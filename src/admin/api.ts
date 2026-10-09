@@ -13,6 +13,7 @@ import { arenaChannel } from "../shared/arena.ts";
 import { MIGRATIONS } from "../shared/schema.ts";
 import { integrityOf } from "../shared/integrity.ts";
 import { createSession, endSession, sessionResults } from "../shared/sessions.ts";
+import { ROLE_DEFS, autoRolesOf, setAutoRoles, syncAutoRoles, wantedHolders } from "../shared/roles.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -87,6 +88,19 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (logM && method === "GET") return ok(await attemptLog(env, await guild(), Number(logM[1])));
     const revM = path.match(/^\/attempts\/(\d+)\/integrity$/);
     if (revM && method === "POST") return ok(await reviewIntegrity(env, await guild(), Number(revM[1]), body, ctx));
+
+    // ------------------------------------------------------ automatic roles
+    if (path === "/roles" && method === "GET") return ok(await rolesState(env, await guild()));
+    if (path === "/roles" && method === "PUT") {
+      const g = await guild();
+      await setAutoRoles(env, g, { on: body.on, off: body.off });
+      return ok(await rolesState(env, await getGuild(env, g.id)));
+    }
+    if (path === "/roles/sync" && method === "POST") {
+      const g = await guild();
+      await syncAutoRoles(env, g, { budget: 40 });
+      return ok(await rolesState(env, await getGuild(env, g.id)));
+    }
 
     // ----------------------------------------------------------- sessions
     if (path === "/sessions" && method === "GET") {
@@ -853,6 +867,29 @@ async function bulkPoints(env: Env, g: GuildRow, b: any, ctx: Ctx) {
     })());
   }
   return { students: ids.length, entries: stmts.length, total: changes.reduce((s, c) => s + c.delta, 0) };
+}
+
+// ======================================================= automatic roles
+async function rolesState(env: Env, g: GuildRow) {
+  const cfg = autoRolesOf(g);
+  const wanted = await wantedHolders(env, g);
+  const ids = [...new Set([...Object.values(wanted).flat(), ...JSON.parse(g.champion_holders || "[]"), ...JSON.parse(g.streak_holders || "[]")])];
+  const names = new Map((ids.length ? await all<{ discord_id: string; name: string | null }>(env,
+    `SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id IN (${ids.map(() => "?").join(", ")})`, g.id, ...ids) : []).map((r) => [r.discord_id, r.name]));
+  const external: Record<string, string | null> = { champion: g.champion_role, streak: g.streak_role };
+  return {
+    on: cfg.on, error: cfg.error, synced: cfg.synced,
+    roles: ROLE_DEFS.map((d) => {
+      const holders = d.external ? JSON.parse((d.key === "champion" ? g.champion_holders : g.streak_holders) || "[]") as string[] : cfg.holders[d.key] ?? [];
+      const people = (d.external ? holders : wanted[d.key] ?? []);
+      return {
+        key: d.key, name: d.name, color: "#" + d.color.toString(16).padStart(6, "0"), desc: d.desc, hoist: !!d.hoist, level: d.level ?? null,
+        on: !cfg.off.includes(d.key), created: !!(cfg.ids[d.key] || (d.external && external[d.key])),
+        count: people.length, people: people.slice(0, 5).map((id) => ({ id, name: names.get(id) ?? null })),
+        pending: d.external ? 0 : (wanted[d.key] ?? []).filter((u) => !holders.includes(u)).length + holders.filter((u) => !(wanted[d.key] ?? []).includes(u)).length,
+      };
+    }),
+  };
 }
 
 // ============================================================ integrity

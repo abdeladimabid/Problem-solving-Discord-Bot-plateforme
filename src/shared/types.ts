@@ -58,6 +58,7 @@ export interface GuildRow {
   daily_channel: string | null;
   daily_hour: number;
   champion_role: string | null;
+  auto_roles?: string | null;
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;

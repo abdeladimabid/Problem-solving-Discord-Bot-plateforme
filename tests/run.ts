@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, discordCalls, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, clock, discordCalls, discordRoles, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import admin from "../src/admin/index.ts";
 import { runCron } from "../src/bot/cron.ts";
@@ -779,7 +779,7 @@ section("season, weekly digest, contest via dashboard, stop");
   const settings = await api("GET", `/api/settings?g=${G}`);
   check(settings.data.season === "Spring 2027", "settings reflect the season");
   const dinfo = await api("GET", `/api/discord?g=${G}`);
-  check(dinfo.data.channels.length === 3 && dinfo.data.roles.length === 2, "channel & role pickers (text channels only, no @everyone)");
+  check(dinfo.data.channels.length === 3 && dinfo.data.roles.length >= 2 && !dinfo.data.roles.some((r: any) => r.name === "@everyone"), "channel & role pickers (text channels only, no @everyone)");
 }
 
 section("JavaScript & PHP: class languages, quick bank, judge with big tests, starter code");
@@ -1103,6 +1103,79 @@ section("public messages stay in #arena");
   globalThis.fetch = realFetch;
   check(nd.data?.flags === 64 && text(nd).includes("arena") && messagesTo(CH).length === before, "no #arena: duels are refused instead of filling #general");
   db.prepare("UPDATE guilds SET arena_channel = ?, announce_channel = ? WHERE id = ?").run(saved.arena_channel, saved.announce_channel, G);
+}
+
+section("buttons in DMs (assignments, reminders) work");
+{
+  const ch = q1("SELECT id FROM challenges WHERE kind = 'output' AND lang = 'en' AND status = 'active' AND id NOT IN (SELECT challenge_id FROM attempts WHERE discord_id = ?) LIMIT 1", U.carol.id);
+  const r = await api("POST", "/api/assignments", { g: G, challenge_id: ch.id, students: [U.carol.id], due_at: clock.now() + 86400 });
+  const asg = q1("SELECT id FROM assignments WHERE discord_id = ? AND challenge_id = ? ORDER BY id DESC", U.carol.id, ch.id)?.id;
+  check(r.status === 200 && asg, "assignment created");
+  const dmClick = (u: User, custom_id: string) => {
+    const x: any = raw(3, u, { custom_id, component_type: 2 });
+    delete x.guild_id; delete x.guild; x.channel_id = "dm-" + u.id;
+    x.user = x.member.user; delete x.member;
+    return call(x);
+  };
+  const res = await dmClick(U.carol, `astart:${asg}`);
+  check(!text(res).includes("in a server"), "Start in a DM isn't refused");
+  check(q1("SELECT attempt_id FROM assignments WHERE id = ?", asg).attempt_id && text(lastPatch()).includes("ansm:"), "the challenge opens right in the DM");
+  const other = await dmClick(U.bob, `astart:${asg}`);
+  check(text(other).includes("in a server") || text(other).includes("not for you") || text(other).includes("isn't for you"), "someone else's assignment button doesn't open it");
+}
+
+section("automatic roles: created once, moved to the right students");
+{
+  // start clean: no auto roles yet for this server
+  db.prepare("UPDATE guilds SET auto_roles = NULL, champion_role = NULL, streak_role = NULL WHERE id = ?").run(G);
+  discordRoles.list = discordRoles.list.filter((r) => !String(r.id).startsWith("role-"));
+  const before = discordCalls.length;
+  const st = await api("POST", `/api/roles/sync?g=${G}`, { g: G });
+  const calls = discordCalls.slice(before);
+  const created = calls.filter((c) => c.method === "POST" && /\/roles$/.test(c.path));
+  check(st.status === 200 && created.length === 11, `the bot creates its roles (${created.length})`);
+  check(created[0].body.name.includes("Class Leader") && created[0].body.hoist === true && created[1].body.name.includes("Top 3"), "leader and top 3 first, shown on top of the member list");
+  const g1 = q1("SELECT champion_role, streak_role, auto_roles FROM guilds WHERE id = ?", G);
+  check(g1.champion_role && g1.streak_role, "contest champion and On Fire roles are created and plugged in");
+  const top = q("SELECT discord_id, SUM(amount) AS pts FROM ledger WHERE guild_id = ? AND season = (SELECT season FROM guilds WHERE id = ?) AND discord_id IS NOT NULL GROUP BY discord_id ORDER BY pts DESC", G, G);
+  const ids = JSON.parse(g1.auto_roles).ids;
+  const put = (u: string, r: string) => calls.some((c) => c.method === "PUT" && c.path === `/guilds/${G}/members/${u}/roles/${r}`);
+  check(top.length && put(top[0].discord_id, ids.leader), "the season leader gets Class Leader");
+  check(top.length < 2 || put(top[1].discord_id, ids.top3), "#2 gets Top 3");
+  check(messagesTo(ARENA).some((m) => text(m).includes("Class Leader") && text(m).includes(top[0].discord_id)), "leader announced in #arena");
+  check(st.data.roles.find((r: any) => r.key === "leader").people[0].id === top[0].discord_id, "dashboard shows who holds each role");
+
+  // someone overtakes the leader: roles move, shout-out
+  const chaser = top[top.length - 1].discord_id;
+  db.prepare("INSERT INTO ledger (guild_id, discord_id, amount, reason, season, created_at) VALUES (?, ?, ?, 'bonus', (SELECT season FROM guilds WHERE id = ?), ?)").run(G, chaser, top[0].pts + 500, G, clock.now());
+  const b2 = discordCalls.length;
+  await api("POST", `/api/roles/sync?g=${G}`, { g: G });
+  const c2 = discordCalls.slice(b2);
+  check(c2.some((c) => c.method === "PUT" && c.path.endsWith(`/members/${chaser}/roles/${ids.leader}`)) && c2.some((c) => c.method === "DELETE" && c.path.endsWith(`/members/${top[0].discord_id}/roles/${ids.leader}`)), "new leader: role moves");
+  check(messagesTo(ARENA).some((m) => text(m).includes("first place") && text(m).includes(chaser)), "new leader announced");
+  check(!c2.some((c) => c.method === "POST" && /\/roles$/.test(c.path)), "roles aren't created twice");
+
+  // levels: one title role each
+  const lv = JSON.parse(q1("SELECT auto_roles FROM guilds WHERE id = ?", G).auto_roles).holders;
+  const levelHolders = ["legend", "wizard", "hacker", "coderlvl", "apprentice"].flatMap((k) => lv[k] ?? []);
+  check(new Set(levelHolders).size === levelHolders.length && levelHolders.includes(chaser), "level titles: one per student");
+
+  // the teacher turns one off: taken back
+  const off = await api("PUT", `/api/roles?g=${G}`, { g: G, off: ["top3"] });
+  check(off.data.roles.find((r: any) => r.key === "top3").on === false && JSON.parse(q1("SELECT auto_roles FROM guilds WHERE id = ?", G).auto_roles).holders.top3.length === 0, "a role turned off is taken back");
+
+  // no permission: clear message, nothing breaks
+  db.prepare("UPDATE guilds SET auto_roles = NULL WHERE id = ?").run(G);
+  discordRoles.forbidden = true;
+  const bad = await api("POST", `/api/roles/sync?g=${G}`, { g: G });
+  discordRoles.forbidden = false;
+  check(bad.status === 200 && bad.data.error === "permission", "missing Manage Roles is reported to the teacher");
+
+  // the cron keeps it up to date
+  db.prepare("UPDATE guilds SET auto_roles = NULL WHERE id = ?").run(G);
+  clock.advance(600);
+  await runCron(env);
+  check(JSON.parse(q1("SELECT auto_roles FROM guilds WHERE id = ?", G).auto_roles || "{}").synced > 0, "cron syncs the roles by itself");
 }
 
 section("i18n: every key exists in English and French");

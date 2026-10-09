@@ -391,3 +391,15 @@ dialog.wide { width: min(1100px, calc(100vw - 32px)); }
 .chip button:hover { background: var(--down-bg); color: var(--down); }
 .check span { font-weight: 400; }
 .grid-table th.ctr { text-align: center; }
+
+/* automatic roles */
+.panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.panel-head h2 { margin: 0; }
+.role-list { display: grid; gap: 6px; margin: 12px 0; }
+.role-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface-2); margin: 0; font-weight: 400; cursor: pointer; }
+.role-row.off { opacity: .55; }
+.role-dot { width: 14px; height: 14px; border-radius: 50%; }
+.role-main small { display: block; color: var(--ink-faint); font-size: 12px; }
+.role-people { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.role-people .avatar { width: 22px; height: 22px; font-size: 10px; }
+@media (max-width: 760px) { .role-row { grid-template-columns: auto auto 1fr; } .role-people { grid-column: 1 / -1; justify-content: flex-start; } }

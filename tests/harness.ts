@@ -116,6 +116,7 @@ function execLocal(id: string, source: string, stdin: string) {
   }
 }
 export const access = { jwks: null as any };
+export const discordRoles = { forbidden: false, list: [{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }] as any[] };
 let msgId = 1000;
 
 const realFetch = globalThis.fetch;
@@ -129,7 +130,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (path === "/users/@me/channels") return Response.json({ id: `dm-${body.recipient_id}` });
     if (/^\/channels\/[^/]+\/messages$/.test(path)) return Response.json({ id: String(msgId++) });
     if (/^\/guilds\/[^/]+\/channels$/.test(path)) return Response.json([{ id: "c1", name: "general", type: 0, position: 0 }, { id: "c2", name: "contests", type: 0, position: 1 }, { id: "arena1", name: "⚔️-arena", type: 0, position: 2 }, { id: "v1", name: "voice", type: 2, position: 3 }]);
-    if (/^\/guilds\/[^/]+\/roles$/.test(path)) return Response.json([{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }]);
+    if (/^\/guilds\/[^/]+\/roles$/.test(path)) {
+      if (discordRoles.forbidden) return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403 });
+      if (method === "POST") { const r = { id: `role-${discordRoles.list.length}`, position: 1, ...body }; discordRoles.list.push(r); return Response.json(r); }
+      return Response.json(discordRoles.list);
+    }
     if (/^\/guilds\/[^/]+$/.test(path)) return Response.json({ id: "g", name: "CS Class" });
     if (method === "PUT" || method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({});

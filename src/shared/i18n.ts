@@ -84,6 +84,8 @@ const en: Dict = {
   "quick.heads_up": "🛑 You've already scored {max} quick challenges today, so this one won't give points (but it's still good practice). Want points? `/practice type:Write code` is never limited.",
   "arena.private_here": "Only you can see this here: public bot messages go to {arena}.",
   "duel.no_arena": "⚔️ Duels happen in **#arena**, and this server doesn't have one yet. Ask your teacher to create a channel named `arena` (or pick one in the dashboard → Settings).",
+  "roles.new_leader": "👑 {user} just took **first place** from {prev}! The **Class Leader** role is theirs… for now.",
+  "roles.first_leader": "👑 {user} leads the season leaderboard and gets the **Class Leader** role!",
   "quick.repeat": "🔁 You already solved this one before: no points the second time.",
   "ch.question_default": "What does this code print?",
 
@@ -494,6 +496,8 @@ const fr: Dict = {
   "quick.heads_up": "🛑 Tu as déjà marqué {max} défis rapides aujourd'hui : celui-ci ne rapportera pas de points (mais c'est un bon entraînement). Tu veux des points ? `/practice type:Écrire du code` n'est jamais limité.",
   "arena.private_here": "Toi seul vois ceci ici : les messages publics du bot vont dans {arena}.",
   "duel.no_arena": "⚔️ Les duels se passent dans **#arena**, et ce serveur n'en a pas encore. Demande à ton enseignant de créer un salon nommé `arena` (ou d'en choisir un dans le tableau de bord → Settings).",
+  "roles.new_leader": "👑 {user} vient de prendre la **première place** à {prev} ! Le rôle **Class Leader** est à lui… pour l'instant.",
+  "roles.first_leader": "👑 {user} mène le classement de la saison et reçoit le rôle **Class Leader** !",
   "quick.repeat": "🔁 Tu as déjà résolu ce défi : pas de points la deuxième fois.",
   "ch.question_default": "Qu'affiche ce code ?",
 

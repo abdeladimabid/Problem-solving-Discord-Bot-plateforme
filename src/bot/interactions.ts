@@ -73,12 +73,32 @@ export function errorText(L: string, e: unknown): string {
   return t(L, "err.generic") + (reason ? `\n-# ${reason}` : "");
 }
 
+/** Which server a button pressed in a DM belongs to. */
+async function guildFromButton(env: Env, customId: string, userId: string): Promise<string | null> {
+  const [kind, x] = customId.split(":");
+  const id = Number(x);
+  const table = ["astart", "abatch"].includes(kind) ? "assignments"
+    : ["dacc", "ddec", "dopen"].includes(kind) ? "duels"
+    : ["sopen", "sgo"].includes(kind) ? "sessions"
+    : Number.isFinite(id) && id > 0 ? "attempts" : null;
+  if (table && id > 0) {
+    const owner = table === "attempts" || table === "assignments" ? " AND discord_id = ?" : "";
+    const r = await one<{ guild_id: string }>(env, `SELECT guild_id FROM ${table} WHERE id = ?${owner}`, id, ...(owner ? [userId] : []));
+    if (r) return r.guild_id;
+  }
+  // otherwise: the only server where this student plays
+  const gs = await all<{ guild_id: string }>(env, "SELECT guild_id FROM players WHERE discord_id = ? LIMIT 2", userId);
+  return gs.length === 1 ? gs[0].guild_id : null;
+}
+
 // ============================================================ entrypoint
 export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<Response> {
   if (raw.type === 1) return json({ type: 1 }); // PING
-  if (!raw.guild_id) return say(t("en", "err.guild_only"));
-  const guild = await getGuild(env, raw.guild_id);
   const user = raw.member?.user ?? raw.user;
+  // Buttons in DMs (assignments, reminders) carry no server: find it from what the button points to.
+  const guildId = raw.guild_id ?? ((raw.type === 3 || raw.type === 5) && user?.id ? await guildFromButton(env, String(raw.data?.custom_id ?? ""), user.id) : null);
+  if (!guildId) return say(t("en", "err.guild_only"));
+  const guild = await getGuild(env, guildId);
   const perms = BigInt(raw.member?.permissions ?? "0");
   const ix: Ix = {
     raw, env, ctx, guild, L: guild.lang,

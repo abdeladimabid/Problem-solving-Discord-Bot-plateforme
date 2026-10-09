@@ -976,7 +976,8 @@ async function viewSettings() {
         <p style="margin-top:16px"><button class="btn primary" id="save">Save settings</button></p>
       </section>
       <div class="stack">
-        <section class="panel"><h2>Roles</h2>
+        <section class="panel"><h2>Contest roles</h2>
+          <p class="muted small">Leave on <b>Off</b> and the automatic roles below create 🏆 Contest Champion and 🔥 On Fire for you, or pick roles you already have.</p>
           <label for="s-champ">Champion role <span class="muted">(latest contest winner)</span></label><select id="s-champ" style="width:100%">${roles(g.champion_role)}</select>
           <label for="s-streak">Streak role <span class="muted">(3 contests or 5 dailies in a row)</span></label><select id="s-streak" style="width:100%">${roles(g.streak_role)}</select>
           <p class="muted small">In Discord's Server Settings → Roles, drag the bot's role above these roles, or it can't give them out.</p>
@@ -990,6 +991,10 @@ async function viewSettings() {
         </section>
       </div>
     </div>
+    <section class="panel" id="autoroles"><div class="panel-head"><h2>Automatic roles</h2><span class="toolbar" style="margin:0"><label class="check" style="margin:0"><input type="checkbox" id="ar-on"> On</label><button class="btn" id="ar-sync">Create &amp; update now</button></span></div>
+      <p class="muted small">The bot creates these roles in your server and moves them to the right students by itself (every few minutes). <b>Class Leader</b> and <b>Top 3</b> are shown in their own group at the top of the member list. Badges (first solve, 10 solves, duel wins…) are given automatically too and shown in <code>/profile</code>.</p>
+      <div id="ar-body"><p class="muted">Loading…</p></div>
+    </section>
     <section class="panel" id="anticheat"><h2>Anti-cheat</h2>
       <p class="muted small">Makes AI and copy-paste slower and <b>visible</b> to you. No tool can make it impossible: a student can still retype code from a phone. That's why the explanation step and class sessions matter most.</p>
       <div class="grid cols-2-even">
@@ -1080,6 +1085,7 @@ async function viewSettings() {
   $("#save-sc").onclick = (e) => busy(e.currentTarget, async () => { await api("/settings", { method: "PUT", body: { scoring: readScoring() } }); toast("Scoring saved: /help shows the new table"); viewSettings(); });
   if ($("#reset-sc")) $("#reset-sc").onclick = (e) => busy(e.currentTarget, async () => { await api("/settings", { method: "PUT", body: { scoring: null } }); toast("Default scoring restored"); viewSettings(); });
   $("#s-champ").onchange = $("#s-streak").onchange = () => $("#save").click();
+  loadAutoRoles();
   $("#save-ac").onclick = (e) => busy(e.currentTarget, async () => {
     S.guild = await api("/settings", { method: "PUT", body: { integrity: {
       editor: $("#ac-editor").value, explain: $("#ac-explain").checked, similarity: $("#ac-sim").checked, codeImage: $("#ac-img").checked,
@@ -1114,6 +1120,30 @@ async function viewSettings() {
   };
 }
 
+
+// ---------------------------------------------------- automatic roles
+async function loadAutoRoles(state = null) {
+  const box = $("#ar-body");
+  if (!box) return;
+  const d = state || await api("/roles").catch((e) => ({ error: e.message, roles: [] }));
+  $("#ar-on").checked = !!d.on;
+  const err = d.error === "permission"
+    ? `<div class="notice warn"><b>The bot isn't allowed to manage roles.</b> In Discord: Server Settings → Roles → give the bot's role the <b>Manage Roles</b> permission, and drag it <b>above</b> the roles it hands out. Then press “Create &amp; update now”.</div>`
+    : d.error ? `<div class="notice warn">Last update failed: ${esc(d.error)}</div>` : "";
+  box.innerHTML = `${err}<div class="role-list">${d.roles.map((r) => `
+    <label class="role-row ${r.on ? "" : "off"}">
+      <input type="checkbox" data-role="${r.key}" ${r.on ? "checked" : ""} ${d.on ? "" : "disabled"}>
+      <span class="role-dot" style="background:${r.color}"></span>
+      <span class="role-main"><b style="color:${r.color}">${esc(r.name)}</b>${r.hoist ? ' <span class="tag">shown on top</span>' : ""}<small>${esc(r.desc)}</small></span>
+      <span class="role-people small">${!d.on || !r.on ? '<span class="muted">off</span>' : r.count ? r.people.map((p) => `${avatar(p.name, p.id)} ${esc(p.name || p.id)}`).join(" ") + (r.count > r.people.length ? ` <span class="muted">+${r.count - r.people.length}</span>` : "") : '<span class="muted">nobody yet</span>'}
+        ${r.on && d.on && !r.created ? '<span class="tag">will be created</span>' : ""}${r.pending ? ` <span class="muted">· ${r.pending} change${r.pending > 1 ? "s" : ""} pending</span>` : ""}</span>
+    </label>`).join("")}</div>
+    <p class="muted small">${d.synced ? `Last update ${fmtAgo(d.synced)}.` : "Not created yet: press “Create &amp; update now”."} Turning a role off takes it back from students; the role itself stays in your server (delete it in Discord if you want).</p>`;
+  const save = (body) => api("/roles", { method: "PUT", body }).then((x) => { loadAutoRoles(x); toast("Saved"); }).catch((e) => toast(e.message, true));
+  $("#ar-on").onchange = () => save({ on: $("#ar-on").checked });
+  $$("[data-role]", box).forEach((c) => c.onchange = () => save({ off: $$("[data-role]", box).filter((x) => !x.checked).map((x) => x.dataset.role) }));
+  $("#ar-sync").onclick = (e) => busy(e.currentTarget, async () => { const x = await api("/roles/sync", { method: "POST" }); loadAutoRoles(x); toast(x.error ? "Couldn't update the roles" : "Roles updated", !!x.error); });
+}
 
 // ============================================================ daily
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];

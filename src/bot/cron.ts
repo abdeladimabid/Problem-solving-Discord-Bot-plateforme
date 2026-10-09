@@ -10,6 +10,7 @@ import { pollDueContests, syncRoles } from "../shared/contests.ts";
 import { processQueue } from "../shared/queue.ts";
 import { chooseDaily, dailyConfig, postDaily } from "../shared/daily.ts";
 import { endDueSessions } from "../shared/sessions.ts";
+import { syncDueRoles } from "../shared/roles.ts";
 import { arenaChannel } from "../shared/arena.ts";
 import { COMMANDS, commandsVersion } from "../shared/commands.ts";
 import { dapi } from "../shared/discord.ts";
@@ -35,6 +36,7 @@ export async function runCron(env: Env) {
   await safe("practice", () => run(env, "UPDATE attempts SET status = 'expired', finished_at = ? WHERE status = 'pending' AND origin = 'practice' AND started_at < ?", now(), now() - 86400));
   await safe("daily", () => postDailies(env, !generated));
   await safe("digest", () => weeklyDigests(env));
+  if (!generated) await safe("roles", () => syncDueRoles(env));
 }
 
 // ------------------------------------------------------- slash commands
