@@ -16,7 +16,8 @@
     "update": "npm run db:migrate && npm run deploy",
     "logs": "wrangler tail -c wrangler.bot.jsonc",
     "test": "node --experimental-strip-types --no-warnings tests/run.ts",
-    "preview": "node --experimental-strip-types --no-warnings tests/preview.ts"
+    "preview": "node --experimental-strip-types --no-warnings tests/preview.ts",
+    "export:challenges": "node --no-warnings scripts/export-challenges.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0",

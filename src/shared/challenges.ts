@@ -1,8 +1,8 @@
 // The challenge engine: picking, rendering, answering, judging, scoring.
 // Shared by practice, daily challenges, assignments and duels.
 import type { AttemptRow, ChallengeRow, Difficulty, DuelRow, Env, GuildRow, PlayerRow } from "./types.ts";
-import { addPoints, all, checkBadges, findPlayer, now, one, practicePointsToday, run, totalPoints } from "./db.ts";
-import { RULES, basePoints, dayKey, elo, fmtDuration, isCorrectOutput, levelInfo, pointsFor, progressBar, scoringOf, titleKey } from "./game.ts";
+import { addPoints, all, checkBadges, findPlayer, now, one, practicePointsToday, quickSolvesToday, run, totalPoints } from "./db.ts";
+import { RULES, basePoints, dayKey, elo, isLimitedKind, quickFactor, fmtDuration, isCorrectOutput, levelInfo, pointsFor, progressBar, scoringOf, titleKey } from "./game.ts";
 import { t } from "./i18n.ts";
 import { COLORS, btn, codeBlock, linkBtn, mention, pingUsers, row, send, truncate } from "./discord.ts";
 import { aiJudge, codeFeedback, explainQuestions, gradeExplanation } from "./ai.ts";
@@ -363,6 +363,7 @@ export async function finish(
   let points = 0;
   let held = 0;
   let capped = false;
+  let quickNote = "";
   const totalBefore = await totalPoints(env, guild.id, a.discord_id);
 
   // claim the attempt atomically so a double click can't score twice
@@ -387,13 +388,38 @@ export async function finish(
     points = a.origin === "duel" && duelWon === false
       ? RULES.duelLoserPoints
       : pointsFor(sc, { kind: c.kind, difficulty: c.difficulty, origin: a.origin, usedHint: !!a.used_hint, tries: a.tries || 1, seconds: t0 - a.started_at, onTime: assignmentOnTime });
-    if (a.origin === "practice") {
-      const w = integrityOf(guild).practiceWeight;
-      if (w !== 1) points = Math.round(points * w);
-      const today = await practicePointsToday(env, guild.id, a.discord_id);
-      if (today + points > sc.cap) {
-        points = Math.max(0, sc.cap - today);
-        capped = true;
+    // Anti-farming, for quick types only (multiple choice, complexity, output, bug) in practice and duels.
+    // Write code and HackerRank problems are never limited, and neither is anything the teacher hands out
+    // (daily challenge, assignments, class sessions).
+    if (isLimitedKind(c.kind) && (a.origin === "practice" || a.origin === "duel") && points > 0) {
+      const before = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM attempts WHERE guild_id = ? AND discord_id = ? AND challenge_id = ? AND status = 'solved' AND id != ?",
+        guild.id, a.discord_id, c.id, a.id);
+      if (before?.n) {
+        points = 0;
+        quickNote = t(L, "quick.repeat");
+      } else {
+        if (a.origin === "practice") {
+          const w = integrityOf(guild).practiceWeight;
+          if (w !== 1) points = Math.round(points * w);
+        }
+        const n = await quickSolvesToday(env, guild.id, a.discord_id, a.id);
+        const f = quickFactor(sc, n);
+        const max = sc.quick.full + sc.quick.reduced;
+        if (f === 0) {
+          points = 0;
+          quickNote = t(L, "quick.none", { max });
+        } else {
+          if (f < 1) points = Math.max(1, Math.round(points * f));
+          const left = Math.max(0, sc.quick.full - n - 1);
+          quickNote = f < 1
+            ? t(L, "quick.reduced", { pct: sc.quick.pct, left: Math.max(0, max - n - 1) })
+            : left <= 2 ? t(L, "quick.left", { left, pct: sc.quick.pct }) : "";
+        }
+        const today = await practicePointsToday(env, guild.id, a.discord_id);
+        if (points && today + points > sc.cap) {
+          points = Math.max(0, sc.cap - today);
+          capped = true;
+        }
       }
     }
     // "explain your code": half the points now, the rest after a good explanation
@@ -455,7 +481,7 @@ export async function finish(
     fields.push({ name: t(L, "ch.language"), value: LANGS[(isCodeLang(a.lang) ? a.lang : "python") as CodeLang].label, inline: true });
   }
   if (solved) {
-    const pv = o.claimed ? "⏳ " + t(L, "res.pending") : capped && !points ? t(L, "res.points_capped") : t(L, "res.points_val", { p: points }) + (held ? ` (+${held} 🧠)` : "");
+    const pv = o.claimed ? "⏳ " + t(L, "res.pending") : (capped || quickNote) && !points ? t(L, "res.points_capped") : t(L, "res.points_val", { p: points }) + (held ? ` (+${held} 🧠)` : "");
     fields.push({ name: t(L, "res.points"), value: pv, inline: true });
   }
   fields.push({ name: t(L, "res.level"), value: `${lv.level} · ${progressBar(lv.progress)} ${totalAfter}/${lv.next}`, inline: false });
@@ -472,6 +498,7 @@ export async function finish(
   }
   if (o.aiNote) desc.push(`🧠 **${t(L, solved ? "judge.ai_review" : "judge.ai_feedback")}:** ${o.aiNote}`);
   if (c.explanation) desc.push(`**${t(L, "res.explanation")}:** ${c.explanation}`);
+  if (quickNote) desc.push(quickNote);
   if (capped) desc.push(t(L, "ch.cap", { cap: sc.cap }));
   if (extra.length) desc.push(extra.join("\n"));
 

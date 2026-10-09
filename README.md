@@ -41,7 +41,7 @@ Everything public (daily challenge, duels, contests, level-ups, assignments, wee
 | Write code ×8 | 24 | 48 | 96 |
 | HackerRank problem ×10 | 30 | 60 | 120 |
 
-Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, duel win ×2, hint ×0.5, second try ×0.5 (write code: −15% per extra submission, min 40%), quick answer within 60 s +20%. Contests: 120/90/70 for the podium, 40 for the top 10, 15 for taking part, 25 per special award. Practice is capped at 300 points per day. **You can change all of it in Dashboard → Settings → Scoring**; `/help` shows the current table.
+Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, duel win ×2, hint ×0.5, second try ×0.5 (write code: −15% per extra submission, min 40%), quick answer within 60 s +20%. Contests: 120/90/70 for the podium, 40 for the top 10, 15 for taking part, 25 per special award. **No farming of quick challenges:** in `/practice` and duels, multiple choice, complexity, output and bug give full points for the first 5 a day, 20% for the next 5, then nothing (max 150 pts a day), and a challenge solved before never pays twice. **Write code and HackerRank problems are never limited**, and neither is anything you hand out (daily challenge, assignments, class sessions). **You can change all of it in Dashboard → Settings → Scoring**; `/help` shows the current table.
 
 **Difficulty is real.** The built-in bank (62 quick challenges + 18 write-code problems, English and French) was checked by running every snippet; hard write-code problems need a real algorithm (DP, binary search, monotonic stack, Dijkstra, divide and conquer…) and a naive solution fails the big tests on time.
 
@@ -67,6 +67,16 @@ Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, du
 Want to look before installing anything? Run `npm install && npm run preview` and open http://localhost:8787 to see the dashboard with a demo class.
 
 ---
+
+## Saving your challenges in the repo
+
+Challenges you write in the dashboard, the ones the AI generates and HackerRank problems you import live in your Cloudflare database. To keep them with the code, so anyone who clones your repo starts with them:
+
+```bash
+npm run export:challenges
+```
+
+It reads your live database (you must be logged in to wrangler, as for `npm run update`) and writes `migrations/00NN_my_challenges.sql`. Commit that file. New installs get the challenges during `npm run setup`; your own database already has them, so applying the file there changes nothing. Run it again whenever you've added more: only new challenges are written. Exported challenges are shared by every server using that install, and the author's Discord ID is left out. Your students' answers, points and names are never exported.
 
 ## Updating
 

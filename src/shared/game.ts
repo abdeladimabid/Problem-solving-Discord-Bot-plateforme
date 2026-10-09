@@ -35,14 +35,16 @@ export const RULES = {
 export interface Scoring {
   base: Record<Difficulty, number>;
   mult: Record<string, number>;
-  cap: number;                          // max practice points per student per day
+  cap: number;                          // max points per student per day from QUICK challenges (practice + duels)
+  quick: { full: number; reduced: number; pct: number };  // per day: `full` quick solves at 100%, the next `reduced` at pct%, then 0
   contest: { first: number; second: number; third: number; top10: number; play: number };
   award: number;                        // contest special awards
 }
 export const DEFAULT_SCORING: Scoring = {
   base: { easy: 3, medium: 6, hard: 12 },
   mult: { mcq: 1, complexity: 2, output: 3, bug: 5, write: 8, code: 10 },
-  cap: 300,
+  cap: 150,
+  quick: { full: 5, reduced: 5, pct: 20 },
   contest: { first: 120, second: 90, third: 70, top10: 40, play: 15 },
   award: 25,
 };
@@ -60,12 +62,24 @@ export function scoringOf(g: { scoring?: string | null } | null | undefined): Sc
     base: { easy: num(o.base?.easy, d.base.easy), medium: num(o.base?.medium, d.base.medium), hard: num(o.base?.hard, d.base.hard) },
     mult: Object.fromEntries(SCORE_KINDS.map((k) => [k, num(o.mult?.[k], d.mult[k], 1000)])),
     cap: num(o.cap, d.cap),
+    quick: { full: Math.round(num(o.quick?.full, d.quick.full, 1000)), reduced: Math.round(num(o.quick?.reduced, d.quick.reduced, 1000)), pct: Math.round(num(o.quick?.pct, d.quick.pct, 100)) },
     contest: {
       first: num(o.contest?.first, d.contest.first), second: num(o.contest?.second, d.contest.second),
       third: num(o.contest?.third, d.contest.third), top10: num(o.contest?.top10, d.contest.top10), play: num(o.contest?.play, d.contest.play),
     },
     award: num(o.award, d.award),
   };
+}
+
+/** Quick types can be answered in seconds, so they're the ones worth limiting. Write code and HackerRank never are. */
+export const LIMITED_KINDS = ["mcq", "complexity", "output", "bug"];
+export const isLimitedKind = (kind: string) => LIMITED_KINDS.includes(kind);
+
+/** Share of the points a quick solve earns, given how many quick solves (practice + duels) already scored today. */
+export function quickFactor(sc: Scoring, solvedToday: number): number {
+  if (solvedToday < sc.quick.full) return 1;
+  if (solvedToday < sc.quick.full + sc.quick.reduced) return sc.quick.pct / 100;
+  return 0;
 }
 
 export const basePoints = (sc: Scoring, kind: string, difficulty: Difficulty) =>

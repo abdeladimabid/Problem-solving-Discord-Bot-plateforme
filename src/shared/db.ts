@@ -102,14 +102,30 @@ export async function totalPoints(env: Env, guildId: string, discordId: string):
   return r?.s ?? 0;
 }
 
+/** Points earned today from quick challenges (multiple choice, complexity, output, bug) in practice and duels. */
 export async function practicePointsToday(env: Env, guildId: string, discordId: string): Promise<number> {
   const start = Math.floor(Date.now() / 86400000) * 86400;
   const r = await one<{ s: number }>(
     env,
-    "SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'practice' AND created_at >= ?",
+    `SELECT COALESCE(SUM(a.points), 0) AS s FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel') AND a.finished_at >= ?
+        AND c.kind IN ('mcq', 'complexity', 'output', 'bug')`,
     guildId, discordId, start,
   );
   return r?.s ?? 0;
+}
+
+/** Quick challenges solved today with points (practice + duels): drives the diminishing returns. */
+export async function quickSolvesToday(env: Env, guildId: string, discordId: string, exceptAttempt = 0): Promise<number> {
+  const start = Math.floor(Date.now() / 86400000) * 86400;
+  const r = await one<{ n: number }>(
+    env,
+    `SELECT COUNT(*) AS n FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel') AND a.status = 'solved' AND a.finished_at >= ? AND a.id != ?
+        AND c.kind IN ('mcq', 'complexity', 'output', 'bug')`,
+    guildId, discordId, start, exceptAttempt,
+  );
+  return r?.n ?? 0;
 }
 
 export interface StandingRow { key: string; discord_id: string | null; hr: string | null; name: string; points: number }

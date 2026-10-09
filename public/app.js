@@ -1008,9 +1008,9 @@ async function viewSettings() {
           <label for="ac-quick">Time to answer a quick challenge</label>
           <select id="ac-quick" style="width:100%">${[[0, "No limit"], [30, "30 seconds"], [45, "45 seconds"], [60, "1 minute"], [90, "1 min 30"], [120, "2 minutes"], [180, "3 minutes"], [300, "5 minutes"]].map(([v, l]) => `<option value="${v}" ${ic.quickLimit === v ? "selected" : ""}>${l}</option>`).join("")}${[0, 30, 45, 60, 90, 120, 180, 300].includes(ic.quickLimit) ? "" : `<option value="${ic.quickLimit}" selected>${ic.quickLimit} seconds</option>`}</select>
           <p class="muted small">A late answer still gets checked but earns no points.</p>
-          <label for="ac-pw">Points for /practice</label>
+          <label for="ac-pw">Points for quick challenges in /practice</label>
           <select id="ac-pw" style="width:100%">${[[1, "Full points"], [0.75, "75%"], [0.5, "Half (supervised work counts more)"], [0.25, "25%"], [0, "No points (practice only)"]].map(([v, l]) => `<option value="${v}" ${ic.practiceWeight === v ? "selected" : ""}>${l}</option>`).join("")}${[1, 0.75, 0.5, 0.25, 0].includes(ic.practiceWeight) ? "" : `<option value="${ic.practiceWeight}" selected>×${ic.practiceWeight}</option>`}</select>
-          <p class="muted small">Class sessions, assignments, the daily challenge and duels are not affected.</p>
+          <p class="muted small">Write code and HackerRank always give full points. Class sessions, assignments, the daily challenge and duels are not affected.</p>
         </div>
       </div>
       <p><button class="btn primary" id="save-ac">Save anti-cheat</button> <a class="btn" href="#/integrity">Review flagged answers</a></p>
@@ -1023,8 +1023,16 @@ async function viewSettings() {
           <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sb-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sb-${d}" value="${sc.base[d]}"></div>`).join("")}</div>
           <h3>Multiplier per type</h3>
           <div class="field-row" style="flex-wrap:wrap">${kinds.map((k) => `<div><label for="sm-${k}">${esc(KIND[k] || k)}</label><input type="number" min="0" max="100" step="0.5" id="sm-${k}" value="${sc.mult[k]}"></div>`).join("")}</div>
+          <h3>Anti-farming for quick challenges</h3>
+          <p class="muted small">Multiple choice, complexity, output and bug take seconds, so in <b>/practice and duels</b> their points shrink after a few a day. <b>Write code and HackerRank are never limited</b>, and nothing you hand out (daily challenge, assignments, class sessions) is either. Solving the same challenge again never gives points.</p>
+          <div class="field-row" style="flex-wrap:wrap">
+            <div><label for="sq-full">Full points for the first</label><input type="number" min="0" max="1000" id="sq-full" value="${sc.quick.full}"></div>
+            <div><label for="sq-red">then this many more</label><input type="number" min="0" max="1000" id="sq-red" value="${sc.quick.reduced}"></div>
+            <div><label for="sq-pct">at (% of the points)</label><input type="number" min="0" max="100" id="sq-pct" value="${sc.quick.pct}"></div>
+          </div>
+          <p class="muted small" id="sq-sum"></p>
           <div class="field-row">
-            <div><label for="s-cap">Practice cap per day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
+            <div><label for="s-cap">Max quick-challenge points a day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
             <div><label for="s-award">Contest special award</label><input type="number" min="0" id="s-award" value="${sc.award}"></div>
           </div>
           <h3>HackerRank contest points</h3>
@@ -1044,6 +1052,7 @@ async function viewSettings() {
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),
     cap: Number($("#s-cap").value), award: Number($("#s-award").value),
+    quick: { full: Number($("#sq-full").value), reduced: Number($("#sq-red").value), pct: Number($("#sq-pct").value) },
     contest: Object.fromEntries(["first", "second", "third", "top10", "play"].map((k) => [k, Number($(`#sc-${k}`).value)])),
   });
   const preview = () => {
@@ -1053,6 +1062,12 @@ async function viewSettings() {
   };
   $$("[id^=sb-],[id^=sm-]").forEach((i) => (i.oninput = preview));
   preview();
+  const qsum = () => {
+    const f = Number($("#sq-full").value), r = Number($("#sq-red").value), p = Number($("#sq-pct").value);
+    $("#sq-sum").textContent = `Each day a student gets full points for ${f} quick challenge${f === 1 ? "" : "s"}, ${r ? `${p}% for the next ${r}, ` : ""}then 0 (they can keep playing for practice).`;
+  };
+  $$("[id^=sq-]").forEach((i) => (i.oninput = qsum));
+  qsum();
   $("#save").onclick = (e) => busy(e.currentTarget, async () => {
     const arena = $("#s-arena").value;
     S.guild = await api("/settings", { method: "PUT", body: {

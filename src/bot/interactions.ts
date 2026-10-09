@@ -2,9 +2,9 @@
 // Anything that touches the database more than a couple of times is DEFERRED
 // (Discord gets an answer within 3 seconds, the real work continues after).
 import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow, Lang } from "../shared/types.ts";
-import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, run, standings } from "../shared/db.ts";
+import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
-import { RULES, SCORE_KINDS, basePoints, dayKey, levelInfo, progressBar, scoringOf, titleKey } from "../shared/game.ts";
+import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, titleKey } from "../shared/game.ts";
 import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
 import {
   answer, feedbackFor, finish, getAttempt, getChallenge, pickChallenge, renderFor, startAttempt, submitCode, verifyCoding,
@@ -193,7 +193,13 @@ async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: 
       return { content: t(L, mode === "write" ? "ch.generating_write" : "ch.generating", { topic: topic ?? t(L, `diff.${difficulty}`) }) };
     }
     const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "practice");
-    return renderFor(ix.env, ix.guild, c, a);
+    const out: any = await renderFor(ix.env, ix.guild, c, a);
+    if (isLimitedKind(c.kind)) {
+      const sc = scoringOf(ix.guild);
+      const n = await quickSolvesToday(ix.env, ix.guild.id, ix.userId, a.id);
+      if (quickFactor(sc, n) === 0) out.content = t(L, "quick.heads_up", { max: sc.quick.full + sc.quick.reduced });
+    }
+    return out;
   });
   return deferReply(true);
 }
@@ -536,7 +542,7 @@ function helpPage(ix: Ix, topic: string) {
     const sc = scoringOf(ix.guild);
     const head = `\`${t(L, "help.points_type").padEnd(18)} ${"🟢".padStart(4)} ${"🟡".padStart(4)} ${"🔴".padStart(4)}\``;
     const lines = SCORE_KINDS.map((k) => `\`${t(L, `kind.${k}`).slice(0, 18).padEnd(18)} ${String(basePoints(sc, k, "easy")).padStart(4)} ${String(basePoints(sc, k, "medium")).padStart(4)} ${String(basePoints(sc, k, "hard")).padStart(4)}\``);
-    body = body.replace("{table}", [head, ...lines].join("\n")).replace("{cap}", String(sc.cap))
+    body = body.replace("{table}", [head, ...lines].join("\n")).replace("{cap}", String(sc.cap)).replace("{qfull}", String(sc.quick.full)).replace("{qred}", String(sc.quick.reduced)).replace("{qpct}", String(sc.quick.pct))
       .replace("{c1}", String(sc.contest.first)).replace("{c2}", String(sc.contest.second)).replace("{c3}", String(sc.contest.third))
       .replace("{c10}", String(sc.contest.top10)).replace("{cplay}", String(sc.contest.play)).replace("{award}", String(sc.award));
   }

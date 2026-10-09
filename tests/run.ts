@@ -1035,6 +1035,52 @@ section("anti-cheat: function mode, code editor, typing record, explain your cod
   db.prepare("UPDATE guilds SET integrity = ? WHERE id = ?").run(JSON.stringify({ editor: "off", explain: false, codeImage: false, similarity: false }), G);
 }
 
+section("anti-farming: quick challenges shrink after a few a day, write code never does");
+{
+  const D = { id: "104", name: "Dave", teacher: false };
+  clock.advance(86400);
+  const mcqs = q("SELECT * FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND status = 'active' AND id NOT IN (SELECT challenge_id FROM attempts WHERE discord_id = ?) ORDER BY id LIMIT 14", D.id);
+  const base0 = (await api("GET", `/api/settings?g=${G}`)).data.scoring;
+  const full = (c: any) => Math.max(1, Math.round(base0.base[c.difficulty] * base0.mult.mcq * 1.2));   // answered fast: +20%
+  check(mcqs.length >= 13, "enough multiple-choice challenges for the test");
+  const solveMcq = async (c: any, origin = "practice") => {
+    db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, ?, ?)").run(G, D.id, c.id, origin, clock.now());
+    const aid = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", D.id).id;
+    await click(D as any, `ans:${aid}:${c.answer}`);
+    return { aid, pts: q1("SELECT points FROM attempts WHERE id = ?", aid).points, msg: text(lastPatch()) };
+  };
+  const pts: number[] = [];
+  let msgs: string[] = [];
+  for (let i = 0; i < 11; i++) { const r = await solveMcq(mcqs[i]); pts.push(r.pts); msgs.push(r.msg); }
+  check(pts.slice(0, 5).every((p, i) => p === full(mcqs[i])), `first 5 quick solves: full points (${pts.slice(0, 5)})`);
+  check(pts.slice(5, 10).every((p, i) => p === Math.max(1, Math.round(full(mcqs[i + 5]) * 0.2))), `next 5: 20% (${pts.slice(5, 10)})`);
+  check(pts[10] === 0 && msgs[10].includes("practice only"), "11th quick solve: no points");
+  check(msgs[3].includes("full-value quick challenge") && msgs[6].includes("20%"), "students are told before and when points shrink");
+  // asking for another quick challenge: heads-up
+  await slash(D as any, "practice", { difficulty: "easy", type: "output" });
+  check(text(lastPatch()).includes("won't give points"), "heads-up when the day's quick allowance is used");
+  // an assignment is the teacher's choice: never limited
+  const asg = await solveMcq(mcqs[11], "assignment");
+  check(asg.pts > 0, "assignments still give points after the quick allowance");
+  // solving the same challenge again: nothing
+  const again = await solveMcq(mcqs[0]);
+  check(again.pts === 0 && again.msg.includes("already solved"), "re-solving a challenge gives no points");
+  // write code: unlimited, full points
+  const w = q1("SELECT * FROM challenges WHERE source = 'seed' AND kind = 'write' AND lang = 'en' AND difficulty = 'easy' AND solution IS NOT NULL LIMIT 1");
+  db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, D.id, w.id, clock.now());
+  const wid = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", D.id).id;
+  await select(D as any, `lang:${wid}`, ["python"]);
+  await submit(D as any, `msub:${wid}`, w.solution);
+  const sc = (await api("GET", `/api/settings?g=${G}`)).data.scoring;
+  check(q1("SELECT points FROM attempts WHERE id = ?", wid).points === Math.round(sc.base.easy * sc.mult.write) && !text(lastPatch()).includes("limit"), "write code after the quick limit: full points");
+  // teacher can tune it
+  await api("PUT", "/api/settings", { g: G, scoring: { ...sc, quick: { full: 20, reduced: 0, pct: 0 } } });
+  const more = await solveMcq(mcqs[12]);
+  check(more.pts > 1, "teacher raised the allowance: points again");
+  check((await slash(D as any, "help", {})) && true, "help still renders");
+  await api("PUT", "/api/settings", { g: G, scoring: null });
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
