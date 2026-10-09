@@ -10,6 +10,12 @@ const checked = new Map<string, number>();
  * The channel for public posts: the configured arena, else a text channel
  * named "arena" (found automatically and remembered), else the announcements channel.
  */
+/** The real #arena (set in the dashboard or a channel named "arena"), without falling back to other channels. */
+export async function strictArena(env: Env, g: GuildRow): Promise<string | null> {
+  const a = await arenaChannel(env, g);
+  return g.arena_channel ? g.arena_channel : a && a !== g.announce_channel && a !== g.daily_channel ? a : null;
+}
+
 export async function arenaChannel(env: Env, g: GuildRow): Promise<string | null> {
   if (g.arena_channel) return g.arena_channel;
   const last = checked.get(g.id) ?? 0;

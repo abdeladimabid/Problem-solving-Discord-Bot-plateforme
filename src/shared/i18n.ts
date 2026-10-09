@@ -82,6 +82,8 @@ const en: Dict = {
   "quick.reduced": "⚖️ You've used today's full-value quick challenges: this one gave {pct}% of its points ({left} reduced one(s) left). 💻 Write code and 🏆 HackerRank still give full points, as many as you want!",
   "quick.none": "🛑 You've used today's {max} point-earning quick challenges: this one is practice only (+0). 💻 Write-code and 🏆 HackerRank problems still give full points, as many as you want!",
   "quick.heads_up": "🛑 You've already scored {max} quick challenges today, so this one won't give points (but it's still good practice). Want points? `/practice type:Write code` is never limited.",
+  "arena.private_here": "Only you can see this here: public bot messages go to {arena}.",
+  "duel.no_arena": "⚔️ Duels happen in **#arena**, and this server doesn't have one yet. Ask your teacher to create a channel named `arena` (or pick one in the dashboard → Settings).",
   "quick.repeat": "🔁 You already solved this one before: no points the second time.",
   "ch.question_default": "What does this code print?",
 
@@ -490,6 +492,8 @@ const fr: Dict = {
   "quick.reduced": "⚖️ Tu as utilisé tes défis rapides à plein tarif du jour : celui-ci rapporte {pct} % de ses points (encore {left} à tarif réduit). 💻 Écrire du code et 🏆 HackerRank donnent toujours tous leurs points, autant que tu veux !",
   "quick.none": "🛑 Tu as utilisé les {max} défis rapides qui rapportent des points aujourd'hui : celui-ci est pour l'entraînement (+0). 💻 « Écrire du code » et 🏆 HackerRank donnent toujours tous leurs points, autant que tu veux !",
   "quick.heads_up": "🛑 Tu as déjà marqué {max} défis rapides aujourd'hui : celui-ci ne rapportera pas de points (mais c'est un bon entraînement). Tu veux des points ? `/practice type:Écrire du code` n'est jamais limité.",
+  "arena.private_here": "Toi seul vois ceci ici : les messages publics du bot vont dans {arena}.",
+  "duel.no_arena": "⚔️ Les duels se passent dans **#arena**, et ce serveur n'en a pas encore. Demande à ton enseignant de créer un salon nommé `arena` (ou d'en choisir un dans le tableau de bord → Settings).",
   "quick.repeat": "🔁 Tu as déjà résolu ce défi : pas de points la deuxième fois.",
   "ch.question_default": "Qu'affiche ce code ?",
 

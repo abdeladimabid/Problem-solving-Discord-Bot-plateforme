@@ -16,7 +16,7 @@ import { HackerRankError, fetchLeaderboard, profileText, recentSolves } from "..
 import { LANGS, isCodeLang } from "../shared/runner.ts";
 import { editorToken, editorUrl, integrityOf } from "../shared/integrity.ts";
 import { enqueue } from "../shared/queue.ts";
-import { arenaChannel } from "../shared/arena.ts";
+import { arenaChannel, strictArena } from "../shared/arena.ts";
 
 // ------------------------------------------------------------ responses
 const json = (o: unknown) => new Response(JSON.stringify(o), { headers: { "content-type": "application/json" } });
@@ -89,7 +89,7 @@ export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<R
   try {
     if (raw.type === 4) return await autocomplete(ix);
     await getPlayer(env, guild.id, ix.userId, ix.userName);
-    if (raw.type === 2) return await command(ix);
+    if (raw.type === 2) return await keepInArena(ix, await command(ix));
     if (raw.type === 3) return await component(ix);
     if (raw.type === 5) return await modalSubmit(ix);
   } catch (e) {
@@ -97,6 +97,22 @@ export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<R
     return say(errorText(ix.L, e));
   }
   return say(t(ix.L, "err.generic"));
+}
+
+/**
+ * Everything public belongs in #arena. A command used anywhere else answers privately
+ * (only the person who typed it sees it), so other channels stay clean.
+ */
+async function keepInArena(ix: Ix, res: Response): Promise<Response> {
+  const arena = await strictArena(ix.env, ix.guild);
+  if (arena && ix.raw.channel_id === arena) return res;
+  let body: any;
+  try { body = await res.clone().json(); } catch { return res; }
+  if ((body?.type !== 4 && body?.type !== 5) || (body.data?.flags & EPHEMERAL)) return res;
+  body.data = { ...(body.data ?? {}), flags: (body.data?.flags ?? 0) | EPHEMERAL };
+  if (body.type === 4 && arena && typeof body.data.content === "string") body.data.content += "\n-# " + t(ix.L, "arena.private_here", { arena: `<#${arena}>` });
+  else if (body.type === 4 && arena && !body.data.content) body.data.content = "-# " + t(ix.L, "arena.private_here", { arena: `<#${arena}>` });
+  return json(body);
 }
 
 // ============================================================== commands
@@ -219,8 +235,9 @@ async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficu
     const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ?)", ix.guild.id, id, id);
     if (busy) return say(t(L, "duel.busy", { name: nm }));
   }
-  const arena = await arenaChannel(ix.env, ix.guild);
-  const channel = arena ?? ix.raw.channel_id;
+  const arena = await strictArena(ix.env, ix.guild);
+  if (!arena) return say(t(L, "duel.no_arena"));
+  const channel = arena;
   const r = await run(ix.env, "INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, mode, difficulty, stake, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ix.guild.id, channel, ix.userId, opponent, mode, difficulty, stake, now());
   const id = Number(r.meta.last_row_id);
@@ -232,12 +249,13 @@ async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficu
     components: [row(btn(t(L, "duel.accept"), `dacc:${id}`, 3, "⚔️"), btn(t(L, "duel.decline"), `ddec:${id}`, 4))],
     allowed_mentions: pingUsers([opponent]),
   };
-  if (arena && arena !== ix.raw.channel_id) {
+  if (arena !== ix.raw.channel_id) {
     try {
       await send(ix.env, arena, invite);
       return say(t(L, "duel.posted", { channel: `<#${arena}>` }));
     } catch {
-      await run(ix.env, "UPDATE duels SET channel_id = ? WHERE id = ?", ix.raw.channel_id, id);
+      await run(ix.env, "UPDATE duels SET status = 'expired' WHERE id = ?", id);
+      return say(t(L, "duel.no_arena"));
     }
   }
   return reply(invite);

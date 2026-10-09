@@ -1081,6 +1081,30 @@ section("anti-farming: quick challenges shrink after a few a day, write code nev
   await api("PUT", "/api/settings", { g: G, scoring: null });
 }
 
+section("public messages stay in #arena");
+{
+  const lb = await slash(U.alice, "leaderboard", {});
+  check(lb.data?.flags === 64 && text(lb).includes(`<#${ARENA}>`), "a command used outside #arena answers privately and points to #arena");
+  const r = raw(2, U.alice, { name: "leaderboard", type: 1, options: [], resolved: resolvedFor({}) });
+  r.channel_id = ARENA;
+  const lbA = await call(r);
+  check(lbA.type === 4 && !(lbA.data?.flags & 64), "in #arena it stays public");
+  const before = messagesTo(CH).length;
+  const d = await slash(U.alice, "duel", { opponent: U.bob.id, mode: "quick", difficulty: "easy" });
+  check(d.data?.flags === 64 && messagesTo(CH).length === before && messagesTo(ARENA).some((m) => text(m).includes("dacc:")), "a duel started elsewhere is posted in #arena only");
+  const did = q1("SELECT id FROM duels ORDER BY id DESC LIMIT 1").id;
+  db.prepare("UPDATE duels SET status = 'expired' WHERE id = ?").run(did);
+  const saved = q1("SELECT arena_channel, announce_channel FROM guilds WHERE id = ?", G);
+  db.prepare("UPDATE guilds SET arena_channel = NULL, announce_channel = ? WHERE id = ?").run(CH, G);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (u: any, init: any) => (String(u).endsWith(`/guilds/${G}/channels`) ? new Response(JSON.stringify([{ id: CH, name: "general", type: 0 }]), { status: 200, headers: { "content-type": "application/json" } }) : realFetch(u, init))) as any;
+  clock.advance(3600);
+  const nd = await slash(U.alice, "duel", { opponent: U.bob.id, mode: "quick", difficulty: "easy" });
+  globalThis.fetch = realFetch;
+  check(nd.data?.flags === 64 && text(nd).includes("arena") && messagesTo(CH).length === before, "no #arena: duels are refused instead of filling #general");
+  db.prepare("UPDATE guilds SET arena_channel = ?, announce_channel = ? WHERE id = ?").run(saved.arena_channel, saved.announce_channel, G);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
