@@ -1,0 +1,8 @@
+node_modules/
+.env
+.dev.vars
+.wrangler/
+.setup.json
+_to_delete/
+.dev.vars.*
+*.log

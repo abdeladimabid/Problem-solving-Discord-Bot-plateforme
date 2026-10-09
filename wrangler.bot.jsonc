@@ -1,0 +1,34 @@
+// The public bot Worker: Discord interactions, cron jobs, race replays.
+// Fill in the 4 values marked PASTE (see README, steps 3–5).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "classbot",
+  "main": "src/bot/index.ts",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+
+  // runs every minute: contests, duel timeouts, reminders, daily challenge, weekly recap
+  "triggers": { "crons": ["* * * * *"] },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "classbot-db",
+      "database_id": "ebd8fce7-7393-403c-a38b-f6edbb5dbc94",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  "ai": { "binding": "AI" },
+
+  "vars": {
+    "DISCORD_APP_ID": "1557727693561266187",
+    "DISCORD_PUBLIC_KEY": "5aa789238c844cfefd0a1eb83997947f00d1ea8d9c1b34deb1454e5787372eba",
+    "PUBLIC_URL": "https://classbot.abdeladim-abid.workers.dev",
+    "DASHBOARD_URL": "https://classbot-admin.abdeladim-abid.workers.dev",
+    // max new AI challenges per day (free tier: 10,000 neurons ≈ 80 checked challenges)
+    "AI_DAILY_LIMIT": "60"
+  }
+  // secret (not in this file): DISCORD_TOKEN → npx wrangler secret put DISCORD_TOKEN -c wrangler.bot.jsonc
+}

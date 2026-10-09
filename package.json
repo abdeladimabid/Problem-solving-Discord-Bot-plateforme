@@ -1,0 +1,29 @@
+{
+  "name": "classbot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord coding-practice bot + teacher dashboard, running free on Cloudflare",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "setup:password": "node scripts/setup.mjs password",
+    "setup:access": "node scripts/setup.mjs access",
+    "db:migrate": "wrangler d1 migrations apply classbot-db --remote -c wrangler.bot.jsonc",
+    "deploy:bot": "wrangler deploy -c wrangler.bot.jsonc",
+    "deploy:admin": "wrangler deploy -c wrangler.admin.jsonc",
+    "deploy": "npm run deploy:bot && npm run deploy:admin",
+    "register": "node --experimental-strip-types --no-warnings --env-file=.env scripts/register-commands.mjs",
+    "update": "npm run db:migrate && npm run deploy",
+    "logs": "wrangler tail -c wrangler.bot.jsonc",
+    "test": "node --experimental-strip-types --no-warnings tests/run.ts",
+    "preview": "node --experimental-strip-types --no-warnings tests/preview.ts"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=22.6"
+  }
+}
