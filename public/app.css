@@ -537,3 +537,12 @@ ol.league li.me b { color: var(--blue); }
 .wo-ev li .small { color: var(--ink-faint); }
 .wo-revisit { margin-top: 8px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); }
 .wo-revisit ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }
+
+.wo-fold > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.wo-fold > summary::-webkit-details-marker { display: none; }
+.wo-fold > summary::before { content: "▸"; font-size: 14px; color: var(--ink-faint); transition: transform .15s; }
+.wo-fold[open] > summary::before { transform: rotate(90deg); }
+.wo-sum-title { font-weight: 700; font-size: 17px; }
+.wo-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.wo-hint { margin-left: auto; }
+.wo-fold[open] .wo-hint { display: none; }
