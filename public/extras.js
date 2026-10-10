@@ -552,8 +552,8 @@ async function loadNotify(state) {
   box.innerHTML = `
     <p class="muted small">When a student needs you, the bot sends you a private message on Discord with the question and a button that opens it here.</p>
     <p>${who}</p>
-    <label class="check"><input type="checkbox" id="nt-hands" ${d.cfg.hands ? "checked" : ""}> ✋ A student raises a hand (<code>/help-me</code>)</label>
-    <label class="check"><input type="checkbox" id="nt-ask" ${d.cfg.ask ? "checked" : ""}> ❓ A student asks a new question (<code>/ask</code>, when the FAQ doesn't already answer it)</label>
+    <label class="check"><input type="checkbox" id="nt-hands" ${d.cfg.hands ? "checked" : ""}><span>✋ A student raises a hand (<code>/help-me</code>)</span></label>
+    <label class="check"><input type="checkbox" id="nt-ask" ${d.cfg.ask ? "checked" : ""}><span>❓ A student asks a new question (<code>/ask</code>, when the FAQ doesn't already answer it)</span></label>
     ${d.dashboard ? "" : `<p class="small late-wait">DASHBOARD_URL isn't set for the bot, so the DMs won't have the "Answer in the dashboard" button.</p>`}
     <p class="toolbar" style="margin-top:12px"><button class="btn" id="nt-test" ${d.teacher ? "" : "disabled"}>Send me a test DM</button><span class="small" id="nt-out"></span></p>`;
   const save = () => api("/notify", { method: "PUT", body: { hands: $("#nt-hands").checked, ask: $("#nt-ask").checked } }).then(() => toast("Notifications saved")).catch((e) => toast(e.message, true));

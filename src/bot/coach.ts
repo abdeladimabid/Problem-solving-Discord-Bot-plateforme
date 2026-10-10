@@ -148,7 +148,8 @@ export async function planButton(ix: Ix, arg: string, fromDm: boolean) {
 }
 
 /** Morning: send their plan to students who asked for it (a few per run). */
-export async function sendMorningPlans(env: Env, perRun = 6) {
+// 2 per minute: building a plan takes ~20 queries, and one cron run may use 50 in total
+export async function sendMorningPlans(env: Env, perRun = 2) {
   const t0 = now(), hour = new Date(t0 * 1000).getUTCHours(), day = dayKey(t0);
   const rows = await all<{ guild_id: string; discord_id: string }>(env,
     `SELECT p.guild_id, p.discord_id FROM players p JOIN guilds g ON g.id = p.guild_id

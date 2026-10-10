@@ -37,7 +37,7 @@ export async function runCron(env: Env) {
   let generated = false;
   await safe("queue", async () => { generated = (await processQueue(env, 1)) > 0; });
   await safe("commands", () => syncCommands(env));
-  await safe("skills", () => backfillSkills(env, 80));
+  if (new Date().getUTCMinutes() % 10 === 0) await safe("skills", () => backfillSkills(env, 80));   // new challenges are tagged when picked anyway
   await safe("contests", () => pollDueContests(env));
   await safe("sessions", () => endDueSessions(env));
   await safe("duels", () => sweepDuels(env));

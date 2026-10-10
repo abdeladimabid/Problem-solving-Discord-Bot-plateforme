@@ -158,7 +158,7 @@ export const skillsOf = (c: { skills?: string | null } & Parameters<typeof guess
 
 /** Fill in the skills of challenges that don't have them yet (AI-made, teacher-made, imported). */
 export async function backfillSkills(env: Env, limit = 60) {
-  const rows = await all<ChallengeRow>(env, "SELECT * FROM challenges WHERE skills IS NULL LIMIT ?", limit);
+  const rows = await all<ChallengeRow>(env, "SELECT id, kind, title, topic, question, code, solution, test_set, hr_slug FROM challenges WHERE skills IS NULL LIMIT ?", limit);
   if (!rows.length) return 0;
   await env.DB.batch(rows.map((c) => env.DB.prepare("UPDATE challenges SET skills = ? WHERE id = ?").bind(guessSkills(c).join(","), c.id)));
   return rows.length;
@@ -207,7 +207,7 @@ export async function studentAttempts(env: Env, guildId: string, discordId: stri
 }
 
 /** Mastery of every skill from a student's attempts (recent ones count more). */
-export function masteryFrom(attempts: AttemptLite[]): SkillScore[] {
+export function masteryFrom(attempts: AttemptLite[], opts: { recency?: boolean } = {}): SkillScore[] {
   type Acc = { w: number; s: number };
   const acc = new Map<string, { code: Acc; quick: Acc; solved: number; failed: number; best: number; mistakes: number }>();
   let nAtt = 0, nEv = 0;
@@ -215,8 +215,8 @@ export function masteryFrom(attempts: AttemptLite[]): SkillScore[] {
     if (a.status === "claimed") continue;
     const isEv = a.kind === "evidence";
     const i = isEv ? nEv++ : nAtt++;
-    const recency = isEv ? (i < 60 ? 1 : i < 180 ? 0.6 : 0.3) : (i < 40 ? 1 : i < 120 ? 0.6 : 0.3);
-    const w = (isEv ? a.weight ?? 1 : DIFF_W[a.difficulty] ?? 1) * recency;
+    const recency = opts.recency === false ? 1 : isEv ? (i < 60 ? 1 : i < 180 ? 0.6 : 0.3) : (i < 40 ? 1 : i < 120 ? 0.6 : 0.3);
+    const w = (isEv ? a.weight ?? 1 : (DIFF_W[a.difficulty] ?? 1) * (a.weight ?? 1)) * recency;
     const ok = a.status === "solved";
     const v = ok ? (isEv ? 1 : (a.used_hint ? 0.7 : 1) * (a.tries > 2 ? 0.8 : 1)) : 0;
     const keys = isEv ? [a.skills ?? ""].filter((k) => SKILL_KEYS.includes(k)) : skillsOf({ ...a, skills: a.skills } as any);

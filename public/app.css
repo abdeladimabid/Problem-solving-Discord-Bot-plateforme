@@ -316,7 +316,8 @@ dialog .dlg-foot { display: flex; gap: 10px; justify-content: flex-end; padding:
 .days .acts { display: flex; gap: 6px; }
 table.plan { width: 100%; }
 table.plan td { padding: 4px 6px 4px 0; border: 0; }
-table.plan td:first-child { font-weight: 600; width: 110px; }
+table.plan td:first-child { font-weight: 600; width: 92px; }
+table.plan td:nth-child(2) { width: 34%; }
 table.plan select { width: 100%; }
 .switch { padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-m); }
 .pick-list { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow: auto; }
@@ -427,7 +428,14 @@ details.panel[open] > summary { margin-bottom: 12px; }
 .mg-bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .mg-bar i { display: block; height: 100%; background: var(--down); border-radius: 4px; }
 .skill-bars { display: grid; gap: 6px; }
-.skill-bar { display: grid; grid-template-columns: minmax(0, 190px) 1fr 44px; gap: 10px; align-items: center; font-size: 13px; }
+.skill-bar { display: grid; grid-template-columns: minmax(0, 180px) minmax(60px, 1fr) 42px 92px; gap: 10px; align-items: center; font-size: 13px; }
+.skill-bar .sk-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-bar .sk-tags { display: flex; gap: 4px; justify-content: flex-start; white-space: nowrap; }
+.skill-bar.unproven .track i { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.55) 0 3px, transparent 3px 6px); }
+.sk-pill { display: inline-block; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--ink-faint); font-weight: 600; white-space: nowrap; }
+.sk-pill.bad { background: rgba(220, 38, 38, .12); color: var(--down); }
+.skill-legend { margin: -4px 0 10px; }
+@media (max-width: 560px) { .skill-bar { grid-template-columns: minmax(0, 1fr) 70px 38px; } .skill-bar .sk-tags { grid-column: 1 / -1; } }
 .skill-bar .track { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
 .skill-bar .track i { display: block; height: 100%; border-radius: 5px; }
 .heat td:first-child { white-space: nowrap; }
@@ -516,3 +524,5 @@ ol.league li.me b { color: var(--blue); }
 @media (prefers-reduced-motion: reduce) { .faq-card.flash { outline: 3px solid var(--blue); outline-offset: 4px; border-radius: 10px; }
 .ok-text { color: var(--up); font-weight: 650; }
 .hand-card.flash { animation: none; } }
+
+.heat-cell.unproven b { font-style: italic; font-weight: 600; opacity: .8; }

@@ -64,15 +64,16 @@ export async function sendWeeklyReports(env: Env, perRun = 3) {
   const t0 = now(), d = new Date(t0 * 1000);
   if (d.getUTCDay() !== 1) return;
   const week = weekKey(t0);
+  // one class at a time; once all its reports are sent it's marked done for the week (no more scans until next Monday)
+  const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE daily_hour <= ? AND COALESCE(last_reports, '') != ? LIMIT 1", d.getUTCHours(), week);
+  if (!g) return;
   const rows = await all<{ guild_id: string; discord_id: string; name: string | null }>(env,
     `SELECT DISTINCT a.guild_id, a.discord_id, p.name FROM attempts a
-       JOIN guilds g ON g.id = a.guild_id AND g.daily_hour <= ?
        LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
-      WHERE a.finished_at >= ? AND NOT EXISTS (SELECT 1 FROM weekly_reports r WHERE r.guild_id = a.guild_id AND r.discord_id = a.discord_id AND r.week = ?)
-      LIMIT ?`, d.getUTCHours(), t0 - 7 * 86400, week, perRun);
+      WHERE a.guild_id = ? AND a.finished_at >= ? AND NOT EXISTS (SELECT 1 FROM weekly_reports r WHERE r.guild_id = a.guild_id AND r.discord_id = a.discord_id AND r.week = ?)
+      LIMIT ?`, g.id, t0 - 7 * 86400, week, perRun);
+  if (rows.length < perRun) await run(env, "UPDATE guilds SET last_reports = ? WHERE id = ?", week, g.id);
   for (const r of rows) {
-    const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", r.guild_id);
-    if (!g) continue;
     const f = await weekFacts(env, g, r.discord_id);
     const facts = `This week: ${f.solved} solved out of ${f.tried} tried, ${f.writeSolved} write-code/HackerRank, ${f.points} points, daily plan finished ${f.planDays} days.`
       + (f.improved ? ` Biggest progress: ${skillName(f.improved.key, "en")} (+${f.improved.delta}%).` : "")

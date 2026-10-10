@@ -513,8 +513,14 @@ function coachPanel(c) {
   return `<section class="panel"><h2>Coach</h2>
     <div class="grid cols-2-even">
       <div>
-        <h3>Skills <span class="muted small">(weakest first · 80% from code, 20% from the other types · hover a bar for details)</span></h3>
-        ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar" title="${esc(skillTip(x))}"><span>${esc(skillLabel(x.key))}${x.proven === false ? ` <small class="muted" title="Not shown in code yet: quick challenges alone count for at most 20%">· no code yet</small>` : ""}${x.codeMistakes ? ` <small class="late-wait">· ${x.codeMistakes} code mistake${x.codeMistakes > 1 ? "s" : ""}</small>` : ""}</span><span class="track"><i style="width:${x.mastery}%;background:${masteryInk(x.mastery)}"></i></span><b class="num" style="color:${masteryInk(x.mastery)}">${x.mastery}%</b></div>`).join("")}</div>` : `<p class="empty">Not enough results yet.</p>`}
+        <h3>Skills <span class="muted small">(weakest first)</span></h3>
+        <p class="muted small skill-legend">80% from code, 20% from the other types · <span class="sk-pill">no code</span> not shown in code yet (max 20%) · <span class="sk-pill bad">🐞 2</span> mistakes found in their code · hover a bar for details</p>
+        ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar ${x.proven === false ? "unproven" : ""}" title="${esc(skillTip(x))}">
+          <span class="sk-name">${esc(skillLabel(x.key))}</span>
+          <span class="track"><i style="width:${Math.max(2, x.mastery)}%;background:${masteryInk(x.mastery)}"></i></span>
+          <b class="num" style="color:${masteryInk(x.mastery)}">${x.mastery}%</b>
+          <span class="sk-tags">${x.proven === false ? `<span class="sk-pill">no code</span>` : ""}${x.codeMistakes ? `<span class="sk-pill bad">🐞 ${x.codeMistakes}</span>` : ""}</span>
+        </div>`).join("")}</div>` : `<p class="empty">Not enough results yet.</p>`}
         ${few ? `<p class="muted small">+ ${few} skill(s) with too few tries to judge yet.</p>` : ""}
       </div>
       <div>
@@ -668,6 +674,11 @@ async function loadChallenges(force = false) {
 
 async function viewChallenges(arg) {
   const [rows, reports, calib, proposed] = await Promise.all([loadChallenges(true), api("/reports"), api("/difficulty").catch(() => []), api("/student-challenges").catch(() => []), loadSkillDefs()]);
+  // the class's track language (null for SQL: then only language-free challenges match "this track")
+  const tk = trackKeyOf(S.guild);
+  const trackCode = { sql: null, mern: "javascript", ai: "python" }[tk] !== undefined ? { sql: null, mern: "javascript", ai: "python" }[tk] : tk;
+  const PAGE = 60;
+  let limit = PAGE;
   $("#pill-reports").hidden = !reports.length;
   $("#pill-reports").textContent = reports.length;
   view.innerHTML = `
@@ -691,6 +702,7 @@ async function viewChallenges(arg) {
         <select id="fd" aria-label="Difficulty"><option value="">All difficulties</option>${Object.entries(DIFF).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select id="fs" aria-label="Source"><option value="">All sources</option><option value="seed">Built-in</option><option value="teacher">Mine</option><option value="ai">AI</option><option value="hackerrank">HackerRank</option></select>
         <select id="fsk" aria-label="Skill"><option value="">All skills</option>${S.skillDefs.map((d) => `<option value="${d.key}">${esc(d.emoji + " " + d.en)}</option>`).join("")}</select>
+        <select id="fl" aria-label="Language"><option value="track">${esc(trackCode ? `${LANG[trackCode] || trackCode} + any language` : "This track")}</option><option value="">All languages</option>${Object.entries(LANG).map(([k, v]) => `<option value="${k}">${esc(v)} only</option>`).join("")}</select>
       </div>
       ${calib.length ? `<details class="panel" id="calib"><summary><b>Difficulty check</b> <span class="pill-inline">${calib.length}</span> <span class="muted small">challenges whose real success rate doesn't match their level</span></summary>
         <div class="table-wrap"><table><thead><tr><th>Challenge</th><th>Now</th><th class="num">Tries</th><th class="num">Solved</th><th>Suggestion</th><th></th></tr></thead><tbody>
@@ -700,20 +712,25 @@ async function viewChallenges(arg) {
       <section class="panel" id="list"></section>
     </div>`;
   const draw = () => {
-    const q = $("#q").value.toLowerCase(), k = $("#fk").value, dif = $("#fd").value, src = $("#fs").value, sk = $("#fsk").value;
-    const shown = rows.filter((r) => (!q || `${r.title} ${r.topic || ""}`.toLowerCase().includes(q)) && (!k || r.kind === k) && (!dif || r.difficulty === dif) && (!src || r.source === src) && (!sk || (r.skills || "").split(",").includes(sk)));
+    const q = $("#q").value.toLowerCase(), k = $("#fk").value, dif = $("#fd").value, src = $("#fs").value, sk = $("#fsk").value, fl = $("#fl").value;
+    const langOk = (r) => !fl || (fl === "track" ? !r.code_lang || r.code_lang === trackCode : r.code_lang === fl);
+    const all = rows.filter((r) => (!q || `${r.title} ${r.topic || ""}`.toLowerCase().includes(q)) && (!k || r.kind === k) && (!dif || r.difficulty === dif) && (!src || r.source === src) && (!sk || (r.skills || "").split(",").includes(sk)) && langOk(r));
+    const shown = all.slice(0, limit);
     shown.forEach((r) => (r.rate = r.solved + r.failed ? Math.round((100 * r.solved) / (r.solved + r.failed)) : null));
     $("#list").innerHTML = table([
       { label: "Title", sort: "title", html: (r) => `${esc(r.title)}<div class="small">${skillTags(r.skills)}</div>` },
-      { label: "Type", sort: "kind", html: (r) => esc(KIND[r.kind] || r.kind) },
+      { label: "Type", sort: "kind", html: (r) => `${esc(KIND[r.kind] || r.kind)}${r.code_lang ? `<div class="muted small">${esc(LANG[r.code_lang] || r.code_lang)}</div>` : ""}` },
       { label: "Difficulty", sort: "difficulty", html: (r) => diffTag(r.difficulty) },
       { label: "Source", sort: "source", html: (r) => esc({ seed: "Built-in", teacher: "Mine", ai: "AI", hackerrank: "HackerRank" }[r.source] || r.source) },
       { label: "Attempts", sort: "attempts", num: true, html: (r) => `${r.attempts}` },
       { label: "Success", sort: "rate", num: true, html: (r) => pct(r.rate) },
       { label: "Status", sort: "status", html: (r) => (r.status === "active" ? '<span class="muted small">in rotation</span>' : status(r.status === "pending" ? "review" : r.status)) },
-    ], shown, { onRow: (r) => editChallenge(r.id), empty: "No challenge matches these filters." });
+    ], shown, { onRow: (r) => editChallenge(r.id), empty: "No challenge matches these filters." })
+      + `<p class="muted small" style="margin:12px 0 0">Showing ${shown.length} of ${all.length}${all.length < rows.length ? ` (${rows.length} in the bank)` : ""}. ${all.length > shown.length ? `<button class="btn small" id="more">Show ${Math.min(PAGE, all.length - shown.length)} more</button> <button class="btn small" id="allrows">Show all</button>` : ""}</p>`;
+    if ($("#more")) $("#more").onclick = () => { limit += PAGE; draw(); };
+    if ($("#allrows")) $("#allrows").onclick = () => { limit = Infinity; draw(); };
   };
-  ["#q", "#fk", "#fd", "#fs", "#fsk"].forEach((s) => ($(s).oninput = draw));
+  ["#q", "#fk", "#fd", "#fs", "#fsk", "#fl"].forEach((s) => ($(s).oninput = () => { limit = PAGE; draw(); }));
   draw();
   $$("[data-edit]").forEach((a) => a.onclick = (e) => { e.preventDefault(); editChallenge(Number(a.dataset.edit)); });
   $$("[data-propedit]").forEach((b) => b.onclick = () => editChallenge(Number(b.dataset.propedit)));
@@ -1078,7 +1095,7 @@ async function viewTeams() {
   view.innerHTML = `
     <div class="page-head"><div><h1>Teams</h1><p class="sub">A team's contest score is the average of its members, so everyone counts.</p></div>
       <div class="toolbar" style="margin:0"><input type="text" id="tn" placeholder="New team name" aria-label="New team name"><button class="btn primary" id="add">Create team</button></div></div>
-    ${teams.length ? `<div class="grid cols-2-even">${teams.map((t) => `<section class="panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><h2>${esc(t.name)}</h2><span class="muted">${t.points} season pts</span></div>
+    ${teams.length ? `<div class="grid cols-2-even">${teams.map((t) => `<section class="panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><h2>${esc(t.name)}</h2><span class="muted" title="Team points from HackerRank contests this season">${t.points} contest pts</span></div>
       <p>${t.members.length ? t.members.map((m) => `<a href="#/student/${m.id}">${esc(m.name || m.id)}</a>`).join(", ") : '<span class="muted">No members yet.</span>'}</p>
       <div class="toolbar" style="margin:0"><button class="btn small" data-edit="${t.id}">Choose members</button><button class="btn small danger" data-del="${t.id}">Delete</button></div></section>`).join("")}</div>`
       : `<div class="panel"><p class="empty">No teams yet. Create one above, then choose its members.</p></div>`}`;
@@ -1186,7 +1203,7 @@ async function viewSettings() {
             <div><label for="sq-red">then this many more</label><input type="number" min="0" max="1000" id="sq-red" value="${sc.quick.reduced}"></div>
             <div><label for="sq-pct">at (% of the points)</label><input type="number" min="0" max="100" id="sq-pct" value="${sc.quick.pct}"></div>
           </div>
-          <label class="check"><input type="checkbox" id="sq-lock" ${sc.quick.lock !== false ? "checked" : ""}> 🔒 After that, students <b>can't pick quick challenges</b> until the next day (in <code>/practice</code> and quick duels)</label>
+          <label class="check"><input type="checkbox" id="sq-lock" ${sc.quick.lock !== false ? "checked" : ""}><span>🔒 After that, students <b>can't pick quick challenges</b> until the next day (in <code>/practice</code> and quick duels)</span></label>
           <p class="muted small" id="sq-sum"></p>
           <div class="field-row">
             <div><label for="s-cap">Max quick-challenge points a day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
@@ -1374,8 +1391,10 @@ async function viewDaily() {
           <label for="dy-h">Time <span class="muted">(UTC hour)</span></label>
           <div class="field-row" style="align-items:center"><input type="number" id="dy-h" min="0" max="23" value="${d.hour}" style="max-width:110px"><span class="muted small" id="dy-local"></span></div>
           <label>Language of quick challenges</label>
-          <div class="checks" id="dy-langs">${["javascript", "php", "python", "java", "c", "cpp"].map((l) => `<label class="check"><input type="checkbox" value="${l}" ${cfg.langs.includes(l) ? "checked" : ""}> ${esc(LANG[l])}</label>`).join("")}</div>
-          <p class="muted small">None ticked = the class languages (${esc(d.classLangs.map((l) => LANG[l] || l).join(", "))}). Write-code problems are answered in any language.</p>
+          <p class="small" style="margin:4px 0">${cfg.langs.length ? `Only <b>${esc(cfg.langs.map((l) => LANG[l] || l).join(", "))}</b> (your choice below)` : `Follows the class track: <b>${esc(d.classLangs.map((l) => LANG[l] || l).join(", ") || "no code language")}</b>`}. Write-code problems are answered in any language.</p>
+          <details ${cfg.langs.length ? "open" : ""}><summary class="small muted">Use other languages for the daily challenge</summary>
+            <div class="checks" id="dy-langs">${["javascript", "php", "python", "java", "c", "cpp"].map((l) => `<label class="check"><input type="checkbox" value="${l}" ${cfg.langs.includes(l) ? "checked" : ""}> ${esc(LANG[l])}</label>`).join("")}</div>
+            <p class="muted small">None ticked = the class track.</p></details>
           <h3>Weekly plan</h3>
           <table class="plan"><tbody>${[1, 2, 3, 4, 5, 6, 0].map((i) => `<tr><td>${WEEKDAYS[i]}</td>
               <td><select data-pd="${i}">${Object.entries(DIFF).map(([k, v]) => `<option value="${k}" ${cfg.plan[i][0] === k ? "selected" : ""}>${v}</option>`).join("")}</select></td>
@@ -2054,20 +2073,25 @@ async function viewSkills() {
   const sortBy = sessionStorage.getItem("classbot.skSort") || "";
   const rows = [...d.students];
   if (sortBy) rows.sort((a, b) => (a.skills[sortBy]?.mastery ?? 101) - (b.skills[sortBy]?.mastery ?? 101));
-  const weak = Object.entries(d.average).filter(([, v]) => v != null).sort((a, b) => a[1] - b[1]).slice(0, 3);
+  let showAll = false;
+  try { showAll = sessionStorage.getItem("classbot.skAll") === "1"; } catch { /* storage blocked */ }
+  const cols = showAll || !d.track?.length ? d.skills : d.track;
+  const weak = Object.entries(d.average).filter(([k, v]) => v != null && cols.includes(k)).sort((a, b) => a[1] - b[1]).slice(0, 3);
   view.innerHTML = `
-    <div class="page-head"><div><h1>Skills</h1><p class="sub">How well each student masters each skill (last 4 months). Click a skill to sort, or to send a practice set.</p></div></div>
+    <div class="page-head"><div><h1>Skills</h1><p class="sub">How well each student masters each skill (last 4 months): 80% from the code they write, 20% from the other types. Click a skill to sort, or to send a practice set.</p></div>
+      ${d.track?.length && d.track.length < d.skills.length ? `<label class="check" style="margin:0"><input type="checkbox" id="sk-all" ${showAll ? "checked" : ""}><span>Show skills outside this class's track (${d.skills.length - d.track.length})</span></label>` : ""}</div>
     <div class="stack">
       ${weak.length ? `<div class="figures">${weak.map(([k, v]) => `<button class="figure clickable" data-pset="${k}" title="Send a practice set"><b style="color:${masteryInk(v)}">${v}%</b><span>${esc(skillLabel(k))} · class average</span></button>`).join("")}
         <div class="figure"><b>${d.students.length}</b><span>students with results</span></div></div>` : ""}
       <section class="panel">
-        ${d.students.length ? `<div class="table-wrap heat"><table><thead><tr><th>Student</th>${d.skills.map((k) => `<th class="ctr heat-col ${sortBy === k ? "sorted" : ""}" data-sort="${k}" title="${esc(skillLabel(k))}: sort / practice set"><span>${esc(skillLabel(k))}</span></th>`).join("")}</tr>
-          <tr class="avg"><td class="muted small">Class average</td>${d.skills.map((k) => `<td class="ctr"><b style="color:${masteryInk(d.average[k])}">${d.average[k] ?? "—"}${d.average[k] != null ? "%" : ""}</b></td>`).join("")}</tr></thead>
-          <tbody>${rows.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${d.skills.map((k) => {
+        ${d.students.length ? `<div class="table-wrap heat"><table><thead><tr><th>Student</th>${cols.map((k) => `<th class="ctr heat-col ${sortBy === k ? "sorted" : ""}" data-sort="${k}" title="${esc(skillLabel(k))}: sort / practice set"><span>${esc(skillLabel(k))}</span></th>`).join("")}</tr>
+          <tr class="avg"><td class="muted small">Class average</td>${cols.map((k) => `<td class="ctr"><b style="color:${masteryInk(d.average[k])}">${d.average[k] ?? "—"}${d.average[k] != null ? "%" : ""}</b></td>`).join("")}</tr></thead>
+          <tbody>${rows.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${cols.map((k) => {
             const v = st.skills[k];
-            return `<td class="heat-cell" style="background:${v && v.evidence >= 2 ? masteryColor(v.mastery) : "transparent"}" title="${esc(skillLabel(k))}: ${v ? `${v.mastery}% (${v.evidence} pts of evidence)` : "not tried"}">${v && v.evidence >= 2 ? `<b style="color:${masteryInk(v.mastery)}">${v.mastery}</b>` : `<span class="muted">${v ? "·" : ""}</span>`}</td>`;
+            const tip = v ? `${v.mastery}%${v.code != null ? ` · code ${v.code}%` : v.proven === false ? " · not shown in code yet" : ""}${v.codeMistakes ? ` · ${v.codeMistakes} mistake(s) in their code` : ""}` : "not tried";
+            return `<td class="heat-cell ${v && v.proven === false ? "unproven" : ""}" style="background:${v && v.evidence >= 2 ? masteryColor(v.mastery) : "transparent"}" title="${esc(skillLabel(k))}: ${esc(tip)}">${v && v.evidence >= 2 ? `<b style="color:${masteryInk(v.mastery)}">${v.mastery}</b>` : `<span class="muted">${v ? "·" : ""}</span>`}</td>`;
           }).join("")}</tr>`).join("")}</tbody></table></div>
-          <p class="muted small">🟩 75%+ solid · 🟨 45–74% getting there · 🟥 under 45% needs work · empty = not enough tries yet. Recent and harder challenges count more.</p>`
+          <p class="muted small">🟩 75%+ solid · 🟨 45–74% getting there · 🟥 under 45% needs work · empty = not enough tries yet · <i>italic</i> = not shown in code yet (max 20%). Harder challenges count more.</p>`
         : `<p class="empty">No results yet. The map fills in as students solve challenges.</p>`}
       </section>
     </div>`;
@@ -2080,6 +2104,8 @@ async function viewSkills() {
     ]);
   });
   $$("[data-pset]").forEach((b) => b.onclick = () => practiceSetDialog(b.dataset.pset, d));
+  const all = $("#sk-all");
+  if (all) all.onchange = () => { try { sessionStorage.setItem("classbot.skAll", all.checked ? "1" : "0"); } catch { /* ignore */ } viewSkills(); };
 }
 
 function practiceSetDialog(skill, d) {

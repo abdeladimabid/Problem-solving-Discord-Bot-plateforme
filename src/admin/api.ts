@@ -658,15 +658,18 @@ async function reviewAttempt(env: Env, g: GuildRow, attemptId: number, approve: 
 
 // ============================================================ challenges
 async function challenges(env: Env, g: GuildRow) {
+  // one pass over this class's attempts and the open reports, instead of 4 subqueries per challenge
   return all(env,
     `SELECT c.id, c.guild_id, c.source, c.kind, c.difficulty, c.lang, c.code_lang, c.title, c.topic, c.url, c.status, c.created_at, c.created_by, c.time_limit, c.skills,
-       (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ?) AS attempts,
-       (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ? AND (a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1))) AS solved,
-       (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ? AND a.status = 'failed') AS failed,
-       (SELECT COUNT(*) FROM reports r WHERE r.challenge_id = c.id AND r.status = 'open') AS reports
-     FROM challenges c WHERE (c.guild_id IS NULL OR c.guild_id = ?) AND c.status != 'archived'
+       COALESCE(s.attempts, 0) AS attempts, COALESCE(s.solved, 0) AS solved, COALESCE(s.failed, 0) AS failed, COALESCE(r.n, 0) AS reports
+     FROM challenges c
+     LEFT JOIN (SELECT challenge_id, COUNT(*) AS attempts,
+                       SUM(status = 'solved' OR (status = 'claimed' AND verified = 1)) AS solved, SUM(status = 'failed') AS failed
+                  FROM attempts WHERE guild_id = ? GROUP BY challenge_id) s ON s.challenge_id = c.id
+     LEFT JOIN (SELECT challenge_id, COUNT(*) AS n FROM reports WHERE status = 'open' GROUP BY challenge_id) r ON r.challenge_id = c.id
+     WHERE (c.guild_id IS NULL OR c.guild_id = ?) AND c.status != 'archived'
        AND (c.kind = 'code' OR c.lang = ? OR c.guild_id = ?)
-     ORDER BY c.id DESC LIMIT 1000`, g.id, g.id, g.id, g.id, g.lang, g.id);
+     ORDER BY c.id DESC LIMIT 1000`, g.id, g.id, g.lang, g.id);
 }
 
 async function challengeDetail(env: Env, g: GuildRow, cid: number) {
@@ -1142,7 +1145,7 @@ async function integrityList(env: Env, g: GuildRow, includeReviewed: boolean) {
     `SELECT a.id, a.discord_id, p.name, a.challenge_id, c.title, c.kind, c.difficulty, a.origin, a.ref, a.status, a.points, a.lang, a.integrity, a.explain, a.reviewed, a.finished_at, a.started_at,
             (SELECT 1 FROM attempt_logs l WHERE l.attempt_id = a.id) AS has_log
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
-      WHERE a.guild_id = ? AND a.integrity IS NOT NULL ${includeReviewed ? "" : "AND a.reviewed = 0"} ORDER BY a.id DESC LIMIT 300`, g.id);
+      WHERE a.guild_id = ? AND a.integrity IS NOT NULL ${includeReviewed ? "" : "AND a.reviewed = 0 AND json_extract(a.integrity, '$.level') > 0"} ORDER BY a.id DESC LIMIT 300`, g.id);
   return rows.map((r) => {
     let rep: any = null, ex: any = null;
     try { rep = JSON.parse(r.integrity); } catch { rep = null; }
@@ -1182,18 +1185,15 @@ async function sendPracticeSet(env: Env, g: GuildRow, b: any, ctx: Ctx) {
   if (!students.length) throw new HttpError(400, "choose at least one student");
   const count = Math.min(5, Math.max(1, Math.round(Number(b.count) || 3)));
   const dueAt = b.due_at ? Number(b.due_at) : null;
-  // each student works at their own level on this skill
-  const levels = new Map<string, "easy" | "medium" | "hard">();
-  for (const u of students) levels.set(u, (await studentProfile(env, g, u)).skills.find((x) => x.key === skill)?.target ?? "easy");
-  const made = await practiceSet(env, g, { skill, students, count, dueAt, note: b.note ? String(b.note).slice(0, 300) : null }, (u) => levels.get(u) ?? "easy");
+  // each student works at their own level on this skill (a few queries for the whole class)
+  const made = await practiceSet(env, g, { skill, students, count, dueAt, note: b.note ? String(b.note).slice(0, 300) : null });
   const L = g.lang;
   ctx.waitUntil((async () => {
-    for (const m of made.slice(0, 20)) {
-      if (!m.challenges.length) continue;
-      const asg = await all<{ id: number }>(env, `SELECT id FROM assignments WHERE guild_id = ? AND discord_id = ? AND challenge_id IN (${m.challenges.map(() => "?").join(", ")}) AND status = 'open' ORDER BY id DESC LIMIT 5`, g.id, m.discord_id, ...m.challenges);
+    for (const m of made.slice(0, 20)) {          // 2 Discord calls each: stays under the free plan's limit
+      if (!m.assignments.length) continue;
       await dm(env, m.discord_id, {
         content: t(L, "pset.dm", { skill: skillName(skill, L), n: m.challenges.length, due: dueAt ? `<t:${dueAt}:R>` : t(L, "pset.no_due") }),
-        components: [{ type: 1, components: asg.map((a, i) => ({ type: 2, style: 1, label: `${i + 1}`, emoji: { name: "📚" }, custom_id: `astart:${a.id}` })) }],
+        components: [{ type: 1, components: m.assignments.slice(0, 5).map((id, i) => ({ type: 2, style: 1, label: `${i + 1}`, emoji: { name: "📚" }, custom_id: `astart:${id}` })) }],
       }).catch(() => {});
     }
   })());
