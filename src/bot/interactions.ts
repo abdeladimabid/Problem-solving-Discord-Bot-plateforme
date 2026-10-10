@@ -2,6 +2,8 @@
 // Anything that touches the database more than a couple of times is DEFERRED
 // (Discord gets an answer within 3 seconds, the real work continues after).
 import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow, Lang } from "../shared/types.ts";
+import { levelFor, tailoredPick } from "../shared/forme.ts";
+import { SKILLS, skillName } from "../shared/skills.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg, setTeacher } from "../shared/notify.ts";
 import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
@@ -87,9 +89,11 @@ async function command(ix: Ix): Promise<Response> {
     // SQL isn't run like the other languages: choosing it means "give me a SQL query challenge"
     // SQL isn't run like the other languages: choosing it means "give me a SQL query challenge";
     // in a SQL class, /practice without a type gives SQL too
-    case "practice": return o.language === "sql" || (!o.type && !o.topic && !o.language && trackOf(ix.guild).family === "sql")
-      ? cmdPractice(ix, o.difficulty, "sql", null, null)
-      : cmdPractice(ix, o.difficulty, o.type ?? "quick", o.topic ?? null, o.language ?? null);
+    case "practice":
+      if (o.type === "forme") return cmdForMe(ix, o.difficulty ?? null);
+      return o.language === "sql" || (!o.type && !o.topic && !o.language && trackOf(ix.guild).family === "sql")
+        ? cmdPractice(ix, o.difficulty ?? null, "sql", null, null)
+        : cmdPractice(ix, o.difficulty ?? null, o.type ?? "quick", o.topic ?? null, o.language ?? null);
     case "duel": return cmdDuel(ix, o.opponent, o.mode ?? "quick", o.difficulty ?? "easy", o.stake ?? 0, o.partner ?? null, o.opponent2 ?? null);
     case "daily": return cmdDaily(ix);
     case "skills": return cmdSkills(ix, o.member ?? ix.userId);
@@ -160,8 +164,34 @@ async function verifyLink(ix: Ix) {
 }
 
 // -------------------------------------------------------------- practice
-async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: string | null, language: string | null) {
+// ------------------------------------------------- 🎯 picked for me
+/** The challenge this student needs next (beginner start, a weak skill, their path), at a level that suits them. */
+async function cmdForMe(ix: Ix, chosen: Difficulty | null) {
   const L = ix.L;
+  later(ix, async () => {
+    const tp = await tailoredPick(ix.env, ix.guild, ix.userId);
+    const level = chosen ?? tp.level;
+    const why = t(L, `forme.${tp.reason}`, { skill: skillName(tp.skill, L), pct: tp.mastery ?? 0, level: t(L, `diff.${level}`) });
+    if (tp.kind === "quick" && (await quickLocked(ix))) return { content: `${why}\n${quickLockedText(ix)}` };
+    const c = await pickForSkill(ix.env, ix.guild, ix.userId, tp.skill, level, { prefer: tp.kind === "quick" ? "quick" : "write", ...(tp.kind === "sql" ? { kind: "sql" } : {}) });
+    if (!c) {
+      // nothing left in the bank for them: the AI writes one, gentler for a beginner or a weak skill
+      const sk = SKILLS.find((x) => x.key === tp.skill)!;
+      const topic = tp.reason === "start" || tp.reason === "weak" ? `${sk.en}: a gentle first exercise for a beginner` : sk.en;
+      const langs = guildLangs(ix.guild);
+      const job = tp.kind === "sql" ? null : await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: tp.kind === "write" ? "write" : "quick", difficulty: level, topic, token: ix.raw.token, codeLang: langs[0] });
+      return { content: job ? `${why}\n${t(L, "forme.generating")}` : `${why}\n${t(L, tp.kind === "sql" ? "ch.none_left_kind" : "ch.queue_busy", { kind: t(L, "kind.sql") })}` };
+    }
+    const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "practice");
+    return renderFor(ix.env, ix.guild, c, a, { notice: why });
+  });
+  return deferReply(true);
+}
+
+async function cmdPractice(ix: Ix, diffIn: Difficulty | null, type: string, topic: string | null, language: string | null) {
+  const L = ix.L;
+  // no level chosen: the one that suits the student (most of their skills are at it)
+  const difficulty: Difficulty = diffIn ?? (await levelFor(ix.env, ix.guild, ix.userId));
   const mode: Mode = type === "coding" ? "coding" : type === "write" ? "write" : "quick";
   if (isCodeLang(language)) await run(ix.env, "UPDATE players SET code_lang = ? WHERE guild_id = ? AND discord_id = ?", language, ix.guild.id, ix.userId);
   const p = await findPlayer(ix.env, ix.guild.id, ix.userId);

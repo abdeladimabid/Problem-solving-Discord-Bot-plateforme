@@ -20,10 +20,11 @@ export const COMMANDS: any[] = [
   {
     name: "practice", description: "Get a challenge at your level", description_localizations: fr("Obtenir un défi à ton niveau"),
     options: [
-      diff(true),
+      { ...diff(false), description: "How hard? (empty = the bot picks a level that suits you)", description_localizations: fr("Quelle difficulté ? (vide = le bot choisit un niveau adapté)") },
       {
         type: STRING, name: "type", description: "Kind of challenge", description_localizations: fr("Type de défi"),
         choices: [
+          { name: "🎯 Picked for me (what I need next)", name_localizations: fr("🎯 Choisi pour moi (ce dont j'ai besoin)"), value: "forme" },
           { name: "Write code (judged by tests)", name_localizations: fr("Écrire du code (jugé par des tests)"), value: "write" },
           { name: "Quick (any, in Discord)", name_localizations: fr("Rapide (au hasard, dans Discord)"), value: "quick" },
           { name: "Predict the output", name_localizations: fr("Deviner la sortie"), value: "output" },

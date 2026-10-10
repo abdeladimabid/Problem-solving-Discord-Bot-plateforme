@@ -534,6 +534,34 @@ function coachPanel(c) {
     </div></section>`;
 }
 
+/** "What to work on": each skill with the evidence behind it, so the teacher sees WHY. */
+function workOnPanel(list, sid) {
+  if (!list?.length) return "";
+  const ev = (rows, icon, label) => rows.length ? `<div class="wo-ev"><b class="small">${icon} ${label}</b><ul>${rows.map((r) =>
+    `<li><a href="#" data-wocid="${r.challenge_id}">${esc(r.title)}</a> ${diffTag(r.difficulty)} <span class="muted small">${esc(fmtAgo(r.when))}</span><div class="small">${esc(r.detail)}</div></li>`).join("")}</ul></div>` : "";
+  return `<section class="panel"><div class="panel-head"><h2>What to work on</h2><span class="muted small">from their own answers and code, last 4 months</span></div>
+    <div class="wo-list">${list.map((w) => `<article class="wo">
+      <header>
+        <b>${esc(skillLabel(w.skill))}</b>
+        <b class="num" style="color:${masteryInk(w.mastery)}">${w.mastery}%</b>
+        <span class="muted small">${w.code != null ? `code ${w.code}%` : "not shown in code yet"}${w.quick != null ? ` · other types ${w.quick}%` : ""} · start at ${esc(DIFF[w.level] || w.level)}</span>
+      </header>
+      <p class="wo-why"><b>Why:</b> ${esc(w.why)}</p>
+      ${ev(w.failedCode, "💻", "Code challenges not solved")}
+      ${ev(w.codeMistakes, "🐞", `Mistakes in their code about ${skillLabel(w.skill).replace(/^\S+\s/, "")}`)}
+      ${ev(w.missedQuick, "❓", "Questions missed")}
+      <p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" data-wopset="${esc(w.skill)}" data-level="${esc(w.level)}">📚 Give 3 challenges on it</button><button class="btn small" data-wogen="${esc(w.skill)}" data-level="${esc(w.level)}">✨ Generate new ones</button></p>
+    </article>`).join("")}</div></section>`;
+}
+function wireWorkOn(sid) {
+  $$("[data-wocid]").forEach((a) => a.onclick = (e) => { e.preventDefault(); editChallenge(Number(a.dataset.wocid)); });
+  $$("[data-wogen]").forEach((b) => b.onclick = () => genForSkillDialog(b.dataset.wogen, b.dataset.level));
+  $$("[data-wopset]").forEach((b) => b.onclick = () => busy(b, async () => {
+    const r = await api("/skills/practice-set", { method: "POST", body: { skill: b.dataset.wopset, students: [sid], count: 3, due_at: Math.floor(Date.now() / 1000) + 7 * 86400 } });
+    toast(r.assignments ? `${r.assignments} challenge(s) assigned at their level, due in a week (sent by DM)` : "No new challenge left on this skill: use ✨ Generate new ones", !r.assignments);
+  }));
+}
+
 async function viewStudent(id) {
   const [d, list] = await Promise.all([api(`/students/${id}`), loadStudents(), loadSkillDefs()]);
   const row = list.find((r) => r.discord_id === id) || { attention: [], trend: "flat" };
@@ -570,6 +598,7 @@ async function viewStudent(id) {
         <div class="figure"><b>${d.contests.played}</b><span>contests · ${d.contests.wins} won · ${d.contests.podiums} podiums</span></div>
       </div>
       ${coachPanel(d.coach)}
+      ${workOnPanel(d.coach?.workOn, id)}
       <div class="grid cols-2-even">
         <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
         <section class="panel"><h2>Contest results</h2>${d.contestList.length > 0
@@ -650,6 +679,7 @@ async function viewStudent(id) {
   $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
   showTab("solved");
   $("#assign").onclick = () => assignDialog([id]);
+  wireWorkOn(id);
   const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(id); };
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);

@@ -526,3 +526,12 @@ ol.league li.me b { color: var(--blue); }
 .hand-card.flash { animation: none; } }
 
 .heat-cell.unproven b { font-style: italic; font-weight: 600; opacity: .8; }
+
+/* student page: what to work on */
+.wo-list { display: grid; gap: 12px; }
+.wo { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.wo header { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; }
+.wo-why { margin: 6px 0 8px; }
+.wo-ev { margin-top: 6px; }
+.wo-ev ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.wo-ev li .small { color: var(--ink-faint); }
