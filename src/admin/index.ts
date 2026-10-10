@@ -18,7 +18,8 @@ export default {
       if (r) return r;
       if (!(await hasSession(request, env))) {
         if (url.pathname.startsWith("/api/")) return Response.json({ error: "Please sign in again." }, { status: 401 });
-        return new Response(null, { status: 303, headers: { location: "/login" } });
+        const next = url.pathname === "/" && !url.search ? "" : `?next=${encodeURIComponent(url.pathname + url.search)}`;
+        return new Response(null, { status: 303, headers: { location: `/login${next}` } });
       }
       auth = { email: "teacher", mode: "password" };
     } else {

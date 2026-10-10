@@ -34,7 +34,14 @@ export async function hasSession(request: Request, env: Env): Promise<boolean> {
   return sameString(sig, await hmac(env.ADMIN_PASSWORD, `session:${exp}`));
 }
 
-const page = (error = "") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+/** Only a path on this site (never another site) can be used as the page to open after signing in. */
+export function safeNext(v: string | null | undefined): string {
+  const n = String(v ?? "");
+  return n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/\\") && !n.startsWith("/login") && n.length < 300 ? n : "/";
+}
+const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+
+const page = (error = "", next = "/") => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClassBot · Sign in</title>
 <style>
 :root{--board:#22463a;--chalk:#eef3ee;--paper:#f3f5f4;--ink:#1d2a26;--line:#dde3e0;--down:#b4421a}
@@ -52,6 +59,7 @@ button{margin-top:16px;width:100%;padding:10px;border:0;border-radius:8px;backgr
 <h1>ClassBot</h1><p>Teacher dashboard</p>
 <label for="pw">Password</label>
 <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+<input type="hidden" name="next" value="${attr(next)}">
 <button type="submit">Sign in</button>
 ${error ? `<div class="err" role="alert">${error}</div>` : ""}
 </form></body></html>`;
@@ -66,19 +74,20 @@ export async function handleAuthRoutes(request: Request, env: Env): Promise<Resp
     return new Response(null, { status: 303, headers: { location: "/login", "set-cookie": `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
   }
   if (url.pathname !== "/login") return null;
-  if (request.method !== "POST") return html(page());
+  if (request.method !== "POST") return html(page("", safeNext(url.searchParams.get("next"))));
   const form = await request.formData().catch(() => null);
   const given = String(form?.get("password") ?? "");
+  const next = safeNext(form?.get("next") as string | null);
   // compare HMACs so the comparison takes the same time whatever the input
   const ok = !!env.ADMIN_PASSWORD && sameString(await hmac(env.ADMIN_PASSWORD, `pw:${given}`), await hmac(env.ADMIN_PASSWORD, `pw:${env.ADMIN_PASSWORD}`));
   if (!ok) {
     await new Promise((r) => setTimeout(r, 1200)); // slows down guessing
-    return html(page("Wrong password. Try again."), 401);
+    return html(page("Wrong password. Try again.", next), 401);
   }
   const exp = Math.floor(Date.now() / 1000) + DAYS * 86400;
   const sig = await hmac(env.ADMIN_PASSWORD!, `session:${exp}`);
   return new Response(null, {
     status: 303,
-    headers: { location: "/", "set-cookie": `${COOKIE}=${exp}.${sig}; Path=/; Max-Age=${DAYS * 86400}; HttpOnly; Secure; SameSite=Lax` },
+    headers: { location: next, "set-cookie": `${COOKIE}=${exp}.${sig}; Path=/; Max-Age=${DAYS * 86400}; HttpOnly; Secure; SameSite=Lax` },
   });
 }

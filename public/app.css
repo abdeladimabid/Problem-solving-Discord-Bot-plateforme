@@ -508,3 +508,7 @@ ol.league li.me b { color: var(--blue); }
 .path-steps li .cov { justify-self: center; }
 .track-pick { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; font-weight: 600; }
 .track-pick select { min-width: 260px; }
+
+.hand-card.flash { outline: 3px solid var(--blue); outline-offset: 2px; animation: hand-flash 1.6s ease-out 2; }
+@keyframes hand-flash { 0% { box-shadow: 0 0 0 0 rgba(37,99,235,.45); } 100% { box-shadow: 0 0 0 14px rgba(37,99,235,0); } }
+@media (prefers-reduced-motion: reduce) { .hand-card.flash { animation: none; } }

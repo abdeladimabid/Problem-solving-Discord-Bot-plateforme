@@ -1532,6 +1532,13 @@ async function viewPoints() {
     const sel = $("#guild");
     let saved = null;
     try { saved = localStorage.getItem("classbot.g"); } catch { /* storage blocked */ }
+    // links from Discord DMs: /?g=<class>&open=hands/12 opens that class and that page
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("g") && S.guilds.some((g) => g.id === qs.get("g"))) { saved = qs.get("g"); try { localStorage.setItem("classbot.g", saved); } catch { /* ignore */ } }
+    if (qs.has("g") || qs.has("open")) {
+      const open = (qs.get("open") || "").replace(/[^\w/-]/g, "");
+      history.replaceState(null, "", "/" + (open ? `#/${open}` : location.hash));
+    }
     S.g = S.guilds.find((g) => g.id === saved)?.id ?? S.guilds[0]?.id ?? null;
     sel.innerHTML = S.guilds.map((g) => `<option value="${g.id}" ${g.id === S.g ? "selected" : ""}>${esc(g.name || g.id)}</option>`).join("") || "<option>No server yet</option>";
     sel.onchange = () => {

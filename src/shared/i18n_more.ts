@@ -20,6 +20,10 @@ export const EN_MORE: Record<string, string> = {
   "hand.cancel": "Lower my hand",
   "hand.cancelled": "👍 Hand lowered. Use /help-me again any time.",
   "hand.gone": "This request is already closed.",
+  "hand.notify_title": "✋ {name} needs help · {server}",
+  "hand.notify_working": "Working on: **{title}**",
+  "hand.notify_queue": "Students waiting now: **{n}**",
+  "hand.notify_open": "Answer in the dashboard",
 
   // ❓ ask / faq
   "faq.too_short": "Write your question in a full sentence (at least 8 characters).",
@@ -204,6 +208,10 @@ export const FR_MORE: Record<string, string> = {
   "hand.cancel": "Baisser la main",
   "hand.cancelled": "👍 Main baissée. Utilise /help-me quand tu veux.",
   "hand.gone": "Cette demande est déjà fermée.",
+  "hand.notify_title": "✋ {name} a besoin d'aide · {server}",
+  "hand.notify_working": "Travaille sur : **{title}**",
+  "hand.notify_queue": "Élèves en attente : **{n}**",
+  "hand.notify_open": "Répondre dans le tableau de bord",
 
   "faq.too_short": "Écris ta question en une vraie phrase (au moins 8 caractères).",
   "faq.too_many": "Tu as déjà 5 questions en attente. Attends d'abord une réponse.",
