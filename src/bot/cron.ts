@@ -11,6 +11,14 @@ import { processQueue } from "../shared/queue.ts";
 import { chooseDaily, dailyConfig, postDaily } from "../shared/daily.ts";
 import { endDueSessions } from "../shared/sessions.ts";
 import { syncDueRoles } from "../shared/roles.ts";
+import { backfillSkills } from "../shared/skills.ts";
+import { sendWeeklyReports } from "../shared/report.ts";
+import { sendTeacherSummaries } from "../shared/insight.ts";
+import { sweepEvents } from "../shared/events.ts";
+import { expireShop } from "../shared/shop.ts";
+import { sendMorningPlans } from "./coach.ts";
+import { checkProjects } from "../shared/projects.ts";
+import { announceLeague } from "../shared/league.ts";
 import { arenaChannel } from "../shared/arena.ts";
 import { COMMANDS, commandsVersion } from "../shared/commands.ts";
 import { dapi } from "../shared/discord.ts";
@@ -29,6 +37,7 @@ export async function runCron(env: Env) {
   let generated = false;
   await safe("queue", async () => { generated = (await processQueue(env, 1)) > 0; });
   await safe("commands", () => syncCommands(env));
+  await safe("skills", () => backfillSkills(env, 80));
   await safe("contests", () => pollDueContests(env));
   await safe("sessions", () => endDueSessions(env));
   await safe("duels", () => sweepDuels(env));
@@ -37,6 +46,13 @@ export async function runCron(env: Env) {
   await safe("daily", () => postDailies(env, !generated));
   await safe("digest", () => weeklyDigests(env));
   if (!generated) await safe("roles", () => syncDueRoles(env));
+  await safe("plans", () => sendMorningPlans(env));
+  if (!generated) await safe("reports", () => sendWeeklyReports(env));
+  await safe("teacher summary", () => sendTeacherSummaries(env));
+  await safe("events", () => sweepEvents(env));
+  await safe("shop", () => expireShop(env));
+  if (!generated) await safe("projects", () => checkProjects(env, 3));
+  await safe("league", () => announceLeague(env));
 }
 
 // ------------------------------------------------------- slash commands

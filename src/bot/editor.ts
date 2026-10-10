@@ -7,7 +7,7 @@ import { getGuild, now, one, run } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { RULES } from "../shared/game.ts";
 import {
-  EXPLAIN_SECONDS, answerExplain, codeLangFor, explainState, getAttempt, getChallenge, loadTests, starterFor, startExplain, submitCode,
+  EXPLAIN_SECONDS, answerExplain, hintPlain, codeLangFor, explainState, getAttempt, getChallenge, loadTests, starterFor, startExplain, submitCode,
 } from "../shared/challenges.ts";
 import { findPlayer } from "../shared/db.ts";
 import { LANGS, RunnerUnavailable, isCodeLang, runSamples } from "../shared/runner.ts";
@@ -54,12 +54,13 @@ async function editorData(env: Env, g: GuildRow, a: AttemptRow, c: ChallengeRow)
     id: k, label: LANGS[k].label, starter: starterFor(c, k, L), header: sig ? signatureLine(sig, k) : null,
   }));
   return {
-    ui: L, title: c.title, statement: c.question ?? "", difficulty: c.difficulty, hint: a.used_hint ? c.hint : null,
+    ui: L, title: c.title, statement: c.question ?? "", difficulty: c.difficulty, hint: hintPlain(c, a.used_hint || 0),
     fn: sig ? { doc: (L === "fr" ? sig.doc?.fr : sig.doc?.en) ?? sig.doc?.en ?? "", examples: samples.map((s) => sampleCall(sig, s.input, s.expected)).filter(Boolean) } : null,
     samples, langs, lang, timeLimit: c.time_limit ?? 2,
-    status: a.status, triesLeft: a.origin === "duel" ? null : Math.max(0, RULES.writeMaxTries - a.tries),
+    status: a.status, triesLeft: a.origin === "duel" || a.origin === "exam" ? null : Math.max(0, RULES.writeMaxTries - a.tries),
+    examNote: a.origin === "exam" ? t(L, a.tries ? "exam.submitted" : "exam.editor", { n: a.tries }).replace(/\*\*/g, "") : null,
     code: a.answer_given && a.status === "pending" ? a.answer_given : null, codeLang: a.lang,
-    result: a.result ? JSON.parse(a.result) : null, feedback: a.feedback, points: a.points, held: a.held ?? 0,
+    result: a.result && a.origin !== "exam" ? JSON.parse(a.result) : null, feedback: a.origin === "exam" ? null : a.feedback, points: a.points, held: a.held ?? 0,
     explain: explainForClient(a), origin: a.origin,
   };
 }
@@ -94,7 +95,7 @@ async function submit(env: Env, g: GuildRow, a: AttemptRow, c: ChallengeRow, b: 
   const lang = isCodeLang(b.lang) ? b.lang : "python";
   const code = String(b.code ?? "").slice(0, 20000);
   if (!code.trim()) return { error: t(g.lang, "judge.empty") };
-  if (a.origin === "session") {
+  if (a.origin === "session" || a.origin === "exam") {
     const s = await one<{ ends_at: number }>(env, "SELECT ends_at FROM sessions WHERE id = ?", a.ref);
     if (s && now() > s.ends_at + 30) return { error: g.lang === "fr" ? "La séance est terminée." : "The session is over." };
   }
@@ -257,6 +258,7 @@ function verdictName(r) { return r.verdict === "accepted" ? L.accepted : r.verdi
 function renderResult(err) {
   const out = $("#out");
   let h = err ? "<div class='notice'>" + esc(err) + "</div>" : "";
+  if (D.examNote) h += "<div class='notice'>📥 " + esc(D.examNote) + "</div>";
   const r = D.result;
   if (r) {
     const ok = r.verdict === "accepted";

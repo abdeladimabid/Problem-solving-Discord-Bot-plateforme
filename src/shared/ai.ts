@@ -393,3 +393,42 @@ export async function gradeExplanation(env: Env, o: { lang: string; codeLang: Co
   while (pts.length < 2) pts.push(0);
   return { score: (pts[0] + pts[1]) / 4, feedback: String(j.feedback ?? "").slice(0, 400) };
 }
+
+// ------------------------------------------------------------- coaching
+/** Two more hint steps for a write-code problem: the approach (no code), then pseudocode. Written once, cached. */
+export async function generateHints(env: Env, o: { lang: string; statement: string; reference?: string | null }): Promise<{ approach: string; pseudo: string } | null> {
+  if (!(await aiBudgetOk(env, AI_COST.feedback))) return null;
+  await aiBudgetUse(env, AI_COST.feedback);
+  const language = o.lang === "fr" ? "French" : "English";
+  const j = await chatJson(env, [
+    { role: "system", content: `You help students who are stuck on a programming problem, in ${language}, without giving the code away. Reply ONLY with JSON: {"approach": "2-3 sentences: the key idea and the data structure or technique to use, and its time complexity. No code.", "pseudo": "6 to 12 lines of language-neutral pseudocode (plain words like 'for each', 'if', 'return'), no real syntax from any language"}` },
+    { role: "user", content: `Problem:\n${o.statement.slice(0, 3000)}${o.reference ? `\n\nA correct reference solution (do NOT copy it, only use it to understand the intended idea):\n${o.reference.slice(0, 3000)}` : ""}` },
+  ], { maxTokens: 2500, temperature: 0.2, timeoutMs: 25000 }).catch(() => null);
+  if (!j || typeof j.approach !== "string" || typeof j.pseudo !== "string") return null;
+  return { approach: j.approach.replace(/```[\s\S]*?```/g, "").trim().slice(0, 700), pseudo: j.pseudo.replace(/```\w*\n?|```/g, "").trim().slice(0, 900) };
+}
+
+/** A clean model solution in the student's language, with a one-line complexity note. Written once per language, cached. */
+export async function modelSolution(env: Env, o: { lang: string; codeLang: CodeLang; statement: string; reference: string; header?: string | null }): Promise<{ code: string; note: string } | null> {
+  if (!(await aiBudgetOk(env, AI_COST.feedback))) return null;
+  await aiBudgetUse(env, AI_COST.feedback);
+  const language = o.lang === "fr" ? "French" : "English";
+  const j = await chatJson(env, [
+    { role: "system", content: `You write model solutions for students. Translate the reference solution into clean, idiomatic ${LANGS[o.codeLang].label} with short comments in ${language}. Same algorithm, readable names.${o.header ? ` The solution must be a function with exactly this signature: ${o.header} (no input reading, no printing).` : " It must read standard input and print the answer exactly like the reference."} Reply ONLY with JSON: {"code": "...", "note": "one sentence in ${language}: the idea and its time complexity"}` },
+    { role: "user", content: `Problem:\n${o.statement.slice(0, 2500)}\n\nReference solution (Python):\n${o.reference.slice(0, 4000)}` },
+  ], { maxTokens: 4000, temperature: 0.1, timeoutMs: 30000 }).catch(() => null);
+  if (!j || typeof j.code !== "string" || !j.code.trim()) return null;
+  return { code: j.code.replace(/^```\w*\n?|```$/g, "").trim().slice(0, 3500), note: String(j.note ?? "").slice(0, 300) };
+}
+
+/** A short, warm weekly note for one student, from their numbers. */
+export async function weeklyNote(env: Env, o: { lang: string; name: string; facts: string }): Promise<string | null> {
+  if (!(await aiBudgetOk(env, 1))) return null;
+  await aiBudgetUse(env, 1);
+  const language = o.lang === "fr" ? "French" : "English";
+  const text = await chat(env, [
+    { role: "system", content: `You are a programming coach writing a weekly note to one student, in ${language}, addressed as "you". 3 to 4 sentences: one specific thing they did well, the one habit to fix (from their mistakes), and one concrete goal for next week. Warm and direct, no generic praise, no headings, no lists.` },
+    { role: "user", content: `Student: ${o.name}\n${o.facts}` },
+  ], { maxTokens: 1200, temperature: 0.5, timeoutMs: 20000 }).catch(() => "");
+  return text.trim() ? text.trim().slice(0, 700) : null;
+}

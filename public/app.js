@@ -53,7 +53,23 @@ function fmtAgo(u) {
 }
 const pct = (v) => (v == null ? "—" : `${v}%`);
 const DIFF = { easy: "Easy", medium: "Medium", hard: "Hard" };
-const KIND = { mcq: "Multiple choice", complexity: "Complexity", output: "Predict the output", bug: "Find the bug", write: "Write code", code: "HackerRank problem" };
+const KIND = { mcq: "Multiple choice", complexity: "Complexity", output: "Predict the output", bug: "Find the bug", regex: "Regular expression", sql: "SQL query", write: "Write code", code: "HackerRank problem" };
+const FORM_KINDS = ["mcq", "complexity", "output", "bug", "write", "code"];   // SQL and regex come from the verified bank
+// What a class learns: one language or stack at a time (see src/shared/tracks.ts)
+const TRACK_LIST = [
+  ["javascript", "🟨 JavaScript"], ["php", "🐘 PHP"], ["python", "🐍 Python"], ["java", "☕ Java"], ["c", "🔧 C"], ["cpp", "➕ C++"],
+  ["sql", "🗄️ SQL (databases)"], ["mern", "⚛️ MERN (MongoDB, Express, React, Node)"], ["ai", "🤖 Python for AI & LLMs"],
+];
+const trackKeyOf = (g) => (TRACK_LIST.some(([k]) => k === g?.track) ? g.track : String(g?.code_lang || "python").split(",")[0]);
+const trackOptions = (sel) => TRACK_LIST.map(([k, label]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(label)}</option>`).join("");
+/** Switch the class's track (from Overview, Settings or Path), then reload the page. */
+async function changeTrack(key, after) {
+  const r = await api("/track", { method: "PUT", body: { track: key } });
+  S.guild = r.guild;
+  S.skillDefs = null; S.challenges = null;
+  toast(`The class now learns ${TRACK_LIST.find(([k]) => k === key)?.[1] || key}: challenges, daily challenge, path and lessons follow it`);
+  if (after) after();
+}
 const LANG = { python: "Python", javascript: "JavaScript", php: "PHP", cpp: "C++", c: "C", java: "Java" };
 const VERDICT = { accepted: "Accepted", wrong: "Wrong answer", tle: "Too slow", runtime: "Crashed", compile: "Doesn't compile", unavailable: "Judge down" };
 const parseJson = (t) => { try { return JSON.parse(t || "null"); } catch { return null; } };
@@ -64,12 +80,12 @@ const codeView = (a) => {
   const head = `${r ? `${esc(VERDICT[r.verdict] || r.verdict)} · ${r.passed}/${r.total} tests${r.judge === "ai" ? " · judged by AI" : ""}` : "code"} · ${esc(LANG[a.lang] || a.lang || "Python")}`;
   return `<details><summary class="small">${head}</summary><pre class="code-view">${esc(a.answer_given)}</pre>${a.feedback ? `<p class="small">🧠 ${esc(a.feedback)}</p>` : ""}</details>`;
 };
-const ORIGIN = { practice: "Practice", daily: "Daily", assignment: "Assignment", duel: "Duel", session: "Class session" };
-const STATUS = { solved: "Solved", claimed: "Self-reported", failed: "Failed", expired: "Not finished", pending: "In progress", done: "Done", late: "Done late", missed: "Missed", open: "Open", active: "Live", finished: "Finished", cancelled: "Cancelled", flagged: "Reported", archived: "Archived" };
+const ORIGIN = { practice: "Practice", daily: "Daily", assignment: "Assignment", duel: "Duel", session: "Class session", plan: "Daily plan", path: "Path", exam: "Exam", bounty: "Bounty", boss: "Boss battle" };
+const STATUS = { review: "Waiting for review", solved: "Solved", claimed: "Self-reported", failed: "Failed", expired: "Not finished", pending: "In progress", done: "Done", late: "Done late", missed: "Missed", open: "Open", active: "Live", finished: "Finished", cancelled: "Cancelled", flagged: "Reported", archived: "Archived" };
 const TREND = { up: "↑ improving", down: "↓ slipping", flat: "→ steady", inactive: "⏸ inactive", new: "✦ new" };
-const REASON = { practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
+const REASON = { plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
 const diffTag = (d) => `<span class="tag ${esc(d)}">${esc(DIFF[d] || d)}</span>`;
-const status = (s) => `<span class="status ${esc(s)}">${esc(STATUS[s] || s)}</span>`;
+const status = (s, label) => `<span class="status ${esc(s)}">${esc(label || STATUS[s] || s)}</span>`;
 const trend = (t) => `<span class="trend ${esc(t)}">${esc(TREND[t] || t)}</span>`;
 const channelName = (id) => S.discord?.channels.find((c) => c.id === id)?.name;
 
@@ -120,7 +136,7 @@ const delta = (now, before, suffix = "") => {
   const cls = d > 0 ? "up" : d < 0 ? "down" : "flat";
   return `<span class="delta ${cls}" title="vs the previous period">${d > 0 ? "▲" : d < 0 ? "▼" : "•"} ${Math.abs(d)}${suffix}</span>`;
 };
-const KIND_COLORS = { mcq: "var(--s2)", complexity: "var(--s4)", output: "var(--s3)", bug: "var(--s6)", write: "var(--s1)", code: "var(--s5)" };
+const KIND_COLORS = { mcq: "var(--s2)", complexity: "var(--s4)", output: "var(--s3)", bug: "var(--s6)", regex: "var(--s2)", sql: "var(--s5)", write: "var(--s1)", code: "var(--s5)" };
 
 // =========================================================== charts
 function sparkline(values, color = "var(--s1)") {
@@ -272,16 +288,47 @@ function table(columns, rows, { onRow, sort, empty = "Nothing here yet." } = {})
   return `<div class="table-wrap" id="${id}"></div>`;
 }
 
+async function loadWeekSummary() {
+  const box = $("#ov-week");
+  if (!box) return;
+  const [s] = await Promise.all([api("/summary").catch(() => null), loadSkillDefs()]);
+  if (!s || !$("#ov-week")) return;
+  const names = (xs) => xs.map((x) => `<a href="#/student/${esc(x.discord_id)}">${esc(x.name || x.discord_id)}</a>`).join(", ");
+  const act = { checkin: "A short word to the students who went quiet", stuck: "Look at where the stuck students fail (Challenges → a challenge → Why students fail)", integrity: `<a href="#/integrity">Review the flagged submissions</a>` };
+  box.innerHTML = `<div class="panel-head"><h2>This week</h2><span class="muted small">also sent to you by DM on Mondays</span></div>
+    <div class="grid cols-2-even">
+      <div class="small stack" style="gap:6px">
+        <div>👥 <b>${s.active}/${s.students}</b> students active · ✅ <b>${s.solved}</b> solved <span class="muted">(previous week ${s.solvedPrev})</span></div>
+        ${s.movers.length ? `<div>🚀 Top: ${s.movers.map((m) => `<a href="#/student/${esc(m.discord_id)}">${esc(m.name || m.discord_id)}</a> +${m.pts}`).join(", ")}</div>` : ""}
+        ${s.stuck.length ? `<div>🧱 Stuck: ${names(s.stuck)}</div>` : ""}
+        ${s.quiet.length ? `<div>😶 Went quiet: ${names(s.quiet)}</div>` : ""}
+        ${s.weakest ? `<div>📉 Weakest class skill: <b>${esc(skillLabel(s.weakest.skill))}</b> (${s.weakest.mastery}%)</div>` : ""}
+      </div>
+      <div><b class="small">Suggested</b><ul class="small" style="margin:6px 0 0;padding-left:18px">${s.actions.map((a) => `<li>${a.startsWith("practice:") ? `<a href="#/skills">Send a practice set on ${esc(skillLabel(a.split(":")[1]))}</a> to the students who need it` : act[a] || a}</li>`).join("") || "<li>Nothing urgent. 👌</li>"}</ul></div>
+    </div>`;
+}
+
+// ============================================================ skills
+async function loadSkillDefs() {
+  if (!S.skillDefs) { const d = await api("/path"); S.skillDefs = d.skills; S.pathDefaults = d.defaults; }
+  return S.skillDefs;
+}
+const skillLabel = (k) => { const d = (S.skillDefs || []).find((x) => x.key === k); return d ? `${d.emoji} ${d.en}` : k; };
+const skillTags = (csv) => (csv || "").split(",").filter(Boolean).map((k) => `<span class="tag skill">${esc(skillLabel(k))}</span>`).join(" ");
+const masteryColor = (m) => (m == null ? "var(--surface-2)" : m >= 75 ? "var(--up-bg)" : m >= 45 ? "var(--warn-bg)" : "var(--down-bg)");
+const masteryInk = (m) => (m == null ? "var(--ink-faint)" : m >= 75 ? "var(--up)" : m >= 45 ? "var(--warn)" : "var(--down)");
+
 // ============================================================ router
 const routes = {
   overview: viewOverview, students: viewStudents, student: viewStudent, challenges: viewChallenges,
   assignments: viewAssignments, contests: viewContests, contest: viewContest, teams: viewTeams, settings: viewSettings,
-  daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession,
+  daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
 async function route() {
   const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const fn = routes[name] || viewOverview;
-  $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${name === "student" ? "students" : name === "contest" ? "contests" : name === "session" ? "sessions" : name}` ? "page" : "false"));
+  const parent = { student: "students", contest: "contests", session: "sessions", project: "projects" }[name] || name;
+  $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
   view.innerHTML = `<p class="muted">Loading…</p>`;
@@ -308,9 +355,12 @@ async function viewOverview() {
   pill.hidden = !d.reports;
   pill.textContent = d.reports;
   setIntegrityPill(d.flagged);
+  setTimeout(() => loadWeekSummary(), 0);
+  setTimeout(() => (typeof loadLive === "function" ? loadLive() : null), 0);
+  setTimeout(() => { const sel = $("#ov-track"); if (sel) sel.onchange = () => busy(sel, () => changeTrack(sel.value, () => viewOverview())); }, 0);
   const days = d.activity.map((a) => fmtDate(Date.parse(a.day) / 1000));
   const last7 = (arr) => arr.slice(-7);
-  const langs = (d.guild.code_lang || "python").split(",").map((l) => `<span class="tag" style="background:rgba(255,255,255,.18);color:#fff">${esc(LANG[l] || l)}</span>`).join(" ");
+  const langs = `<label class="hero-track"><span>This class learns</span><select id="ov-track" aria-label="What the class learns">${trackOptions(trackKeyOf(d.guild))}</select><small>Challenges, daily, path and lessons follow it</small></label>`;
   const kinds = Object.keys(KIND);
   const byKind = Object.fromEntries((d.byKind || []).map((k) => [k.kind, k]));
   const top = (d.top || []).slice(0, 8);
@@ -318,13 +368,14 @@ async function viewOverview() {
   view.innerHTML = `
     <div class="stack">
       <section class="hero">
-        <div><h1>${esc(d.guild.name || "Your class")}</h1>
-          <p class="sub">${esc(d.guild.season)} · bot speaks ${d.guild.lang === "fr" ? "French" : "English"} · ${langs}</p></div>
-        <div class="actions">
-          <a class="btn primary" href="#/assignments">${icon("clipboard")}Assign a challenge</a>
-          <a class="btn" href="#/challenges/new">${icon("plus")}New challenge</a>
-          <a class="btn" href="/api/export.csv?g=${encodeURIComponent(S.g)}" download>${icon("download")}Export grades</a>
-        </div>
+        <div class="hero-main"><h1>${esc(d.guild.name || "Your class")}</h1>
+          <p class="sub">${esc(d.guild.season)} · bot speaks ${d.guild.lang === "fr" ? "French" : "English"}</p>
+          <div class="actions">
+            <a class="btn primary" href="#/assignments">${icon("clipboard")}Assign a challenge</a>
+            <a class="btn" href="#/challenges/new">${icon("plus")}New challenge</a>
+            <a class="btn" href="/api/export.csv?g=${encodeURIComponent(S.g)}" download>${icon("download")}Export grades</a>
+          </div></div>
+        ${langs}
       </section>
       <div class="figures">
         <div class="figure"><div class="ico">${icon("users")}</div><b>${d.students}</b><span>students · ${d.linked} verified on HackerRank</span></div>
@@ -335,6 +386,8 @@ async function viewOverview() {
         <div class="figure"><div class="ico">${icon("trophy")}</div><b>${d.live_contests}</b><span>live contest${d.live_contests === 1 ? "" : "s"} · ${d.contests} finished</span></div>
       </div>
       ${d.missingMigrations?.length ? `<div class="notice danger"><b>Your database needs an update.</b> Some bot features will fail until you run <code>npm run update</code> in the classbot folder (missing: ${esc(d.missingMigrations.slice(0, 3).join(", "))}${d.missingMigrations.length > 3 ? "…" : ""}).</div>` : ""}
+      <section class="panel" id="ov-live"><p class="muted small">Loading what's happening in class…</p></section>
+      <section class="panel" id="ov-week"><p class="muted small">Loading this week's summary…</p></section>
       ${!d.guild.arena_channel ? `<div class="notice warn">📣 <b>No #arena channel yet.</b> Duels need one, and other public bot messages land in the channel where you ran setup. Create a channel named <code>arena</code>, or pick one in <a href="#/settings">Settings</a>.</div>` : ""}
       ${d.flagged || d.live_sessions ? `<div class="notice">${d.live_sessions ? `🟢 <a href="#/sessions">${d.live_sessions} class session${d.live_sessions > 1 ? "s" : ""} running now</a>. ` : ""}${d.flagged ? `🛡️ <a href="#/integrity">${d.flagged} submission${d.flagged > 1 ? "s" : ""} with warning signs</a> to review (pasting, leaving the page, code copied from a classmate…).` : ""}</div>` : ""}
       ${d.reports || d.claims ? `<div class="notice warn">${d.reports ? `🚩 <a href="#/challenges">${d.reports} challenge${d.reports > 1 ? "s" : ""} reported by students</a> need${d.reports > 1 ? "" : "s"} a look. ` : ""}${d.claims ? `🙋 ${d.claims} self-reported HackerRank solve${d.claims > 1 ? "s" : ""} wait for your approval (below).` : ""}</div>` : ""}
@@ -430,8 +483,36 @@ async function viewStudents() {
   draw();
 }
 
+const MISTAKE = {
+  tle: ["⏱️ Too slow", "correct code that times out on big inputs: complexity"], hidden: ["🕳️ Edge cases", "passes the samples, fails hidden tests"],
+  crash: ["💥 Crashes", "index out of range, bad input reading"], compile: ["🧱 Doesn't compile", "syntax errors"],
+  tracing: ["🔮 Reading code", "misses \"predict the output\""], bugs: ["🐞 Spotting bugs", "misses \"find the bug\""],
+  bigo: ["⏱️ Big-O", "misses complexity questions"], concepts: ["❓ Concepts", "misses multiple-choice questions"], hints: ["💡 Hints", "uses hints very often"],
+};
+function coachPanel(c) {
+  if (!c) return "";
+  const skills = c.skills.filter((x) => x.evidence >= 2).sort((a, b) => a.mastery - b.mastery);
+  const few = c.skills.length - skills.length;
+  return `<section class="panel"><h2>Coach</h2>
+    <div class="grid cols-2-even">
+      <div>
+        <h3>Skills <span class="muted small">(weakest first)</span></h3>
+        ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar" title="${x.solved} solved, ${x.failed} not · next level: ${x.target}"><span>${esc(skillLabel(x.key))}</span><span class="track"><i style="width:${x.mastery}%;background:${masteryInk(x.mastery)}"></i></span><b class="num" style="color:${masteryInk(x.mastery)}">${x.mastery}%</b></div>`).join("")}</div>` : `<p class="empty">Not enough results yet.</p>`}
+        ${few ? `<p class="muted small">+ ${few} skill(s) with too few tries to judge yet.</p>` : ""}
+      </div>
+      <div>
+        <h3>Recurring mistakes</h3>
+        ${c.mistakes.length ? `<ul class="flags">${c.mistakes.map((m) => `<li><b>${esc(MISTAKE[m.key]?.[0] || m.key)}</b> · ${m.count}/${m.total} · <span class="muted small">${esc(MISTAKE[m.key]?.[1] || "")}</span></li>`).join("")}</ul>` : `<p class="muted small">No pattern of mistakes.</p>`}
+        <h3>Next for this student</h3>
+        <p class="small">Focus: ${c.focus.map((k) => `<span class="tag skill">${esc(skillLabel(k))}</span>`).join(" ") || "—"}</p>
+        <p class="small">🧭 Path: <b>${c.path.done}/${c.path.total}</b> steps${c.path.current ? ` · now ${esc(skillLabel(c.path.current.skill))} (${esc(DIFF[c.path.current.level])}, ${c.path.current.solved}/${c.path.current.need})` : " · finished"}</p>
+        <p class="small">📋 Daily plan streak: <b>${c.plan.streak}</b> (best ${c.plan.best})${c.plan.remind ? " · gets the plan every morning" : ""}</p>
+      </div>
+    </div></section>`;
+}
+
 async function viewStudent(id) {
-  const [d, list] = await Promise.all([api(`/students/${id}`), loadStudents()]);
+  const [d, list] = await Promise.all([api(`/students/${id}`), loadStudents(), loadSkillDefs()]);
   const row = list.find((r) => r.discord_id === id) || { attention: [], trend: "flat" };
   const p = d.player;
   const solvedRows = d.attempts.filter((a) => a.status === "solved" || a.status === "claimed");
@@ -465,6 +546,7 @@ async function viewStudent(id) {
         <div class="figure"><b>${p.daily_streak}</b><span>day daily streak</span></div>
         <div class="figure"><b>${d.contests.played}</b><span>contests · ${d.contests.wins} won · ${d.contests.podiums} podiums</span></div>
       </div>
+      ${coachPanel(d.coach)}
       <div class="grid cols-2-even">
         <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
         <section class="panel"><h2>Contest results</h2>${d.contestList.length > 0
@@ -568,13 +650,21 @@ async function loadChallenges(force = false) {
 }
 
 async function viewChallenges(arg) {
-  const [rows, reports] = await Promise.all([loadChallenges(true), api("/reports")]);
+  const [rows, reports, calib, proposed] = await Promise.all([loadChallenges(true), api("/reports"), api("/difficulty").catch(() => []), api("/student-challenges").catch(() => []), loadSkillDefs()]);
   $("#pill-reports").hidden = !reports.length;
   $("#pill-reports").textContent = reports.length;
   view.innerHTML = `
     <div class="page-head"><div><h1>Challenges</h1><p class="sub">${rows.length} in the bank: built-in, yours, AI-generated and HackerRank problems</p></div>
       <button class="btn primary" id="new">New challenge</button></div>
     <div class="stack">
+      ${proposed.length ? `<section class="panel"><h2>Written by students <span class="pill-inline">${proposed.length}</span></h2>
+        <p class="muted small">Approve to put it in rotation: the author gets ${10} points now and 3 every time a classmate solves it (up to 20 solvers).</p>
+        ${proposed.map((c) => `<article class="proposal">
+          <header><b>${esc(c.title)}</b> ${diffTag(c.difficulty)} <span class="tag">${esc(KIND[c.kind] || c.kind)}</span> <span class="muted small">by ${esc(c.author || c.created_by)} · ${fmtAgo(c.created_at)}</span></header>
+          <div class="small proposal-body">${esc(c.question || "")}</div>
+          ${c.kind === "mcq" ? `<ol type="A" class="small">${JSON.parse(c.choices || "[]").map((x, i) => `<li ${"ABCD"[i] === c.answer ? 'style="font-weight:700;color:var(--up)"' : ""}>${esc(x)}</li>`).join("")}</ol>${c.explanation ? `<p class="small muted">${esc(c.explanation)}</p>` : ""}` : `<p class="small muted">${esc(c.topic || "")} · tests computed from the student's own solution</p>`}
+          <footer class="toolbar" style="margin:0"><button class="btn small" data-propedit="${c.id}">Open / edit</button><button class="btn small danger" data-propno="${c.id}">Reject</button><button class="btn small primary" data-propok="${c.id}">Approve</button></footer>
+        </article>`).join("")}</section>` : ""}
       ${reports.length ? `<section class="panel"><h2>Reported by students</h2><p class="muted small">A challenge reported by two students is paused until you decide.</p>
         <div class="table-wrap"><table>${reports.map((r) => `<tr><td><b>${esc(r.title)}</b> ${diffTag(r.difficulty)}<div class="muted small">${esc(r.reasons)}</div></td><td class="num">${r.n} report${r.n > 1 ? "s" : ""}</td>
           <td style="white-space:nowrap"><button class="btn small" data-open="${r.challenge_id}">Open and fix</button> <button class="btn small" data-keep="${r.challenge_id}">It's fine</button> <button class="btn small danger" data-archive="${r.challenge_id}">Remove</button></td></tr>`).join("")}</table></div></section>` : ""}
@@ -583,25 +673,41 @@ async function viewChallenges(arg) {
         <select id="fk" aria-label="Type"><option value="">All types</option>${Object.entries(KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select id="fd" aria-label="Difficulty"><option value="">All difficulties</option>${Object.entries(DIFF).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select id="fs" aria-label="Source"><option value="">All sources</option><option value="seed">Built-in</option><option value="teacher">Mine</option><option value="ai">AI</option><option value="hackerrank">HackerRank</option></select>
+        <select id="fsk" aria-label="Skill"><option value="">All skills</option>${S.skillDefs.map((d) => `<option value="${d.key}">${esc(d.emoji + " " + d.en)}</option>`).join("")}</select>
       </div>
+      ${calib.length ? `<details class="panel" id="calib"><summary><b>Difficulty check</b> <span class="pill-inline">${calib.length}</span> <span class="muted small">challenges whose real success rate doesn't match their level</span></summary>
+        <div class="table-wrap"><table><thead><tr><th>Challenge</th><th>Now</th><th class="num">Tries</th><th class="num">Solved</th><th>Suggestion</th><th></th></tr></thead><tbody>
+        ${calib.map((c) => `<tr><td><a href="#" data-edit="${c.id}">${esc(c.title)}</a><div class="muted small">${esc(KIND[c.kind] || c.kind)} · ${esc(c.reason)}</div></td><td>${diffTag(c.difficulty)}</td><td class="num">${c.attempts}</td><td class="num">${c.rate}%</td>
+          <td>${c.suggest ? `→ ${diffTag(c.suggest)}` : '<span class="muted small">check it</span>'}</td><td>${c.suggest ? `<button class="btn small" data-calib="${c.id}" data-to="${c.suggest}">Apply</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></div>${calib.filter((c) => c.suggest).length > 1 ? `<p><button class="btn small" id="calib-all">Apply all suggestions</button></p>` : ""}</details>` : ""}
       <section class="panel" id="list"></section>
     </div>`;
   const draw = () => {
-    const q = $("#q").value.toLowerCase(), k = $("#fk").value, dif = $("#fd").value, src = $("#fs").value;
-    const shown = rows.filter((r) => (!q || `${r.title} ${r.topic || ""}`.toLowerCase().includes(q)) && (!k || r.kind === k) && (!dif || r.difficulty === dif) && (!src || r.source === src));
+    const q = $("#q").value.toLowerCase(), k = $("#fk").value, dif = $("#fd").value, src = $("#fs").value, sk = $("#fsk").value;
+    const shown = rows.filter((r) => (!q || `${r.title} ${r.topic || ""}`.toLowerCase().includes(q)) && (!k || r.kind === k) && (!dif || r.difficulty === dif) && (!src || r.source === src) && (!sk || (r.skills || "").split(",").includes(sk)));
     shown.forEach((r) => (r.rate = r.solved + r.failed ? Math.round((100 * r.solved) / (r.solved + r.failed)) : null));
     $("#list").innerHTML = table([
-      { label: "Title", sort: "title", html: (r) => `${esc(r.title)}${r.topic ? `<div class="muted small">${esc(r.topic)}</div>` : ""}` },
+      { label: "Title", sort: "title", html: (r) => `${esc(r.title)}<div class="small">${skillTags(r.skills)}</div>` },
       { label: "Type", sort: "kind", html: (r) => esc(KIND[r.kind] || r.kind) },
       { label: "Difficulty", sort: "difficulty", html: (r) => diffTag(r.difficulty) },
       { label: "Source", sort: "source", html: (r) => esc({ seed: "Built-in", teacher: "Mine", ai: "AI", hackerrank: "HackerRank" }[r.source] || r.source) },
       { label: "Attempts", sort: "attempts", num: true, html: (r) => `${r.attempts}` },
       { label: "Success", sort: "rate", num: true, html: (r) => pct(r.rate) },
-      { label: "Status", sort: "status", html: (r) => (r.status === "active" ? '<span class="muted small">in rotation</span>' : status(r.status)) },
+      { label: "Status", sort: "status", html: (r) => (r.status === "active" ? '<span class="muted small">in rotation</span>' : status(r.status === "pending" ? "review" : r.status)) },
     ], shown, { onRow: (r) => editChallenge(r.id), empty: "No challenge matches these filters." });
   };
-  ["#q", "#fk", "#fd", "#fs"].forEach((s) => ($(s).oninput = draw));
+  ["#q", "#fk", "#fd", "#fs", "#fsk"].forEach((s) => ($(s).oninput = draw));
   draw();
+  $$("[data-edit]").forEach((a) => a.onclick = (e) => { e.preventDefault(); editChallenge(Number(a.dataset.edit)); });
+  $$("[data-propedit]").forEach((b) => b.onclick = () => editChallenge(Number(b.dataset.propedit)));
+  $$("[data-propok]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/student-challenges/${b.dataset.propok}`, { method: "POST", body: { approve: true } }); toast("Approved: the author was told"); S.challenges = null; viewChallenges(); }));
+  $$("[data-propno]").forEach((b) => b.onclick = () => openDialog("Reject this challenge?", `<label for="rj">Reason <span class="muted">(sent to the student)</span></label><input type="text" id="rj" style="width:100%" maxlength="200" placeholder="e.g. the statement doesn't say what to print">`,
+    [{ label: "Reject", danger: true, action: async () => { await api(`/student-challenges/${b.dataset.propno}`, { method: "POST", body: { approve: false, reason: $("#rj", dlg).value } }); dlg.close(); toast("Rejected: the author was told"); viewChallenges(); } }]));
+  $$("[data-calib]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/challenges/${b.dataset.calib}/difficulty`, { method: "POST", body: { difficulty: b.dataset.to } }); toast("Level updated"); S.challenges = null; viewChallenges(); }));
+  if ($("#calib-all")) $("#calib-all").onclick = (e) => busy(e.currentTarget, async () => {
+    for (const c of calib.filter((x) => x.suggest)) await api(`/challenges/${c.id}/difficulty`, { method: "POST", body: { difficulty: c.suggest } });
+    toast("Levels updated"); S.challenges = null; viewChallenges();
+  });
   $("#new").onclick = () => newChallenge();
   if (arg === "new" || arg === "ai") { newChallenge(arg === "ai" ? "ai" : "write"); history.replaceState(null, "", "#/challenges"); }
   $$("[data-open]").forEach((b) => b.onclick = () => editChallenge(Number(b.dataset.open), true));
@@ -617,11 +723,13 @@ function challengeForm(c = {}) {
   const ch = c.choices || ["", "", "", ""];
   const samples = (c.tests || []).filter((t) => t.sample).length || 1;
   return `<div class="field-row">
-      <div><label for="f-kind">Type</label><select id="f-kind" ${c.id ? "disabled" : ""}>${Object.entries(KIND).map(([k, v]) => `<option value="${k}" ${c.kind === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+      <div><label for="f-kind">Type</label><select id="f-kind" ${c.id ? "disabled" : ""}>${Object.entries(KIND).filter(([k]) => FORM_KINDS.includes(k) || k === c.kind).map(([k, v]) => `<option value="${k}" ${c.kind === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
       <div><label for="f-diff">Difficulty</label><select id="f-diff">${Object.entries(DIFF).map(([k, v]) => `<option value="${k}" ${c.difficulty === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
       <div><label for="f-topic">Topic <span class="muted">(optional)</span></label><input type="text" id="f-topic" value="${esc(c.topic)}"></div>
     </div>
     <label for="f-title">Title</label><input type="text" id="f-title" value="${esc(c.title)}" style="width:100%" maxlength="80">
+    <label>Skills it trains <span class="muted">(used by the coach; up to 4, left empty = guessed automatically)</span></label>
+    <div class="chips" id="f-skills">${(S.skillDefs || []).map((d) => `<label><input type="checkbox" value="${d.key}" ${(c.skills || "").split(",").includes(d.key) ? "checked" : ""}> ${esc(d.emoji + " " + d.en)}</label>`).join("")}</div>
     <div data-show="code"><label for="f-url">HackerRank problem link</label><input type="url" id="f-url" value="${esc(c.url)}" style="width:100%" placeholder="https://www.hackerrank.com/challenges/…/problem"></div>
     <div data-show="question">
       <label for="f-question"><span data-show="quiz">Question</span><span data-show="write">Problem statement <span class="muted">(Markdown: story, **Input**, **Output**, **Constraints**; samples are added automatically)</span></span></label>
@@ -660,7 +768,8 @@ function wireForm(root) {
 function readForm(root) {
   const k = $("#f-kind", root).value;
   const v = (id) => $(id, root).value;
-  const out = { kind: k, difficulty: v("#f-diff"), title: v("#f-title"), topic: v("#f-topic"), url: v("#f-url"), question: v("#f-question"), code: v("#f-code"), hint: v("#f-hint"), explanation: v("#f-expl") };
+  const out = { kind: k, difficulty: v("#f-diff"), title: v("#f-title"), topic: v("#f-topic"), url: v("#f-url"), question: v("#f-question"), code: v("#f-code"), hint: v("#f-hint"), explanation: v("#f-expl"),
+    skills: $$("#f-skills input:checked", root).map((i) => i.value).slice(0, 4) };
   if (k === "output") { out.answer = v("#f-answer-out").replace(/\s+$/, ""); out.alternatives = v("#f-alts").split("\n").map((s) => s.trim()).filter(Boolean); }
   if (["mcq", "bug", "complexity"].includes(k)) {
     out.choices = [0, 1, 2, 3].map((i) => v(`#f-c${i}`).trim()).filter(Boolean);
@@ -680,7 +789,8 @@ function readForm(root) {
   return out;
 }
 
-function newChallenge(startTab = "write") {
+async function newChallenge(startTab = "write") {
+  await loadSkillDefs().catch(() => {});
   openDialog("New challenge", `
     <div class="tabs" role="tablist"><button data-t="write" aria-selected="true">Write it</button><button data-t="ai">Generate with AI</button><button data-t="hr">Import from HackerRank</button></div>
     <div data-pane="write">${challengeForm({ kind: "write", difficulty: "medium" })}</div>
@@ -691,7 +801,10 @@ function newChallenge(startTab = "write") {
         <div><label for="g-kind">Type</label><select id="g-kind">${["write", "output", "bug", "complexity", "mcq"].map((k) => `<option value="${k}">${KIND[k]}</option>`).join("")}</select></div>
         <div><label for="g-lang">Code language <span class="muted">(quick types)</span></label><select id="g-lang">${(S.guild?.code_lang || "python").split(",").concat(["javascript", "php", "python", "java", "c", "cpp"]).filter((v, i, arr) => arr.indexOf(v) === i).map((l) => `<option value="${l}">${esc(LANG[l] || l)}</option>`).join("")}</select></div>
       </div>
-      <label for="g-topic">Topic <span class="muted">(e.g. "loops over dictionaries", "recursion")</span></label><input type="text" id="g-topic" style="width:100%">
+      <div class="field-row">
+        <div><label for="g-skill">Skill <span class="muted">(tags the challenge)</span></label><select id="g-skill"><option value="">Any skill</option>${(S.skillDefs || []).filter((d) => !["sql", "regex", "git"].includes(d.key)).map((d) => `<option value="${d.key}">${esc(d.emoji + " " + d.en)}</option>`).join("")}</select></div>
+      </div>
+      <label for="g-topic">Topic <span class="muted">(optional, e.g. "loops over dictionaries", "recursion")</span></label><input type="text" id="g-topic" style="width:100%">
       <p><button class="btn" id="gen">Generate a draft</button></p>
     </div>
     <div data-pane="hr" hidden>
@@ -718,7 +831,7 @@ function newChallenge(startTab = "write") {
     const kind = $("#g-kind", root).value;
     genBtn.textContent = kind === "write" ? "Generating and testing… (up to 2 min)" : "Generating… (up to 1 min)";
     try {
-      const g = await api("/challenges/generate", { method: "POST", body: { difficulty: $("#g-diff", root).value, kind, topic: $("#g-topic", root).value, code_lang: $("#g-lang", root).value } });
+      const g = await api("/challenges/generate", { method: "POST", body: { difficulty: $("#g-diff", root).value, kind, topic: $("#g-topic", root).value, code_lang: $("#g-lang", root).value, skill: $("#g-skill", root).value || undefined } });
       if (g.saved) {
         dlg.close();
         toast(`"${g.challenge.title}" passed its checks and was added to the bank`);
@@ -736,7 +849,7 @@ function newChallenge(startTab = "write") {
 }
 
 async function editChallenge(id, fromReport = false) {
-  const c = await api(`/challenges/${id}`);
+  const [c] = await Promise.all([api(`/challenges/${id}`), loadSkillDefs()]);
   const builtIn = !c.guild_id;
   openDialog(c.title, `
     ${builtIn ? `<p class="notice small">This is a ${c.source === "seed" ? "built-in" : "shared"} challenge. Your edits apply to every server using this bot.</p>` : ""}
@@ -748,6 +861,7 @@ async function editChallenge(id, fromReport = false) {
   [
     { label: "Remove from bank", danger: true, action: async () => { await api(`/challenges/${id}`, { method: "DELETE" }); dlg.close(); toast("Challenge removed"); viewChallenges(); } },
     { label: "Assign", action: async () => { dlg.close(); assignDialog([], id); } },
+    ...(c.results.some((r) => r.status !== "solved") ? [{ label: "Why students fail", action: async () => mistakesDialog(c) }] : []),
     { label: "Save", primary: true, action: async (root) => {
       const body = { ...readForm(root), regrade: !!$("#f-regrade", root)?.checked };
       if (fromReport) {
@@ -762,6 +876,25 @@ async function editChallenge(id, fromReport = false) {
     } },
   ]);
   wireForm(dlg);
+}
+
+/** Wrong answers on one challenge, grouped by cause (failing test, verdict or chosen answer). */
+async function mistakesDialog(c) {
+  const d = await api(`/challenges/${c.id}/mistakes`);
+  const max = Math.max(1, ...d.groups.map((x) => x.count));
+  openDialog(`Why students fail · ${c.title}`, `
+    <p class="muted small">${d.total} finished attempt(s) · ${d.solved} solved. Grouped by what went wrong, most common first.</p>
+    ${d.groups.length ? d.groups.map((x) => `<section class="mistake-group">
+      <div class="mg-head"><b>${esc(x.label)}</b><span class="mg-bar"><i style="width:${(100 * x.count) / max}%"></i></span><b class="num">${x.count}</b></div>
+      <p class="small muted">${x.students.map((s) => esc(s.name || s.id)).join(", ")}${x.count > x.students.length ? ` +${x.count - x.students.length}` : ""}</p>
+      ${x.example ? `<details><summary class="small">Example</summary>
+        ${x.example.input ? `<p class="small"><b>Test input</b></p><pre class="code-view">${esc(x.example.input)}</pre>` : ""}
+        ${x.example.expected != null ? `<p class="small"><b>Expected</b> <code>${esc(x.example.expected)}</code> · <b>got</b> <code>${esc(x.example.got ?? "")}</code></p>` : ""}
+        ${x.example.error ? `<pre class="code-view">${esc(x.example.error)}</pre>` : ""}
+        ${x.example.code ? `<p class="small"><b>One student's code</b> (${esc(LANG[x.example.lang] || x.example.lang || "")})</p><pre class="code-view">${esc(x.example.code)}</pre>` : ""}
+      </details>` : ""}
+    </section>`).join("") : `<p class="empty">Nobody failed it.</p>`}
+    <p class="muted small">Tip: when one group dominates, it's usually an edge case worth 5 minutes in class.</p>`);
 }
 
 // ======================================================= assignments
@@ -965,7 +1098,7 @@ async function viewSettings() {
       <section class="panel"><h2>Bot</h2>
         <div class="field-row">
           <div><label for="s-lang">Language</label><select id="s-lang"><option value="en" ${g.lang === "en" ? "selected" : ""}>English</option><option value="fr" ${g.lang === "fr" ? "selected" : ""}>Français</option></select></div>
-          <div><label>Languages your class learns</label><div class="checks" id="s-code">${["javascript", "php", "python", "java", "c", "cpp"].map((l) => `<label class="check"><input type="checkbox" value="${l}" ${(g.code_lang || "python").split(",").includes(l) ? "checked" : ""}> ${esc(LANG[l])}</label>`).join("")}</div></div>
+          <div><label for="s-track">What the class learns <span class="muted">(one at a time: challenges, daily challenge, path and lessons follow it)</span></label><select id="s-track" style="width:100%">${trackOptions(trackKeyOf(g))}</select></div>
         </div>
         <label for="s-arena">#arena channel <span class="muted">(everything public: daily challenge, duels, contests, level-ups, assignments, weekly recap)</span></label>
         <select id="s-arena" style="width:100%"><option value="">Find a channel named "arena" automatically</option>${channelOptions(g.arena_channel)}</select>
@@ -1077,9 +1210,10 @@ async function viewSettings() {
   $("#save").onclick = (e) => busy(e.currentTarget, async () => {
     const arena = $("#s-arena").value;
     S.guild = await api("/settings", { method: "PUT", body: {
-      lang: $("#s-lang").value, code_lang: $$("#s-code input:checked").map((i) => i.value).join(",") || "python", arena_channel: arena, announce_channel: arena,
+      lang: $("#s-lang").value, arena_channel: arena, announce_channel: arena,
       daily_channel: $("#s-daily").value || arena, daily_hour: Number($("#s-hour").value), champion_role: $("#s-champ").value, streak_role: $("#s-streak").value,
     } });
+    if ($("#s-track").value !== trackKeyOf(S.guild)) await changeTrack($("#s-track").value);
     toast("Settings saved");
   });
   $("#save-sc").onclick = (e) => busy(e.currentTarget, async () => { await api("/settings", { method: "PUT", body: { scoring: readScoring() } }); toast("Scoring saved: /help shows the new table"); viewSettings(); });
@@ -1147,7 +1281,7 @@ async function loadAutoRoles(state = null) {
 
 // ============================================================ daily
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const DAILY_KIND = { write: "Write code", quick: "Quick (any type)", mcq: "Multiple choice", complexity: "Complexity", output: "Predict the output", bug: "Find the bug", code: "HackerRank problem" };
+const DAILY_KIND = { write: "Write code", quick: "Quick (any type)", mcq: "Multiple choice", complexity: "Complexity", output: "Predict the output", bug: "Find the bug", code: "HackerRank problem", sql: "SQL query", regex: "Regular expression" };
 const langTag = (l) => (l ? `<span class="tag lang">${esc(LANG[l] || l)}</span>` : "");
 const dayLabel = (day) => {
   const d = new Date(day + "T12:00:00Z");
@@ -1156,15 +1290,15 @@ const dayLabel = (day) => {
 const utcHourLocal = (h) => { const d = new Date(); d.setUTCHours(h, 0, 0, 0); return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); };
 
 /** A searchable challenge list in a dialog; resolves with the chosen challenge (or null). */
-async function pickChallengeDialog(title, { langs = null } = {}) {
-  const rows = (await loadChallenges()).filter((c) => c.status === "active");
+async function pickChallengeDialog(title, { langs = null, kinds = null } = {}) {
+  const rows = (await loadChallenges()).filter((c) => c.status === "active" && (!kinds || kinds.includes(c.kind)));
   return new Promise((resolve) => {
     let done = false;
     const finish = (v) => { if (!done) { done = true; resolve(v); } };
     openDialog(title, `
       <div class="toolbar" style="margin:0 0 10px">
         <input type="search" id="pk-q" placeholder="Search titles and topics" style="flex:1;min-width:180px">
-        <select id="pk-k"><option value="">All types</option>${Object.entries(KIND).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+        <select id="pk-k"><option value="">All types</option>${Object.entries(KIND).filter(([k]) => !kinds || kinds.includes(k)).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select id="pk-d"><option value="">All levels</option>${Object.entries(DIFF).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
         <select id="pk-l"><option value="">All languages</option>${Object.entries(LANG).map(([k, v]) => `<option value="${k}" ${langs && langs.length === 1 && langs[0] === k ? "selected" : ""}>${v}</option>`).join("")}</select>
       </div>
@@ -1209,7 +1343,7 @@ async function viewDaily() {
           <ul class="days">${d.upcoming.map((u, i) => `<li class="${u.pin ? "pinned" : ""}">
               <span class="day"><b>${esc(dayLabel(u.day))}</b>${i === 0 ? '<small>today</small>' : ""}</span>
               <span class="what">${u.pin ? `📌 <b>${esc(u.pin.title)}</b> ${diffTag(u.pin.difficulty)} ${langTag(u.pin.kind === "write" || u.pin.kind === "code" ? null : u.pin.code_lang)}<small>${esc(KIND[u.pin.kind] || u.pin.kind)} · chosen by you</small>`
-                : `<span class="muted">🎲 Random</span> ${diffTag(u.difficulty)} <small>${esc(DAILY_KIND[u.kind])}${u.kind === "write" || u.kind === "code" ? "" : ` · ${esc(cfg.langsEffective.map((l) => LANG[l] || l).join(" / "))}`}</small>`}</span>
+                : `<span class="muted">🎲 Random</span> ${diffTag(u.difficulty)} <small>${esc(DAILY_KIND[u.kind])}${["write", "code", "sql", "regex"].includes(u.kind) ? "" : ` · ${esc(cfg.langsEffective.map((l) => LANG[l] || l).join(" / "))}`}</small>`}</span>
               <span class="acts">${u.pin ? `<button class="btn small" data-unpin="${u.day}">Make random</button>` : ""}<button class="btn small" data-pin="${u.day}">${u.pin ? "Change" : "Choose…"}</button></span>
             </li>`).join("")}</ul>
         </section>
@@ -1602,6 +1736,161 @@ async function replayDialog(id, meta = null) {
 }
 
 // ============================================================ sessions
+// ============================================================ events
+const QUIZ_KINDS = ["mcq", "bug", "complexity"];
+let eventsTimer = null;
+async function viewEvents() {
+  clearTimeout(eventsTimer);
+  const [d] = await Promise.all([api("/events"), loadDiscord()]);
+  const q = d.live;
+  const left = q && q.endsAt ? Math.max(0, Math.round(q.endsAt - Date.now() / 1000)) : 0;
+  const answered = q ? q.answers.reduce((a, x) => a + x.n, 0) : 0;
+  const pct = (b) => Math.min(100, Math.round((100 * b.damage) / Math.max(1, b.hp)));
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Events</h1><p class="sub">Live quiz in class, boss battles the whole class fights together, bounties for the fastest solver.</p></div>
+      <div class="toolbar" style="margin:0"><button class="btn primary" id="ev-quiz">${icon("plus")} Live quiz</button><button class="btn" id="ev-boss">${icon("swords")} Boss battle</button><button class="btn" id="ev-bty">${icon("target")} Bounty</button></div></div>
+    <div class="stack">
+      ${q ? `<section class="panel live-quiz">
+        <div class="panel-head"><h2>🎤 ${esc(q.title)}</h2><span class="status active">${q.current < 0 ? "Ready" : `Question ${q.current + 1}/${q.total}`}</span></div>
+        ${q.current < 0 ? `<p class="small">The quiz is ready. Put #arena on the projector, then press <b>Start</b>: each question stays open ${q.seconds} s.</p>`
+          : `<p class="small"><b>${esc(q.currentChallenge?.title || "")}</b> · ${q.revealed ? `answer <b>${esc(q.currentChallenge?.answer || "?")}</b> revealed` : left ? `<b id="qz-left">${left}</b> s left` : "time's up"} · ${answered} answer(s)
+             ${q.answers.length ? " · " + q.answers.map((a) => `${esc(a.answer)}: ${a.n}`).join(" · ") : ""}</p>`}
+        <p class="toolbar">
+          ${q.current >= 0 && !q.revealed ? `<button class="btn" id="qz-reveal">Reveal the answer</button>` : ""}
+          ${q.current + 1 < q.total ? `<button class="btn primary" id="qz-next">${q.current < 0 ? "Start" : "Next question"}</button>` : ""}
+          <button class="btn ${q.current + 1 >= q.total ? "primary" : ""}" id="qz-end">End the quiz</button>
+        </p>
+        ${q.standings.length ? `<h3 class="small">Leaderboard</h3><ol class="small quiz-board">${q.standings.slice(0, 10).map((s) => `<li><b>${esc(s.name || s.discord_id)}</b> · ${s.score} pts · ${s.right} ✅</li>`).join("")}</ol>` : ""}
+      </section>` : ""}
+      <section class="panel"><h2>⚔️ Boss battles</h2>
+      ${d.bosses.length ? `<div class="stack">${d.bosses.map((b) => `<div class="boss-row">
+          <div><b>${esc(b.name)}</b> ${status(b.status === "won" ? "done" : b.status === "lost" ? "expired" : "active", { won: "Defeated", lost: "Escaped", active: "Live" }[b.status])} <span class="muted small">· challenge “${esc(b.challenge_title)}” · ${b.fighters} fighter(s) · ${b.status === "active" ? `ends ${fmtDateTime(b.deadline)}` : fmtDateTime(b.finished_at || b.deadline)}</span></div>
+          <div class="hpbar" title="${b.damage}/${b.hp} damage"><span style="width:${pct(b)}%"></span></div>
+          <div class="small muted">${Math.max(0, b.hp - b.damage)}/${b.hp} HP left · reward ${b.reward} pts + ${b.coins} 🪙 each ${b.status === "active" ? `<button class="btn small" data-boss-stop="${b.id}">Stop</button>` : ""}</div>
+        </div>`).join("")}</div>` : `<p class="empty">No boss yet. A boss is a hard write-code challenge with a big health bar: every student's best submission hits it (up to ${40} damage each, by share of tests passed). Beat it before the deadline and everyone who hit it gets the reward.</p>`}
+      </section>
+      <section class="panel"><h2>💰 Bounties</h2>
+      ${table([
+        { label: "Challenge", html: (b) => `<b>${esc(b.challenge_title)}</b>` },
+        { label: "Status", html: (b) => status(b.status === "claimed" ? "done" : b.status === "expired" ? "expired" : "active", { claimed: "Claimed", expired: "Closed", open: "Open" }[b.status]) },
+        { label: "Reward", html: (b) => `${b.points} pts + ${b.coins} 🪙` },
+        { label: "Winner", html: (b) => (b.winner_id ? `<a href="#/student/${esc(b.winner_id)}">${esc(b.winner_name || b.winner_id)}</a>` : "—") },
+        { label: "Ends", html: (b) => `<span class="small">${b.deadline ? fmtDateTime(b.deadline) : "no limit"}</span>` },
+        { label: "", html: (b) => (b.status === "open" ? `<button class="btn small" data-bty-stop="${b.id}">Close</button>` : "") },
+      ], d.bounties, { empty: "No bounty yet. The first student to solve the challenge takes the points and coins." })}
+      </section>
+      <div class="grid cols-2-even">
+        <section class="panel"><h2>🪙 Coin shop</h2><p class="small muted">Students earn coins (daily +5, daily plan +10, quiz podium, bosses, bounties, helping classmates) and spend them with <code>/shop</code>.</p>
+          <ul class="small">${d.shop.map((it) => `<li>${it.emoji} <b>${esc({ freeze: "Streak freeze", hint: "Free hint", title: "Custom title (7 days)", color: "Colored role (7 days)" }[it.key])}</b> · ${it.price} 🪙 · bought ${it.n}×</li>`).join("")}</ul></section>
+        <section class="panel"><h2>🙋 Peer help</h2><p class="small muted">A stuck student presses <b>Ask a classmate</b>; classmates explain in words (no full solutions), and a 👍 gives the helper ${8} pts + ${5} 🪙 (3 per day max).</p>
+          <p class="small">${d.help?.open ?? 0} open request(s) · ${d.help?.answered ?? 0} explanation(s) · ${d.help?.helpful ?? 0} marked helpful</p></section>
+      </div>
+      ${d.quizzes.filter((x) => x.status === "done").length ? `<section class="panel"><h2>Past quizzes</h2>${table([
+        { label: "Quiz", html: (x) => `<b>${esc(x.title)}</b>` },
+        { label: "Questions", num: true, html: (x) => `${x.total}` },
+        { label: "Date", html: (x) => `<span class="small">${fmtDateTime(x.created_at)}</span>` },
+      ], d.quizzes.filter((x) => x.status === "done"), {})}</section>` : ""}
+    </div>`;
+  const act = async (url, msg) => { try { await api(url, { method: "POST", body: {} }); if (msg) toast(msg); } catch (e) { toast(e.message, true); } viewEvents(); };
+  if (q) {
+    $("#qz-next") && ($("#qz-next").onclick = (e) => { e.target.disabled = true; act(`/quizzes/${q.id}/next`); });
+    $("#qz-reveal") && ($("#qz-reveal").onclick = (e) => { e.target.disabled = true; act(`/quizzes/${q.id}/reveal`); });
+    $("#qz-end").onclick = (e) => { e.target.disabled = true; act(`/quizzes/${q.id}/end`, "Quiz over: points and coins given"); };
+    const tick = () => { const el = $("#qz-left"); if (!el || location.hash !== "#/events") return; const n = Number(el.textContent) - 1; if (n <= 0) return viewEvents(); el.textContent = n; eventsTimer = setTimeout(tick, 1000); };
+    eventsTimer = setTimeout(() => ($("#qz-left") ? tick() : location.hash === "#/events" && !dlg.open && viewEvents()), $("#qz-left") ? 1000 : 4000);
+  }
+  $$("[data-boss-stop]").forEach((b) => b.onclick = () => confirm("Stop this boss now? It escapes and nobody gets the reward.") && act(`/bosses/${b.dataset.bossStop}/cancel`));
+  $$("[data-bty-stop]").forEach((b) => b.onclick = () => act(`/bounties/${b.dataset.btyStop}/cancel`));
+  $("#ev-quiz").onclick = () => quizDialog();
+  $("#ev-boss").onclick = () => eventDialog("boss");
+  $("#ev-bty").onclick = () => eventDialog("bounty");
+}
+
+async function quizDialog() {
+  await Promise.all([loadDiscord(), loadChallenges()]);
+  const st = { t: "Live quiz", s: "20", ch: "", pts: true, picked: [] };
+  const save = () => Object.assign(st, { t: $("#qd-t", dlg).value, s: $("#qd-s", dlg).value, ch: $("#qd-ch", dlg).value, pts: $("#qd-pts", dlg).checked });
+  const open = () => {
+    openDialog("New live quiz", `
+      <label for="qd-t">Title</label><input type="text" id="qd-t" style="width:100%" maxlength="80" value="${esc(st.t)}">
+      <div class="field-row">
+        <div><label for="qd-s">Seconds per question</label><input type="number" id="qd-s" min="10" max="120" value="${esc(st.s)}"></div>
+        <div><label for="qd-ch">Post in</label><select id="qd-ch"><option value="">#arena (automatic)</option>${channelOptions(st.ch)}</select></div>
+      </div>
+      <label class="check"><input type="checkbox" id="qd-pts" ${st.pts ? "checked" : ""}> Give leaderboard points at the end (quiz score ÷ 100) — the podium always gets coins</label>
+      <label>Questions <span class="muted">(multiple choice, find the bug, Big-O; up to 30)</span></label>
+      <div id="qd-list" class="chips"></div>
+      <p class="toolbar" style="margin:6px 0 0"><button type="button" class="btn small" id="qd-add">${icon("plus")} Add a question</button><button type="button" class="btn small" id="qd-rand">Add 5 random</button></p>
+      <div class="toolbar" style="margin:6px 0 0"><input type="text" id="qd-topic" placeholder="Topic for the AI (optional), e.g. arrays" style="flex:1"><button type="button" class="btn small" id="qd-ai">✨ Generate a question</button></div>
+      <p class="muted small">Answers are locked on the first click; being right gives 500, answering fast up to +500.</p>`,
+    [{ label: "Create the quiz", primary: true, action: async () => {
+      save();
+      if (!st.picked.length) throw new Error("Add at least one question");
+      await api("/quizzes", { method: "POST", body: { title: st.t, seconds: Number(st.s), channel_id: st.ch || null, give_points: st.pts, challenge_ids: st.picked.map((c) => c.id) } });
+      dlg.close();
+      toast("Quiz ready: press Start when the class is watching");
+      viewEvents();
+    } }]);
+    const draw = () => {
+      $("#qd-list", dlg).innerHTML = st.picked.length ? st.picked.map((c, i) => `<span class="chip">${i + 1}. ${esc(c.title)}<button type="button" data-rm="${i}" aria-label="Remove">×</button></span>`).join("") : `<span class="muted small">None yet.</span>`;
+      $$("[data-rm]", dlg).forEach((b) => b.onclick = () => { st.picked.splice(Number(b.dataset.rm), 1); draw(); });
+    };
+    $("#qd-add", dlg).onclick = async () => { save(); const c = await pickChallengeDialog("Add a question", { kinds: QUIZ_KINDS }); if (c && !st.picked.some((p) => p.id === c.id) && st.picked.length < 30) st.picked.push(c); open(); };
+    $("#qd-ai", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+      const btnEl = e.currentTarget;
+      btnEl.textContent = "Generating… (up to 1 min)";
+      try {
+        const r = await api("/ai/challenge", { method: "POST", body: { kind: "mcq", difficulty: "medium", topic: $("#qd-topic", dlg).value } });
+        if (st.picked.length < 30) st.picked.push(r.challenge);
+        S.challenges = null;
+        draw();
+        toast(`Added: ${r.challenge.title}`);
+      } finally { btnEl.textContent = "✨ Generate a question"; }
+    });
+    $("#qd-rand", dlg).onclick = () => {
+      const pool = (S.challenges || []).filter((c) => c.status === "active" && QUIZ_KINDS.includes(c.kind) && !st.picked.some((p) => p.id === c.id));
+      for (let i = 0; i < 5 && pool.length && st.picked.length < 30; i++) st.picked.push(...pool.splice(Math.floor(Math.random() * pool.length), 1));
+      draw();
+    };
+    draw();
+  };
+  open();
+}
+
+async function eventDialog(kind) {
+  await Promise.all([loadDiscord(), loadChallenges()]);
+  const boss = kind === "boss";
+  const st = boss ? { name: "The Bug King", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
+  const ids = boss ? ["name", "hp", "hours", "reward", "coins", "ch"] : ["points", "coins", "hours", "ch"];
+  const save = () => ids.forEach((k) => (st[k] = $(`#ev-${k}`, dlg).value));
+  const open = () => {
+    openDialog(boss ? "New boss battle" : "New bounty", `
+      ${boss ? `<label for="ev-name">Boss name</label><input type="text" id="ev-name" style="width:100%" maxlength="60" value="${esc(st.name)}">` : ""}
+      <label>Challenge</label>
+      <p class="toolbar" style="margin:0">${st.c ? `<span class="chip">${esc(st.c.title)} ${diffTag(st.c.difficulty)}</span>` : `<span class="muted small">None yet.</span>`}<button type="button" class="btn small" id="ev-pick">${st.c ? "Change" : "Choose"}</button></p>
+      <div class="field-row">
+        ${boss ? `<div><label for="ev-hp">Health (HP)</label><input type="number" id="ev-hp" min="40" max="5000" value="${esc(st.hp)}"></div>` : ""}
+        <div><label for="ev-hours">${boss ? "Hours to beat it" : "Hours open (empty = no limit)"}</label><input type="number" id="ev-hours" min="1" max="720" value="${esc(st.hours)}"></div>
+      </div>
+      <div class="field-row">
+        <div><label for="ev-${boss ? "reward" : "points"}">Points ${boss ? "for each fighter" : "for the winner"}</label><input type="number" id="ev-${boss ? "reward" : "points"}" min="0" max="300" value="${esc(boss ? st.reward : st.points)}"></div>
+        <div><label for="ev-coins">Coins ${boss ? "for each fighter" : "for the winner"}</label><input type="number" id="ev-coins" min="0" max="500" value="${esc(st.coins)}"></div>
+      </div>
+      <label for="ev-ch">Post in</label><select id="ev-ch" style="width:100%"><option value="">#arena (automatic)</option>${channelOptions(st.ch)}</select>
+      <p class="muted small">${boss ? `One student deals at most 40 damage, so ${Math.ceil(Number(st.hp) / 40) || 5}+ students must solve it (or get close) to win. Pick a hard write-code challenge.` : "The first correct solution wins. Pick any challenge solved in Discord."}</p>`,
+    [{ label: boss ? "Release the boss" : "Post the bounty", primary: true, action: async () => {
+      save();
+      if (!st.c) throw new Error("Choose a challenge");
+      await api(boss ? "/bosses" : "/bounties", { method: "POST", body: { ...st, challenge_id: st.c.id, channel_id: st.ch || null, c: undefined } });
+      dlg.close();
+      toast(boss ? "The boss is in #arena" : "Bounty posted");
+      viewEvents();
+    } }]);
+    $("#ev-pick", dlg).onclick = async () => { save(); const c = await pickChallengeDialog("Choose a challenge", { kinds: boss ? ["write"] : ["write", "mcq", "output", "bug", "complexity", "sql", "regex"] }); if (c) st.c = c; open(); };
+  };
+  open();
+}
+
 async function viewSessions() {
   const rows = await api("/sessions");
   const live = rows.filter((s) => s.status === "active");
@@ -1635,10 +1924,12 @@ async function viewSessions() {
 
 async function newSessionDialog() {
   const [teams] = await Promise.all([api("/teams"), loadDiscord(), loadChallenges()]);
-  const st = { t: `Class session ${new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" })}`, m: "60", team: "", ch: "", picked: [] };
-  const save = () => Object.assign(st, { t: $("#ss-t", dlg).value, m: $("#ss-m", dlg).value, team: $("#ss-team", dlg).value, ch: $("#ss-ch", dlg).value });
+  const st = { t: `Class session ${new Date().toLocaleDateString(undefined, { day: "numeric", month: "short" })}`, m: "60", team: "", ch: "", picked: [], mode: "class" };
+  const save = () => Object.assign(st, { t: $("#ss-t", dlg).value, m: $("#ss-m", dlg).value, team: $("#ss-team", dlg).value, ch: $("#ss-ch", dlg).value, mode: $("#ss-mode", dlg).value });
   const open = () => {
     openDialog("New class session", `
+      <label for="ss-mode">Kind</label>
+      <select id="ss-mode" style="width:100%"><option value="class" ${st.mode === "class" ? "selected" : ""}>Class session: students see their results right away</option><option value="exam" ${st.mode === "exam" ? "selected" : ""}>Exam: no feedback until the end, best submission counts, graded /20</option></select>
       <label for="ss-t">Title</label><input type="text" id="ss-t" style="width:100%" maxlength="80" placeholder="e.g. Loops practice, group B" value="${esc(st.t)}">
       <div class="field-row">
         <div><label for="ss-m">Length (minutes)</label><input type="number" id="ss-m" min="5" max="600" value="${esc(st.m)}"></div>
@@ -1652,7 +1943,7 @@ async function newSessionDialog() {
     [{ label: "Start the session", primary: true, action: async () => {
       save();
       if (!st.picked.length) throw new Error("Add at least one challenge");
-      const s = await api("/sessions", { method: "POST", body: { title: st.t, minutes: Number(st.m), team_id: st.team || null, channel_id: st.ch || null, challenge_ids: st.picked.map((c) => c.id) } });
+      const s = await api("/sessions", { method: "POST", body: { title: st.t, minutes: Number(st.m), team_id: st.team || null, channel_id: st.ch || null, challenge_ids: st.picked.map((c) => c.id), mode: st.mode } });
       dlg.close();
       toast("Session started: students got the button in Discord");
       location.hash = `#/session/${s.id}`;
@@ -1694,12 +1985,13 @@ async function viewSession(id) {
     const ico = { solved: "✅", failed: "❌", expired: "⌛", pending: "✏️" }[x.status] || "•";
     const flag = x.level && x.reviewed !== 1 ? `<span class="cell-flag lvl-${x.level}" title="${x.level === 2 ? "Suspicious" : "Worth a look"}">⚑</span>` : "";
     const tip = `${STATUS[x.status] || x.status}${x.tries ? ` · ${x.tries} submission(s)` : ""}${x.minutes != null ? ` · ${x.minutes} min` : ""}${x.lang ? ` · ${LANG[x.lang] || x.lang}` : ""}`;
-    return `<td class="cell ${esc(x.status)}" title="${esc(tip)}"><button type="button" data-att="${x.attempt}">${ico}${x.status === "solved" ? ` <small>${x.points}</small>` : ""}${flag}</button></td>`;
+    const label = d.exam ? (x.status === "pending" && !x.tries ? "✏️" : `${Math.round((x.score ?? 0) * 100)}%`) : `${ico}${x.status === "solved" ? ` <small>${x.points}</small>` : ""}`;
+    return `<td class="cell ${esc(d.exam ? (x.score >= 1 ? "solved" : x.score > 0 ? "pending" : x.status === "pending" ? "pending" : "failed") : x.status)}" title="${esc(tip)}"><button type="button" data-att="${x.attempt}">${label}${flag}</button></td>`;
   };
   view.innerHTML = `
-    <div class="page-head"><div><p class="sub"><a href="#/sessions">← Sessions</a></p><h1>${esc(s.title)} ${status(s.status)}</h1>
+    <div class="page-head"><div><p class="sub"><a href="#/sessions">← Sessions</a></p><h1>${d.exam ? "📝 " : ""}${esc(s.title)} ${status(s.status)}${d.exam ? ' <span class="tag">exam</span>' : ""}</h1>
       <p class="sub">${fmtDateTime(s.starts_at)} → ${fmtDateTime(s.ends_at)}${live ? ` · <b id="ss-left">${Math.ceil(left / 60)} min left</b>` : ""}${s.team_id ? " · one team" : ""}</p></div>
-      <div class="toolbar" style="margin:0">${live ? `<button class="btn danger" id="end">End now</button>` : ""}<button class="btn" id="refresh">Refresh</button></div></div>
+      <div class="toolbar" style="margin:0">${d.exam ? `<a class="btn" href="/api/sessions/${s.id}/grades.csv?g=${encodeURIComponent(S.g)}" download>${icon("download")} Grades (CSV)</a>` : ""}${live ? `<button class="btn danger" id="end">End now</button>` : ""}<button class="btn" id="refresh">Refresh</button></div></div>
     <div class="stack">
       <div class="figures">
         <div class="figure"><b>${n}</b><span>student${n === 1 ? "" : "s"} started</span></div>
@@ -1708,8 +2000,8 @@ async function viewSession(id) {
         <div class="figure"><b>${flagged}</b><span>flagged answers</span></div>
       </div>
       <section class="panel"><h2>Results</h2>
-        ${n ? `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${d.challenges.map((c, i) => `<th class="ctr" title="${esc(c.title)}">${esc(c.title.length > 18 ? c.title.slice(0, 17) + "…" : c.title)}<div class="small muted">${perCh[i]}/${n} ✅</div></th>`).join("")}<th class="num">Solved</th><th class="num">Points</th></tr></thead>
-          <tbody>${d.students.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${d.challenges.map((c) => cell(st, c)).join("")}<td class="num"><b>${st.solved}</b>/${d.challenges.length}</td><td class="num">${st.points}</td></tr>`).join("")}</tbody></table></div>
+        ${n ? `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${d.challenges.map((c, i) => `<th class="ctr" title="${esc(c.title)}">${esc(c.title.length > 18 ? c.title.slice(0, 17) + "…" : c.title)}<div class="small muted">${perCh[i]}/${n} ✅</div></th>`).join("")}<th class="num">Solved</th><th class="num">${d.exam ? "Grade /20" : "Points"}</th></tr></thead>
+          <tbody>${d.students.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${d.challenges.map((c) => cell(st, c)).join("")}<td class="num"><b>${st.solved}</b>/${d.challenges.length}</td><td class="num">${d.exam ? `<b>${st.grade ?? "—"}</b>` : st.points}</td></tr>`).join("")}</tbody></table></div>
           <p class="muted small">✅ solved · ❌ out of tries · ✏️ working on it · ⌛ not finished in time · ⚑ warning signs (click a cell to replay the typing)</p>`
         : `<p class="empty">${live ? "Nobody has opened a challenge yet. Students press “Open the session” under the bot's message." : "Nobody took part."}</p>`}
       </section>
@@ -1727,4 +2019,69 @@ async function viewSession(id) {
     viewSession(id);
   }, true);
   if (live) sessionTimer = setTimeout(() => { if (location.hash === `#/session/${id}` && !dlg.open) viewSession(id); else if (location.hash === `#/session/${id}`) sessionTimer = setTimeout(() => viewSession(id), 20000); }, 20000);
+}
+
+// ============================================================ skills
+async function viewSkills() {
+  const [d] = await Promise.all([api("/skills/class"), loadSkillDefs()]);
+  const sortBy = sessionStorage.getItem("classbot.skSort") || "";
+  const rows = [...d.students];
+  if (sortBy) rows.sort((a, b) => (a.skills[sortBy]?.mastery ?? 101) - (b.skills[sortBy]?.mastery ?? 101));
+  const weak = Object.entries(d.average).filter(([, v]) => v != null).sort((a, b) => a[1] - b[1]).slice(0, 3);
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Skills</h1><p class="sub">How well each student masters each skill (last 4 months). Click a skill to sort, or to send a practice set.</p></div></div>
+    <div class="stack">
+      ${weak.length ? `<div class="figures">${weak.map(([k, v]) => `<button class="figure clickable" data-pset="${k}" title="Send a practice set"><b style="color:${masteryInk(v)}">${v}%</b><span>${esc(skillLabel(k))} · class average</span></button>`).join("")}
+        <div class="figure"><b>${d.students.length}</b><span>students with results</span></div></div>` : ""}
+      <section class="panel">
+        ${d.students.length ? `<div class="table-wrap heat"><table><thead><tr><th>Student</th>${d.skills.map((k) => `<th class="ctr heat-col ${sortBy === k ? "sorted" : ""}" data-sort="${k}" title="${esc(skillLabel(k))}: sort / practice set"><span>${esc(skillLabel(k))}</span></th>`).join("")}</tr>
+          <tr class="avg"><td class="muted small">Class average</td>${d.skills.map((k) => `<td class="ctr"><b style="color:${masteryInk(d.average[k])}">${d.average[k] ?? "—"}${d.average[k] != null ? "%" : ""}</b></td>`).join("")}</tr></thead>
+          <tbody>${rows.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${d.skills.map((k) => {
+            const v = st.skills[k];
+            return `<td class="heat-cell" style="background:${v && v.evidence >= 2 ? masteryColor(v.mastery) : "transparent"}" title="${esc(skillLabel(k))}: ${v ? `${v.mastery}% (${v.evidence} pts of evidence)` : "not tried"}">${v && v.evidence >= 2 ? `<b style="color:${masteryInk(v.mastery)}">${v.mastery}</b>` : `<span class="muted">${v ? "·" : ""}</span>`}</td>`;
+          }).join("")}</tr>`).join("")}</tbody></table></div>
+          <p class="muted small">🟩 75%+ solid · 🟨 45–74% getting there · 🟥 under 45% needs work · empty = not enough tries yet. Recent and harder challenges count more.</p>`
+        : `<p class="empty">No results yet. The map fills in as students solve challenges.</p>`}
+      </section>
+    </div>`;
+  $$("[data-sort]").forEach((th) => th.onclick = () => {
+    const k = th.dataset.sort;
+    openDialog(skillLabel(k), `<p>Class average: <b>${d.average[k] ?? "—"}%</b></p>`, [
+      { label: "Sort by this skill", action: async () => { sessionStorage.setItem("classbot.skSort", k); dlg.close(); viewSkills(); } },
+      { label: "✨ Generate challenges", action: async () => genForSkillDialog(k, (d.average[k] ?? 50) < 45 ? "easy" : "medium") },
+      { label: "Send a practice set", primary: true, action: async () => practiceSetDialog(k, d) },
+    ]);
+  });
+  $$("[data-pset]").forEach((b) => b.onclick = () => practiceSetDialog(b.dataset.pset, d));
+}
+
+function practiceSetDialog(skill, d) {
+  const list = [...d.students].sort((a, b) => (a.skills[skill]?.mastery ?? 0) - (b.skills[skill]?.mastery ?? 0));
+  openDialog(`Practice set · ${skillLabel(skill)}`, `
+    <p class="muted small">Each student gets their own challenges on this skill, at <b>their</b> level (one step above what they reliably solve), as assignments with a DM.</p>
+    <div class="field-row">
+      <div><label for="ps-n">Challenges each</label><input type="number" id="ps-n" min="1" max="5" value="3"></div>
+      <div><label for="ps-due">Due</label><select id="ps-due"><option value="">No due date</option><option value="2">In 2 days</option><option value="7" selected>In a week</option><option value="14">In 2 weeks</option></select></div>
+      <div><label for="ps-th">Select students under</label><select id="ps-th"><option value="45">45%</option><option value="60" selected>60%</option><option value="75">75%</option><option value="101">everyone</option></select></div>
+    </div>
+    <label for="ps-note">Note <span class="muted">(optional)</span></label><input type="text" id="ps-note" style="width:100%" maxlength="300" placeholder="e.g. We'll correct these on Thursday">
+    <div class="pick-students" id="ps-list"></div>`,
+  [{ label: "Send", primary: true, action: async () => {
+    const students = $$("#ps-list input:checked", dlg).map((i) => i.value);
+    if (!students.length) throw new Error("Pick at least one student");
+    const days = Number($("#ps-due", dlg).value);
+    const r = await api("/skills/practice-set", { method: "POST", body: { skill, students, count: Number($("#ps-n", dlg).value), due_at: days ? Math.floor(Date.now() / 1000) + days * 86400 : null, note: $("#ps-note", dlg).value } });
+    dlg.close();
+    toast(`${r.assignments} challenge(s) sent to ${r.students} student(s)${r.empty.length ? ` · ${r.empty.length} had nothing new left` : ""}`);
+  } }]);
+  const draw = () => {
+    const th = Number($("#ps-th", dlg).value);
+    $("#ps-list", dlg).innerHTML = list.map((st) => {
+      const v = st.skills[skill];
+      const m = v && v.evidence >= 2 ? v.mastery : null;
+      return `<label class="check"><input type="checkbox" value="${esc(st.discord_id)}" ${m == null || m < th ? "checked" : ""}> ${esc(st.name || st.discord_id)} <span class="muted small" style="color:${masteryInk(m)}">${m == null ? "not tried" : m + "%"}</span></label>`;
+    }).join("");
+  };
+  $("#ps-th", dlg).onchange = draw;
+  draw();
 }

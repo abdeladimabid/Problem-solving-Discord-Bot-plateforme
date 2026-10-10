@@ -57,6 +57,10 @@ export async function dm(env: Env, userId: string, payload: Record<string, unkno
   }
 }
 
+export function editMessage(env: Env, channelId: string, messageId: string, payload: Record<string, unknown>) {
+  return dapi(env, "PATCH", `/channels/${channelId}/messages/${messageId}`, { allowed_mentions: NO_PINGS, ...payload });
+}
+
 export function editOriginal(env: Env, token: string, payload: Record<string, unknown>) {
   return dapi(env, "PATCH", `/webhooks/${env.DISCORD_APP_ID}/${token}/messages/@original`, { allowed_mentions: NO_PINGS, ...payload }, false);
 }

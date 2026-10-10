@@ -8,7 +8,7 @@ import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quick
 import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
 import {
   answer, feedbackFor, finish, getAttempt, getChallenge, pickChallenge, renderFor, startAttempt, submitCode, verifyCoding,
-  codeLangFor, guildLangs, starterFor, startExplain, answerExplain, explainState, EXPLAIN_SECONDS,
+  codeLangFor, guildLangs, starterFor, startExplain, answerExplain, explainState, EXPLAIN_SECONDS, ensureHints, hintSteps, solutionFor,
 } from "../shared/challenges.ts";
 import type { Mode } from "../shared/challenges.ts";
 import { activeContests, hrNames, isFrozen, standingsEmbed, stopContest, trackContest, trackingEmbed } from "../shared/contests.ts";
@@ -17,79 +17,20 @@ import { LANGS, isCodeLang } from "../shared/runner.ts";
 import { editorToken, editorUrl, integrityOf } from "../shared/integrity.ts";
 import { enqueue } from "../shared/queue.ts";
 import { arenaChannel, strictArena } from "../shared/arena.ts";
-
-// ------------------------------------------------------------ responses
-const json = (o: unknown) => new Response(JSON.stringify(o), { headers: { "content-type": "application/json" } });
-const reply = (data: Record<string, unknown>, ephemeral = false) =>
-  json({ type: 4, data: { allowed_mentions: NO_PINGS, ...data, ...(ephemeral ? { flags: EPHEMERAL } : {}) } });
-const say = (content: string, ephemeral = true) => reply({ content }, ephemeral);
-const update = (data: Record<string, unknown>) => json({ type: 7, data: { allowed_mentions: NO_PINGS, ...data } });
-const deferReply = (ephemeral: boolean) => json({ type: 5, data: ephemeral ? { flags: EPHEMERAL } : {} });
-const deferUpdate = () => json({ type: 6 });
-
-interface Ix {
-  raw: any;
-  env: Env;
-  ctx: Ctx;
-  guild: GuildRow;
-  L: Lang;
-  userId: string;
-  userName: string;
-  teacher: boolean;
-}
-
-function options(raw: any): { sub: string | null; o: Record<string, any> } {
-  let opts: any[] = raw.data?.options ?? [];
-  let sub: string | null = null;
-  if (opts[0]?.type === 1) {
-    sub = opts[0].name;
-    opts = opts[0].options ?? [];
-  }
-  return { sub, o: Object.fromEntries(opts.map((x: any) => [x.name, x.value])) };
-}
-
-function memberName(raw: any, id: string): string {
-  const m = raw.data?.resolved?.members?.[id], u = raw.data?.resolved?.users?.[id];
-  return m?.nick ?? u?.global_name ?? u?.username ?? "?";
-}
-
-/** Run slow work after answering Discord (deferred), reporting errors to the user. */
-function later(ix: Ix, work: () => Promise<Record<string, unknown> | null>) {
-  ix.ctx.waitUntil(
-    work()
-      .then((payload) => (payload ? editOriginal(ix.env, ix.raw.token, payload) : null))
-      .catch(async (e) => {
-        console.error(e);
-        await editOriginal(ix.env, ix.raw.token, { content: errorText(ix.L, e), embeds: [], components: [] }).catch(() => {});
-      }),
-  );
-}
-
-/** What the student sees when something breaks: a clear hint when the database wasn't updated, else a short reason. */
-export function errorText(L: string, e: unknown): string {
-  const msg = String((e as Error)?.message ?? e ?? "");
-  if (/no such (table|column)|has no column named/i.test(msg)) return t(L, "err.db_update");
-  const reason = msg.replace(/D1_ERROR:\s*/g, "").replace(/\s+/g, " ").trim().slice(0, 150);
-  return t(L, "err.generic") + (reason ? `\n-# ${reason}` : "");
-}
-
-/** Which server a button pressed in a DM belongs to. */
-async function guildFromButton(env: Env, customId: string, userId: string): Promise<string | null> {
-  const [kind, x] = customId.split(":");
-  const id = Number(x);
-  const table = ["astart", "abatch"].includes(kind) ? "assignments"
-    : ["dacc", "ddec", "dopen"].includes(kind) ? "duels"
-    : ["sopen", "sgo"].includes(kind) ? "sessions"
-    : Number.isFinite(id) && id > 0 ? "attempts" : null;
-  if (table && id > 0) {
-    const owner = table === "attempts" || table === "assignments" ? " AND discord_id = ?" : "";
-    const r = await one<{ guild_id: string }>(env, `SELECT guild_id FROM ${table} WHERE id = ?${owner}`, id, ...(owner ? [userId] : []));
-    if (r) return r.guild_id;
-  }
-  // otherwise: the only server where this student plays
-  const gs = await all<{ guild_id: string }>(env, "SELECT guild_id FROM players WHERE discord_id = ? LIMIT 2", userId);
-  return gs.length === 1 ? gs[0].guild_id : null;
-}
+import { type Ix, deferReply, deferUpdate, errorText, guildFromButton, json, later, memberName, options, reply, say, update } from "./ix.ts";
+export { errorText } from "./ix.ts";
+import { pickForSkill } from "../shared/coach.ts";
+import { cmdCreate, createSubmit } from "./create.ts";
+import { activeTitle, useHintToken } from "../shared/shop.ts";
+import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
+import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
+import {
+  certButton, cmdAsk, cmdFaq, cmdHelpMe, cmdInterview, cmdLeague, cmdProject, faqButton, handButton, handSubmit,
+  interviewButton, interviewSubmit, profileButtons, projectChoices, shareButton,
+} from "./extras.ts";
+import { sendCertificates } from "../shared/share.ts";
+import { translateChallenge } from "../shared/translate.ts";
+import { isTrack, setTrack, trackLabel, trackOf } from "../shared/tracks.ts";
 
 // ============================================================ entrypoint
 export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<Response> {
@@ -140,10 +81,26 @@ async function command(ix: Ix): Promise<Response> {
   const { sub, o } = options(ix.raw);
   switch (ix.raw.data.name) {
     case "link": return cmdLink(ix, String(o.username));
-    case "practice": return cmdPractice(ix, o.difficulty, o.type ?? "quick", o.topic ?? null, o.language ?? null);
-    case "duel": return cmdDuel(ix, o.opponent, o.mode ?? "quick", o.difficulty ?? "easy", o.stake ?? 0);
+    // SQL isn't run like the other languages: choosing it means "give me a SQL query challenge"
+    // SQL isn't run like the other languages: choosing it means "give me a SQL query challenge";
+    // in a SQL class, /practice without a type gives SQL too
+    case "practice": return o.language === "sql" || (!o.type && !o.topic && !o.language && trackOf(ix.guild).family === "sql")
+      ? cmdPractice(ix, o.difficulty, "sql", null, null)
+      : cmdPractice(ix, o.difficulty, o.type ?? "quick", o.topic ?? null, o.language ?? null);
+    case "duel": return cmdDuel(ix, o.opponent, o.mode ?? "quick", o.difficulty ?? "easy", o.stake ?? 0, o.partner ?? null, o.opponent2 ?? null);
     case "daily": return cmdDaily(ix);
+    case "skills": return cmdSkills(ix, o.member ?? ix.userId);
+    case "today": return cmdToday(ix, o.remind ?? null);
+    case "path": return cmdPath(ix);
+    case "shop": return cmdShop(ix);
+    case "create": return cmdCreate(ix, o.type === "mcq" ? "mcq" : "write", (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
     case "assignments": return cmdAssignments(ix);
+    case "help-me": return cmdHelpMe(ix);
+    case "ask": return cmdAsk(ix, String(o.question ?? ""));
+    case "faq": return cmdFaq(ix, o.search ?? null);
+    case "interview": return cmdInterview(ix, (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
+    case "project": return cmdProject(ix, sub ?? "list", o);
+    case "league": return cmdLeague(ix);
     case "profile": return cmdProfile(ix, o.member ?? ix.userId);
     case "leaderboard": return cmdLeaderboard(ix, o.board ?? "season");
     case "rival": return cmdRival(ix, sub!, o.member ?? null);
@@ -211,6 +168,17 @@ async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: 
   if (mode === "coding" && !p?.hr_username) return say(t(L, "err.not_linked_self"));
   if (mode === "coding" && !p?.hr_verified) return reply(linkMessage(L, p!.hr_display ?? p!.hr_username!, p!.hr_code ?? "?"), true);
   const kind = mode === "quick" && type !== "quick" ? type : null;
+  // SQL, regex and Git: picked by skill (no AI generation for these: the bank is verified)
+  const special = ({ sql: { skill: "sql", kind: "sql" }, regex: { skill: "regex", kind: "regex" }, git: { skill: "git", kind: "mcq" } } as Record<string, { skill: string; kind: string }>)[type];
+  if (special) {
+    later(ix, async () => {
+      const c = await pickForSkill(ix.env, ix.guild, ix.userId, special.skill, difficulty, { kind: special.kind });
+      if (!c) return { content: t(L, "ch.none_left_kind", { kind: t(L, `kind.${special.kind === "mcq" ? "git" : special.kind}`) }) };
+      const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "practice");
+      return renderFor(ix.env, ix.guild, c, a);
+    });
+    return deferReply(true);
+  }
 
   later(ix, async () => {
     let c: ChallengeRow | null = null;
@@ -241,9 +209,10 @@ async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: 
 }
 
 // ----------------------------------------------------------------- duels
-async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficulty, stake: number) {
+async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficulty, stake: number, partner: string | null = null, opponent2: string | null = null) {
   const L = ix.L;
   if (opponent === ix.userId) return say(t(L, "duel.self"));
+  if (partner || opponent2) return cmdTeamDuel(ix, opponent, mode, difficulty, partner, opponent2);
   if (ix.raw.data.resolved?.users?.[opponent]?.bot) return say(t(L, "duel.bot"));
   const oppName = memberName(ix.raw, opponent);
   const me = await getPlayer(ix.env, ix.guild.id, ix.userId);
@@ -252,7 +221,7 @@ async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficu
   if (stake > me.coins) return say(t(L, "duel.coins", { name: ix.userName, n: me.coins }));
   if (stake > them.coins) return say(t(L, "duel.coins", { name: oppName, n: them.coins }));
   for (const [id, nm] of [[ix.userId, ix.userName], [opponent, oppName]]) {
-    const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ?)", ix.guild.id, id, id);
+    const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ? OR partner_id = ? OR opponent2_id = ?)", ix.guild.id, id, id, id, id);
     if (busy) return say(t(L, "duel.busy", { name: nm }));
   }
   const arena = await strictArena(ix.env, ix.guild);
@@ -281,11 +250,60 @@ async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficu
   return reply(invite);
 }
 
+/** 2 vs 2: same challenge for all four, the first correct solve wins for their team. No stakes. */
+async function cmdTeamDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficulty, partner: string | null, opponent2: string | null) {
+  const L = ix.L;
+  if (!partner || !opponent2) return say(t(L, "duel.team_need_both"));
+  const four = [ix.userId, partner, opponent, opponent2];
+  if (new Set(four).size !== 4) return say(t(L, "duel.team_distinct"));
+  if (four.some((u) => ix.raw.data.resolved?.users?.[u]?.bot)) return say(t(L, "duel.bot"));
+  const names = new Map(four.map((u) => [u, u === ix.userId ? ix.userName : memberName(ix.raw, u)]));
+  for (const u of four) {
+    const p = await getPlayer(ix.env, ix.guild.id, u, names.get(u));
+    if (mode === "coding" && !p.hr_verified) return say(t(L, "duel.need_link"));
+    const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ? OR partner_id = ? OR opponent2_id = ?)", ix.guild.id, u, u, u, u);
+    if (busy) return say(t(L, "duel.busy", { name: names.get(u) }));
+  }
+  const arena = await strictArena(ix.env, ix.guild);
+  if (!arena) return say(t(L, "duel.no_arena"));
+  const r = await run(ix.env, "INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, partner_id, opponent2_id, accepted, mode, difficulty, stake, created_at) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, 0, ?)",
+    ix.guild.id, arena, ix.userId, opponent, partner, opponent2, mode, difficulty, now());
+  const id = Number(r.meta.last_row_id);
+  const invite = {
+    content: t(L, "duel.invite_team", { a: mention(ix.userId), p: mention(partner), b: mention(opponent), o: mention(opponent2), mode: t(L, `duel.mode.${mode}`), difficulty: t(L, `diff.${difficulty}`), waiting: [partner, opponent, opponent2].map(mention).join(" ") }),
+    components: [row(btn(t(L, "duel.accept"), `dacc:${id}`, 3, "⚔️"), btn(t(L, "duel.decline"), `ddec:${id}`, 4))],
+    allowed_mentions: pingUsers([partner, opponent, opponent2]),
+  };
+  try {
+    await send(ix.env, arena, invite);
+  } catch {
+    await run(ix.env, "UPDATE duels SET status = 'expired' WHERE id = ?", id);
+    return say(t(L, "duel.no_arena"));
+  }
+  return say(t(L, "duel.posted", { channel: `<#${arena}>` }));
+}
+
+const duelPlayers = (d: DuelRow) => [d.challenger_id, d.opponent_id, d.partner_id, d.opponent2_id].filter(Boolean) as string[];
+
 async function duelAccept(ix: Ix, id: number) {
   const L = ix.L;
   const d = await one<DuelRow>(ix.env, "SELECT * FROM duels WHERE id = ? AND guild_id = ?", id, ix.guild.id);
   if (!d || d.status !== "pending") return say(t(L, "duel.over"));
-  if (d.opponent_id !== ix.userId) return say(t(L, "duel.only_opponent", { b: mention(d.opponent_id) }));
+  const team = !!d.partner_id;
+  if (team) {
+    const invited = [d.partner_id!, d.opponent_id, d.opponent2_id!];
+    if (!invited.includes(ix.userId)) return say(t(L, "duel.not_participant"));
+    const acc: string[] = JSON.parse(d.accepted || "[]");
+    if (!acc.includes(ix.userId)) acc.push(ix.userId);
+    await run(ix.env, "UPDATE duels SET accepted = ? WHERE id = ? AND status = 'pending'", JSON.stringify(acc), id);
+    const waiting = invited.filter((u) => !acc.includes(u));
+    if (waiting.length) {
+      return update({
+        content: t(L, "duel.invite_team", { a: mention(d.challenger_id), p: mention(d.partner_id!), b: mention(d.opponent_id), o: mention(d.opponent2_id!), mode: t(L, `duel.mode.${d.mode}`), difficulty: t(L, `diff.${d.difficulty}`), waiting: waiting.map(mention).join(" ") }),
+        components: [row(btn(t(L, "duel.accept"), `dacc:${id}`, 3, "⚔️"), btn(t(L, "duel.decline"), `ddec:${id}`, 4))],
+      });
+    }
+  } else if (d.opponent_id !== ix.userId) return say(t(L, "duel.only_opponent", { b: mention(d.opponent_id) }));
   if (now() - d.created_at > RULES.duelInviteSeconds) {
     await run(ix.env, "UPDATE duels SET status = 'expired' WHERE id = ?", id);
     return update({ content: t(L, "duel.expired", { a: mention(d.challenger_id), b: mention(d.opponent_id) }), components: [] });
@@ -294,7 +312,7 @@ async function duelAccept(ix: Ix, id: number) {
   if (!claimed.meta.changes) return say(t(L, "duel.over"));
   later(ix, async () => {
     const mode = (d.mode as string) as Mode;
-    const players = [d.challenger_id, d.opponent_id];
+    const players = duelPlayers(d);
     const c = (await pickChallenge(ix.env, ix.guild, { players, difficulty: d.difficulty, mode }))
       ?? (await pickChallenge(ix.env, ix.guild, { players, difficulty: d.difficulty, mode, allowSeen: true }));
     if (!c) {
@@ -312,6 +330,11 @@ async function duelAccept(ix: Ix, id: number) {
       }
     }
     await run(ix.env, "UPDATE duels SET status = 'active', challenge_id = ?, started_at = ? WHERE id = ?", c.id, now(), id);
+    if (team) return {
+      content: t(L, "duel.started_team", { a: mention(d.challenger_id), p: mention(d.partner_id!), b: mention(d.opponent_id), o: mention(d.opponent2_id!), difficulty: t(L, `diff.${d.difficulty}`), mode: t(L, `duel.mode.${d.mode}`), minutes: Math.round((RULES.duelSeconds[d.mode] ?? 600) / 60) }),
+      components: [row(btn(t(L, "duel.open"), `dopen:${id}`, 1, "🎯"))],
+      allowed_mentions: pingUsers(players),
+    };
     return {
       content: t(L, "duel.started", {
         a: mention(d.challenger_id), b: mention(d.opponent_id), difficulty: t(L, `diff.${d.difficulty}`), mode: t(L, `duel.mode.${d.mode}`),
@@ -328,7 +351,7 @@ async function duelDecline(ix: Ix, id: number) {
   const L = ix.L;
   const d = await one<DuelRow>(ix.env, "SELECT * FROM duels WHERE id = ? AND guild_id = ?", id, ix.guild.id);
   if (!d || d.status !== "pending") return say(t(L, "duel.over"));
-  if (d.opponent_id !== ix.userId && d.challenger_id !== ix.userId) return say(t(L, "duel.only_opponent", { b: mention(d.opponent_id) }));
+  if (!duelPlayers(d).includes(ix.userId)) return say(t(L, "duel.only_opponent", { b: mention(d.opponent_id) }));
   await run(ix.env, "UPDATE duels SET status = 'declined' WHERE id = ?", id);
   return update({ content: t(L, "duel.declined", { b: mention(ix.userId) }), components: [] });
 }
@@ -337,7 +360,7 @@ async function duelOpen(ix: Ix, id: number) {
   const L = ix.L;
   const d = await one<DuelRow>(ix.env, "SELECT * FROM duels WHERE id = ? AND guild_id = ?", id, ix.guild.id);
   if (!d) return say(t(L, "err.unknown"));
-  if (d.challenger_id !== ix.userId && d.opponent_id !== ix.userId) return say(t(L, "duel.not_participant"));
+  if (!duelPlayers(d).includes(ix.userId)) return say(t(L, "duel.not_participant"));
   if (d.status !== "active" || !d.challenge_id) return say(t(L, "duel.over"));
   later(ix, async () => {
     const c = await getChallenge(ix.env, d.challenge_id!);
@@ -423,11 +446,12 @@ async function cmdProfile(ix: Ix, memberId: string) {
   const hr = s.player?.hr_display ? t(L, s.player.hr_verified ? "prof.hr" : "prof.hr_unverified", { hr: s.player.hr_display }) : t(L, "prof.no_hr");
   return reply({
     embeds: [{
-      title: `🪪 ${name}`,
+      title: `🪪 ${name}${activeTitle(s.player as any) ? ` · 🏷️ ${activeTitle(s.player as any)}` : ""}`,
       description: `**${t(L, "prof.level", { level: lv.level, title: t(L, titleKey(lv.level)) })}**\n${progressBar(lv.progress, 14)} ${s.total}/${lv.next}\n${hr}`,
       color: COLORS.blue,
       fields,
     }],
+    components: memberId === ix.userId ? [profileButtons(L)] : [],
   });
 }
 
@@ -435,7 +459,8 @@ async function cmdLeaderboard(ix: Ix, board: string) {
   const L = ix.L, g = ix.guild;
   let title = "", lines: string[] = [];
   const medal = (i: number) => MEDALS[i + 1] ?? `\`${i + 1}.\``;
-  const who = (r: { discord_id: string | null; name: string }) => (r.discord_id ? mention(r.discord_id) : `**${r.name}**`);
+  const titles = new Map((await all<{ discord_id: string; title: string }>(ix.env, "SELECT discord_id, title FROM players WHERE guild_id = ? AND title IS NOT NULL AND title_until > ?", g.id, now())).map((x) => [x.discord_id, x.title]));
+  const who = (r: { discord_id: string | null; name: string }) => (r.discord_id ? mention(r.discord_id) + (titles.get(r.discord_id) ? ` *🏷️ ${titles.get(r.discord_id)}*` : "") : `**${r.name}**`);
   if (board === "season" || board === "level") {
     const rows = await standings(ix.env, g.id, board === "season" ? g.season : null, 15);
     title = board === "season" ? t(L, "lb.season", { season: g.season }) : t(L, "lb.level");
@@ -570,7 +595,7 @@ async function cmdStandings(ix: Ix, slug: string | null) {
 }
 
 // ----------------------------------------------------------------- help
-const HELP_PAGES = ["start", "challenges", "write", "points", "duels", "daily", "contests", "social", "teacher"];
+const HELP_PAGES = ["start", "challenges", "write", "points", "duels", "daily", "contests", "social", "coach", "events", "more", "teacher"];
 
 function helpPage(ix: Ix, topic: string) {
   const L = ix.L;
@@ -621,7 +646,8 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
     if (top) msg = t(L, "season.champion", { old, who: top.discord_id ? mention(top.discord_id) : top.name, pts: top.points }) + "\n" + msg;
     const arena = await arenaChannel(ix.env, g);
     if (arena && arena !== ix.raw.channel_id) await send(ix.env, arena, { content: msg }).catch(() => {});
-    return say(msg, false);
+    if (o.certificates !== false) ix.ctx.waitUntil(sendCertificates(ix.env, g, old).catch((e) => console.error("certificates", e)));
+    return say(msg + "\n" + t(L, "cert.sent_note"), false);
   }
   if (sub === "dashboard") {
     return say(ix.env.DASHBOARD_URL ? t(L, "teacher.dashboard", { url: ix.env.DASHBOARD_URL }) : t(L, "teacher.no_dashboard"));
@@ -634,11 +660,17 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
     return say(t(L, "link.verified", { user: mention(member), hr: p.hr_display ?? p.hr_username }));
   }
   if (sub === "setup") {
-    const lang = o.language ?? g.lang, hour = o.daily_hour ?? g.daily_hour, code = o.code_language ?? g.code_lang;
+    const lang = o.language ?? g.lang, hour = o.daily_hour ?? g.daily_hour;
+    // code_language: a track (one language or stack); older combined values ("javascript,php") still work
+    if (o.code_language && isTrack(o.code_language)) await setTrack(ix.env, g, o.code_language);
+    else if (o.code_language) await run(ix.env, "UPDATE guilds SET code_lang = ?, track = NULL WHERE id = ?", o.code_language, g.id);
+    const g2 = await getGuild(ix.env, g.id);
+    const code = g2.code_lang;
     const arena = o.arena ?? g.arena_channel ?? (await arenaChannel(ix.env, { ...g, announce_channel: null, daily_channel: null })) ?? ix.raw.channel_id;
+    await run(ix.env, "UPDATE guilds SET teacher_id = ? WHERE id = ?", ix.userId, ix.guild.id);
     await run(ix.env, "UPDATE guilds SET lang = ?, daily_hour = ?, code_lang = ?, arena_channel = ?, announce_channel = ?, daily_channel = ?, name = COALESCE(name, ?) WHERE id = ?",
       lang, hour, code, arena, arena, arena, ix.raw.guild?.name ?? null, g.id);
-    return say(t(lang, "teacher.setup_ok", { lang: lang === "fr" ? "Français" : "English", channel: `<#${arena}>`, hour, code: guildLangs({ code_lang: code }).map((x) => LANGS[x as keyof typeof LANGS]?.label ?? x).join(" + ") }));
+    return say(t(lang, "teacher.setup_ok", { lang: lang === "fr" ? "Français" : "English", channel: `<#${arena}>`, hour, code: g2.track ? trackLabel(g2, lang) : guildLangs({ code_lang: code }).map((x) => LANGS[x as keyof typeof LANGS]?.label ?? x).join(" + ") }));
   }
   return say(t(L, "err.unknown"));
 }
@@ -659,6 +691,54 @@ async function component(ix: Ix): Promise<Response> {
   const id = Number(x);
   switch (kind) {
     case "help": return update(helpPage(ix, String(ix.raw.data.values?.[0] ?? "start")));
+    case "sol": {
+      const r = await ownAttempt(ix, id);
+      if (r instanceof Response) return r;
+      if (r.a.status === "pending" || r.c.kind !== "write" || !r.c.solution || ["session", "exam"].includes(r.a.origin)) return say(t(L, "sol.not_yet"));
+      later(ix, async () => {
+        const lang = (isCodeLang(r.a.lang) ? r.a.lang : "python") as any;
+        const sol = await solutionFor(ix.env, r.c, lang);
+        if (!sol) return { content: t(L, "sol.not_yet") };
+        return {
+          content: [t(L, "sol.title", { title: r.c.title }), sol.note ? `💬 ${sol.note}` : "", sol.fallback ? t(L, "sol.fallback") : "",
+            "```" + (sol.lang === "cpp" ? "cpp" : sol.lang) + "\n" + sol.code.slice(0, 1700) + "\n```", t(L, "sol.compare")].filter(Boolean).join("\n"),
+        };
+      });
+      return deferReply(true);
+    }
+    case "today": return cmdToday(ix, null);
+    case "hand": return handButton(ix, x, Number(y));
+    case "tr": {
+      const a = await getAttempt(ix.env, id);
+      const c = a ? await getChallenge(ix.env, a.challenge_id) : null;
+      if (!a || !c || a.guild_id !== ix.guild.id) return say(t(L, "err.unknown"));
+      const to = (c.lang === "fr" ? "en" : "fr") as "en" | "fr";
+      later(ix, async () => {
+        const tr = await translateChallenge(ix.env, c, to);
+        if (!tr) return { content: t(to, "tr.failed") };
+        const LETTERS = ["A", "B", "C", "D", "E", "F"];
+        const body = [tr.question ?? "", tr.choices ? "\n" + tr.choices.map((ch, i) => `**${LETTERS[i]})** ${ch}`).join("\n") : ""].join("\n");
+        return { embeds: [{ title: `🌐 ${tr.title}`, description: body.slice(0, 4000), color: COLORS.blue, footer: { text: t(to, "tr.footer") } }] };
+      });
+      return deferReply(true);
+    }
+    case "faqok": case "faqask": return faqButton(ix, kind, id, Number(y));
+    case "ivr": case "ive": return interviewButton(ix, kind, id);
+    case "ivnew": return cmdInterview(ix, (["easy", "medium", "hard"].includes(x) ? x : "easy") as Difficulty);
+    case "share": return shareButton(ix, x);
+    case "cert": return certButton(ix);
+    case "plan": return planButton(ix, x, !ix.raw.guild_id);
+    case "path": return pathButton(ix, x, y);
+    case "report": return reportButton(ix);
+    case "skills": return cmdSkills(ix, ix.userId);
+    case "qz": return quizButton(ix, id, Number(y), String(String(ix.raw.data.custom_id).split(":")[3] ?? ""));
+    case "boss": return bossButton(ix, id);
+    case "bty": return bountyButton(ix, id);
+    case "shop": return shopButton(ix, x);
+    case "ask": return askButton(ix, id);
+    case "hlp": return explainButton(ix, id);
+    case "hrate": return rateButton(ix, id, y === "1");
+    case "sk": return trainSkill(ix, x, (["easy", "medium", "hard"].includes(y) ? y : "easy") as Difficulty);
     case "hrv": return verifyLink(ix);
     case "ans": {
       const r = await ownAttempt(ix, id);
@@ -670,6 +750,8 @@ async function component(ix: Ix): Promise<Response> {
       const r = await ownAttempt(ix, id);
       if (r instanceof Response) return r;
       if (r.a.status !== "pending") return say(t(L, "res.already"));
+      if (r.c.kind === "sql") return json(modal(`mans:${id}`, t(L, "sql.modal_title"), [{ id: "a", label: t(L, "sql.modal_label"), long: true, max: 2000 }]));
+      if (r.c.kind === "regex") return json(modal(`mans:${id}`, t(L, "rx.modal_title"), [{ id: "a", label: t(L, "rx.modal_label"), long: false, max: 300 }]));
       return json(modal(`mans:${id}`, t(L, "ch.modal_title"), [{ id: "a", label: t(L, "ch.modal_label"), long: true, max: 300 }]));
     }
     case "sub": {
@@ -720,7 +802,7 @@ async function component(ix: Ix): Promise<Response> {
       }
       const ids: number[] = JSON.parse(s.challenges || "[]");
       const rows = await all<ChallengeRow>(ix.env, `SELECT * FROM challenges WHERE id IN (${ids.map(() => "?").join(", ") || "0"})`, ...ids);
-      const done = new Set((await all<{ challenge_id: number }>(ix.env, "SELECT challenge_id FROM attempts WHERE origin = 'session' AND ref = ? AND discord_id = ? AND status != 'pending'", s.id, ix.userId)).map((x) => x.challenge_id));
+      const done = new Set((await all<{ challenge_id: number }>(ix.env, "SELECT challenge_id FROM attempts WHERE origin IN ('session', 'exam') AND ref = ? AND discord_id = ? AND status != 'pending'", s.id, ix.userId)).map((x) => x.challenge_id));
       const list = ids.map((cid, i) => rows.find((c) => c.id === cid)).filter(Boolean) as ChallengeRow[];
       const buttons = list.map((c, i) => btn(`${i + 1}. ${c.title}`.slice(0, 80), `sgo:${s.id}:${c.id}`, done.has(c.id) ? 2 : 1, done.has(c.id) ? "✅" : "🧩", done.has(c.id)));
       const rows5: unknown[] = [];
@@ -729,16 +811,17 @@ async function component(ix: Ix): Promise<Response> {
     }
     case "sgo": {
       const sid = id, cid = Number(y);
-      const s = await one<{ id: number; challenges: string; ends_at: number; status: string; team_id: number | null }>(ix.env, "SELECT * FROM sessions WHERE id = ? AND guild_id = ?", sid, ix.guild.id);
+      const s = await one<{ id: number; challenges: string; ends_at: number; status: string; team_id: number | null; mode: string }>(ix.env, "SELECT * FROM sessions WHERE id = ? AND guild_id = ?", sid, ix.guild.id);
       if (!s || s.status !== "active" || now() > s.ends_at) return say(t(L, "session.over"));
       if (!(JSON.parse(s.challenges || "[]") as number[]).includes(cid)) return say(t(L, "err.unknown"));
       if (s.team_id && !(await one(ix.env, "SELECT 1 FROM team_members WHERE team_id = ? AND discord_id = ?", s.team_id, ix.userId))) return say(t(L, "session.not_for_you"));
       later(ix, async () => {
         const c = await getChallenge(ix.env, cid);
         if (!c) return { content: t(L, "err.unknown") };
-        const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "session", sid);
-        if (a.status !== "pending") return { content: t(L, "res.already") };
-        return renderFor(ix.env, ix.guild, c, a, { notice: t(L, "session.notice", { end: ts(s.ends_at) }) });
+        const exam = s.mode === "exam";
+        const a = await startAttempt(ix.env, ix.guild, ix.userId, c, exam ? "exam" : "session", sid);
+        if (a.status !== "pending") return { content: t(L, exam ? "exam.saved" : "res.already") };
+        return renderFor(ix.env, ix.guild, c, a, { notice: t(L, exam ? "exam.notice" : "session.notice", { end: ts(s.ends_at) }) });
       });
       return deferReply(true);
     }
@@ -767,9 +850,18 @@ async function component(ix: Ix): Promise<Response> {
       const r = await ownAttempt(ix, id);
       if (r instanceof Response) return r;
       if (r.a.status !== "pending") return say(t(L, "res.already"));
-      if (!r.c.hint) return say(t(L, "ch.no_hint"));
-      await run(ix.env, "UPDATE attempts SET used_hint = 1 WHERE id = ?", id);
-      later(ix, async () => renderFor(ix.env, ix.guild, r.c, { ...r.a, used_hint: 1 }));
+      const steps = hintSteps(r.c);
+      const level = (r.a.used_hint || 0) + 1;
+      if (level > steps.length) return say(t(L, steps.length ? "hint.no_more" : "ch.no_hint"));
+      later(ix, async () => {
+        if (steps[level - 1] !== "nudge" && !(await ensureHints(ix.env, r.c))) {
+          return { ...(await renderFor(ix.env, ix.guild, r.c, r.a)), content: t(L, "hint.unavailable") };
+        }
+        const done = await run(ix.env, "UPDATE attempts SET used_hint = ? WHERE id = ? AND used_hint = ?", level, id, r.a.used_hint || 0);
+        if (!done.meta.changes) return null;
+        const token = !["exam", "duel"].includes(r.a.origin) && (await useHintToken(ix.env, ix.guild, ix.userId, id));
+        return { ...(await renderFor(ix.env, ix.guild, r.c, { ...r.a, used_hint: level })), content: token ? t(L, "shop.token_used") : "" };
+      });
       return deferUpdate();
     }
     case "rep": {
@@ -820,6 +912,11 @@ async function modalSubmit(ix: Ix): Promise<Response> {
   const [kind, x] = String(ix.raw.data.custom_id).split(":");
   const id = Number(x);
   const value = String(ix.raw.data.components?.[0]?.components?.[0]?.value ?? "");
+  if (kind === "mcreate") return createSubmit(ix, x, ix.raw.data.components ?? []);
+  if (kind === "mshop") return doBuy(ix, x, value);
+  if (kind === "mhand") return handSubmit(ix, ix.raw.data.components ?? []);
+  if (kind === "miv") return interviewSubmit(ix, id, value);
+  if (kind === "mhelp") return explainSubmit(ix, id, value);
   if (kind === "mans") {
     const r = await ownAttempt(ix, id);
     if (r instanceof Response) return r;
@@ -892,6 +989,8 @@ async function autocomplete(ix: Ix): Promise<Response> {
     for (const r of await all<{ hr_display: string }>(ix.env, "SELECT hr_display FROM players WHERE guild_id = ? AND hr_display IS NOT NULL", ix.guild.id)) set.add(r.hr_display);
     for (const c of await activeContests(ix.env, ix.guild.id)) for (const n of Object.values(JSON.parse(c.state || "{}").names ?? {})) set.add(String(n));
     names = [...set];
+  } else if (ix.raw.data.name === "project") {
+    return json({ type: 8, data: { choices: await projectChoices(ix, cur) } });
   } else if (ix.raw.data.name === "contest" || ix.raw.data.name === "teacher") {
     names = (await activeContests(ix.env, ix.guild.id)).map((c) => c.slug);
   }

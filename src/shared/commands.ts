@@ -30,6 +30,9 @@ export const COMMANDS: any[] = [
           { name: "Find the bug", name_localizations: fr("Trouver le bug"), value: "bug" },
           { name: "Multiple choice", name_localizations: fr("QCM"), value: "mcq" },
           { name: "Complexity", name_localizations: fr("Complexité"), value: "complexity" },
+          { name: "SQL query", name_localizations: fr("Requête SQL"), value: "sql" },
+          { name: "Regular expression", name_localizations: fr("Expression régulière"), value: "regex" },
+          { name: "Git question", name_localizations: fr("Question Git"), value: "git" },
           { name: "HackerRank problem (verified)", name_localizations: fr("Problème HackerRank (vérifié)"), value: "coding" },
         ],
       },
@@ -39,6 +42,7 @@ export const COMMANDS: any[] = [
         choices: [
           { name: "JavaScript", value: "javascript" }, { name: "PHP", value: "php" }, { name: "Python", value: "python" },
           { name: "Java", value: "java" }, { name: "C", value: "c" }, { name: "C++", value: "cpp" },
+          { name: "SQL (database queries)", name_localizations: fr("SQL (requêtes base de données)"), value: "sql" },
         ],
       },
     ],
@@ -57,8 +61,33 @@ export const COMMANDS: any[] = [
       },
       diff(false),
       { type: INTEGER, name: "stake", description: "Coins each player bets (optional)", description_localizations: fr("Pièces misées par chaque joueur (facultatif)"), min_value: 0, max_value: 1000 },
+      { type: USER, name: "partner", description: "2 vs 2: your teammate", description_localizations: fr("2 contre 2 : ton coéquipier") },
+      { type: USER, name: "opponent2", description: "2 vs 2: the second opponent", description_localizations: fr("2 contre 2 : le second adversaire") },
     ],
   },
+  {
+    name: "skills", description: "Your skill map and what trips you up", description_localizations: fr("Ta carte de compétences et tes erreurs fréquentes"),
+    options: [{ type: USER, name: "member", description: "Teachers: see a student's map", description_localizations: fr("Enseignants : voir la carte d'un élève") }],
+  },
+  {
+    name: "today", description: "Your plan for today: 3 challenges picked for you", description_localizations: fr("Ton plan du jour : 3 défis choisis pour toi"),
+    options: [{ type: BOOLEAN, name: "remind", description: "Send me my plan every morning", description_localizations: fr("M'envoyer mon plan chaque matin") }],
+  },
+  {
+    name: "create", description: "Write your own challenge for the class (your teacher approves it)", description_localizations: fr("Écris ton propre défi pour la classe (ton enseignant le valide)"),
+    options: [
+      {
+        type: STRING, name: "type", description: "What kind of challenge", description_localizations: fr("Quel type de défi"), required: true,
+        choices: [
+          { name: "Write code (with tests)", name_localizations: fr("Écrire du code (avec des tests)"), value: "write" },
+          { name: "Multiple choice", name_localizations: fr("QCM"), value: "mcq" },
+        ],
+      },
+      diff(true),
+    ],
+  },
+  { name: "shop", description: "Spend your coins: streak freeze, hint tokens, a title, a color", description_localizations: fr("Dépense tes pièces : gel de série, jetons d'indice, un titre, une couleur") },
+  { name: "path", description: "Your step-by-step path, with lessons", description_localizations: fr("Ton parcours étape par étape, avec des leçons") },
   { name: "daily", description: "Today's daily challenge", description_localizations: fr("Le défi du jour") },
   { name: "assignments", description: "Challenges your teacher gave you", description_localizations: fr("Les défis donnés par ton enseignant") },
   {
@@ -107,6 +136,39 @@ export const COMMANDS: any[] = [
     ],
   },
   {
+    name: "help-me", description: "Raise your hand: ask your teacher for help (live queue)", description_localizations: fr("Lever la main : demander de l'aide à ton enseignant (file d'attente)"),
+  },
+  {
+    name: "ask", description: "Ask a question: the class FAQ first, else your teacher answers", description_localizations: fr("Poser une question : la FAQ d'abord, sinon ton enseignant répond"),
+    options: [{ type: STRING, name: "question", description: "Your question", description_localizations: fr("Ta question"), required: true, min_length: 8, max_length: 600 }],
+  },
+  {
+    name: "faq", description: "Questions your teacher already answered", description_localizations: fr("Les questions auxquelles ton enseignant a déjà répondu"),
+    options: [{ type: STRING, name: "search", description: "Words to look for", description_localizations: fr("Mots à chercher"), max_length: 100 }],
+  },
+  {
+    name: "interview", description: "Mock coding interview: solve a problem and explain it to an interviewer", description_localizations: fr("Entretien technique blanc : résous un problème et explique-le"),
+    options: [diff(false)],
+  },
+  {
+    name: "project", description: "GitHub projects graded by the bot", description_localizations: fr("Projets GitHub corrigés par le bot"),
+    options: [
+      { type: SUB, name: "list", description: "Open projects and your score", description_localizations: fr("Projets ouverts et ton score") },
+      {
+        type: SUB, name: "submit", description: "Link your public GitHub repository to a project", description_localizations: fr("Relier ton dépôt GitHub public à un projet"),
+        options: [
+          { type: STRING, name: "repo", description: "github.com/you/your-repo", description_localizations: fr("github.com/toi/ton-depot"), required: true, max_length: 200 },
+          { type: STRING, name: "project", description: "Which project (if several)", description_localizations: fr("Quel projet (s'il y en a plusieurs)"), autocomplete: true },
+        ],
+      },
+      {
+        type: SUB, name: "check", description: "Grade your repository again now", description_localizations: fr("Corriger ton dépôt maintenant"),
+        options: [{ type: STRING, name: "project", description: "Which project (if several)", description_localizations: fr("Quel projet (s'il y en a plusieurs)"), autocomplete: true }],
+      },
+    ],
+  },
+  { name: "league", description: "Class vs class: this week's league table", description_localizations: fr("Classe contre classe : le classement de la semaine") },
+  {
     name: "help", description: "Everything the bot can do", description_localizations: fr("Tout ce que le bot sait faire"),
     options: [{
       type: STRING, name: "topic", description: "Jump to a topic", description_localizations: fr("Aller à un sujet"),
@@ -119,6 +181,9 @@ export const COMMANDS: any[] = [
         { name: "Daily & assignments", name_localizations: fr("Défi du jour & devoirs"), value: "daily" },
         { name: "HackerRank contests", name_localizations: fr("Concours HackerRank"), value: "contests" },
         { name: "Profile, rivals, teams", name_localizations: fr("Profil, rivaux, équipes"), value: "social" },
+        { name: "Coach: plan, skills, path, shop", name_localizations: fr("Coach : plan, compétences, parcours, boutique"), value: "coach" },
+        { name: "Quiz, boss battles, bounties", name_localizations: fr("Quiz, boss, primes"), value: "events" },
+        { name: "Help, interviews, projects, league", name_localizations: fr("Aide, entretiens, projets, ligue"), value: "more" },
         { name: "Teacher tools", name_localizations: fr("Outils enseignant"), value: "teacher" },
       ],
     }],
@@ -135,16 +200,17 @@ export const COMMANDS: any[] = [
           { type: STRING, name: "language", description: "Bot language", description_localizations: fr("Langue du bot"), choices: [{ name: "English", value: "en" }, { name: "Français", value: "fr" }] },
           { type: INTEGER, name: "daily_hour", description: "Hour (UTC) for the daily challenge", description_localizations: fr("Heure (UTC) du défi du jour"), min_value: 0, max_value: 23 },
           {
-            type: STRING, name: "code_language", description: "Programming language(s) your class learns", description_localizations: fr("Langage(s) de programmation de la classe"),
+            type: STRING, name: "code_language", description: "What your class learns: one language or stack", description_localizations: fr("Ce que la classe apprend : un langage ou une pile"),
             choices: [
-              { name: "JavaScript + PHP", value: "javascript,php" },
               { name: "JavaScript", value: "javascript" },
               { name: "PHP", value: "php" },
               { name: "Python", value: "python" },
               { name: "Java", value: "java" },
               { name: "C", value: "c" },
               { name: "C++", value: "cpp" },
-              { name: "Python + JavaScript", value: "python,javascript" },
+              { name: "SQL (databases)", name_localizations: fr("SQL (bases de données)"), value: "sql" },
+              { name: "MERN (MongoDB, Express, React, Node)", value: "mern" },
+              { name: "Python for AI & LLMs", name_localizations: fr("Python pour l'IA et les LLM"), value: "ai" },
             ],
           },
         ],
@@ -167,7 +233,10 @@ export const COMMANDS: any[] = [
       },
       {
         type: SUB, name: "season", description: "Start a new season", description_localizations: fr("Commencer une nouvelle saison"),
-        options: [{ type: STRING, name: "name", description: "Season name", description_localizations: fr("Nom de la saison"), required: true, max_length: 60 }],
+        options: [
+          { type: STRING, name: "name", description: "Season name", description_localizations: fr("Nom de la saison"), required: true, max_length: 60 },
+          { type: BOOLEAN, name: "certificates", description: "DM every student their certificate (default yes)", description_localizations: fr("Envoyer à chaque élève son certificat (oui par défaut)") },
+        ],
       },
       { type: SUB, name: "dashboard", description: "Link to the teacher dashboard", description_localizations: fr("Lien vers le tableau de bord") },
       {

@@ -108,8 +108,8 @@ export async function practicePointsToday(env: Env, guildId: string, discordId: 
   const r = await one<{ s: number }>(
     env,
     `SELECT COALESCE(SUM(a.points), 0) AS s FROM attempts a JOIN challenges c ON c.id = a.challenge_id
-      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel') AND a.finished_at >= ?
-        AND c.kind IN ('mcq', 'complexity', 'output', 'bug')`,
+      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel', 'path') AND a.finished_at >= ?
+        AND c.kind IN ('mcq', 'complexity', 'output', 'bug', 'regex')`,
     guildId, discordId, start,
   );
   return r?.s ?? 0;
@@ -121,8 +121,8 @@ export async function quickSolvesToday(env: Env, guildId: string, discordId: str
   const r = await one<{ n: number }>(
     env,
     `SELECT COUNT(*) AS n FROM attempts a JOIN challenges c ON c.id = a.challenge_id
-      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel') AND a.status = 'solved' AND a.finished_at >= ? AND a.id != ?
-        AND c.kind IN ('mcq', 'complexity', 'output', 'bug')`,
+      WHERE a.guild_id = ? AND a.discord_id = ? AND a.origin IN ('practice', 'duel', 'path') AND a.status = 'solved' AND a.finished_at >= ? AND a.id != ?
+        AND c.kind IN ('mcq', 'complexity', 'output', 'bug', 'regex')`,
     guildId, discordId, start, exceptAttempt,
   );
   return r?.n ?? 0;

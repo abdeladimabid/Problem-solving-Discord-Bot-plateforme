@@ -14,9 +14,29 @@ import { MIGRATIONS } from "../shared/schema.ts";
 import { integrityOf } from "../shared/integrity.ts";
 import { createSession, endSession, sessionResults } from "../shared/sessions.ts";
 import { ROLE_DEFS, autoRolesOf, setAutoRoles, syncAutoRoles, wantedHolders } from "../shared/roles.ts";
+import { SKILLS, setSkills, skillName, studentProfile } from "../shared/skills.ts";
+import { classLangs, defaultLessons, defaultSteps, pathCfg, pathCustom, pathProgress, savePath } from "../shared/path.ts";
+import { GenError, bankCoverage, challengeForSkill, generateProject, writeLesson } from "../shared/aigen.ts";
+import type { GenKind } from "../shared/aigen.ts";
+import { leagueOf as leagueCfgOf } from "../shared/league.ts";
+import { TRACKS, setTrack, skillFitsTrack, trackOf } from "../shared/tracks.ts";
+import { challengeMistakes, classHeatmap, difficultyCheck, practiceSet, teacherSummary } from "../shared/insight.ts";
+import { examGrades } from "../shared/sessions.ts";
+import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
+import { focusSkills } from "../shared/plan.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
+import { QUIZ_KINDS, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
+import type { QuizRow } from "../shared/events.ts";
+import { SHOP } from "../shared/shop.ts";
+import { HandError, handQueue, updateHand } from "../shared/hands.ts";
+import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
+import { ProjectError, gradeRepo, projectDetail, projectList, saveProject } from "../shared/projects.ts";
+import type { ProjectRow, RepoRow } from "../shared/projects.ts";
+import { compareClasses, leagueOf, leagueTable, setLeague } from "../shared/league.ts";
+import { certUrl, sendCertificates } from "../shared/share.ts";
+import { standings } from "../shared/db.ts";
 
 class HttpError extends Error {
   status: number;
@@ -89,6 +109,97 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     const revM = path.match(/^\/attempts\/(\d+)\/integrity$/);
     if (revM && method === "POST") return ok(await reviewIntegrity(env, await guild(), Number(revM[1]), body, ctx));
 
+    // ---------------------------------------------------- skills & coaching
+    if (path === "/skills/class" && method === "GET") return ok({ ...(await classHeatmap(env, await guild())), defs: SKILLS });
+    if (path === "/skills/practice-set" && method === "POST") return ok(await sendPracticeSet(env, await guild(), body, ctx));
+    if (path === "/summary" && method === "GET") return ok(await teacherSummary(env, await guild()));
+    if (path === "/difficulty" && method === "GET") return ok(await difficultyCheck(env, await guild()));
+    if (path === "/path" && method === "GET") {
+      const g = await guild();
+      return ok(await pathView(env, g));
+    }
+    if (path === "/path" && method === "PUT") {
+      const g = await guild();
+      await savePath(env, g, { steps: body.steps, lessons: body.lessons, reset: !!body.reset });
+      const g2 = await getGuild(env, g.id);
+      return ok(await pathView(env, g2));
+    }
+    const misM = path.match(/^\/challenges\/(\d+)\/mistakes$/);
+    if (misM && method === "GET") {
+      const g = await guild();
+      const c = await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ? AND (guild_id IS NULL OR guild_id = ?)", Number(misM[1]), g.id);
+      if (!c) throw new HttpError(404, "unknown challenge");
+      return ok(await challengeMistakes(env, g, c));
+    }
+    const difM = path.match(/^\/challenges\/(\d+)\/difficulty$/);
+    if (difM && method === "POST") {
+      if (!["easy", "medium", "hard"].includes(body.difficulty)) throw new HttpError(400, "difficulty?");
+      await run(env, "UPDATE challenges SET difficulty = ? WHERE id = ? AND (guild_id IS NULL OR guild_id = ?)", body.difficulty, Number(difM[1]), (await guild()).id);
+      return ok({ ok: true });
+    }
+    if (path === "/student-challenges" && method === "GET") return ok(await pendingStudentChallenges(env, await guild()));
+    const srvM = path.match(/^\/student-challenges\/(\d+)$/);
+    if (srvM && method === "POST") {
+      const r = await reviewStudentChallenge(env, await guild(), Number(srvM[1]), !!body.approve, String(body.reason ?? "").slice(0, 200));
+      if (!r) throw new HttpError(404, "unknown challenge");
+      return ok(r);
+    }
+    const csvM = path.match(/^\/sessions\/(\d+)\/grades\.csv$/);
+    if (csvM && method === "GET") return examCsv(env, await guild(), Number(csvM[1]));
+
+    // --------------------------------------------------------- class events
+    if (path === "/events" && method === "GET") return ok(await eventsState(env, await guild()));
+    if (path === "/quizzes" && method === "POST") {
+      const g = await guild();
+      const ids = (Array.isArray(body.challenge_ids) ? body.challenge_ids : []).map(Number).filter((x: number) => x > 0).slice(0, 30);
+      if (ids.length < 1) throw new HttpError(400, "choose at least one question");
+      const found = await all<{ id: number; kind: string; choices: string | null }>(env, `SELECT id, kind, choices FROM challenges WHERE id IN (${ids.map(() => "?").join(", ")}) AND (guild_id IS NULL OR guild_id = ?) AND status != 'archived'`, ...ids, g.id);
+      if (found.length !== new Set(ids).size || found.some((c) => !QUIZ_KINDS.includes(c.kind) || !c.choices)) throw new HttpError(400, "a live quiz only takes multiple-choice questions (MCQ, find the bug, Big-O)");
+      if (await one(env, "SELECT 1 FROM quizzes WHERE guild_id = ? AND status != 'done'", g.id)) throw new HttpError(409, "a quiz is already running, end it first");
+      const seconds = Math.min(120, Math.max(10, Math.round(Number(body.seconds) || 20)));
+      const q = await createQuiz(env, g, { title: String(body.title ?? "").trim().slice(0, 80) || "Live quiz", questions: ids, seconds, channelId: body.channel_id || null, givePoints: body.give_points !== false });
+      if (!q.channel_id) throw new HttpError(400, "no arena channel: run /teacher setup in Discord first");
+      return ok(q);
+    }
+    const qzM = path.match(/^\/quizzes\/(\d+)(?:\/(next|reveal|end))?$/);
+    if (qzM) {
+      const g = await guild();
+      const q = await one<QuizRow>(env, "SELECT * FROM quizzes WHERE id = ? AND guild_id = ?", Number(qzM[1]), g.id);
+      if (!q) throw new HttpError(404, "unknown quiz");
+      if (method === "POST" && qzM[2] === "next") { if (q.status === "done") throw new HttpError(409, "quiz is over"); await quizNext(env, g, q); }
+      else if (method === "POST" && qzM[2] === "reveal") await quizReveal(env, g, q);
+      else if (method === "POST" && qzM[2] === "end") await quizEnd(env, g, q);
+      else if (method !== "GET" || qzM[2]) throw new HttpError(405, "method not allowed");
+      return ok(await quizLive(env, Number(qzM[1])));
+    }
+    if (path === "/bosses" && method === "POST") {
+      const g = await guild();
+      const n = (v: unknown, lo: number, hi: number, d: number) => Math.min(hi, Math.max(lo, Math.round(Number(v) || d)));
+      try {
+        return ok(await createBoss(env, g, { challengeId: Number(body.challenge_id), name: String(body.name ?? "").trim().slice(0, 60) || "The Bug King", hp: n(body.hp, 40, 5000, 200), hours: n(body.hours, 1, 336, 48), reward: n(body.reward, 0, 200, 30), coins: n(body.coins, 0, 500, 20), channelId: body.channel_id || null }));
+      } catch (e: any) { throw new HttpError(400, e.message); }
+    }
+    if (path === "/bounties" && method === "POST") {
+      const g = await guild();
+      const n = (v: unknown, lo: number, hi: number, d: number) => Math.min(hi, Math.max(lo, Math.round(Number(v) || d)));
+      try {
+        return ok(await createBounty(env, g, { challengeId: Number(body.challenge_id), points: n(body.points, 0, 300, 40), coins: n(body.coins, 0, 500, 30), hours: body.hours ? n(body.hours, 1, 720, 24) : null, channelId: body.channel_id || null }));
+      } catch (e: any) { throw new HttpError(400, e.message); }
+    }
+    const btyDel = path.match(/^\/bounties\/(\d+)\/cancel$/);
+    if (btyDel && method === "POST") {
+      const g = await guild();
+      await run(env, "UPDATE bounties SET status = 'expired' WHERE id = ? AND guild_id = ? AND status = 'open'", Number(btyDel[1]), g.id);
+      return ok({ ok: true });
+    }
+    const bossDel = path.match(/^\/bosses\/(\d+)\/cancel$/);
+    if (bossDel && method === "POST") {
+      const g = await guild();
+      await run(env, "UPDATE bosses SET deadline = ? WHERE id = ? AND guild_id = ? AND status = 'active'", now() - 1, Number(bossDel[1]), g.id);
+      await sweepEvents(env);
+      return ok({ ok: true });
+    }
+
     // ------------------------------------------------------ automatic roles
     if (path === "/roles" && method === "GET") return ok(await rolesState(env, await guild()));
     if (path === "/roles" && method === "PUT") {
@@ -116,7 +227,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (found.length !== ids.length) throw new HttpError(400, "unknown challenge in the list");
       const minutes = Math.min(600, Math.max(5, Math.round(Number(body.minutes) || 60)));
       const title = String(body.title ?? "").trim().slice(0, 80) || "Class session";
-      const s = await createSession(env, g, { title, challenges: ids, minutes, teamId: body.team_id ? Number(body.team_id) : null, channelId: body.channel_id || null });
+      const s = await createSession(env, g, { title, challenges: ids, minutes, teamId: body.team_id ? Number(body.team_id) : null, channelId: body.channel_id || null, mode: body.mode === "exam" ? "exam" : "class" });
       return ok(s);
     }
     const sesM = path.match(/^\/sessions\/(\d+)$/);
@@ -169,19 +280,22 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       const difficulty = (DIFFS.includes(body.difficulty) ? body.difficulty : "medium") as Difficulty;
       const lang = body.lang === "fr" || body.lang === "en" ? body.lang : g.lang;
+      const skill = SKILLS.find((x) => x.key === body.skill);
+      if (skill) body.topic = [skill.en, body.topic].filter(Boolean).join(": ");
       try {
         if (body.kind === "write") {
           // checked on the runner, then saved (the tests are part of the problem)
           const w = await generateWrite(env, { difficulty, topic: body.topic || null, lang });
           if (!w) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
           const c = await saveGeneratedWrite(env, { ...g, lang }, w, difficulty, user.email, "ai");
+          if (skill && c) await setSkills(env, c.id, [skill.key]);
           return ok({ saved: true, challenge: c });
         }
         const kind = ["mcq", "complexity", "output", "bug"].includes(body.kind) ? body.kind : null;
         const codeLang = guildLangs({ code_lang: body.code_lang || "" }).includes(body.code_lang) ? body.code_lang : pickGuildLang(g);
         const gen = await generateQuick(env, { difficulty, kind, topic: body.topic || null, lang, codeLang, examples: await bankExamples(env, { ...g, lang }, kind, difficulty, codeLang) });
         if (!gen) throw new HttpError(503, "The AI couldn't produce a checked challenge right now (busy or daily limit reached). Try again.");
-        return ok({ ...gen, code_lang: codeLang });
+        return ok({ ...gen, code_lang: codeLang, skills: skill?.key ?? null });
       } catch (e) {
         if (e instanceof RunnerUnavailable) throw new HttpError(503, "The code runner is unreachable right now: " + e.message);
         throw e;
@@ -286,11 +400,120 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (!name) throw new HttpError(400, "name required");
       await run(env, "UPDATE guilds SET season = ? WHERE id = ?", name, g.id);
       if (body.announce) ctx.waitUntil(arenaChannel(env, g).then((ch) => ch && send(env, ch, { content: t(g.lang, "season.new", { season: name }) })).catch(() => {}));
+      if (body.certificates !== false && name !== g.season) ctx.waitUntil(sendCertificates(env, g, g.season).catch((e) => console.error("certificates", e)));
       return ok(await getGuild(env, g.id));
     }
+    // ---------------------------------------------------------- 🎯 track
+    if (path === "/track" && method === "GET") { const g = await guild(); return ok({ track: trackOf(g), tracks: TRACKS }); }
+    if (path === "/track" && method === "PUT") {
+      const g = await guild();
+      if (!TRACKS.some((t) => t.key === body.track)) throw new HttpError(400, "unknown track");
+      const t = await setTrack(env, g, String(body.track));
+      return ok({ track: t, guild: await getGuild(env, g.id) });
+    }
+    if (path === "/pills" && method === "GET") {
+      const g = await guild();
+      const h = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id);
+      const f = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id);
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0 });
+    }
+    // -------------------------------------------------- ✨ AI generation
+    if (path === "/path/lesson-ai" && method === "POST") return ok(await writeLesson(env, await guild(), String(body.skill ?? ""), String(body.hint ?? "")));
+    if (path === "/coverage" && method === "GET") return ok(await bankCoverage(env, await guild()));
+    if (path === "/ai/challenge" && method === "POST") {
+      const g = await guild();
+      const kind = (["write", "quick", "mcq", "output", "bug", "complexity"].includes(body.kind) ? body.kind : "quick") as GenKind;
+      const c = await challengeForSkill(env, g, { skill: body.skill || null, difficulty: body.difficulty, kind, topic: body.topic || null, codeLang: body.code_lang || null });
+      return ok({ challenge: c, coverage: await bankCoverage(env, g) });
+    }
+    if (path === "/projects/ai" && method === "POST") return ok(await generateProject(env, await guild(), { idea: body.idea, difficulty: body.difficulty, lang: body.lang }));
+    if (path === "/overview/live" && method === "GET") return ok(await overviewLive(env, await guild()));
+
+    // ------------------------------------------------------ ✋ help queue
+    if (path === "/hands" && method === "GET") return ok(await handQueue(env, await guild()));
+    let hm = path.match(/^\/hands\/(\d+)$/);
+    if (hm && method === "PUT") {
+      const g = await guild();
+      const action = ["take", "reply", "done", "requeue"].includes(body.action) ? body.action : "done";
+      await updateHand(env, g, Number(hm[1]), action, String(body.reply ?? ""));
+      return ok(await handQueue(env, g));
+    }
+
+    // ---------------------------------------------------- ❓ questions/FAQ
+    if (path === "/faq" && method === "GET") return ok({ items: await faqList(env, await guild()) });
+    if (path === "/faq" && method === "POST") { const g = await guild(); await saveFaq(env, g, { ...body, id: undefined }); return ok({ items: await faqList(env, g) }); }
+    hm = path.match(/^\/faq\/(\d+)$/);
+    if (hm && method === "PUT") { const g = await guild(); await saveFaq(env, g, { ...body, id: Number(hm[1]) }); return ok({ items: await faqList(env, g) }); }
+    if (hm && method === "DELETE") { const g = await guild(); await run(env, "DELETE FROM faq WHERE id = ? AND guild_id = ?", Number(hm[1]), g.id); return ok({ items: await faqList(env, g) }); }
+    hm = path.match(/^\/faq\/(\d+)\/draft$/);
+    if (hm && method === "POST") {
+      const g = await guild();
+      await run(env, "UPDATE faq SET draft = NULL WHERE id = ? AND guild_id = ? AND status = 'pending'", Number(hm[1]), g.id);
+      const d = await draftAnswer(env, g, Number(hm[1]));
+      if (!d) throw new HttpError(503, "The AI couldn't write a draft right now (daily AI budget used up or AI unavailable). Write the answer yourself.");
+      return ok({ items: await faqList(env, g) });
+    }
+
+    // ------------------------------------------------------ 🐙 projects
+    if (path === "/projects" && method === "GET") return ok({ items: await projectList(env, await guild()), hook: `${(env.PUBLIC_URL || "").replace(/\/$/, "")}/gh/hook` });
+    if (path === "/projects" && method === "POST") { const g = await guild(); const p = await saveProject(env, g, { ...body, id: undefined }); return ok(await projectDetail(env, g, p.id)); }
+    hm = path.match(/^\/projects\/(\d+)$/);
+    if (hm && method === "GET") { const d = await projectDetail(env, await guild(), Number(hm[1])); if (!d) throw new HttpError(404, "unknown project"); return ok(d); }
+    if (hm && method === "PUT") { const g = await guild(); await saveProject(env, g, { ...body, id: Number(hm[1]) }); return ok(await projectDetail(env, g, Number(hm[1]))); }
+    if (hm && method === "DELETE") {
+      const g = await guild();
+      await run(env, "DELETE FROM project_repos WHERE project_id = ? AND guild_id = ?", Number(hm[1]), g.id);
+      await run(env, "DELETE FROM projects WHERE id = ? AND guild_id = ?", Number(hm[1]), g.id);
+      return ok({ items: await projectList(env, g) });
+    }
+    hm = path.match(/^\/projects\/(\d+)\/check$/);
+    if (hm && method === "POST") {
+      // grade one student now (or flag everyone for the next cron runs)
+      const g = await guild();
+      const p = await one<ProjectRow>(env, "SELECT * FROM projects WHERE id = ? AND guild_id = ?", Number(hm[1]), g.id);
+      if (!p) throw new HttpError(404, "unknown project");
+      if (body.discord_id) {
+        const pr = await one<RepoRow>(env, "SELECT * FROM project_repos WHERE project_id = ? AND discord_id = ?", p.id, String(body.discord_id));
+        if (!pr) throw new HttpError(404, "this student has no repository linked");
+        await gradeRepo(env, g, p, pr, true);
+      } else await run(env, "UPDATE project_repos SET due_check = 1 WHERE project_id = ?", p.id);
+      return ok(await projectDetail(env, g, p.id));
+    }
+
+    // ------------------------------------------- 🏆 league & all classes
+    if (path === "/compare" && method === "GET") return ok(await compareClasses(env));
+    if (path === "/league" && method === "GET") { const g = await guild(); return ok({ cfg: leagueOf(g), table: await leagueTable(env) }); }
+    if (path === "/league" && method === "PUT") { const g = await guild(); const cfg = await setLeague(env, g, body); return ok({ cfg, table: await leagueTable(env) }); }
+
+    // ----------------------------------------------------- 🎓 certificates
+    if (path === "/certificates" && method === "GET") {
+      const g = await guild();
+      const season = url.searchParams.get("season") || g.season;
+      const seasons = await all<{ season: string }>(env, "SELECT DISTINCT season FROM ledger WHERE guild_id = ? ORDER BY season", g.id);
+      const rows = (await standings(env, g.id, season, 200)).filter((r) => r.discord_id && r.points > 0);
+      return ok({
+        season, current: g.season, seasons: seasons.map((x) => x.season),
+        items: await Promise.all(rows.map(async (r, i) => ({ rank: i + 1, name: r.name, discord_id: r.discord_id, points: r.points, url: await certUrl(env, g.id, r.discord_id!, season) }))),
+      });
+    }
+    if (path === "/certificates/send" && method === "POST") {
+      const g = await guild();
+      return ok({ sent: await sendCertificates(env, g, String(body.season || g.season)) });
+    }
+
+    // ---------------------------------------------------- 🎤 interviews
+    if (path === "/interviews" && method === "GET") {
+      const g = await guild();
+      const rows = await all<any>(env, `SELECT i.id, i.discord_id, i.status, i.scores, i.transcript, i.created_at, i.finished_at, c.title, c.difficulty, p.name, a.status AS code_status
+        FROM interviews i JOIN challenges c ON c.id = i.challenge_id LEFT JOIN players p ON p.guild_id = i.guild_id AND p.discord_id = i.discord_id
+        LEFT JOIN attempts a ON a.id = i.attempt_id WHERE i.guild_id = ? ORDER BY i.id DESC LIMIT 100`, g.id);
+      return ok({ items: rows.map((r) => ({ ...r, scores: r.scores ? JSON.parse(r.scores) : null, transcript: JSON.parse(r.transcript || "[]") })) });
+    }
+
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
+    if (e instanceof HandError || e instanceof FaqError || e instanceof ProjectError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });
@@ -391,9 +614,16 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
     did, did, g.id, did, did);
   const ledger = await all(env, "SELECT amount, reason, note, created_at FROM ledger WHERE guild_id = ? AND discord_id = ? ORDER BY id DESC LIMIT 40", g.id, did);
   const team = await one(env, "SELECT t.id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = ? AND m.discord_id = ?", g.id, did);
+  const prof = await studentProfile(env, g, did);
+  const path = await pathProgress(env, g, did);
+  const coach = {
+    skills: prof.skills.filter((x) => x.evidence > 0), mistakes: prof.mistakes, focus: focusSkills(prof.skills, 2).map((x) => x.key),
+    path: { done: path.steps.filter((x) => x.done).length, total: path.steps.length, current: path.current >= 0 ? path.steps[path.current] : null },
+    plan: { streak: (s.player as any)?.plan_streak ?? 0, best: (s.player as any)?.plan_best ?? 0, remind: !!(s.player as any)?.plan_dm },
+  };
   return {
     ...s, level: { ...s.level, title: t("en", titleKey(s.level.level)) },
-    weeks, byReason, attempts, matrix, contestList: contests, assignments: asg, duelList: duels, ledger, team,
+    weeks, byReason, attempts, matrix, contestList: contests, assignments: asg, duelList: duels, ledger, team, coach,
   };
 }
 
@@ -418,7 +648,7 @@ async function reviewAttempt(env: Env, g: GuildRow, attemptId: number, approve: 
 // ============================================================ challenges
 async function challenges(env: Env, g: GuildRow) {
   return all(env,
-    `SELECT c.id, c.guild_id, c.source, c.kind, c.difficulty, c.lang, c.code_lang, c.title, c.topic, c.url, c.status, c.created_at, c.created_by, c.time_limit,
+    `SELECT c.id, c.guild_id, c.source, c.kind, c.difficulty, c.lang, c.code_lang, c.title, c.topic, c.url, c.status, c.created_at, c.created_by, c.time_limit, c.skills,
        (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ?) AS attempts,
        (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ? AND (a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1))) AS solved,
        (SELECT COUNT(*) FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ? AND a.status = 'failed') AS failed,
@@ -495,6 +725,7 @@ async function createChallenge(env: Env, g: GuildRow, b: any, by: string) {
     g.id, b.source === "ai" ? "ai" : c.kind === "code" ? "hackerrank" : "teacher", c.kind, c.difficulty,
     c.kind === "code" ? "any" : (b.lang ?? g.lang), c.kind === "code" ? null : (guildLangs({ code_lang: b.code_lang || "" }).includes(b.code_lang) ? b.code_lang : guildLangs(g)[0]),
     c.title, c.question, c.code, c.choices, c.answer, c.alternatives, c.hint, c.explanation, c.topic, c.hr_slug, c.url, by, now());
+  if (Array.isArray(b.skills) && b.skills.length) await setSkills(env, Number(r.meta.last_row_id), b.skills);
   return one(env, "SELECT * FROM challenges WHERE id = ?", Number(r.meta.last_row_id));
 }
 
@@ -522,6 +753,8 @@ async function updateChallenge(env: Env, g: GuildRow, cid: number, b: any) {
   if (c.kind === "write" && (b.solution !== undefined || b.tests !== undefined || b.time_limit !== undefined)) {
     await saveWriteTests(env, old, b);
   }
+  if (Array.isArray(b.skills)) await setSkills(env, cid, b.skills);
+  if (b.solution !== undefined && b.solution !== old.solution) await run(env, "UPDATE challenges SET hints = NULL, solutions = NULL WHERE id = ?", cid);
   let regraded = 0;
   if (old.kind !== "write" && b.regrade && (c.answer !== old.answer || c.alternatives !== old.alternatives)) {
     regraded = await regrade(env, g, (await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ?", cid))!);
@@ -928,4 +1161,128 @@ async function reviewIntegrity(env: Env, g: GuildRow, id: number, b: any, ctx: C
     await run(env, "UPDATE attempts SET reviewed = 1 WHERE id = ?", id);
   }
   return { ok: true };
+}
+
+// ======================================================== coaching helpers
+async function sendPracticeSet(env: Env, g: GuildRow, b: any, ctx: Ctx) {
+  const skill = String(b.skill ?? "");
+  if (!SKILLS.some((x) => x.key === skill)) throw new HttpError(400, "unknown skill");
+  const students: string[] = (Array.isArray(b.students) ? b.students : []).map(String).slice(0, 40);
+  if (!students.length) throw new HttpError(400, "choose at least one student");
+  const count = Math.min(5, Math.max(1, Math.round(Number(b.count) || 3)));
+  const dueAt = b.due_at ? Number(b.due_at) : null;
+  // each student works at their own level on this skill
+  const levels = new Map<string, "easy" | "medium" | "hard">();
+  for (const u of students) levels.set(u, (await studentProfile(env, g, u)).skills.find((x) => x.key === skill)?.target ?? "easy");
+  const made = await practiceSet(env, g, { skill, students, count, dueAt, note: b.note ? String(b.note).slice(0, 300) : null }, (u) => levels.get(u) ?? "easy");
+  const L = g.lang;
+  ctx.waitUntil((async () => {
+    for (const m of made.slice(0, 20)) {
+      if (!m.challenges.length) continue;
+      const asg = await all<{ id: number }>(env, `SELECT id FROM assignments WHERE guild_id = ? AND discord_id = ? AND challenge_id IN (${m.challenges.map(() => "?").join(", ")}) AND status = 'open' ORDER BY id DESC LIMIT 5`, g.id, m.discord_id, ...m.challenges);
+      await dm(env, m.discord_id, {
+        content: t(L, "pset.dm", { skill: skillName(skill, L), n: m.challenges.length, due: dueAt ? `<t:${dueAt}:R>` : t(L, "pset.no_due") }),
+        components: [{ type: 1, components: asg.map((a, i) => ({ type: 2, style: 1, label: `${i + 1}`, emoji: { name: "📚" }, custom_id: `astart:${a.id}` })) }],
+      }).catch(() => {});
+    }
+  })());
+  return { students: made.length, assignments: made.reduce((n, m) => n + m.challenges.length, 0), empty: made.filter((m) => !m.challenges.length).map((m) => m.discord_id) };
+}
+
+async function examCsv(env: Env, g: GuildRow, id: number) {
+  const s = await one<any>(env, "SELECT * FROM sessions WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!s) throw new HttpError(404, "unknown session");
+  const ids: number[] = JSON.parse(s.challenges || "[]");
+  const titles = new Map((await all<{ id: number; title: string }>(env, `SELECT id, title FROM challenges WHERE id IN (${ids.map(() => "?").join(", ") || "0"})`, ...ids)).map((c) => [c.id, c.title]));
+  const grades = s.grades ? JSON.parse(s.grades) : await examGrades(env, s);
+  const players = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name]));
+  const flags = new Map((await all<{ discord_id: string; n: number }>(env,
+    "SELECT discord_id, COUNT(*) AS n FROM attempts WHERE origin = 'exam' AND ref = ? AND integrity IS NOT NULL AND json_extract(integrity, '$.level') > 0 GROUP BY discord_id", id)).map((r) => [r.discord_id, r.n]));
+  const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const head = ["Student", "Discord ID", ...ids.map((i, k) => `Q${k + 1} ${titles.get(i) ?? ""} (%)`), "Grade /20", "Integrity flags"];
+  const lines = Object.entries(grades as Record<string, any>).sort((a, b) => String(players.get(a[0]) ?? "").localeCompare(String(players.get(b[0]) ?? "")))
+    .map(([u, v]) => [players.get(u) ?? "", u, ...ids.map((i) => Math.round((v.scores[i] ?? 0) * 100)), String(v.grade).replace(".", ","), flags.get(u) ?? 0].map(q).join(";"));
+  const csv = "\ufeff" + [head.map(q).join(";"), ...lines].join("\r\n");
+  return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="exam-${id}.csv"` } });
+}
+
+// ------------------------------------------------------------- events
+async function quizLive(env: Env, id: number) {
+  const q = await one<QuizRow>(env, "SELECT * FROM quizzes WHERE id = ?", id);
+  if (!q) return null;
+  const ids: number[] = JSON.parse(q.questions);
+  const cur = q.current >= 0 ? await one<{ id: number; title: string; answer: string | null }>(env, "SELECT id, title, answer FROM challenges WHERE id = ?", ids[q.current]) : null;
+  const answers = q.current >= 0 ? await all<{ answer: string; n: number }>(env, "SELECT answer, COUNT(*) AS n FROM quiz_answers WHERE quiz_id = ? AND q_idx = ? GROUP BY answer", id, q.current) : [];
+  return { ...q, total: ids.length, currentChallenge: cur, answers, standings: (await quizStandings(env, id)).slice(0, 20), endsAt: q.q_started ? q.q_started + q.seconds : null };
+}
+
+async function eventsState(env: Env, g: GuildRow) {
+  const quizzes = await all<QuizRow>(env, "SELECT * FROM quizzes WHERE guild_id = ? ORDER BY id DESC LIMIT 20", g.id);
+  const live = quizzes.find((q) => q.status !== "done");
+  const bosses = await all(env, `SELECT b.*, c.title AS challenge_title, (SELECT COALESCE(SUM(damage), 0) FROM boss_hits h WHERE h.boss_id = b.id) AS damage,
+      (SELECT COUNT(*) FROM boss_hits h WHERE h.boss_id = b.id AND h.damage > 0) AS fighters FROM bosses b JOIN challenges c ON c.id = b.challenge_id WHERE b.guild_id = ? ORDER BY b.id DESC LIMIT 20`, g.id);
+  const bounties = await all(env, `SELECT b.*, c.title AS challenge_title, p.name AS winner_name FROM bounties b JOIN challenges c ON c.id = b.challenge_id
+      LEFT JOIN players p ON p.guild_id = b.guild_id AND p.discord_id = b.winner_id WHERE b.guild_id = ? ORDER BY b.id DESC LIMIT 30`, g.id);
+  const shop = await all(env, "SELECT item, COUNT(*) AS n, SUM(cost) AS coins FROM purchases WHERE guild_id = ? GROUP BY item", g.id);
+  const help = await one<{ open: number; answered: number; helpful: number }>(env, `SELECT
+      (SELECT COUNT(*) FROM help_requests WHERE guild_id = ?1 AND status = 'open') AS open,
+      (SELECT COUNT(*) FROM help_answers h JOIN help_requests r ON r.id = h.request_id WHERE r.guild_id = ?1) AS answered,
+      (SELECT COUNT(*) FROM help_answers h JOIN help_requests r ON r.id = h.request_id WHERE r.guild_id = ?1 AND h.rating = 1) AS helpful`, g.id);
+  return {
+    quizzes: quizzes.map((q) => ({ ...q, total: (JSON.parse(q.questions) as number[]).length })),
+    live: live ? await quizLive(env, live.id) : null,
+    bosses, bounties,
+    shop: SHOP.map((it) => ({ ...it, ...(shop.find((x: any) => x.item === it.key) ?? { n: 0, coins: 0 }) })),
+    help,
+  };
+}
+
+// ------------------------------------------------------------ path page
+async function pathView(env: Env, g: GuildRow) {
+  const langs = classLangs(g);
+  return {
+    ...pathCfg(g), custom: pathCustom(g), langs, track: trackOf(g), tracks: TRACKS,
+    defaults: { steps: defaultSteps(g), lessons: defaultLessons(g) },
+    skills: SKILLS.map((s) => ({ ...s, fits: skillFitsTrack(s.key, g) })),
+    coverage: await bankCoverage(env, g),
+  };
+}
+
+// ------------------------------------------------- overview: what's live
+async function overviewLive(env: Env, g: GuildRow) {
+  const t0 = now(), week = t0 - 7 * 86400;
+  const n = async (sql: string, ...a: unknown[]) => (await one<{ n: number }>(env, sql, ...a))?.n ?? 0;
+  const hands = { waiting: await n("SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id), helping: await n("SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'helping'", g.id),
+    oldest: (await one<{ t: number | null }>(env, "SELECT MIN(created_at) AS t FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id))?.t ?? null };
+  const questions = await n("SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id);
+  const created = await n("SELECT COUNT(*) AS n FROM challenges WHERE guild_id = ? AND source = 'student' AND status = 'pending'", g.id);
+  const quiz = await one<{ id: number; title: string; status: string }>(env, "SELECT id, title, status FROM quizzes WHERE guild_id = ? AND status IN ('draft', 'live') ORDER BY id DESC LIMIT 1", g.id);
+  const bosses = await all<{ id: number; name: string; hp: number; deadline: number; d: number }>(env,
+    "SELECT b.id, b.name, b.hp, b.deadline, COALESCE((SELECT SUM(damage) FROM boss_hits h WHERE h.boss_id = b.id), 0) AS d FROM bosses b WHERE b.guild_id = ? AND b.status = 'active'", g.id);
+  const bounties = await n("SELECT COUNT(*) AS n FROM bounties WHERE guild_id = ? AND status = 'open'", g.id);
+  const projects = await one<{ open: number; linked: number; complete: number }>(env,
+    `SELECT COUNT(DISTINCT p.id) AS open, COUNT(r.discord_id) AS linked, COALESCE(SUM(r.total > 0 AND r.best = r.total), 0) AS complete
+       FROM projects p LEFT JOIN project_repos r ON r.project_id = p.id WHERE p.guild_id = ? AND p.status = 'open'`, g.id);
+  const nextDue = await one<{ title: string; due_at: number }>(env, "SELECT title, due_at FROM projects WHERE guild_id = ? AND status = 'open' AND due_at > ? ORDER BY due_at LIMIT 1", g.id, t0);
+  const interviews = await one<{ n: number; avg: number | null }>(env,
+    "SELECT COUNT(*) AS n, AVG(json_extract(scores, '$.overall')) AS avg FROM interviews WHERE guild_id = ? AND created_at >= ?", g.id, week);
+  const plans = await one<{ made: number; done: number; people: number }>(env,
+    "SELECT COUNT(*) AS made, SUM(completed_at IS NOT NULL) AS done, COUNT(DISTINCT discord_id) AS people FROM daily_plans WHERE guild_id = ? AND created_at >= ?", g.id, week);
+  const helped = await n("SELECT COUNT(*) AS n FROM help_answers a JOIN help_requests r ON r.id = a.request_id WHERE r.guild_id = ? AND a.rating = 1 AND a.created_at >= ?", g.id, week);
+  const sessions = await n("SELECT COUNT(*) AS n FROM sessions WHERE guild_id = ? AND status = 'active'", g.id);
+  const lg = leagueCfgOf(g);
+  let league: { rank: number; total: number; score: number } | null = null;
+  if (lg.on) {
+    const table = await leagueTable(env);
+    const i = table.findIndex((r) => r.guild_id === g.id);
+    if (i >= 0) league = { rank: i + 1, total: table.length, score: table[i].score };
+  }
+  return {
+    hands, questions, created, sessions,
+    events: { quiz, bosses: bosses.map((b) => ({ ...b, left: Math.max(0, b.hp - b.d) })), bounties },
+    projects: { ...(projects ?? { open: 0, linked: 0, complete: 0 }), nextDue },
+    interviews: { n: interviews?.n ?? 0, avg: interviews?.avg == null ? null : Math.round(interviews.avg * 10) / 10 },
+    plans: { made: plans?.made ?? 0, done: plans?.done ?? 0, people: plans?.people ?? 0 },
+    helped, league: lg.on ? { name: lg.name, ...(league ?? { rank: null, total: 0, score: 0 }) } : null,
+  };
 }

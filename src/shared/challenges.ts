@@ -1,11 +1,17 @@
 // The challenge engine: picking, rendering, answering, judging, scoring.
 // Shared by practice, daily challenges, assignments and duels.
+import { trackOf } from "./tracks.ts";
 import type { AttemptRow, ChallengeRow, Difficulty, DuelRow, Env, GuildRow, PlayerRow } from "./types.ts";
 import { addPoints, all, checkBadges, findPlayer, now, one, practicePointsToday, quickSolvesToday, run, totalPoints } from "./db.ts";
-import { RULES, basePoints, dayKey, elo, isLimitedKind, quickFactor, fmtDuration, isCorrectOutput, levelInfo, pointsFor, progressBar, scoringOf, titleKey } from "./game.ts";
+import { HINT_STEPS, RULES, basePoints, dayKey, elo, isLimitedKind, quickFactor, fmtDuration, isCorrectOutput, levelInfo, pointsFor, progressBar, scoringOf, titleKey } from "./game.ts";
 import { t } from "./i18n.ts";
 import { COLORS, btn, codeBlock, linkBtn, mention, pingUsers, row, send, truncate } from "./discord.ts";
-import { aiJudge, codeFeedback, explainQuestions, gradeExplanation } from "./ai.ts";
+import { onPlanItemDone } from "./plan.ts";
+import { judgeRegex, judgeSql, regexData, rowsText } from "./sqlrx.ts";
+import { rewardAuthor } from "./create.ts";
+import { bossHit, claimBounty } from "./events.ts";
+import type { SqlVerdict } from "./sqlrx.ts";
+import { aiJudge, codeFeedback, explainQuestions, generateHints, gradeExplanation, modelSolution } from "./ai.ts";
 import type { GeneratedQuick, GeneratedWrite, QuickExample } from "./ai.ts";
 import { HackerRankError, recentSolves } from "./hackerrank.ts";
 import { LANGS, QUICK_LANGS, RunnerUnavailable, STARTER, isCodeLang, judge } from "./runner.ts";
@@ -22,7 +28,9 @@ export const QUICK_KINDS = ["mcq", "complexity", "output", "bug"];
 export const isChoiceKind = (k: string) => k === "mcq" || k === "bug" || k === "complexity";
 
 /** The programming languages the class learns (guild setting, e.g. "javascript,php"). */
-export function guildLangs(g: { code_lang?: string | null }): string[] {
+export function guildLangs(g: { code_lang?: string | null; track?: string | null }): string[] {
+  // a class with a track learns ONE language: the track's (SQL classes keep their code_lang)
+  if (g.track) { const t = trackOf(g); if (t.code) return [t.code]; }
   const list = String(g.code_lang || "python").split(",").map((x) => x.trim().toLowerCase()).filter((x) => QUICK_LANGS.includes(x));
   return list.length ? [...new Set(list)] : ["python"];
 }
@@ -63,6 +71,7 @@ export async function pickChallenge(
   const langs = o.langs?.length ? o.langs : guildLangs(guild);
   return one<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind IN ('mcq', 'complexity', 'output', 'bug') AND c.lang = ?
       AND (c.code_lang IS NULL OR c.code_lang IN (${langs.map(() => "?").join(", ")})) AND ${scope} ${kind ? "AND c.kind = ?" : ""} ${notSeen}
+      AND COALESCE(c.topic, '') != 'git'   -- Git questions only come with /practice type:Git
       ORDER BY RANDOM() LIMIT 1`, guild.lang, ...langs, o.difficulty, guild.id, ...(kind ? [kind] : []), ...seenArgs);
 }
 
@@ -129,6 +138,73 @@ export interface RenderOpts {
   editorUrl?: string; editorOnly?: boolean; imageUrl?: string; quickLimit?: number;
 }
 
+// ---------------------------------------------------------- hints in steps
+export type HintStep = "nudge" | "approach" | "pseudo";
+/** Write-code problems get up to 3 hint steps (each costs more); quick ones a single hint. */
+export function hintSteps(c: ChallengeRow): HintStep[] {
+  if (c.kind === "write") return [...(c.hint ? ["nudge"] as HintStep[] : []), "approach", "pseudo"];
+  return c.hint ? ["nudge"] : [];
+}
+export function hintTexts(c: ChallengeRow): Partial<Record<HintStep, string>> {
+  let h: any = {};
+  try { h = c.hints ? JSON.parse(c.hints) : {}; } catch { h = {}; }
+  return { nudge: c.hint ?? undefined, approach: h.approach, pseudo: h.pseudo };
+}
+/** The hints a student unlocked so far, as message lines. */
+export function hintLines(L: string, c: ChallengeRow, level: number): string[] {
+  const steps = hintSteps(c).slice(0, level), tx = hintTexts(c), out: string[] = [];
+  for (const st of steps) {
+    if (!tx[st]) continue;
+    if (st === "nudge") out.push(c.kind === "write" ? t(L, "hint.nudge", { hint: tx.nudge! }) : t(L, "ch.hint", { hint: tx.nudge! }));
+    if (st === "approach") out.push(t(L, "hint.approach", { text: tx.approach! }));
+    if (st === "pseudo") out.push(t(L, "hint.pseudo", { text: "```\n" + tx.pseudo! + "\n```" }));
+  }
+  return out;
+}
+/** Plain text of the unlocked hints (code editor page). */
+export function hintPlain(c: ChallengeRow, level: number): string | null {
+  const tx = hintTexts(c);
+  const parts = hintSteps(c).slice(0, level).map((st) => tx[st]).filter(Boolean) as string[];
+  return parts.length ? parts.join("\n\n") : null;
+}
+/** A model solution in the student's language (translated once by the AI, then cached). */
+export async function solutionFor(env: Env, c: ChallengeRow, lang: CodeLang): Promise<{ code: string; note: string; lang: CodeLang; fallback: boolean } | null> {
+  if (!c.solution) return null;
+  let cache: any = {};
+  try { cache = c.solutions ? JSON.parse(c.solutions) : {}; } catch { cache = {}; }
+  if (cache[lang]) return { code: cache[lang], note: cache.note ?? "", lang, fallback: false };
+  const sig = parseSignature(c.signature);
+  const m = await modelSolution(env, { lang: c.lang === "fr" ? "fr" : "en", codeLang: lang, statement: c.question ?? "", reference: c.solution, header: sig ? signatureLine(sig, lang) : null });
+  if (!m) return { code: c.solution, note: cache.note ?? "", lang: "python", fallback: lang !== "python" };
+  cache[lang] = m.code;
+  if (!cache.note && m.note) cache.note = m.note;
+  c.solutions = JSON.stringify(cache);
+  await run(env, "UPDATE challenges SET solutions = ? WHERE id = ?", c.solutions, c.id);
+  return { code: m.code, note: cache.note ?? m.note, lang, fallback: false };
+}
+
+/** Make sure the approach and pseudocode hints exist (written once by the AI, then shared by everyone). */
+export async function ensureHints(env: Env, c: ChallengeRow): Promise<boolean> {
+  const tx = hintTexts(c);
+  if (tx.approach && tx.pseudo) return true;
+  const sig = parseSignature(c.signature);
+  const statement = (c.question ?? "") + (sig ? `\n\nThe student writes: ${signatureLine(sig, "python")}` : "");
+  const h = await generateHints(env, { lang: c.lang === "fr" ? "fr" : "en", statement, reference: c.solution });
+  if (!h) return false;
+  c.hints = JSON.stringify(h);
+  await run(env, "UPDATE challenges SET hints = ? WHERE id = ?", c.hints, c.id);
+  return true;
+}
+
+function hintButton(L: string, c: ChallengeRow, a: AttemptRow) {
+  const steps = hintSteps(c), level = a.used_hint || 0;
+  if (c.kind !== "write") return btn(t(L, "ch.hint_btn"), `hint:${a.id}`, 2, "💡", level > 0 || !steps.length);
+  const next = steps[level];
+  const pct = Math.round((1 - HINT_STEPS[Math.min(3, level + 1)]) * 100);
+  return next ? btn(t(L, `hint.btn_${next}`, { pct }), `hint:${a.id}`, 2, next === "nudge" ? "💡" : next === "approach" ? "🧭" : "📝")
+    : btn(t(L, "hint.btn_none"), `hint:${a.id}`, 2, "📝", true);
+}
+
 export function renderChallenge(guild: GuildRow, c: ChallengeRow, a: AttemptRow, o: RenderOpts = {}) {
   const L = guild.lang;
   const lines: string[] = [];
@@ -167,7 +243,8 @@ export function renderChallenge(guild: GuildRow, c: ChallengeRow, a: AttemptRow,
         lines.push("", `**${t(L, "ch.sample", { n: i + 1 })}**`, codeBlock(truncate((s.input ?? "").replace(/\n$/, ""), 600)), `**${t(L, "ch.sample_out")}**`, codeBlock(truncate(s.expected, 300)));
       });
     }
-    if (a.used_hint && c.hint) lines.push("", t(L, "ch.hint", { hint: c.hint }));
+    const hl = hintLines(L, c, a.used_hint || 0);
+    if (hl.length) lines.push("", ...hl);
     if (o.editorUrl && o.editorOnly) lines.push("", t(L, "ch.editor_note"));
     const left = Math.max(0, maxTries(a) - a.tries);
     fields.push(
@@ -184,8 +261,23 @@ export function renderChallenge(guild: GuildRow, c: ChallengeRow, a: AttemptRow,
     const actions: unknown[] = [];
     if (o.editorUrl) actions.push(linkBtn(t(L, "ch.editor_btn"), o.editorUrl, "💻"));
     if (!o.editorOnly) actions.push(btn(t(L, "ch.submit_btn"), `sub:${a.id}`, o.editorUrl ? 2 : 1, "📤"));
-    actions.push(btn(t(L, "ch.hint_btn"), `hint:${a.id}`, 2, "💡", !!a.used_hint || !c.hint), btn(t(L, "ch.report_btn"), `rep:${a.id}`, 2, "🚩"));
+    actions.push(hintButton(L, c, a), btn(t(L, "ch.report_btn"), `rep:${a.id}`, 2, "🚩"));
+    if (a.tries > 0 && a.status === "pending" && !["exam", "session", "duel", "bounty", "boss"].includes(a.origin) && actions.length < 5) actions.push(btn(t(L, "help.ask_btn"), `ask:${a.id}`, 2, "🙋"));
     components.push(row(...actions));
+  } else if (c.kind === "sql" || c.kind === "regex") {
+    lines.push(c.question ?? "");
+    if (c.kind === "sql") {
+      lines.push("", t(L, "sql.task"), codeBlock(truncate(c.code ?? "", 2600), "sql"));
+    } else {
+      const rd = regexData(c);
+      lines.push("", t(L, "rx.must_match", { list: rd.shown.match.map((x) => "`" + (x || "(empty)") + "`").join("  ") }),
+        t(L, "rx.must_reject", { list: rd.shown.reject.map((x) => "`" + (x || "(empty)") + "`").join("  ") }),
+        t(L, "rx.task", { flags: rd.shown.flags ? ` (flags: \`${rd.shown.flags}\`)` : "" }));
+    }
+    const hl = hintLines(L, c, a.used_hint || 0);
+    if (hl.length) lines.push("", ...hl);
+    fields.push({ name: t(L, "ch.tries"), value: String(Math.max(0, RULES.codeAnswerTries - a.tries)), inline: true });
+    components.push(row(btn(t(L, c.kind === "sql" ? "sql.answer_btn" : "rx.answer_btn"), `ansm:${a.id}`, 1, "✍️"), hintButton(L, c, a), btn(t(L, "ch.report_btn"), `rep:${a.id}`, 2, "🚩")));
   } else {
     lines.push(c.question || t(L, "ch.question_default"));
     if (c.code && !o.imageUrl) lines.push(codeBlock(c.code, c.code_lang ?? ""));
@@ -204,6 +296,13 @@ export function renderChallenge(guild: GuildRow, c: ChallengeRow, a: AttemptRow,
     ));
   }
 
+  // 🌐 the same challenge in the other language (shown privately; answers stay on this message)
+  if (a.status === "pending" && c.kind !== "code") {
+    const b = btn(t(L, "tr.btn"), `tr:${a.id}`, 2, "🌐");
+    const last: any = components[components.length - 1];
+    if (last && last.components.length < 5) last.components.push(b);
+    else if (components.length < 5) components.push(row(b));
+  }
   return {
     embeds: [{
       title: `🧩 ${c.title}`,
@@ -227,12 +326,12 @@ export async function renderFor(env: Env, guild: GuildRow, c: ChallengeRow, a: A
   }
   if (c.kind === "code") extra.hrState = !p?.hr_username ? "none" : p.hr_verified ? "ok" : "unverified";
   const ig = integrityOf(guild);
-  if (c.kind === "write" && a.status === "pending" && (ig.editor !== "off" || a.origin === "session") && env.PUBLIC_URL) {
+  if (c.kind === "write" && a.status === "pending" && (ig.editor !== "off" || a.origin === "session" || a.origin === "exam") && env.PUBLIC_URL) {
     extra.editorUrl = editorUrl(env, await editorToken(env, a.id, a.discord_id));
-    extra.editorOnly = ig.editor === "required" || a.origin === "session";
+    extra.editorOnly = ig.editor === "required" || a.origin === "session" || a.origin === "exam";
   }
   if (c.kind !== "write" && c.kind !== "code") {
-    if (c.code && ig.codeImage && env.PUBLIC_URL) extra.imageUrl = codeImageUrl(env, c);
+    if (c.code && QUICK_KINDS.includes(c.kind) && ig.codeImage && env.PUBLIC_URL) extra.imageUrl = codeImageUrl(env, c);
     if (ig.quickLimit) extra.quickLimit = ig.quickLimit;
   }
   return renderChallenge(guild, c, a, extra);
@@ -266,6 +365,7 @@ function answerText(c: ChallengeRow, given: string | null) {
 export async function answer(env: Env, guild: GuildRow, a: AttemptRow, c: ChallengeRow, given: string): Promise<Outcome> {
   const L = guild.lang;
   if (a.status !== "pending") return { payload: { content: t(L, "res.already"), embeds: [], components: [] }, solved: false, finished: true };
+  if (c.kind === "sql" || c.kind === "regex") return answerCode(env, guild, a, c, given);
   const tries = a.tries + 1;
   const limit = integrityOf(guild).quickLimit;
   if (limit && now() - a.started_at > limit + 3) {
@@ -275,6 +375,11 @@ export async function answer(env: Env, guild: GuildRow, a: AttemptRow, c: Challe
   const correct = isChoiceKind(c.kind)
     ? given.trim().toUpperCase() === (c.answer ?? "").toUpperCase()
     : isCorrectOutput(given, c.answer ?? "", JSON.parse(c.alternatives || "[]"));
+  if (a.origin === "exam") {
+    // exams: no feedback until the end, one answer per question
+    await run(env, "UPDATE attempts SET tries = ?, answer_given = ?, status = ?, finished_at = ?, verified = 1 WHERE id = ? AND status = 'pending'", tries, given, correct ? "solved" : "failed", now(), a.id);
+    return { payload: { content: t(L, "exam.saved"), embeds: [], components: [] }, solved: false, finished: true };
+  }
 
   if (!correct && !isChoiceKind(c.kind) && tries < RULES.outputTries) {
     await run(env, "UPDATE attempts SET tries = ?, answer_given = ? WHERE id = ?", tries, given, a.id);
@@ -282,6 +387,51 @@ export async function answer(env: Env, guild: GuildRow, a: AttemptRow, c: Challe
   }
   await run(env, "UPDATE attempts SET tries = ?, answer_given = ? WHERE id = ?", tries, given, a.id);
   return finish(env, guild, { ...a, tries, answer_given: given }, c, correct, { verified: 1 });
+}
+
+/** SQL and regex answers: judged on shown AND hidden data, 3 tries. */
+async function answerCode(env: Env, guild: GuildRow, a: AttemptRow, c: ChallengeRow, given: string): Promise<Outcome> {
+  const L = guild.lang;
+  let ok = false;
+  const notice: string[] = [];
+  let note = "";
+  if (c.kind === "sql") {
+    let v: SqlVerdict;
+    try {
+      v = await judgeSql(env, given, await loadTests(env, c), c.answer !== "unordered");
+    } catch (e) {
+      if (!(e instanceof RunnerUnavailable)) throw e;
+      return { payload: renderChallenge(guild, c, a, { notice: t(L, "judge.unavailable") }), solved: false, finished: false };
+    }
+    ok = v.ok;
+    if (v.error) notice.push(t(L, "sql.error", { error: v.error }));
+    else if (!ok && v.failedSample) notice.push(t(L, "sql.wrong_sample", { got: codeBlock(rowsText(v.got ?? [])), want: codeBlock(rowsText(v.want ?? [])) }));
+    else if (!ok) notice.push(t(L, "sql.wrong_hidden", { passed: v.passed, total: v.total }));
+    else note = t(L, "sql.ok", { total: v.total });
+  } else {
+    const v = judgeRegex(given, regexData(c));
+    ok = v.ok;
+    if (v.error) notice.push(t(L, "rx.error", { error: v.error }));
+    else if (!ok) {
+      const lines = v.visible.slice(0, 6).map((x) => t(L, x.should ? "rx.should_match" : "rx.should_reject", { s: x.s || "(empty)" }));
+      if (v.hidden) lines.push(t(L, "rx.hidden_fail", { n: v.hidden }));
+      notice.push(lines.join("\n"));
+    } else note = t(L, "rx.ok", { ref: c.answer ?? "" });
+  }
+  const tries = a.tries + 1;
+  await run(env, "UPDATE attempts SET tries = ?, answer_given = ? WHERE id = ?", tries, given.slice(0, 2000), a.id);
+  const fresh = { ...a, tries, answer_given: given };
+  if (a.origin === "exam") {
+    if (ok || tries >= RULES.codeAnswerTries) {
+      await run(env, "UPDATE attempts SET status = ?, finished_at = ?, verified = 1 WHERE id = ? AND status = 'pending'", ok ? "solved" : "failed", now(), a.id);
+      return { payload: { content: t(L, "exam.saved"), embeds: [], components: [] }, solved: false, finished: true };
+    }
+    return { payload: renderChallenge(guild, c, fresh, { notice: t(L, "exam.submitted", { n: tries }) }), solved: false, finished: false };
+  }
+  if (ok) return finish(env, guild, fresh, c, true, { verified: 1, note });
+  if (tries >= RULES.codeAnswerTries) return finish(env, guild, fresh, c, false, { verified: 1, note: notice.join("\n") + (c.kind === "regex" && c.answer ? "\n" + t(L, "rx.reveal", { ref: c.answer }) : "") });
+  notice.push(t(L, "judge.try_again", { n: RULES.codeAnswerTries - tries }));
+  return { payload: renderChallenge(guild, c, fresh, { notice: notice.join("\n") }), solved: false, finished: false };
 }
 
 // ------------------------------------------------------------ write code
@@ -327,6 +477,16 @@ export async function submitCode(env: Env, guild: GuildRow, a: AttemptRow, c: Ch
   }
   const tries = a.tries + 1;
   const accepted = j.verdict === "accepted";
+  if (a.origin === "exam") {
+    // exams: judged silently, the best submission counts, results after the end
+    let prev: Judgement | null = null;
+    try { prev = a.result ? JSON.parse(a.result) : null; } catch { prev = null; }
+    const better = !prev || j.passed >= prev.passed;
+    await run(env, `UPDATE attempts SET tries = ?, lang = ?${better ? ", answer_given = ?, result = ?" : ""} WHERE id = ?`,
+      ...(better ? [tries, lang, code.slice(0, 8000), JSON.stringify({ ...j, failed: undefined }), a.id] : [tries, lang, a.id]));
+    await recordIntegrity(env, guild, a, c, code, lang, log, via).catch((e) => console.error("integrity", e));
+    return { payload: { content: t(L, "exam.submitted", { n: tries }), embeds: [], components: [] }, solved: false, finished: false };
+  }
   let feedback = aiNote;
   if (!accepted && !feedback) {
     feedback = (await codeFeedback(env, { lang: L, codeLang: lang, statement: c.question ?? "", code, judgement: j, accepted: false }).catch(() => null)) ?? "";
@@ -335,11 +495,12 @@ export async function submitCode(env: Env, guild: GuildRow, a: AttemptRow, c: Ch
     tries, code.slice(0, 8000), lang, JSON.stringify({ ...j, failed: j.failed ? { ...j.failed, input: undefined } : undefined }), feedback || null, a.id);
   await recordIntegrity(env, guild, a, c, code, lang, log, via).catch((e) => console.error("integrity", e));
   const fresh = { ...a, tries, answer_given: code, lang, feedback };
+  const bossNote = a.origin === "boss" && a.ref ? await bossHit(env, guild, a.ref, a.discord_id, j).catch((e) => { console.error("boss", e); return null; }) : null;
 
-  if (accepted) return finish(env, guild, fresh, c, true, { verified: j.judge === "tests" ? 1 : 0, judgement: j, aiNote });
-  if (tries >= maxTries(a)) return finish(env, guild, fresh, c, false, { verified: 1, judgement: j, aiNote: feedback });
+  if (accepted) return finish(env, guild, fresh, c, true, { verified: j.judge === "tests" ? 1 : 0, judgement: j, aiNote, note: bossNote ?? undefined });
+  if (tries >= maxTries(a)) return finish(env, guild, fresh, c, false, { verified: 1, judgement: j, aiNote: feedback, note: bossNote ?? undefined });
 
-  const notice = [verdictLine(L, j), ...failureDetails(L, j)];
+  const notice = [...(bossNote ? [bossNote] : []), verdictLine(L, j), ...failureDetails(L, j)];
   if (j.judge === "ai") notice.push(t(L, "judge.by_ai"));
   if (feedback) notice.push(`🧠 **${t(L, "judge.ai_feedback")}:** ${feedback}`);
   notice.push(t(L, "judge.try_again", { n: maxTries(a) - tries }));
@@ -387,11 +548,11 @@ export async function finish(
   if (solved && !o.claimed) {
     points = a.origin === "duel" && duelWon === false
       ? RULES.duelLoserPoints
-      : pointsFor(sc, { kind: c.kind, difficulty: c.difficulty, origin: a.origin, usedHint: !!a.used_hint, tries: a.tries || 1, seconds: t0 - a.started_at, onTime: assignmentOnTime });
+      : pointsFor(sc, { kind: c.kind, difficulty: c.difficulty, origin: a.origin, usedHint: Math.max(0, (a.used_hint || 0) - (a.free_hints || 0)), tries: a.tries || 1, seconds: t0 - a.started_at, onTime: assignmentOnTime });
     // Anti-farming, for quick types only (multiple choice, complexity, output, bug) in practice and duels.
     // Write code and HackerRank problems are never limited, and neither is anything the teacher hands out
     // (daily challenge, assignments, class sessions).
-    if (isLimitedKind(c.kind) && (a.origin === "practice" || a.origin === "duel") && points > 0) {
+    if (isLimitedKind(c.kind) && (a.origin === "practice" || a.origin === "duel" || a.origin === "path") && points > 0) {
       const before = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM attempts WHERE guild_id = ? AND discord_id = ? AND challenge_id = ? AND status = 'solved' AND id != ?",
         guild.id, a.discord_id, c.id, a.id);
       if (before?.n) {
@@ -436,6 +597,9 @@ export async function finish(
 
   // --- origin hooks
   if (a.origin === "daily" && solved && !o.claimed) extra.push(...(await onDailySolved(env, guild, a)));
+  if (a.origin === "bounty" && a.ref && solved && !o.claimed) { const m = await claimBounty(env, guild, a.ref, a.discord_id); if (m) extra.push(m); }
+  if (solved && !o.claimed && c.source === "student") await rewardAuthor(env, guild, c, a.discord_id).catch((e) => console.error("author", e));
+  if (a.origin === "plan" && !o.claimed) extra.push(...(await onPlanItemDone(env, guild, a.discord_id, a.id, a.ref, solved, points + held)));
   if (a.origin === "assignment" && a.ref) {
     const st = o.claimed ? null : solved ? (assignmentOnTime ? "done" : "late") : "failed";
     if (st) await run(env, "UPDATE assignments SET status = ?, completed_at = ?, attempt_id = ? WHERE id = ? AND status = 'open'", st, t0, a.id, a.ref);
@@ -505,6 +669,8 @@ export async function finish(
   const components: unknown[] = [];
   if (held) components.push(row(btn(t(L, "explain.btn", { p: held }), `exp:${a.id}`, 1, "🧠")));
   else if (c.kind === "write" && !o.aiNote) components.push(row(btn(t(L, solved ? "judge.review_btn" : "judge.help_btn"), `fb:${a.id}`, 2, "🧠")));
+  if (c.kind === "write" && c.solution && !o.claimed && !["session", "exam"].includes(a.origin)) components.push(row(btn(t(L, "sol.btn"), `sol:${a.id}`, 2, "📘")));
+  if (!solved && (c.kind === "write" || c.kind === "sql") && !["exam", "session", "duel", "bounty", "boss"].includes(a.origin)) components.push(row(btn(t(L, "help.ask_btn"), `ask:${a.id}`, 2, "🙋")));
 
   return {
     payload: {
@@ -572,8 +738,13 @@ async function onDailySolved(env: Env, guild: GuildRow, a: AttemptRow): Promise<
   }
   const p = await findPlayer(env, guild.id, a.discord_id);
   const yesterday = dayKey(now() - 86400);
-  const streak = p?.last_daily_day === day ? p.daily_streak : p?.last_daily_day === yesterday ? (p.daily_streak ?? 0) + 1 : 1;
-  await run(env, "UPDATE players SET daily_streak = ?, last_daily_day = ? WHERE guild_id = ? AND discord_id = ?", streak, day, guild.id, a.discord_id);
+  // a streak freeze (coin shop) covers one missed day
+  const twoAgo = dayKey(now() - 2 * 86400);
+  const frozen = p?.last_daily_day === twoAgo && ((p as any)?.streak_freezes ?? 0) > 0 && (p?.daily_streak ?? 0) > 0;
+  const streak = p?.last_daily_day === day ? p.daily_streak : p?.last_daily_day === yesterday || frozen ? (p!.daily_streak ?? 0) + 1 : 1;
+  if (frozen) await run(env, "UPDATE players SET streak_freezes = streak_freezes - 1 WHERE guild_id = ? AND discord_id = ? AND streak_freezes > 0", guild.id, a.discord_id);
+  await run(env, "UPDATE players SET daily_streak = ?, last_daily_day = ?, coins = coins + ? WHERE guild_id = ? AND discord_id = ?", streak, day, p?.last_daily_day === day ? 0 : RULES.dailyCoins, guild.id, a.discord_id);
+  if (frozen) out.push(t(L, "shop.freeze_used"));
   out.push(t(L, "daily.streak", { n: streak }));
   const ch = await arenaChannel(env, guild);
   if (ch && n <= 3) await send(env, ch, { content: t(L, "daily.solved", { user: mention(a.discord_id), n }) }).catch(() => {});
@@ -585,6 +756,20 @@ async function settleDuelWin(env: Env, guild: GuildRow, duelId: number, winnerId
   const L = guild.lang;
   const d = await one<DuelRow>(env, "SELECT * FROM duels WHERE id = ?", duelId);
   if (!d) return;
+  if (d.partner_id && d.opponent2_id) {
+    // 2 vs 2: the solver's teammate wins the same points; the other team gets participation points
+    const teamA = [d.challenger_id, d.partner_id], teamB = [d.opponent_id, d.opponent2_id];
+    const [winners, losers] = teamA.includes(winnerId) ? [teamA, teamB] : [teamB, teamA];
+    const mate = winners.find((u) => u !== winnerId)!;
+    await addPoints(env, guild, { discordId: mate, amount: points, reason: "duel", ref: duelId, note: "team win" });
+    for (const l of losers) await addPoints(env, guild, { discordId: l, amount: RULES.duelLoserPoints, reason: "duel", ref: duelId, note: "participation" });
+    await run(env, "UPDATE attempts SET status = 'expired', finished_at = ? WHERE origin = 'duel' AND ref = ? AND status = 'pending'", now(), duelId);
+    await send(env, d.channel_id, {
+      content: t(L, "duel.won_team", { w: mention(winnerId), m: mention(mate), l: losers.map(mention).join(" & "), time: fmtDuration(now() - (d.started_at ?? now())), p: points }),
+      allowed_mentions: pingUsers([...winners, ...losers]),
+    }).catch(() => {});
+    return;
+  }
   const loserId = d.challenger_id === winnerId ? d.opponent_id : d.challenger_id;
   const w = await findPlayer(env, guild.id, winnerId), l = await findPlayer(env, guild.id, loserId);
   const [wr, lr] = elo(w?.rating ?? 1000, l?.rating ?? 1000, 1);
@@ -607,7 +792,7 @@ async function maybeDuelDraw(env: Env, guild: GuildRow, duelId: number) {
   const d = await one<DuelRow>(env, "SELECT * FROM duels WHERE id = ?", duelId);
   if (!d || d.status !== "active") return;
   const failed = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM attempts WHERE origin = 'duel' AND ref = ? AND status = 'failed'", duelId);
-  if ((failed?.n ?? 0) >= 2) await endDuelDraw(env, guild, d, "duel.draw");
+  if ((failed?.n ?? 0) >= (d.partner_id ? 4 : 2)) await endDuelDraw(env, guild, d, "duel.draw");
 }
 
 export async function endDuelDraw(env: Env, guild: GuildRow, d: DuelRow, key: "duel.draw" | "duel.timeout") {
@@ -618,8 +803,8 @@ export async function endDuelDraw(env: Env, guild: GuildRow, d: DuelRow, key: "d
     env.DB.prepare("UPDATE attempts SET status = 'expired', finished_at = ? WHERE origin = 'duel' AND ref = ? AND status = 'pending'").bind(now(), d.id),
   ]);
   await send(env, d.channel_id, {
-    content: t(guild.lang, key, { a: mention(d.challenger_id), b: mention(d.opponent_id) }),
-    allowed_mentions: pingUsers([d.challenger_id, d.opponent_id]),
+    content: t(guild.lang, key, { a: [d.challenger_id, d.partner_id].filter(Boolean).map((u) => mention(u!)).join(" & "), b: [d.opponent_id, d.opponent2_id].filter(Boolean).map((u) => mention(u!)).join(" & ") }),
+    allowed_mentions: pingUsers([d.challenger_id, d.opponent_id, d.partner_id, d.opponent2_id].filter(Boolean) as string[]),
   }).catch(() => {});
 }
 
@@ -633,7 +818,7 @@ export async function regrade(env: Env, guild: GuildRow, c: ChallengeRow): Promi
     const given = a.answer_given ?? "";
     const ok = isChoiceKind(c.kind) ? given.toUpperCase() === (c.answer ?? "").toUpperCase() : isCorrectOutput(given, c.answer ?? "", JSON.parse(c.alternatives || "[]"));
     if (!ok) continue;
-    const pts = pointsFor(scoringOf(guild), { kind: c.kind, difficulty: c.difficulty, origin: a.origin === "duel" ? "practice" : a.origin, usedHint: !!a.used_hint, tries: a.tries, seconds: 999 });
+    const pts = pointsFor(scoringOf(guild), { kind: c.kind, difficulty: c.difficulty, origin: a.origin === "duel" ? "practice" : a.origin, usedHint: a.used_hint, tries: a.tries, seconds: 999 });
     await run(env, "UPDATE attempts SET status = 'solved', points = ? WHERE id = ?", pts, a.id);
     await addPoints(env, guild, { discordId: a.discord_id, amount: pts, reason: "regrade", ref: a.id });
     n++;
