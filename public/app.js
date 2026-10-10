@@ -542,7 +542,12 @@ function workOnPanel(c, sid) {
     ? `Couldn't build this section: ${esc(c.workOnError)}` : "Nothing to point out yet: every skill they tried is going well, or they haven't answered enough challenges."}</p></section>`;
   const ev = (rows, icon, label) => rows.length ? `<div class="wo-ev"><b class="small">${icon} ${label}</b><ul>${rows.map((r) =>
     `<li><a href="#" data-wocid="${r.challenge_id}">${esc(r.title)}</a> ${diffTag(r.difficulty)} <span class="muted small">${esc(fmtAgo(r.when))}</span><div class="small">${esc(r.detail)}</div></li>`).join("")}</ul></div>` : "";
-  return `<section class="panel" id="workon">${head}
+  // folded by default (it's long): the summary line already says which skills, and how weak
+  return `<section class="panel" id="workon"><details class="wo-fold">
+    <summary><span class="wo-sum-title">🎯 What to work on, and why</span>
+      <span class="wo-chips">${list.map((w) => `<span class="tag skill">${esc(skillLabel(w.skill))} <b style="color:${masteryInk(w.mastery)}">${w.mastery}%</b></span>`).join(" ")}</span>
+      <span class="muted small wo-hint">show details</span></summary>
+    <p class="muted small" style="margin:10px 0 12px">From their own answers and code, last 4 months.</p>
     <div class="wo-list">${list.map((w) => `<article class="wo">
       <header>
         <b>${esc(skillLabel(w.skill))}</b>
@@ -559,7 +564,7 @@ function workOnPanel(c, sid) {
         <button class="btn small primary" data-wonote="${esc(w.skill)}">✍️ Write a note to the student</button>
         <button class="btn small" data-wopset="${esc(w.skill)}" data-level="${esc(w.level)}">📚 Give 3 challenges on it</button>
         <button class="btn small" data-wogen="${esc(w.skill)}" data-level="${esc(w.level)}">✨ Generate new ones</button></p>
-    </article>`).join("")}</div></section>`;
+    </article>`).join("")}</div></details></section>`;
 }
 function wireWorkOn(sid, name) {
   $$("[data-wocid]").forEach((a) => a.onclick = (e) => { e.preventDefault(); editChallenge(Number(a.dataset.wocid)); });
