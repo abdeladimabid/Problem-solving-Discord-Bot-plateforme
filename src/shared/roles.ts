@@ -3,7 +3,7 @@
 // Champion and On Fire are handed out by contests.ts (syncRoles); here we only
 // create them when the teacher hasn't picked roles of their own.
 import type { Env, GuildRow } from "./types.ts";
-import { all, now, run, standings } from "./db.ts";
+import { all, now, one, run, standings } from "./db.ts";
 import { levelInfo, titleKey } from "./game.ts";
 import { t } from "./i18n.ts";
 import { addRole, dapi, mention, pingUsers, removeRole, send } from "./discord.ts";
@@ -36,11 +36,12 @@ export interface AutoRoles {
   leader: string | null;                 // last announced leader
   error: string | null;
   synced: number;
+  full?: number;                         // last sync that finished everything (no Discord budget left over)
 }
 export function autoRolesOf(g: { auto_roles?: string | null }): AutoRoles {
   let o: any = {};
   try { o = g.auto_roles ? JSON.parse(g.auto_roles) : {}; } catch { o = {}; }
-  return { on: o.on !== false, off: Array.isArray(o.off) ? o.off : [], ids: o.ids ?? {}, holders: o.holders ?? {}, leader: o.leader ?? null, error: o.error ?? null, synced: o.synced ?? 0 };
+  return { on: o.on !== false, off: Array.isArray(o.off) ? o.off : [], ids: o.ids ?? {}, holders: o.holders ?? {}, leader: o.leader ?? null, error: o.error ?? null, synced: o.synced ?? 0, full: o.full ?? 0 };
 }
 const save = (env: Env, g: GuildRow, cfg: AutoRoles) => run(env, "UPDATE guilds SET auto_roles = ? WHERE id = ?", JSON.stringify(cfg), g.id);
 
@@ -56,9 +57,9 @@ export async function wantedHolders(env: Env, g: GuildRow): Promise<Record<strin
       GROUP BY a.discord_id HAVING n >= 5 ORDER BY n DESC, MAX(a.finished_at) ASC LIMIT 1`, g.id, now() - 30 * 86400);
   w.coder = coder.map((r) => r.discord_id);
   const duel = await all<{ discord_id: string }>(env,
-    `SELECT p.discord_id FROM players p WHERE p.guild_id = ?
-        AND (SELECT COUNT(*) FROM duels d WHERE d.guild_id = p.guild_id AND d.winner_id = p.discord_id) >= 3
-      ORDER BY p.rating DESC LIMIT 1`, g.id);
+    `SELECT p.discord_id FROM players p
+       JOIN (SELECT winner_id, COUNT(*) AS n FROM duels WHERE guild_id = ? AND winner_id IS NOT NULL GROUP BY winner_id HAVING n >= 3) w ON w.winner_id = p.discord_id
+      WHERE p.guild_id = ? ORDER BY p.rating DESC LIMIT 1`, g.id, g.id);
   w.duelist = duel.map((r) => r.discord_id);
   for (const d of ROLE_DEFS) if (d.level) w[d.key] = [];
   const totals = await all<{ discord_id: string; pts: number }>(env,
@@ -137,6 +138,7 @@ export async function syncAutoRoles(env: Env, g: GuildRow, o: { budget?: number;
       }
       cfg.leader = lead;
     }
+    if (budget > 0) cfg.full = now();
   } catch (e: any) {
     cfg.error = e?.status === 403 ? "permission" : String(e?.message ?? e).slice(0, 200);
   }
@@ -150,7 +152,15 @@ export async function syncDueRoles(env: Env) {
   const due = await all<GuildRow>(env,
     `SELECT * FROM guilds WHERE (auto_roles IS NULL OR json_extract(auto_roles, '$.on') IS NOT 0)
        AND COALESCE(json_extract(auto_roles, '$.synced'), 0) < ? ORDER BY COALESCE(json_extract(auto_roles, '$.synced'), 0) LIMIT 1`, now() - 300);
-  for (const g of due) await syncAutoRoles(env, g);
+  for (const g of due) {
+    // nothing earned since the last complete sync: the roles can't have changed (re-check every 6 h anyway)
+    const cfg = autoRolesOf(g);
+    if (cfg.on && !cfg.error && cfg.full && cfg.full >= cfg.synced - 5 && now() - cfg.full < 6 * 3600) {
+      const moved = await one(env, "SELECT 1 FROM ledger WHERE guild_id = ? AND created_at >= ? LIMIT 1", g.id, cfg.full);
+      if (!moved) { cfg.synced = now(); cfg.full = now(); await save(env, g, cfg); continue; }
+    }
+    await syncAutoRoles(env, g);
+  }
 }
 
 /** Turn everything off and take our roles back off people (the roles themselves stay, the teacher can delete them). */

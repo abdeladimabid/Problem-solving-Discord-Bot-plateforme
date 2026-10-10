@@ -1,6 +1,6 @@
 // HackerRank contest tracking: live commentary, freeze & reveal, awards,
 // season points, team results, predictions and champion roles.
-import type { ContestRow, Entry, Env, GuildRow } from "./types.ts";
+import type { D1Stmt, ContestRow, Entry, Env, GuildRow } from "./types.ts";
 import { addPoints, all, checkBadges, getGuild, now, one, run } from "./db.ts";
 import type { Award, Snap } from "./game.ts";
 import { RULES, addSnapshot, computeAwards, contestPoints, fmtDuration, isPhotoFinish, rivalPasses, scoringOf, settleBet, teamResults } from "./game.ts";
@@ -326,35 +326,44 @@ export async function finishContest(env: Env, c: ContestRow) {
   }
   const awards = computeAwards(final, snaps, st.worst ?? {}, endTime, history, st.first_blood ?? null);
 
-  // results, points, awards
+  // results, points, awards, team points, bets and the contest's status: ONE atomic batch, so a contest
+  // with many players never ends half-saved (and stays within the free plan's query limit)
+  const stmts: D1Stmt[] = [];
+  const q = (sql: string, ...args: unknown[]) => stmts.push(env.DB.prepare(sql).bind(...args));
+  const sc = scoringOf(g);
+  const ledger = (did: string | null, hr: string, amount: number, reason: string, note: string) => {
+    if (amount) q("INSERT INTO ledger (guild_id, discord_id, hr_username, season, amount, reason, ref, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      g.id, did, hr, season, Math.round(amount), reason, String(c.id), note, t0);
+  };
   for (const e of final) {
     const k = e.username.toLowerCase();
     const did = links.get(k) ?? null;
-    await run(env, `INSERT OR REPLACE INTO contest_results (contest_id, guild_id, hr_username, hr_display, discord_id, rank, score, time_taken, participants)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.id, g.id, k, e.username, did, e.rank, e.score, e.time_taken, final.length);
-    await addPoints(env, seasonGuild, { discordId: did, hr: k, amount: contestPoints(scoringOf(g), e.rank), reason: "contest", ref: c.id, note: `#${e.rank}` });
+    q(`INSERT OR REPLACE INTO contest_results (contest_id, guild_id, hr_username, hr_display, discord_id, rank, score, time_taken, participants)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.id, g.id, k, e.username, did, e.rank, e.score, e.time_taken, final.length);
+    ledger(did, k, contestPoints(sc, e.rank), "contest", `#${e.rank}`);
   }
   for (const a of awards) {
     const k = a.u.toLowerCase();
-    await run(env, "INSERT INTO awards (guild_id, contest_id, hr_username, discord_id, award, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    q("INSERT INTO awards (guild_id, contest_id, hr_username, discord_id, award, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       g.id, c.id, k, links.get(k) ?? null, a.id, JSON.stringify(a.detail), t0);
-    await addPoints(env, seasonGuild, { discordId: links.get(k) ?? null, hr: k, amount: scoringOf(g).award, reason: "award", ref: c.id, note: a.id });
+    ledger(links.get(k) ?? null, k, sc.award, "award", a.id);
   }
   const teams = await teamsWithMembers(env, g.id);
   const tres = teams.length ? teamResults(teams, final) : [];
   for (const r of tres) {
-    await run(env, "INSERT OR REPLACE INTO team_points (guild_id, team_id, season, contest_id, rank, avg_score, points) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    q("INSERT OR REPLACE INTO team_points (guild_id, team_id, season, contest_id, rank, avg_score, points) VALUES (?, ?, ?, ?, ?, ?, ?)",
       g.id, r.id, season, c.id, r.rank, r.avg, RULES.teamPoints[r.rank] ?? 0);
   }
   const bets = await all<{ discord_id: string; pick: string; pick_display: string; amount: number }>(env, "SELECT * FROM bets WHERE contest_id = ?", c.id);
   const betRows: { uid: string; pick: string; amount: number; outcome: string; payout: number }[] = [];
   for (const b of bets) {
     const r = settleBet(b.pick, b.amount, final);
-    await run(env, "UPDATE bets SET outcome = ?, payout = ? WHERE contest_id = ? AND discord_id = ?", r.outcome, r.payout, c.id, b.discord_id);
-    if (r.payout) await run(env, "UPDATE players SET coins = coins + ? WHERE guild_id = ? AND discord_id = ?", r.payout, g.id, b.discord_id);
+    q("UPDATE bets SET outcome = ?, payout = ? WHERE contest_id = ? AND discord_id = ?", r.outcome, r.payout, c.id, b.discord_id);
+    if (r.payout) q("UPDATE players SET coins = coins + ? WHERE guild_id = ? AND discord_id = ?", r.payout, g.id, b.discord_id);
     betRows.push({ uid: b.discord_id, pick: b.pick_display, amount: b.amount, outcome: r.outcome, payout: r.payout });
   }
-  await run(env, "UPDATE contests SET status = 'finished', finished_at = ?, snaps = ?, state = ? WHERE id = ?", t0, JSON.stringify(snaps), JSON.stringify(st), c.id);
+  q("UPDATE contests SET status = 'finished', finished_at = ?, snaps = ?, state = ? WHERE id = ?", t0, JSON.stringify(snaps), JSON.stringify(st), c.id);
+  await env.DB.batch(stmts);
   for (const e of final.filter((e) => e.rank <= 3)) {
     const did = links.get(e.username.toLowerCase());
     if (did) await checkBadges(env, g, did);

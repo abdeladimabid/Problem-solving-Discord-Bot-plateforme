@@ -1,67 +1,119 @@
 // Teacher insight: class skill heatmap, targeted practice sets, mistake grouping,
 // difficulty check, and the Monday summary.
-import type { ChallengeRow, Difficulty, Env, GuildRow } from "./types.ts";
+import type { ChallengeRow, D1Stmt, Difficulty, Env, GuildRow } from "./types.ts";
+import { guildLangs } from "./challenges.ts";
 import { all, now, one, run } from "./db.ts";
 import { t } from "./i18n.ts";
 import { COLORS, dm } from "./discord.ts";
-import { SKILL_KEYS, skillName, skillsOf } from "./skills.ts";
+import { SKILL_KEYS, masteryFrom, skillName, skillsOf } from "./skills.ts";
+import type { AttemptLite } from "./skills.ts";
+import { roadmapFor, skillFitsTrack } from "./tracks.ts";
 import { pickForSkill } from "./coach.ts";
 import { weekKey } from "./report.ts";
 
 const W: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
 
 // ------------------------------------------------------------- heatmap
-/** Mastery of every student on every skill, from aggregated counts (cheap enough for a whole class). */
+/**
+ * Mastery of every student on every skill, from aggregated counts (cheap enough for a whole class).
+ * Same rules as the student page: 80% code (including what each code submission showed), 20% the rest.
+ */
 export async function classHeatmap(env: Env, g: GuildRow) {
+  const since = now() - 120 * 86400;
   const rows = await all<{ discord_id: string; skills: string | null; kind: string; difficulty: string; test_set: string | null; hr_slug: string | null; title: string; topic: string | null; ok: number; hinted: number; n: number }>(env,
     `SELECT a.discord_id, c.skills, c.kind, c.difficulty, c.test_set, c.hr_slug, c.title, c.topic,
             (a.status = 'solved') AS ok, (a.used_hint > 0) AS hinted, COUNT(*) AS n
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id
-      WHERE a.guild_id = ? AND a.status IN ('solved', 'failed', 'expired') AND a.finished_at >= ?
-      GROUP BY a.discord_id, c.id, ok, hinted`, g.id, now() - 120 * 86400);
-  const acc = new Map<string, Map<string, { w: number; s: number }>>();
-  for (const r of rows) {
-    const m = acc.get(r.discord_id) ?? new Map();
-    for (const k of skillsOf(r as any)) {
-      const e = m.get(k) ?? { w: 0, s: 0 };
-      const w = (W[r.difficulty] ?? 1) * r.n;
-      e.w += w; e.s += r.ok ? w * (r.hinted ? 0.7 : 1) : 0;
-      m.set(k, e);
-    }
-    acc.set(r.discord_id, m);
-  }
+      WHERE a.guild_id = ? AND a.finished_at >= ? AND a.status IN ('solved', 'failed', 'expired')
+      GROUP BY a.discord_id, c.id, ok, hinted`, g.id, since);
+  const ev = await all<{ discord_id: string; skill: string; ok: number; w: number }>(env,
+    "SELECT discord_id, skill, ok, SUM(weight) AS w FROM skill_evidence WHERE guild_id = ? AND created_at >= ? GROUP BY discord_id, skill, ok", g.id, since).catch(() => []);
+  const per = new Map<string, AttemptLite[]>();
+  const push = (id: string, a: AttemptLite) => { const l = per.get(id) ?? []; l.push(a); per.set(id, l); };
+  for (const r of rows) push(r.discord_id, { ...(r as any), status: r.ok ? "solved" : "failed", used_hint: r.hinted, tries: 1, result: null, finished_at: null, challenge_id: 0, weight: r.n });
+  for (const e of ev) push(e.discord_id, { status: e.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: "easy", skills: e.skill, result: null, finished_at: null, challenge_id: 0, weight: e.w });
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name]));
-  const students = [...acc.entries()].map(([id, m]) => ({
+  const students = [...per.entries()].map(([id, list]) => ({
     discord_id: id, name: names.get(id) ?? null,
-    skills: Object.fromEntries([...m.entries()].map(([k, e]) => [k, { mastery: Math.round((100 * (e.s + 0.5)) / (e.w + 1)), evidence: Math.round(e.w) }])),
+    skills: Object.fromEntries(masteryFrom(list, { recency: false }).filter((x) => x.evidence > 0)
+      .map((x) => [x.key, { mastery: x.mastery, evidence: Math.round(x.evidence), proven: x.proven, code: x.code, codeMistakes: x.codeMistakes }])),
   })).sort((a, b) => String(a.name ?? a.discord_id).localeCompare(String(b.name ?? b.discord_id)));
-  const used = SKILL_KEYS.filter((k) => students.some((s) => s.skills[k]));
+  const used = SKILL_KEYS.filter((k) => students.some((s) => (s.skills as any)[k]));
   const average = Object.fromEntries(used.map((k) => {
-    const v = students.map((s) => s.skills[k]).filter((x) => x && x.evidence >= 2);
-    return [k, v.length ? Math.round(v.reduce((a, b) => a + b.mastery, 0) / v.length) : null];
+    const v = students.map((s) => (s.skills as any)[k]).filter((x) => x && x.evidence >= 2);
+    return [k, v.length ? Math.round(v.reduce((a: number, b: any) => a + b.mastery, 0) / v.length) : null];
   }));
-  return { skills: used, average, students };
+  // the class's track first (its roadmap order), so the map isn't full of skills the class doesn't learn
+  const road = [...new Set(roadmapFor(g).map((s) => s.skill))];
+  const track = [...road, ...SKILL_KEYS.filter((k) => !road.includes(k) && skillFitsTrack(k, g))];
+  return { skills: used, track: track.filter((k) => used.includes(k)), average, students };
 }
 
 /**
  * Give each chosen student their own practice challenges on one skill, at their level,
  * as assignments (DM + reminder like any assignment).
+ * Done in a handful of queries whatever the class size (the free plan allows 50 per request):
+ * levels, candidates, what each student already saw, then all the inserts in one batch.
  */
-export async function practiceSet(env: Env, g: GuildRow, o: { skill: string; students: string[]; count: number; dueAt: number | null; note?: string | null },
-  levelOf: (uid: string) => Difficulty) {
+export async function practiceSet(env: Env, g: GuildRow, o: { skill: string; students: string[]; count: number; dueAt: number | null; note?: string | null }) {
+  const students = [...new Set(o.students)].slice(0, 40);
+  const count = Math.min(5, Math.max(1, o.count));
+  const like = `%,${o.skill},%`;
+  const inList = students.map(() => "?").join(", ");
+  // 1. each student's level on this skill (same rules as the student page)
+  const att = await all<{ discord_id: string; kind: string; difficulty: string; skills: string | null; ok: number; hinted: number; n: number }>(env,
+    `SELECT a.discord_id, c.kind, c.difficulty, c.skills, (a.status = 'solved') AS ok, (a.used_hint > 0) AS hinted, COUNT(*) AS n
+       FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+      WHERE a.guild_id = ? AND a.discord_id IN (${inList}) AND a.status IN ('solved', 'failed', 'expired')
+        AND (',' || COALESCE(c.skills, '') || ',') LIKE ?
+      GROUP BY a.discord_id, c.kind, c.difficulty, c.skills, ok, hinted`, g.id, ...students, like);
+  const ev = await all<{ discord_id: string; ok: number; w: number }>(env,
+    `SELECT discord_id, ok, SUM(weight) AS w FROM skill_evidence WHERE guild_id = ? AND skill = ? AND discord_id IN (${inList}) GROUP BY discord_id, ok`,
+    g.id, o.skill, ...students).catch(() => []);
+  const level = new Map<string, Difficulty>();
+  for (const uid of students) {
+    const list: AttemptLite[] = [
+      ...att.filter((r) => r.discord_id === uid).map((r) => ({ status: r.ok ? "solved" : "failed", used_hint: r.hinted, tries: 1, kind: r.kind, difficulty: r.difficulty, skills: r.skills, result: null, finished_at: null, challenge_id: 0, weight: r.n })),
+      ...ev.filter((r) => r.discord_id === uid).map((r) => ({ status: r.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: "easy", skills: o.skill, result: null, finished_at: null, challenge_id: 0, weight: r.w })),
+    ];
+    level.set(uid, (masteryFrom(list, { recency: false }).find((x) => x.key === o.skill)?.target ?? "easy") as Difficulty);
+  }
+  // 2. challenges on this skill the class can do, 3. who already saw which
+  const langs = guildLangs(g);
+  const cands = await all<{ id: number; difficulty: Difficulty; kind: string }>(env,
+    `SELECT c.id, c.difficulty, c.kind FROM challenges c
+      WHERE c.status = 'active' AND (c.guild_id IS NULL OR c.guild_id = ?) AND (',' || COALESCE(c.skills, '') || ',') LIKE ?
+        AND (c.lang = ? OR c.lang = 'any')
+        AND (c.code_lang IS NULL OR c.kind IN ('write', 'code', 'sql', 'regex') OR c.code_lang IN (${langs.map(() => "?").join(", ")}))
+      LIMIT 600`, g.id, like, g.lang, ...langs);
+  const seen = new Set((await all<{ k: string }>(env,
+    `SELECT a.discord_id || ':' || a.challenge_id AS k FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+      WHERE a.guild_id = ? AND a.discord_id IN (${inList}) AND (',' || COALESCE(c.skills, '') || ',') LIKE ?`, g.id, ...students, like)).map((r) => r.k));
+  const hrOk = new Set((await all<{ discord_id: string }>(env,
+    `SELECT discord_id FROM players WHERE guild_id = ? AND hr_verified = 1 AND discord_id IN (${inList})`, g.id, ...students)).map((r) => r.discord_id));
+  // 4. pick: their level first, then the levels around it, at random among the ones they haven't seen
+  const LV: Difficulty[] = ["easy", "medium", "hard"];
   const made: { discord_id: string; challenges: number[] }[] = [];
-  for (const uid of o.students.slice(0, 40)) {
+  const stmts: D1Stmt[] = [];
+  const t0 = now();
+  for (const uid of students) {
+    const target = level.get(uid) ?? "easy";
+    const order = [...LV].sort((a, b) => Math.abs(LV.indexOf(a) - LV.indexOf(target)) - Math.abs(LV.indexOf(b) - LV.indexOf(target)));
     const picked: number[] = [];
-    for (let i = 0; i < Math.min(5, Math.max(1, o.count)); i++) {
-      const c = await pickForSkill(env, g, uid, o.skill, levelOf(uid), { exclude: picked });
-      if (!c) break;
-      picked.push(c.id);
-      await run(env, "INSERT INTO assignments (guild_id, discord_id, challenge_id, due_at, note, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)",
-        g.id, uid, c.id, o.dueAt, o.note ?? null, now());
+    for (const d of order) {
+      const pool = cands.filter((c) => c.difficulty === d && (c.kind !== "code" || hrOk.has(uid)) && !seen.has(`${uid}:${c.id}`) && !picked.includes(c.id))
+        .sort(() => Math.random() - 0.5);
+      for (const c of pool) { if (picked.length >= count) break; picked.push(c.id); }
+      if (picked.length >= count) break;
     }
+    for (const cid of picked) stmts.push(env.DB.prepare("INSERT INTO assignments (guild_id, discord_id, challenge_id, due_at, note, status, created_at) VALUES (?, ?, ?, ?, ?, 'open', ?)")
+      .bind(g.id, uid, cid, o.dueAt, o.note ?? null, t0));
     made.push({ discord_id: uid, challenges: picked });
   }
-  return made;
+  if (stmts.length) await env.DB.batch(stmts);
+  const ids = stmts.length ? await all<{ id: number; discord_id: string }>(env,
+    `SELECT id, discord_id FROM assignments WHERE guild_id = ? AND created_at = ? AND discord_id IN (${inList}) ORDER BY id`, g.id, t0, ...students) : [];
+  return made.map((m) => ({ ...m, assignments: ids.filter((r) => r.discord_id === m.discord_id).map((r) => r.id) }));
 }
 
 // ------------------------------------------------------ mistake grouping

@@ -25,14 +25,17 @@ export const clock = {
 };
 
 // ------------------------------------------------------------------- D1
+/** Number of D1 round trips (a batch counts as one), like Cloudflare counts them. */
+export const d1 = { queries: 0 };
 class Stmt implements D1Stmt {
   db: DatabaseSync; sql: string; args: unknown[];
   constructor(db: DatabaseSync, sql: string, args: unknown[] = []) { this.db = db; this.sql = sql; this.args = args; }
   bind(...values: unknown[]) { return new Stmt(this.db, this.sql, values); }
   private params() { return this.args.map((v) => (v === undefined ? null : typeof v === "boolean" ? (v ? 1 : 0) : v)) as any[]; }
-  async first<T>() { return (this.db.prepare(this.sql).get(...this.params()) as T) ?? null; }
-  async all<T>() { return { results: this.db.prepare(this.sql).all(...this.params()) as T[], meta: {} }; }
-  async run() {
+  async first<T>() { d1.queries++; return (this.db.prepare(this.sql).get(...this.params()) as T) ?? null; }
+  async all<T>() { d1.queries++; return { results: this.db.prepare(this.sql).all(...this.params()) as T[], meta: {} }; }
+  async run(inBatch = false) {
+    if (!inBatch) d1.queries++;
     const r = this.db.prepare(this.sql).run(...this.params());
     return { results: [], meta: { last_row_id: Number(r.lastInsertRowid), changes: Number(r.changes) } };
   }
@@ -47,7 +50,8 @@ export function makeD1(): D1 & { raw: DatabaseSync } {
       db.exec("BEGIN");
       try {
         const out = [];
-        for (const s of stmts) out.push(await s.run());
+        d1.queries++;
+        for (const s of stmts) out.push(await (s as any).run(true));
         db.exec("COMMIT");
         return out;
       } catch (e) { db.exec("ROLLBACK"); throw e; }

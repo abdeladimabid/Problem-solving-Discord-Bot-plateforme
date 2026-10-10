@@ -12,8 +12,8 @@ const LEVELS: Difficulty[] = ["easy", "medium", "hard"];
  */
 export async function pickForSkill(env: Env, g: GuildRow, userId: string, skill: string, difficulty: Difficulty,
   o: { prefer?: "write" | "quick"; exclude?: number[]; allowSeen?: boolean; kind?: string } = {}): Promise<ChallengeRow | null> {
-  const nulls = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM challenges WHERE skills IS NULL");
-  if (nulls?.n) await backfillSkills(env, 200);
+  // challenges without skills yet (just generated): tag them first (uses the partial index, no scan)
+  if (await one(env, "SELECT 1 FROM challenges WHERE skills IS NULL LIMIT 1")) await backfillSkills(env, 200);
   const p = await findPlayer(env, g.id, userId);
   const langs = guildLangs(g);
   const hrOk = !!p?.hr_verified;

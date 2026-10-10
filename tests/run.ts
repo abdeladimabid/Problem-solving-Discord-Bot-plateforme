@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, discordCalls, discordRoles, github, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, clock, d1, discordCalls, discordRoles, github, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
@@ -1768,6 +1768,20 @@ section("skill mastery: code proves it (80%), every submission updates the skill
   const page = await api("GET", `/api/students/${E.id}?g=${G}`);
   const arr = page.data.coach?.skills?.find((x: any) => x.key === "arrays");
   check(arr && arr.codeMistakes >= 1 && arr.code != null, `student page shows code mistakes per skill (${JSON.stringify(arr && { m: arr.mastery, code: arr.code, quick: arr.quick, mistakes: arr.codeMistakes })})`);
+}
+
+section("speed: a practice set for a whole class stays under the free plan's 50 queries");
+{
+  for (let i = 0; i < 30; i++) run1("INSERT OR IGNORE INTO players (guild_id, discord_id, name, created_at) VALUES (?, ?, ?, ?)", G, `9${String(i).padStart(3, "0")}`, `Student ${i}`, clock.now());
+  const many = Array.from({ length: 30 }, (_, i) => `9${String(i).padStart(3, "0")}`);
+  const before = d1.queries;
+  const r = await api("POST", "/api/skills/practice-set", { g: G, skill: "loops", students: many, count: 3, due_at: null });
+  const used = d1.queries - before;
+  check(r.data.students === 30 && r.data.assignments >= 30, `30 students got their challenges (${r.data.assignments} assignments)`);
+  check(used <= 25, `…in ${used} database queries (was ~550)`);
+  check(q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id IN (" + many.map(() => "?").join(",") + ")", ...many).n === r.data.assignments, "all of them were saved");
+  run1("DELETE FROM assignments WHERE discord_id LIKE '9%' AND LENGTH(discord_id) = 4");
+  run1("DELETE FROM players WHERE discord_id LIKE '9%' AND LENGTH(discord_id) = 4");
 }
 
 section("dashboard links keep their page through the sign-in");
