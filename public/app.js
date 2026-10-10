@@ -534,12 +534,15 @@ function coachPanel(c) {
     </div></section>`;
 }
 
-/** "What to work on": each skill with the evidence behind it, so the teacher sees WHY. */
-function workOnPanel(list, sid) {
-  if (!list?.length) return "";
+/** "What to work on": each skill with the evidence behind it, so the teacher sees WHY, and what to revisit. */
+function workOnPanel(c, sid) {
+  const list = c?.workOn || [];
+  const head = `<div class="panel-head"><h2>🎯 What to work on, and why</h2><span class="muted small">from their own answers and code, last 4 months</span></div>`;
+  if (!list.length) return `<section class="panel" id="workon">${head}<p class="${c?.workOnError ? "notice" : "muted"}">${c?.workOnError
+    ? `Couldn't build this section: ${esc(c.workOnError)}` : "Nothing to point out yet: every skill they tried is going well, or they haven't answered enough challenges."}</p></section>`;
   const ev = (rows, icon, label) => rows.length ? `<div class="wo-ev"><b class="small">${icon} ${label}</b><ul>${rows.map((r) =>
     `<li><a href="#" data-wocid="${r.challenge_id}">${esc(r.title)}</a> ${diffTag(r.difficulty)} <span class="muted small">${esc(fmtAgo(r.when))}</span><div class="small">${esc(r.detail)}</div></li>`).join("")}</ul></div>` : "";
-  return `<section class="panel"><div class="panel-head"><h2>What to work on</h2><span class="muted small">from their own answers and code, last 4 months</span></div>
+  return `<section class="panel" id="workon">${head}
     <div class="wo-list">${list.map((w) => `<article class="wo">
       <header>
         <b>${esc(skillLabel(w.skill))}</b>
@@ -550,16 +553,40 @@ function workOnPanel(list, sid) {
       ${ev(w.failedCode, "💻", "Code challenges not solved")}
       ${ev(w.codeMistakes, "🐞", `Mistakes in their code about ${skillLabel(w.skill).replace(/^\S+\s/, "")}`)}
       ${ev(w.missedQuick, "❓", "Questions missed")}
-      <p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" data-wopset="${esc(w.skill)}" data-level="${esc(w.level)}">📚 Give 3 challenges on it</button><button class="btn small" data-wogen="${esc(w.skill)}" data-level="${esc(w.level)}">✨ Generate new ones</button></p>
+      ${w.revisit?.length ? `<div class="wo-revisit"><b class="small">📖 What to revisit</b><ul>${w.revisit.map((x) => `<li class="small">${esc(x)}</li>`).join("")}</ul>
+        ${w.lesson ? `<p class="small muted" style="margin:4px 0 0">Lesson in <code>/path</code>: <b>${esc(w.lesson)}</b></p>` : ""}</div>` : ""}
+      <p class="toolbar" style="margin:10px 0 0">
+        <button class="btn small primary" data-wonote="${esc(w.skill)}">✍️ Write a note to the student</button>
+        <button class="btn small" data-wopset="${esc(w.skill)}" data-level="${esc(w.level)}">📚 Give 3 challenges on it</button>
+        <button class="btn small" data-wogen="${esc(w.skill)}" data-level="${esc(w.level)}">✨ Generate new ones</button></p>
     </article>`).join("")}</div></section>`;
 }
-function wireWorkOn(sid) {
+function wireWorkOn(sid, name) {
   $$("[data-wocid]").forEach((a) => a.onclick = (e) => { e.preventDefault(); editChallenge(Number(a.dataset.wocid)); });
   $$("[data-wogen]").forEach((b) => b.onclick = () => genForSkillDialog(b.dataset.wogen, b.dataset.level));
   $$("[data-wopset]").forEach((b) => b.onclick = () => busy(b, async () => {
     const r = await api("/skills/practice-set", { method: "POST", body: { skill: b.dataset.wopset, students: [sid], count: 3, due_at: Math.floor(Date.now() / 1000) + 7 * 86400 } });
     toast(r.assignments ? `${r.assignments} challenge(s) assigned at their level, due in a week (sent by DM)` : "No new challenge left on this skill: use ✨ Generate new ones", !r.assignments);
   }));
+  $$("[data-wonote]").forEach((b) => b.onclick = () => {
+    const skill = b.dataset.wonote;
+    openDialog(`Note to ${name || "the student"} · ${skillLabel(skill)}`, `
+      <p class="muted small">The AI drafts it from the evidence above (the challenges, their mistakes, what to revisit). Edit it, then send it by Discord DM.</p>
+      <textarea id="wn-t" maxlength="1900" style="min-height:200px;width:100%" placeholder="Writing the note…"></textarea>
+      <p class="small" id="wn-st"></p>`,
+      [{ label: "Send by DM", primary: true, action: async () => {
+        const text = $("#wn-t", dlg).value.trim();
+        if (!text) throw new Error("Write the note first");
+        await api(`/students/${sid}/message`, { method: "POST", body: { text } });
+        dlg.close(); toast("Note sent by DM");
+      } }]);
+    const ta = $("#wn-t", dlg), st = $("#wn-st", dlg);
+    ta.disabled = true; st.textContent = "⏳ The AI is writing the note (up to 30 s)…";
+    api(`/students/${sid}/workon-note`, { method: "POST", body: { skill } })
+      .then((r) => { ta.value = r.text; st.textContent = ""; })
+      .catch((e) => { st.innerHTML = `<span class="late-wait">${esc(e.message)}</span>`; })
+      .finally(() => { ta.disabled = false; ta.focus(); });
+  });
 }
 
 async function viewStudent(id) {
@@ -597,8 +624,8 @@ async function viewStudent(id) {
         <div class="figure"><b>${p.daily_streak}</b><span>day daily streak</span></div>
         <div class="figure"><b>${d.contests.played}</b><span>contests · ${d.contests.wins} won · ${d.contests.podiums} podiums</span></div>
       </div>
+      ${workOnPanel(d.coach, id)}
       ${coachPanel(d.coach)}
-      ${workOnPanel(d.coach?.workOn, id)}
       <div class="grid cols-2-even">
         <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
         <section class="panel"><h2>Contest results</h2>${d.contestList.length > 0
@@ -679,7 +706,7 @@ async function viewStudent(id) {
   $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
   showTab("solved");
   $("#assign").onclick = () => assignDialog([id]);
-  wireWorkOn(id);
+  wireWorkOn(id, p.name);
   const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(id); };
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);

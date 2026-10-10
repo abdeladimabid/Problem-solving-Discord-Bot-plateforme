@@ -29,6 +29,11 @@ export default {
     }
     if (url.pathname.startsWith("/api/")) return handleApi(request, env, ctx, auth);
     if (!env.ASSETS) return new Response("assets binding missing", { status: 500 });
-    return env.ASSETS.fetch(request);
+    // the dashboard's own files: always check for a newer version, so an update shows up without Ctrl+F5
+    const res = await env.ASSETS.fetch(request);
+    if (!/\.(js|css|html)$|\/$/.test(url.pathname)) return res;
+    const out = new Response(res.body, res);
+    out.headers.set("cache-control", "no-cache");
+    return out;
   },
 };
