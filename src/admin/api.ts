@@ -38,7 +38,7 @@ import { compareClasses, leagueOf, leagueTable, setLeague } from "../shared/leag
 import { certUrl, sendCertificates } from "../shared/share.ts";
 import { standings } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
-import { workOn } from "../shared/workon.ts";
+import { workOn, workOnNote } from "../shared/workon.ts";
 
 class HttpError extends Error {
   status: number;
@@ -261,6 +261,23 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (!amount || Math.abs(amount) > 10000) throw new HttpError(400, "amount must be a non-zero number");
       await addPoints(env, g, { discordId: m[1], amount, reason: "bonus", note: String(body.reason ?? "").slice(0, 200) });
       if (body.notify && amount > 0) ctx.waitUntil(dm(env, m[1], { content: `🎁 +${amount} pts${body.reason ? ` · ${String(body.reason).slice(0, 200)}` : ""}` }));
+      return ok({ ok: true });
+    }
+    m = path.match(/^\/students\/(\d+)\/workon-note$/);
+    if (m && method === "POST") {
+      const g = await guild();
+      const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", g.id, m[1]);
+      const text = await workOnNote(env, g, m[1], String(body.skill ?? ""), p?.name ?? "");
+      if (!text) throw new HttpError(503, "The AI couldn't write the note right now (daily AI budget used up, or nothing to say on this skill). Write it yourself below.");
+      return ok({ text });
+    }
+    m = path.match(/^\/students\/(\d+)\/message$/);
+    if (m && method === "POST") {
+      const g = await guild();
+      const text = String(body.text ?? "").trim().slice(0, 1900);
+      if (!text) throw new HttpError(400, "Write a message first");
+      const sent = await dm(env, m[1], { embeds: [{ title: t(g.lang, "teacher.note_title"), description: text, color: 0x2a78d6 }] });
+      if (!sent) throw new HttpError(400, "Discord refused the DM (the student blocks DMs from server members).");
       return ok({ ok: true });
     }
     m = path.match(/^\/students\/(\d+)\/hackerrank$/);
@@ -630,7 +647,7 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
   const path = await pathProgress(env, g, did);
   const coach = {
     skills: prof.skills.filter((x) => x.evidence > 0), mistakes: prof.mistakes, focus: focusSkills(prof.skills, 2).map((x) => x.key),
-    workOn: await workOn(env, g, did).catch((e) => { console.error("workOn", e); return []; }),
+    ...(await workOn(env, g, did).then((list) => ({ workOn: list, workOnError: null }), (e) => { console.error("workOn", e); return { workOn: [], workOnError: String(e?.message ?? e).slice(0, 300) }; })),
     path: { done: path.steps.filter((x) => x.done).length, total: path.steps.length, current: path.current >= 0 ? path.steps[path.current] : null },
     plan: { streak: (s.player as any)?.plan_streak ?? 0, best: (s.player as any)?.plan_best ?? 0, remind: !!(s.player as any)?.plan_dm },
   };

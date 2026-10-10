@@ -278,6 +278,9 @@ function fakeAI() {
       if (sys.includes("interview scorecard")) {
         return { response: JSON.stringify({ problem: 4, communication: 5, code: 5, complexity: 4, verdict: "Hire", strengths: "Clear thinking out loud.", improve: "State the complexity earlier." }) };
       }
+      if (sys.includes("short private message to your student")) {
+        return { response: "Ezra, in Arrays you crashed on an index in your last challenge: remember the last index is length - 1. Revisit the Arrays lesson in /path, then try /practice Picked for me." };
+      }
       if (sys.includes("kind but demanding")) {
         return { response: "Your loop never considers the case where every number is negative: start from the first element instead of 0." + (sys.includes('"SKILLS:"') ? "\nSKILLS: loops, notaskill" : "") };
       }

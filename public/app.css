@@ -535,3 +535,5 @@ ol.league li.me b { color: var(--blue); }
 .wo-ev { margin-top: 6px; }
 .wo-ev ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 4px; }
 .wo-ev li .small { color: var(--ink-faint); }
+.wo-revisit { margin-top: 8px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); }
+.wo-revisit ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 2px; }

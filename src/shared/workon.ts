@@ -6,11 +6,42 @@ import { all, now } from "./db.ts";
 import { skillName, skillsOf, studentProfile } from "./skills.ts";
 import type { SkillScore } from "./skills.ts";
 import { roadmapFor } from "./tracks.ts";
+import { LESSONS } from "./lessons.ts";
+import { chat } from "./ai.ts";
+import { aiBudgetOk, aiBudgetUse } from "./db.ts";
+
+const plain = (md: string) => md.replace(/\*\*?|`/g, "").trim();
+
+/** What to go back over: the lesson's key point, plus one line per KIND of mistake they made. */
+function revisitFor(skill: string, failed: any[], ev: any[], noCode: boolean): string[] {
+  const out: string[] = [];
+  const add = (x: string) => { if (!out.includes(x)) out.push(x); };
+  const verdicts = failed.map((r) => { try { return JSON.parse(r.result || "null"); } catch { return null; } }).filter(Boolean);
+  const errs = [...verdicts.map((j: any) => `${j.failed?.error ?? ""} ${j.error ?? ""}`), ...ev.map((e) => String(e.why ?? ""))].join(" ");
+  if (/IndexError|out of (range|bounds)|Undefined (array key|offset)|undefined/i.test(errs)) add("Index bounds: the first index is 0 and the last is length − 1; check the loop's start and end.");
+  if (/KeyError|Undefined (array )?(key|index) ["']/i.test(errs)) add("Check that a key exists before reading it (in / isset / has).");
+  if (/RecursionError|maximum (call stack|recursion)/i.test(errs)) add("Recursion needs a base case that is always reached.");
+  if (/ZeroDivision|division by zero/i.test(errs)) add("Guard divisions: what happens when the divisor is 0?");
+  if (/TypeError|NameError|not defined|Undefined variable|cannot find symbol/i.test(errs)) add("Variable names and types: declare before use, convert input text to numbers.");
+  if (verdicts.some((j: any) => j.verdict === "compile")) add("Syntax: brackets, colons/semicolons and indentation; read the first error line.");
+  if (verdicts.some((j: any) => j.verdict === "tle")) add("Speed: a loop inside a loop on big inputs is too slow; look for one pass with a dictionary, sorting or prefix sums.");
+  if (verdicts.some((j: any) => j.verdict === "wrong" && j.failed && j.failed.sample === false)) add("Edge cases: empty input, a single element, negatives, duplicates, the biggest values.");
+  if (verdicts.some((j: any) => j.verdict === "wrong" && j.failed?.sample)) add("Re-read the statement and trace the sample by hand before coding.");
+  if (failed.some((r) => r.kind === "output")) add("Tracing code: follow it on paper line by line, writing each variable's value.");
+  if (failed.some((r) => r.kind === "bug")) add("Reading code critically: check each line against what it should do.");
+  if (failed.some((r) => r.kind === "complexity")) add("Counting steps: how many times does each loop run when n doubles?");
+  if (noCode) add("Write code on it: a write-code challenge proves it (quizzes alone count for 20% at most).");
+  const l = LESSONS[skill]?.en;
+  if (l?.tip) add(`Key point from the lesson: ${plain(l.tip)}`);
+  return out.slice(0, 5);
+}
 
 export interface Evidence { attempt_id: number; challenge_id: number; title: string; kind: string; difficulty: string; when: number; detail: string }
 export interface WorkOn {
   skill: string; name: string; mastery: number; code: number | null; quick: number | null; status: string; level: string;
   why: string;                // one plain sentence
+  revisit: string[];          // what to go back over, from the lesson and from the kind of mistakes made
+  lesson: string | null;      // title of the matching /path lesson
   failedCode: Evidence[];     // write-code / SQL / HackerRank challenges on this skill they didn't solve
   codeMistakes: Evidence[];   // mistakes in this skill found in their code (any challenge)
   missedQuick: Evidence[];    // quick questions on this skill they got wrong
@@ -67,10 +98,15 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
       WHERE e.guild_id = ? AND e.discord_id = ? AND e.ok = 0 AND e.created_at >= ? ORDER BY e.id DESC LIMIT 200`, g.id, uid, since).catch(() => []);
 
   return pick.map((s) => {
-    const on = failed.filter((r) => skillsOf(r).includes(s.key));
+    const onAll = failed.filter((r) => skillsOf(r).includes(s.key));
+    // one line per challenge (the latest try), with how many times it was missed
+    const tries = new Map<number, number>();
+    for (const r of onAll) tries.set(r.challenge_id, (tries.get(r.challenge_id) ?? 0) + 1);
+    const on = onAll.filter((r, i) => onAll.findIndex((x) => x.challenge_id === r.challenge_id) === i);
+    const times = (r: any) => ((tries.get(r.challenge_id) ?? 1) > 1 ? ` · missed ${tries.get(r.challenge_id)} times` : "");
     const failedCode: Evidence[] = on.filter((r) => CODE.includes(r.kind)).slice(0, 5).map((r) => ({
       attempt_id: r.attempt_id, challenge_id: r.challenge_id, title: r.title, kind: r.kind, difficulty: r.difficulty, when: r.at,
-      detail: r.kind === "code" ? "not solved on HackerRank" : r.status === "expired" ? "started, never finished" : [verdictText(r.result), r.feedback ? `coach: “${short(r.feedback, 140)}”` : ""].filter(Boolean).join(" · "),
+      detail: (r.kind === "code" ? "not solved on HackerRank" : r.status === "expired" ? "started, never finished" : [verdictText(r.result), r.feedback ? `coach: “${short(r.feedback, 140)}”` : ""].filter(Boolean).join(" · ")) + times(r),
     }));
     // one line per challenge where their code showed this mistake (several submissions → one line)
     const seen = new Set<number>();
@@ -85,7 +121,7 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
     }
     const missedQuick: Evidence[] = on.filter((r) => !CODE.includes(r.kind)).slice(0, 5).map((r) => ({
       attempt_id: r.attempt_id, challenge_id: r.challenge_id, title: r.title, kind: r.kind, difficulty: r.difficulty, when: r.at,
-      detail: r.status === "expired" ? `${KIND[r.kind] ?? r.kind}, not answered` : `${KIND[r.kind] ?? r.kind}: answered “${short(choice(r, r.answer_given), 60)}”${r.answer ? `, right answer “${short(choice(r, r.answer), 60)}”` : ""}`,
+      detail: (r.status === "expired" ? `${KIND[r.kind] ?? r.kind}, not answered` : `${KIND[r.kind] ?? r.kind}: answered “${short(choice(r, r.answer_given), 60)}”${r.answer ? `, right answer “${short(choice(r, r.answer), 60)}”` : ""}`) + times(r),
     }));
     // the sentence: what the numbers say, from the most telling evidence
     const parts: string[] = [];
@@ -96,6 +132,29 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
     if (qf) parts.push(`missed ${qf} quick question${qf > 1 ? "s" : ""}`);
     if (s.code == null && s.quick != null) parts.push("hasn't shown it in code yet (quizzes alone count for 20% at most)");
     const why = parts.length ? `${parts[0][0].toUpperCase()}${parts.join(", ").slice(1)}.` : `Few tries so far (${s.solved} solved, ${s.failed} not).`;
-    return { skill: s.key, name: skillName(s.key, "en"), mastery: s.mastery, code: s.code, quick: s.quick, status: s.status, level: s.target, why, failedCode, codeMistakes, missedQuick, solved: s.solved };
+    const revisit = revisitFor(s.key, on, ev.filter((x) => x.skill === s.key), s.code == null && s.quick != null);
+    return { skill: s.key, name: skillName(s.key, "en"), mastery: s.mastery, code: s.code, quick: s.quick, status: s.status, level: s.target, why, revisit,
+      lesson: LESSONS[s.key]?.en?.title ?? null, failedCode, codeMistakes, missedQuick, solved: s.solved };
   });
+}
+
+
+/** A short personal note to the student about one skill (AI), from the same evidence; the teacher edits it and sends it. */
+export async function workOnNote(env: Env, g: GuildRow, uid: string, skill: string, name: string): Promise<string | null> {
+  const w = (await workOn(env, g, uid, 8)).find((x) => x.skill === skill);
+  if (!w) return null;
+  if (!(await aiBudgetOk(env, 1))) return null;
+  await aiBudgetUse(env, 1);
+  const facts = [
+    `Skill: ${w.name} (${w.mastery}%).`, `Why: ${w.why}`,
+    ...w.failedCode.map((e) => `Code challenge not solved: "${e.title}" (${e.difficulty}): ${e.detail}`),
+    ...w.codeMistakes.map((e) => `Mistake in their code on "${e.title}": ${e.detail}`),
+    ...w.missedQuick.map((e) => `Missed: "${e.title}": ${e.detail}`),
+    `To revisit: ${w.revisit.join(" | ")}`, w.lesson ? `Lesson available in /path: ${w.lesson}` : "",
+  ].filter(Boolean).join("\n");
+  const text = await chat(env, [
+    { role: "system", content: `You are a kind, precise programming teacher writing a short private message to your student ${name}. Write in ${g.lang === "fr" ? "French" : "English"}, 4 to 6 sentences, addressed to them ("you"). Name the exact challenges where it went wrong and what went wrong, then say concretely what to revisit and suggest one next step (the /path lesson, then a challenge with /practice "Picked for me"). Encouraging, no blame, no code solutions, plain text.` },
+    { role: "user", content: facts.slice(0, 3500) },
+  ], { maxTokens: 900, temperature: 0.4, timeoutMs: 30000 }).catch(() => "");
+  return text.replace(/```[\s\S]*?```/g, "").trim().slice(0, 1800) || null;
 }
