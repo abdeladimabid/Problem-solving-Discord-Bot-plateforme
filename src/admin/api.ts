@@ -38,6 +38,7 @@ import { compareClasses, leagueOf, leagueTable, setLeague } from "../shared/leag
 import { certUrl, sendCertificates } from "../shared/share.ts";
 import { standings } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
+import { workOn } from "../shared/workon.ts";
 
 class HttpError extends Error {
   status: number;
@@ -629,6 +630,7 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
   const path = await pathProgress(env, g, did);
   const coach = {
     skills: prof.skills.filter((x) => x.evidence > 0), mistakes: prof.mistakes, focus: focusSkills(prof.skills, 2).map((x) => x.key),
+    workOn: await workOn(env, g, did).catch((e) => { console.error("workOn", e); return []; }),
     path: { done: path.steps.filter((x) => x.done).length, total: path.steps.length, current: path.current >= 0 ? path.steps[path.current] : null },
     plan: { streak: (s.player as any)?.plan_streak ?? 0, best: (s.player as any)?.plan_best ?? 0, remind: !!(s.player as any)?.plan_dm },
   };

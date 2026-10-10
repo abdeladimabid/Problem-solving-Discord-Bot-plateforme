@@ -1770,6 +1770,43 @@ section("skill mastery: code proves it (80%), every submission updates the skill
   check(arr && arr.codeMistakes >= 1 && arr.code != null, `student page shows code mistakes per skill (${JSON.stringify(arr && { m: arr.mastery, code: arr.code, quick: arr.quick, mistakes: arr.codeMistakes })})`);
 }
 
+section("/practice 🎯 picked for me: what the student needs next, at their level");
+{
+  const NEW = { id: "130", name: "Nour", teacher: false };
+  const lastAtt = (uid: string) => q1("SELECT a.*, c.kind, c.skills, c.difficulty FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", uid);
+  const g0 = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const { roadmapFor } = await import("../src/shared/tracks.ts");
+  const first = roadmapFor(g0)[0].skill;
+  await slash(NEW as any, "practice", { type: "forme" });
+  let a = lastAtt(NEW.id), msg = text(lastPatch());
+  check(!!a && a.difficulty === "easy" && String(a.skills).split(",").includes(first), `a beginner starts with the roadmap's first skill (${first}), easy (${a?.skills} ${a?.difficulty})`);
+  check(a?.kind === "write" || a?.kind === "sql", `…as a write-code challenge (${a?.kind})`);
+  check(msg.includes("first steps"), "…and is told why");
+
+  // a student who solves a few things but keeps failing arrays: arrays comes first
+  const W = { id: "131", name: "Walid", teacher: false };
+  await slash(W as any, "help", {});
+  const pick = (skill: string, kind = "write") => q1(`SELECT id FROM challenges WHERE status = 'active' AND lang = 'en' AND kind = ? AND (',' || skills || ',') LIKE ? ORDER BY id LIMIT 1 OFFSET ?`, kind, `%,${skill},%`, 0);
+  const add = (cid: number, status: string) => run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, started_at, finished_at) VALUES (?, ?, ?, 'practice', ?, 1, ?, ?)", G, W.id, cid, status, clock.now() - 3600, clock.now() - 3600);
+  const arr = q(`SELECT id FROM challenges WHERE status = 'active' AND lang = 'en' AND (',' || skills || ',') LIKE '%,arrays,%' AND (',' || skills || ',') NOT LIKE '%,basics,%' LIMIT 4`);
+  const bas = q(`SELECT id FROM challenges WHERE status = 'active' AND lang = 'en' AND (',' || skills || ',') LIKE '%,basics,%' AND (',' || skills || ',') NOT LIKE '%,arrays,%' LIMIT 4`);
+  for (const r of bas) add(r.id, "solved");
+  for (const r of arr) add(r.id, "failed");
+  for (let i = 0; i < 3; i++) run1("INSERT INTO skill_evidence (guild_id, discord_id, attempt_id, skill, ok, weight, why, created_at) VALUES (?, ?, 0, 'arrays', 0, 1, 'test', ?)", G, W.id, clock.now());
+  await slash(W as any, "practice", { type: "forme" });
+  a = lastAtt(W.id); msg = text(lastPatch());
+  const roadSkills = [...new Set(roadmapFor(g0).map((x: any) => x.skill))];
+  const firstWeak = roadSkills.find((k: string) => k === "arrays" || (k !== "basics" && false));
+  check(String(a.skills).split(",").includes("arrays") && msg.includes("weakest"), `weak at arrays: an arrays challenge, explained (${a.skills}; ${msg.slice(0, 90)})`);
+  check(a.difficulty === "easy", `…at an easy level since they fail it (${a.difficulty})`);
+  void pick; void firstWeak;
+
+  // no difficulty chosen: a level that suits them
+  await slash(NEW as any, "practice", { type: "output" });
+  a = lastAtt(NEW.id);
+  check(a && a.kind === "output" && a.difficulty === "easy", `difficulty left empty: a beginner gets easy (${a?.difficulty})`);
+}
+
 section("speed: a practice set for a whole class stays under the free plan's 50 queries");
 {
   for (let i = 0; i < 30; i++) run1("INSERT OR IGNORE INTO players (guild_id, discord_id, name, created_at) VALUES (?, ?, ?, ?)", G, `9${String(i).padStart(3, "0")}`, `Student ${i}`, clock.now());
@@ -1782,6 +1819,21 @@ section("speed: a practice set for a whole class stays under the free plan's 50 
   check(q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id IN (" + many.map(() => "?").join(",") + ")", ...many).n === r.data.assignments, "all of them were saved");
   run1("DELETE FROM assignments WHERE discord_id LIKE '9%' AND LENGTH(discord_id) = 4");
   run1("DELETE FROM players WHERE discord_id LIKE '9%' AND LENGTH(discord_id) = 4");
+}
+
+section("student page: what to work on, with the evidence behind it");
+{
+  const ez = await api("GET", `/api/students/120?g=${G}`);
+  const wo = ez.data.coach.workOn as any[];
+  const arr = wo.find((w) => w.skill === "arrays");
+  check(Array.isArray(wo) && wo.length > 0 && wo.every((w) => typeof w.why === "string" && w.why.length > 10), `each skill to work on comes with a reason (${wo.map((w) => w.skill).join(", ")})`);
+  check(!!arr && arr.codeMistakes.length >= 1 && arr.codeMistakes[0].detail.includes("IndexError") && !!arr.codeMistakes[0].title, `arrays: the challenge where their code crashed on an index is named (${arr?.codeMistakes?.[0]?.title}: ${arr?.codeMistakes?.[0]?.detail})`);
+  check(/mistakes in this in their code/.test(arr?.why ?? ""), `…and the reason says so ("${arr?.why}")`);
+  const wal = await api("GET", `/api/students/131?g=${G}`);
+  const wa = (wal.data.coach.workOn as any[]).find((w) => w.skill === "arrays");
+  check(!!wa && (wa.failedCode.length + wa.missedQuick.length) >= 1 && /didn't solve|missed/i.test(wa.why), `failed challenges are listed by name (${wa?.why})`);
+  const q = wa?.missedQuick?.[0];
+  if (q) check(/answered “/.test(q.detail), `a missed question shows what they answered (${q.detail})`);
 }
 
 section("dashboard links keep their page through the sign-in");
