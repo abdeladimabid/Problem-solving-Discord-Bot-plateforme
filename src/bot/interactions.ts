@@ -2,6 +2,7 @@
 // Anything that touches the database more than a couple of times is DEFERRED
 // (Discord gets an answer within 3 seconds, the real work continues after).
 import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow, Lang } from "../shared/types.ts";
+import { notifyCfg, notifyTest, saveNotifyCfg, setTeacher } from "../shared/notify.ts";
 import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, titleKey } from "../shared/game.ts";
@@ -49,6 +50,8 @@ export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<R
   };
   try {
     if (raw.type === 4) return await autocomplete(ix);
+    // nobody gets the teacher DMs yet (classes set up before they existed): the first teacher who uses the bot does
+    if (ix.teacher && !guild.teacher_id) ctx.waitUntil(setTeacher(env, guild, ix.userId).catch(() => {}));
     await getPlayer(env, guild.id, ix.userId, ix.userName);
     if (raw.type === 2) return await keepInArena(ix, await command(ix));
     if (raw.type === 3) return await component(ix);
@@ -649,6 +652,16 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
     if (o.certificates !== false) ix.ctx.waitUntil(sendCertificates(ix.env, g, old).catch((e) => console.error("certificates", e)));
     return say(msg + "\n" + t(L, "cert.sent_note"), false);
   }
+  if (sub === "notify") {
+    // "send the help-me / ask DMs to me", then a test DM so the teacher sees it works
+    await setTeacher(ix.env, g, ix.userId, true);
+    if (o.help_me != null || o.ask != null) await saveNotifyCfg(ix.env, g, { ...(o.help_me != null ? { hands: !!o.help_me } : {}), ...(o.ask != null ? { ask: !!o.ask } : {}) });
+    const g2 = await getGuild(ix.env, g.id);
+    const cfg = notifyCfg(g2);
+    const r = await notifyTest(ix.env, g2);
+    const state = t(L, "notify.state", { hands: t(L, cfg.hands ? "notify.on" : "notify.off"), ask: t(L, cfg.ask ? "notify.on" : "notify.off") });
+    return say(`${t(L, r.ok ? "notify.set_ok" : "notify.set_closed")}\n${state}`);
+  }
   if (sub === "dashboard") {
     return say(ix.env.DASHBOARD_URL ? t(L, "teacher.dashboard", { url: ix.env.DASHBOARD_URL }) : t(L, "teacher.no_dashboard"));
   }
@@ -667,7 +680,7 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
     const g2 = await getGuild(ix.env, g.id);
     const code = g2.code_lang;
     const arena = o.arena ?? g.arena_channel ?? (await arenaChannel(ix.env, { ...g, announce_channel: null, daily_channel: null })) ?? ix.raw.channel_id;
-    await run(ix.env, "UPDATE guilds SET teacher_id = ? WHERE id = ?", ix.userId, ix.guild.id);
+    await setTeacher(ix.env, ix.guild, ix.userId, true);
     await run(ix.env, "UPDATE guilds SET lang = ?, daily_hour = ?, code_lang = ?, arena_channel = ?, announce_channel = ?, daily_channel = ?, name = COALESCE(name, ?) WHERE id = ?",
       lang, hour, code, arena, arena, arena, ix.raw.guild?.name ?? null, g.id);
     return say(t(lang, "teacher.setup_ok", { lang: lang === "fr" ? "Français" : "English", channel: `<#${arena}>`, hour, code: g2.track ? trackLabel(g2, lang) : guildLangs({ code_lang: code }).map((x) => LANGS[x as keyof typeof LANGS]?.label ?? x).join(" + ") }));

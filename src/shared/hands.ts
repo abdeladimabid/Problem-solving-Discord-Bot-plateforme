@@ -25,32 +25,6 @@ export async function raiseHand(env: Env, g: GuildRow, uid: string, name: string
   return { id: Number(r.meta.last_row_id), position: await position(env, g.id, Number(r.meta.last_row_id)) };
 }
 
-/** Link to one request in the dashboard (opens the right class, then the request). */
-export function handLink(env: Env, g: GuildRow, id: number): string | null {
-  if (!env.DASHBOARD_URL) return null;
-  return `${env.DASHBOARD_URL.replace(/\/+$/, "")}/?g=${encodeURIComponent(g.id)}&open=${encodeURIComponent(`hands/${id}`)}`;
-}
-
-/** DM the teacher (the one who ran /teacher setup) as soon as a student raises a hand. */
-export async function notifyTeacher(env: Env, g: GuildRow, id: number): Promise<boolean> {
-  if (!g.teacher_id) return false;
-  const h = await one<HandRow & { title: string | null }>(env,
-    "SELECT h.*, c.title FROM hands h LEFT JOIN attempts a ON a.id = h.attempt_id LEFT JOIN challenges c ON c.id = a.challenge_id WHERE h.id = ? AND h.guild_id = ?", id, g.id);
-  if (!h) return false;
-  const L = g.lang, link = handLink(env, g, id);
-  const waiting = await position(env, g.id, id);
-  const lines = [
-    `> ${truncate(h.question, 900).split("\n").join("\n> ")}`,
-    h.code ? codeBlock(truncate(h.code, 700)) : "",
-    h.title ? t(L, "hand.notify_working", { title: h.title }) : "",
-    t(L, "hand.notify_queue", { n: waiting }),
-  ].filter(Boolean);
-  return dm(env, g.teacher_id, {
-    embeds: [{ title: t(L, "hand.notify_title", { name: h.name || "?", server: g.name ?? "" }), description: truncate(lines.join("\n"), 4000), color: COLORS.gold, timestamp: new Date(h.created_at * 1000).toISOString() }],
-    components: link ? [{ type: 1, components: [{ type: 2, style: 5, label: t(L, "hand.notify_open"), url: link, emoji: { name: "✍️" } }] }] : [],
-  }).catch(() => false);
-}
-
 /** Place in the queue, counting only students still waiting (1 = next). */
 export async function position(env: Env, guildId: string, handId: number): Promise<number> {
   const r = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting' AND id <= ?", guildId, handId);

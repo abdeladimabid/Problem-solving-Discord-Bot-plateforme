@@ -48,8 +48,8 @@ Switching the track changes everything at once: the challenges `/practice` and d
 | `/today [remind]` | Their plan for today: 3 challenges picked for them (a rematch of one they missed, one at their edge, a warm-up), a bonus and a 🗓️ plan streak when they finish it |
 | `/skills` · `/path` | Their skill map (mastery per skill) and most frequent mistakes · a step-by-step path with a 📖 lesson for each step: written for beginners (a plain explanation with an everyday comparison, one tiny example **in the class's track language**, a 🌐 button to switch English/French, one tip) and links to free tutorials to read more (javascript.info, php.net, Python docs, W3Schools, Khan Academy, VisuAlgo…, in French when the class is in French) |
 | `/shop` · `/create` | Spend coins (streak freeze, hint tokens, title, color) · write a challenge for the class (you approve it; they earn points when classmates solve it) |
-| `/help-me` | ✋ Raise their hand: question + optional code go to your live **Help queue**; you also get a **Discord DM** with the question and a button that opens it in the dashboard (sent to whoever ran `/teacher setup`); you come over or answer by DM |
-| `/ask question` · `/faq` | ❓ Looks in the class FAQ first; otherwise you answer (an AI draft is ready for you to check), they get it by DM and it joins the FAQ |
+| `/help-me` | ✋ Raise their hand: question + optional code go to your live **Help queue**; you get a **Discord DM** with the question and a button that opens it in the dashboard; you come over or answer by DM |
+| `/ask question` · `/faq` | ❓ Looks in the class FAQ first; otherwise you get a **Discord DM** with a button to answer it (an AI draft is ready for you to check); they get your answer by DM and it joins the FAQ |
 | `/interview [difficulty]` | 🎤 Mock coding interview: they explain approach, edge cases and complexity to an interviewer, code it, and get a scorecard (+5 pts once a day) |
 | `/project list / submit / check` | 🐙 Link their **public GitHub repository** to a project you created; the bot runs the file against your tests after every push and gives points per test passed |
 | `/league` | 🏆 Class vs class this week (points per student) |
@@ -96,7 +96,7 @@ Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, du
 - **✨ Generate with AI, everywhere:** a lesson for any skill (in the track's language, English + French, linking only to known resources); new challenges for a path step or a skill on the Skills page (each one checked before it's saved, then tagged with the skill; SQL challenges are run on several datasets before they're kept); the challenge generator can target a skill; a live-quiz question; a whole GitHub project (instructions + tests whose expected outputs come from really running the AI's reference solution); FAQ answer drafts.
 - **GitHub projects:** create a project (instructions, language, file to run, input/output tests, points, due date). See every linked repository, its best score and last result, grade one student now or everyone again.
 - **Classes & league:** all your Discord servers side by side (students, active, solved, points per student, accuracy, 4-week trend), join the **class league**, and open or send **certificates** for any season.
-- **Settings:** language (English/French), what the class learns (the track), the #arena channel, daily challenge time, roles, seasons, **scoring per type**, and **Diagnostics** (checks that the code runner, the AI and HackerRank answer, shows the AI budget and the bank size).
+- **Settings:** language (English/French), what the class learns (the track), the #arena channel, daily challenge time, roles, seasons, **scoring per type**, **🔔 Discord notifications** (who gets the `/help-me` and `/ask` DMs, turn each on or off, send a test DM), and **Diagnostics** (checks that the code runner, the AI and HackerRank answer, shows the AI budget and the bank size).
 
 Want to look before installing anything? Run `npm install && npm run preview` and open http://localhost:8787 to see the dashboard with a demo class.
 
@@ -221,6 +221,7 @@ Open your dashboard URL: you'll get a one-time code by email, and then you're in
 2. Optional, for roles: create two roles, e.g. **👑 Champion** (gold, displayed separately) and **🔥 On Fire**. In *Server Settings → Roles*, drag the **bot's role above them**, then pick them in the dashboard under **Settings → Roles**.
 3. Tell students to run `/link <their HackerRank username>`, then `/practice`.
 4. Follow a contest with `/teacher track link:<contest URL>` or from the dashboard's **Contests** page.
+5. Run `/teacher notify` to get a Discord DM whenever a student uses `/help-me` or `/ask` (a test DM is sent right away).
 
 That's it. 🎉
 
@@ -259,6 +260,7 @@ That's it. 🎉
 | Dashboard says "locked" | Step 9 isn't finished: `TEAM_DOMAIN`/`POLICY_AUD` missing, or `deploy:admin` not run. |
 | "Forbidden: invalid Cloudflare Access token" | The `POLICY_AUD` doesn't match the Access application's AUD tag. |
 | Roles aren't given | The bot's role must be above the Champion/Streak roles, and it needs Manage Roles. The bot also posts a warning in the channel. |
+| No DM when a student uses `/help-me` or `/ask` | Run `/teacher notify` in your server: it makes you the one who gets them and sends a test DM. If it says Discord refused it, open the server's menu → **Privacy settings** and turn on **Direct messages**. Dashboard → Settings → **🔔 Discord notifications** shows who gets them. |
 | No daily challenge | Create a channel named `arena` or run `/teacher setup arena:#channel`. It's posted at the set hour **UTC**. |
 | "Judge down" / AI errors | Dashboard → Settings → **Run checks** shows which service is failing. |
 | Something went wrong after updating | Run `npm run db:migrate` (new tables), `npm run deploy`, then `npm run register` (new command options). |

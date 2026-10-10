@@ -60,6 +60,7 @@ export interface GuildRow {
   champion_role: string | null;
   auto_roles?: string | null;
   track?: string | null;
+  notify?: string | null;    // JSON: which teacher DMs are on
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;

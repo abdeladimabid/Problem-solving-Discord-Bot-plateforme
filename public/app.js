@@ -1181,12 +1181,14 @@ async function viewSettings() {
       </div>
       <p><button class="btn primary" id="save-sc">Save scoring</button> ${g.scoring_custom ? `<button class="btn" id="reset-sc">Back to defaults</button>` : ""}</p>
     </section>
+    <section class="panel"><h2>🔔 Discord notifications</h2><div id="s-notify"><p class="muted">Loading…</p></div></section>
     <section class="panel"><h2>Diagnostics</h2><p class="muted small">Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.</p>
       <p><button class="btn" id="diag">Run checks</button></p><div id="diag-out"></div></section>
     </div>`;
   const local = () => { const h = (Number($("#s-hour").value) + offset + 24) % 24; $("#s-local").textContent = `= ${String(Math.floor(h)).padStart(2, "0")}:${h % 1 ? "30" : "00"} your time`; };
   $("#s-hour").oninput = local;
   local();
+  if (typeof loadNotify === "function") loadNotify();
   const readScoring = () => ({
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),
