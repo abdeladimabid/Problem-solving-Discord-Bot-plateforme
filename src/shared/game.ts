@@ -39,7 +39,7 @@ export interface Scoring {
   base: Record<Difficulty, number>;
   mult: Record<string, number>;
   cap: number;                          // max points per student per day from QUICK challenges (practice + duels)
-  quick: { full: number; reduced: number; pct: number };  // per day: `full` quick solves at 100%, the next `reduced` at pct%, then 0
+  quick: { full: number; reduced: number; pct: number; lock: boolean };  // per day: `full` quick solves at 100%, the next `reduced` at pct%, then 0; lock = can't pick more until tomorrow
   contest: { first: number; second: number; third: number; top10: number; play: number };
   award: number;                        // contest special awards
 }
@@ -47,7 +47,7 @@ export const DEFAULT_SCORING: Scoring = {
   base: { easy: 3, medium: 6, hard: 12 },
   mult: { mcq: 1, complexity: 2, output: 3, bug: 5, regex: 3, sql: 6, write: 8, code: 10 },
   cap: 150,
-  quick: { full: 5, reduced: 5, pct: 20 },
+  quick: { full: 3, reduced: 2, pct: 50, lock: true },
   contest: { first: 120, second: 90, third: 70, top10: 40, play: 15 },
   award: 25,
 };
@@ -65,7 +65,7 @@ export function scoringOf(g: { scoring?: string | null } | null | undefined): Sc
     base: { easy: num(o.base?.easy, d.base.easy), medium: num(o.base?.medium, d.base.medium), hard: num(o.base?.hard, d.base.hard) },
     mult: Object.fromEntries(SCORE_KINDS.map((k) => [k, num(o.mult?.[k], d.mult[k], 1000)])),
     cap: num(o.cap, d.cap),
-    quick: { full: Math.round(num(o.quick?.full, d.quick.full, 1000)), reduced: Math.round(num(o.quick?.reduced, d.quick.reduced, 1000)), pct: Math.round(num(o.quick?.pct, d.quick.pct, 100)) },
+    quick: { full: Math.round(num(o.quick?.full, d.quick.full, 1000)), reduced: Math.round(num(o.quick?.reduced, d.quick.reduced, 1000)), pct: Math.round(num(o.quick?.pct, d.quick.pct, 100)), lock: o.quick?.lock === undefined ? d.quick.lock : o.quick.lock !== false },
     contest: {
       first: num(o.contest?.first, d.contest.first), second: num(o.contest?.second, d.contest.second),
       third: num(o.contest?.third, d.contest.third), top10: num(o.contest?.top10, d.contest.top10), play: num(o.contest?.play, d.contest.play),
@@ -77,6 +77,9 @@ export function scoringOf(g: { scoring?: string | null } | null | undefined): Sc
 /** Quick types can be answered in seconds, so they're the ones worth limiting. Write code and HackerRank never are. */
 export const LIMITED_KINDS = ["mcq", "complexity", "output", "bug", "regex"];
 export const isLimitedKind = (kind: string) => LIMITED_KINDS.includes(kind);
+
+/** Seconds until the quick allowance comes back (midnight UTC). */
+export const secondsToNextDay = (nowSec = Math.floor(Date.now() / 1000)) => 86400 - (nowSec % 86400);
 
 /** Share of the points a quick solve earns, given how many quick solves (practice + duels) already scored today. */
 export function quickFactor(sc: Scoring, solvedToday: number): number {

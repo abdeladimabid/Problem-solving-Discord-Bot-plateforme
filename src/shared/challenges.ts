@@ -552,7 +552,7 @@ export async function finish(
     // Anti-farming, for quick types only (multiple choice, complexity, output, bug) in practice and duels.
     // Write code and HackerRank problems are never limited, and neither is anything the teacher hands out
     // (daily challenge, assignments, class sessions).
-    if (isLimitedKind(c.kind) && (a.origin === "practice" || a.origin === "duel" || a.origin === "path") && points > 0) {
+    if (isLimitedKind(c.kind) && (a.origin === "practice" || a.origin === "duel") && points > 0) {
       const before = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM attempts WHERE guild_id = ? AND discord_id = ? AND challenge_id = ? AND status = 'solved' AND id != ?",
         guild.id, a.discord_id, c.id, a.id);
       if (before?.n) {
@@ -575,6 +575,7 @@ export async function finish(
           quickNote = f < 1
             ? t(L, "quick.reduced", { pct: sc.quick.pct, left: Math.max(0, max - n - 1) })
             : left <= 2 ? t(L, "quick.left", { left, pct: sc.quick.pct }) : "";
+          if (sc.quick.lock && n + 1 >= max) quickNote = t(L, "quick.last", { max });
         }
         const today = await practicePointsToday(env, guild.id, a.discord_id);
         if (points && today + points > sc.cap) {
