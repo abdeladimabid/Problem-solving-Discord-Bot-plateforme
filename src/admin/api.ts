@@ -37,6 +37,7 @@ import type { ProjectRow, RepoRow } from "../shared/projects.ts";
 import { compareClasses, leagueOf, leagueTable, setLeague } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
 import { standings } from "../shared/db.ts";
+import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 
 class HttpError extends Error {
   status: number;
@@ -376,6 +377,16 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
 
     // ----------------------------------------------------------- settings
+    if (path === "/notify" && method === "GET") return ok(await notifyState(env, await guild()));
+    if (path === "/notify" && method === "PUT") {
+      const g = await guild();
+      await saveNotifyCfg(env, g, body);
+      return ok(await notifyState(env, await getGuild(env, g.id)));
+    }
+    if (path === "/notify/test" && method === "POST") {
+      const r = await notifyTest(env, await guild());
+      return ok({ ...r, ...(await notifyState(env, await guild())) });
+    }
     if (path === "/settings" && method === "GET") return ok(await settings(env, await guild()));
     if (path === "/settings" && method === "PUT") {
       const g = await guild();
@@ -1285,4 +1296,15 @@ async function overviewLive(env: Env, g: GuildRow) {
     plans: { made: plans?.made ?? 0, done: plans?.done ?? 0, people: plans?.people ?? 0 },
     helped, league: lg.on ? { name: lg.name, ...(league ?? { rank: null, total: 0, score: 0 }) } : null,
   };
+}
+
+
+/** Who gets the /help-me and /ask DMs, and which ones are on. */
+async function notifyState(env: Env, g: GuildRow) {
+  let teacher: { id: string; name: string } | null = null;
+  if (g.teacher_id) {
+    const m = await dapi<any>(env, "GET", `/guilds/${g.id}/members/${g.teacher_id}`).catch(() => null);
+    teacher = { id: g.teacher_id, name: m?.nick ?? m?.user?.global_name ?? m?.user?.username ?? g.teacher_id };
+  }
+  return { teacher, cfg: notifyCfg(g), dashboard: !!env.DASHBOARD_URL };
 }

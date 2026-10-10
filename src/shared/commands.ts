@@ -240,6 +240,13 @@ export const COMMANDS: any[] = [
       },
       { type: SUB, name: "dashboard", description: "Link to the teacher dashboard", description_localizations: fr("Lien vers le tableau de bord") },
       {
+        type: SUB, name: "notify", description: "Get a DM when a student uses /help-me or /ask (sends a test DM)", description_localizations: fr("Recevoir un MP quand un élève utilise /help-me ou /ask (envoie un MP de test)"),
+        options: [
+          { type: BOOLEAN, name: "help_me", description: "DM me for /help-me (default: on)", description_localizations: fr("MP pour /help-me (activé par défaut)") },
+          { type: BOOLEAN, name: "ask", description: "DM me for new /ask questions (default: on)", description_localizations: fr("MP pour les nouvelles questions /ask (activé par défaut)") },
+        ],
+      },
+      {
         type: SUB, name: "verify", description: "Confirm a student's HackerRank link yourself", description_localizations: fr("Confirmer toi-même le lien HackerRank d'un élève"),
         options: [{ type: USER, name: "member", description: "The student", description_localizations: fr("L'élève"), required: true }],
       },

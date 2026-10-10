@@ -5,7 +5,8 @@ import { all, now, one } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { COLORS, btn, linkBtn, modal, row, truncate } from "../shared/discord.ts";
 import { getChallenge, pickChallenge, renderFor, startAttempt } from "../shared/challenges.ts";
-import { HandError, cancelHand, handText, myHand, notifyTeacher, raiseHand } from "../shared/hands.ts";
+import { notifyHand, notifyQuestion } from "../shared/notify.ts";
+import { HandError, cancelHand, handText, myHand, raiseHand } from "../shared/hands.ts";
 import { FaqError, ask, draftAnswer, escalate, helped, searchFaq } from "../shared/faq.ts";
 import type { FaqRow } from "../shared/faq.ts";
 import { MAX_ANSWERS, finishInterview, getInterview, interviewReply, openInterview, stars, transcriptOf } from "../shared/interview.ts";
@@ -37,7 +38,7 @@ export function handSubmit(ix: Ix, components: any[]) {
   later(ix, async () => {
     try {
       const r = await raiseHand(ix.env, ix.guild, ix.userId, ix.userName, val("q"), val("code") || null);
-      ix.ctx.waitUntil(notifyTeacher(ix.env, ix.guild, r.id).catch((e) => console.error("hand notify", e)));
+      ix.ctx.waitUntil(notifyHand(ix.env, ix.guild, r.id).catch((e) => console.error("hand notify", e)));
       return { content: handText(L, { question: val("q"), code: val("code") || null }, r.position), components: [row(btn(t(L, "hand.cancel"), `hand:cancel:${r.id}`, 4, "✖️"))] };
     } catch (e) {
       if (!(e instanceof HandError)) throw e;
@@ -71,7 +72,10 @@ export function cmdAsk(ix: Ix, question: string) {
           )],
         };
       }
-      if (r.kind === "queued") ix.ctx.waitUntil(draftAnswer(ix.env, ix.guild, r.id).catch((e) => console.error("faq draft", e)));
+      if (r.kind === "queued") {
+        ix.ctx.waitUntil(notifyQuestion(ix.env, ix.guild, r.id, ix.userName).catch((e) => console.error("ask notify", e)));
+        ix.ctx.waitUntil(draftAnswer(ix.env, ix.guild, r.id).catch((e) => console.error("faq draft", e)));
+      }
       return { content: t(L, r.kind === "joined" ? "faq.joined" : "faq.queued") };
     } catch (e) {
       if (!(e instanceof FaqError)) throw e;
@@ -90,7 +94,10 @@ export function faqButton(ix: Ix, kind: string, suggestion: number, faqId: numbe
     }
     try {
       const r = await escalate(ix.env, ix.guild, ix.userId, suggestion);
-      if (r.kind === "queued") ix.ctx.waitUntil(draftAnswer(ix.env, ix.guild, r.id).catch((e) => console.error("faq draft", e)));
+      if (r.kind === "queued") {
+        ix.ctx.waitUntil(notifyQuestion(ix.env, ix.guild, r.id, ix.userName).catch((e) => console.error("ask notify", e)));
+        ix.ctx.waitUntil(draftAnswer(ix.env, ix.guild, r.id).catch((e) => console.error("faq draft", e)));
+      }
       return { content: t(L, r.kind === "joined" ? "faq.joined" : "faq.queued"), embeds: [], components: [] };
     } catch (e) {
       if (!(e instanceof FaqError)) throw e;

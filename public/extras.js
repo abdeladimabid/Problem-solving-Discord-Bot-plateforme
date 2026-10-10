@@ -78,7 +78,7 @@ async function viewHands(focusId, refresh = false) {
 }
 
 // ======================================================== questions/FAQ
-async function viewQuestions() {
+async function viewQuestions(focusId) {
   const d = await api("/faq");
   const pending = d.items.filter((f) => f.status === "pending");
   const approved = d.items.filter((f) => f.status === "approved");
@@ -135,6 +135,11 @@ async function viewQuestions() {
     } }]);
   $$("[data-edit]").forEach((b) => b.onclick = () => edit(d.items.find((x) => String(x.id) === b.dataset.edit)));
   $("#faq-new").onclick = () => edit(null);
+  if (focusId) {
+    const card = $(`.faq-card[data-id="${CSS.escape(String(focusId))}"]`);
+    if (card) { card.classList.add("flash"); card.scrollIntoView({ behavior: "smooth", block: "center" }); setTimeout(() => $(`#fa-${CSS.escape(String(focusId))}`)?.focus({ preventScroll: true }), 500); }
+    else toast("This question was already answered (see the class FAQ)");
+  }
 }
 
 // ============================================================ interviews
@@ -532,4 +537,33 @@ function discordMarkdown(md) {
     if (/^- /.test(line)) return `<p>• ${line.slice(2)}</p>`;
     return line.trim() ? `<p>${line}</p>` : "";
   }).join("").replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
+}
+
+
+// ===================================================== 🔔 notifications (Settings)
+async function loadNotify(state) {
+  const box = $("#s-notify");
+  if (!box) return;
+  let d = state;
+  try { d = d || (await api("/notify")); } catch (e) { box.innerHTML = `<p class="notice">${esc(e.message)}</p>`; return; }
+  const who = d.teacher
+    ? `DMs go to <b>${esc(d.teacher.name)}</b> on Discord. To send them to someone else, that person runs <code>/teacher notify</code> in your server.`
+    : `<span class="late-wait"><b>Nobody gets them yet.</b></span> In your Discord server, run <code>/teacher notify</code> yourself: the DMs will come to you (a test DM is sent right away).`;
+  box.innerHTML = `
+    <p class="muted small">When a student needs you, the bot sends you a private message on Discord with the question and a button that opens it here.</p>
+    <p>${who}</p>
+    <label class="check"><input type="checkbox" id="nt-hands" ${d.cfg.hands ? "checked" : ""}> ✋ A student raises a hand (<code>/help-me</code>)</label>
+    <label class="check"><input type="checkbox" id="nt-ask" ${d.cfg.ask ? "checked" : ""}> ❓ A student asks a new question (<code>/ask</code>, when the FAQ doesn't already answer it)</label>
+    ${d.dashboard ? "" : `<p class="small late-wait">DASHBOARD_URL isn't set for the bot, so the DMs won't have the "Answer in the dashboard" button.</p>`}
+    <p class="toolbar" style="margin-top:12px"><button class="btn" id="nt-test" ${d.teacher ? "" : "disabled"}>Send me a test DM</button><span class="small" id="nt-out"></span></p>`;
+  const save = () => api("/notify", { method: "PUT", body: { hands: $("#nt-hands").checked, ask: $("#nt-ask").checked } }).then(() => toast("Notifications saved")).catch((e) => toast(e.message, true));
+  $("#nt-hands").onchange = save; $("#nt-ask").onchange = save;
+  $("#nt-test").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api("/notify/test", { method: "POST" });
+    const out = $("#nt-out");
+    if (r.ok) out.innerHTML = `<span class="ok-text">✅ Sent. Check your Discord DMs.</span>`;
+    else if (r.reason === "closed") out.innerHTML = `<span class="late-wait">❌ Discord refused the DM: in your server's menu → <b>Privacy settings</b>, turn on <b>Direct messages</b>, then try again.</span>`;
+    else if (r.reason === "no_teacher") out.innerHTML = `<span class="late-wait">Run <code>/teacher notify</code> in Discord first.</span>`;
+    else out.innerHTML = `<span class="late-wait">❌ ${esc(r.detail || "The DM couldn't be sent.")}</span>`;
+  });
 }

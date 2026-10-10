@@ -27,6 +27,7 @@ const { env, privateKey } = await makeEnv();
 const db = (env.DB as any).raw;
 const q = (sql: string, ...a: any[]) => db.prepare(sql).all(...a) as any[];
 const q1 = (sql: string, ...a: any[]) => db.prepare(sql).get(...a) as any;
+const run1 = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
 
 const G = "g1", CH = "ch1", ARENA = "arena1";
 const U = {
@@ -1647,6 +1648,51 @@ section("help queue: /help-me, live queue in the dashboard, replies by DM");
   await api("PUT", `/api/hands/${kaiHand.id}?g=${G}`, { action: "done" });
   qd = await api("GET", `/api/hands?g=${G}`);
   check(qd.data.open.length === 0 && qd.data.stats.helped === 2 && qd.data.stats.avgWait != null, "queue empty, average wait computed");
+}
+
+section("teacher DMs: /help-me and /ask notify the teacher, /teacher notify, settings");
+{
+  const kai = { id: "111", name: "Kai", teacher: false }, mo = { id: "115", name: "Mo", teacher: false };
+  const toProf = () => discordCalls.filter((x) => x.path === `/channels/dm-${U.prof.id}/messages`);
+  // a class set up before notifications existed: nobody is saved
+  run1("UPDATE guilds SET teacher_id = NULL, notify = NULL WHERE id = ?", G);
+  await slash(U.prof, "help", {});
+  check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "the first teacher who uses the bot gets the DMs when nobody was set");
+  await slash(kai, "help", {});
+  check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "a student never becomes the teacher");
+
+  let n = toProf().length;
+  await slash(mo, "ask", { question: "Can we use the internet during the exam on Friday?" });
+  const qid = q1("SELECT id FROM faq WHERE guild_id = ? AND status = 'pending' AND question LIKE '%internet%'", G).id;
+  let b = toProf().slice(n).at(-1)?.body;
+  check(toProf().length === n + 1 && JSON.stringify(b.embeds).includes("Mo") && JSON.stringify(b.embeds).includes("internet"), "/ask: the teacher gets a DM with the student and the question");
+  check(b.components[0].components[0].url.includes(encodeURIComponent(`questions/${qid}`)), "/ask DM opens that question in the dashboard");
+  n = toProf().length;
+  await slash(kai, "ask", { question: "Can we use the internet during the exam on friday?" });
+  check(toProf().length === n, "a student joining the same question doesn't send a second DM");
+
+  // turn /ask DMs off from the dashboard
+  let st = await api("GET", `/api/notify?g=${G}`);
+  check(st.data.teacher?.id === U.prof.id && st.data.cfg.hands && st.data.cfg.ask, "dashboard shows who gets the DMs and that both are on");
+  st = await api("PUT", `/api/notify?g=${G}`, { ask: false });
+  check(st.data.cfg.ask === false && st.data.cfg.hands === true, "the teacher can turn /ask DMs off");
+  n = toProf().length;
+  await slash(mo, "ask", { question: "What time does the lab open on Saturdays?" });
+  check(toProf().length === n, "no DM when /ask notifications are off");
+  await api("PUT", `/api/notify?g=${G}`, { ask: true });
+
+  n = toProf().length;
+  const t1 = await api("POST", `/api/notify/test?g=${G}`);
+  check(t1.data.ok === true && toProf().length === n + 1 && JSON.stringify(toProf().at(-1).body).includes("Notifications are on"), "'Send me a test DM' works");
+
+  // another teacher takes over with /teacher notify
+  const prof2 = { id: "101", name: "Prof2", teacher: true };
+  const r = await slash(prof2, "teacher", { help_me: true }, "notify");
+  check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === prof2.id && text(r).includes("you"), "/teacher notify sends the DMs to whoever runs it");
+  check(discordCalls.some((x) => x.path === `/channels/dm-${prof2.id}/messages` && JSON.stringify(x.body).includes("Notifications are on")), "/teacher notify sends a test DM");
+  await slash(U.prof, "teacher", { language: "en" }, "setup");
+  check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "/teacher setup also makes you the one who gets them");
+  run1("DELETE FROM faq WHERE guild_id = ? AND (question LIKE '%internet%' OR question LIKE '%lab open%')", G);
 }
 
 section("dashboard links keep their page through the sign-in");
