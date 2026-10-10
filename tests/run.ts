@@ -84,7 +84,7 @@ async function api(method: string, path: string, body?: any, headers: Record<str
   const ct = res.headers.get("content-type") ?? "";
   return { status: res.status, data: ct.includes("json") ? await res.json() : await res.text() } as any;
 }
-function pointsForTest() { return 24; }
+function pointsForTest() { return 30; }   // easy write code: 3 × 10
 function solveAnswer(cid: number) {
   const c = q1("SELECT * FROM challenges WHERE id = ?", cid);
   return c;
@@ -263,7 +263,7 @@ section("write code: real judge, verdicts, AI coach, points");
   check(text(p).includes("Accepted"), "reference solution accepted on every test");
   const at = q1("SELECT * FROM attempts WHERE id = ?", aid);
   check(at.status === "solved" && at.verified === 1 && at.tries === 4, "attempt solved and verified by tests");
-  check(at.points === 26, `medium write = 6 × 8 = 48 pts, 4th submission −45% → 26 (got ${at.points})`);
+  check(at.points === 33, `medium write = 6 × 10 = 60 pts, 4th submission −45% → 33 (got ${at.points})`);
   check(JSON.parse(at.result).verdict === "accepted" && at.lang === "python", "judge result stored for the teacher");
   check(ids(p).includes(`fb:${aid}`), "Review my code button after success");
   await click(U.alice, `fb:${aid}`);

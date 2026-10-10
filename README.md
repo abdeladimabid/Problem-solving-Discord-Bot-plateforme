@@ -68,8 +68,8 @@ On `/profile`, students can **🔗 share a public profile page** (level, badges,
 | Complexity ×2 | 6 | 12 | 24 |
 | Predict the output ×3 | 9 | 18 | 36 |
 | Find the bug ×5 | 15 | 30 | 60 |
-| Write code ×8 | 24 | 48 | 96 |
-| HackerRank problem ×10 | 30 | 60 | 120 |
+| HackerRank problem ×8 | 24 | 48 | 96 |
+| Write code ×10 | 30 | 60 | 120 |
 
 Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, duel win ×2, hint ×0.5, second try ×0.5 (write code: −15% per extra submission, min 40%), quick answer within 60 s +20%. Contests: 120/90/70 for the podium, 40 for the top 10, 15 for taking part, 25 per special award. **No farming of quick challenges:** in `/practice` and duels, multiple choice, complexity, output and bug give full points for the first 3 a day, 50% for the next 2, then they are **locked until the next day** (max 150 pts a day; the lock can be turned off), and a challenge solved before never pays twice. **Write code and HackerRank problems are never limited**, and neither is anything you hand out (daily challenge, assignments, class sessions, `/today` and `/path`): those always give full points and never use up the allowance. **You can change all of it in Dashboard → Settings → Scoring**; `/help` shows the current table.
 

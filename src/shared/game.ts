@@ -45,7 +45,7 @@ export interface Scoring {
 }
 export const DEFAULT_SCORING: Scoring = {
   base: { easy: 3, medium: 6, hard: 12 },
-  mult: { mcq: 1, complexity: 2, output: 3, bug: 5, regex: 3, sql: 6, write: 8, code: 10 },
+  mult: { mcq: 1, complexity: 2, output: 3, bug: 5, regex: 3, sql: 6, write: 10, code: 8 },
   cap: 150,
   quick: { full: 3, reduced: 2, pct: 50, lock: true },
   contest: { first: 120, second: 90, third: 70, top10: 40, play: 15 },
