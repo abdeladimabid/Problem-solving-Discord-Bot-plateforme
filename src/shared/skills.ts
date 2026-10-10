@@ -186,6 +186,7 @@ export interface SkillScore {
   quick: number | null;                      // % from the other types
   codeMistakes: number;                      // mistakes found in their code for this skill
   proven: boolean;                           // shown in code (or a skill that isn't measured in code)
+  levels: number[];                          // success at easy / medium / hard, % (a solve counts for the levels below too)
 }
 export interface AttemptLite {
   status: string; used_hint: number; tries: number; kind: string; difficulty: string; skills: string | null;
@@ -200,53 +201,83 @@ export async function studentAttempts(env: Env, guildId: string, discordId: stri
       WHERE a.guild_id = ? AND a.discord_id = ? AND a.status IN ('solved', 'failed', 'expired', 'claimed') ORDER BY a.id DESC LIMIT 400`, guildId, discordId);
   // what their code showed, submission by submission (also while the challenge is still open)
   const ev = await all<AttemptLite>(env,
-    `SELECT CASE WHEN ok = 1 THEN 'solved' ELSE 'failed' END AS status, 0 AS used_hint, 1 AS tries, NULL AS result, created_at AS finished_at,
-            0 AS challenge_id, 'evidence' AS kind, 'easy' AS difficulty, skill AS skills, weight
-       FROM skill_evidence WHERE guild_id = ? AND discord_id = ? ORDER BY id DESC LIMIT 300`, guildId, discordId).catch(() => [] as AttemptLite[]);
+    `SELECT CASE WHEN e.ok = 1 THEN 'solved' ELSE 'failed' END AS status, 0 AS used_hint, 1 AS tries, NULL AS result, e.created_at AS finished_at,
+            0 AS challenge_id, 'evidence' AS kind, COALESCE(c.difficulty, 'easy') AS difficulty, e.skill AS skills, e.weight
+       FROM skill_evidence e LEFT JOIN attempts a ON a.id = e.attempt_id LEFT JOIN challenges c ON c.id = a.challenge_id
+      WHERE e.guild_id = ? AND e.discord_id = ? ORDER BY e.id DESC LIMIT 300`, guildId, discordId).catch(() => [] as AttemptLite[]);
   return [...attempts, ...ev];
 }
 
-/** Mastery of every skill from a student's attempts (recent ones count more). */
+/**
+ * Mastery of every skill, on a DIFFICULTY LADDER: what matters is the hardest level a student succeeds at reliably.
+ *   • each level has a ceiling: easy counts for 50%, medium for 30% more, hard for the last 20%
+ *     (all-easy work tops out at 50% "getting there"; "strong" needs reliable success at medium or hard)
+ *   • a solve proves the levels below it too; a failure counts against the levels above it too
+ *   • per level, success = solves ÷ (tries + 1): a single success is not proof, it takes several
+ *   • code (write code, HackerRank, SQL, regex, and what each code submission showed) is 80%, the other types 20%;
+ *     a skill not shown in code stays at 20% at most (except skills that can't be run: Big-O, Git, web, MERN, AI)
+ *   • recent work counts more; a hint or many tries make a solve count less; an abandoned challenge counts half
+ */
+export const LEVEL_SHARE = [0.5, 0.3, 0.2];
+export const STRONG_AT = 65, WEAK_UNDER = 35;
+const LEVEL_IX: Record<string, number> = { easy: 0, medium: 1, hard: 2 };
+type Ladder = { s: number[]; n: number[] };
+const newLadder = (): Ladder => ({ s: [0, 0, 0], n: [0, 0, 0] });
+function observe(l: Ladder, level: number, ok: number, w: number) {
+  // ok: 0..1 (a solve with a hint or after many tries is worth less than a clean solve)
+  if (ok > 0) for (let x = 0; x <= level; x++) { l.s[x] += w * ok; l.n[x] += w; }
+  if (ok < 1) for (let x = level; x < 3; x++) l.n[x] += w * (1 - ok);
+}
+// k = how much evidence one "unit" is (1 = one challenge; 4 when code results are weighted ×4)
+const levelP = (l: Ladder, k = 1) => l.n.map((n, i) => (n > 0 ? l.s[i] / (n + k) : 0));
+const ladderScore = (l: Ladder, k = 1) => levelP(l, k).reduce((a, p, i) => a + LEVEL_SHARE[i] * p, 0);
+const CODE_X = CODE_SHARE / (1 - CODE_SHARE);   // a code result weighs 4 quiz answers (80% / 20%)
+const ladderWeight = (l: Ladder) => Math.max(...l.n);
+
 export function masteryFrom(attempts: AttemptLite[], opts: { recency?: boolean } = {}): SkillScore[] {
-  type Acc = { w: number; s: number };
-  const acc = new Map<string, { code: Acc; quick: Acc; solved: number; failed: number; best: number; mistakes: number }>();
+  const acc = new Map<string, { code: Ladder; quick: Ladder; all: Ladder; mix: Ladder; solved: number; failed: number; best: number; mistakes: number; w: number }>();
   let nAtt = 0, nEv = 0;
   for (const a of attempts) {
     if (a.status === "claimed") continue;
     const isEv = a.kind === "evidence";
     const i = isEv ? nEv++ : nAtt++;
     const recency = opts.recency === false ? 1 : isEv ? (i < 60 ? 1 : i < 180 ? 0.6 : 0.3) : (i < 40 ? 1 : i < 120 ? 0.6 : 0.3);
-    const w = (isEv ? a.weight ?? 1 : (DIFF_W[a.difficulty] ?? 1) * (a.weight ?? 1)) * recency;
-    const ok = a.status === "solved";
-    const v = ok ? (isEv ? 1 : (a.used_hint ? 0.7 : 1) * (a.tries > 2 ? 0.8 : 1)) : 0;
+    const w = (a.weight ?? 1) * recency * (a.status === "expired" ? 0.5 : 1);
+    const solved = a.status === "solved";
+    const ok = solved ? (isEv ? 1 : (a.used_hint ? 0.7 : 1) * (a.tries > 2 ? 0.8 : 1)) : 0;
+    const level = LEVEL_IX[a.difficulty] ?? 0;
     const keys = isEv ? [a.skills ?? ""].filter((k) => SKILL_KEYS.includes(k)) : skillsOf({ ...a, skills: a.skills } as any);
     for (const k of keys) {
-      const e = acc.get(k) ?? { code: { w: 0, s: 0 }, quick: { w: 0, s: 0 }, solved: 0, failed: 0, best: 0, mistakes: 0 };
-      const part = CODE_KINDS.includes(a.kind) ? e.code : e.quick;
-      part.w += w; part.s += w * v;
-      if (isEv) { if (!ok) e.mistakes++; }
-      else if (ok) { e.solved++; e.best = Math.max(e.best, DIFF_W[a.difficulty] ?? 1); } else e.failed++;
+      const e = acc.get(k) ?? { code: newLadder(), quick: newLadder(), all: newLadder(), mix: newLadder(), solved: 0, failed: 0, best: 0, mistakes: 0, w: 0 };
+      const isCode = CODE_KINDS.includes(a.kind);
+      observe(isCode ? e.code : e.quick, level, ok, w);
+      observe(e.all, level, ok, w);
+      observe(e.mix, level, ok, isCode ? w * CODE_X : w);     // one ladder, code results weigh ×4: quizzes add evidence, never drag it down
+      e.w += w;
+      if (isEv) { if (!solved) e.mistakes++; }
+      else if (solved) { e.solved++; e.best = Math.max(e.best, level + 1); } else e.failed++;
       acc.set(k, e);
     }
   }
-  const pct = (p: Acc) => (p.w > 0 ? (p.s + 0.5) / (p.w + 1) : null);   // gentle prior: 50% after one try
   return SKILL_KEYS.map((key) => {
     const e = acc.get(key);
-    if (!e) return { key, mastery: 0, evidence: 0, solved: 0, failed: 0, best: null, status: "new", target: "easy", code: null, quick: null, codeMistakes: 0, proven: false } as SkillScore;
-    const c = pct(e.code), q = pct(e.quick);
+    if (!e) return { key, mastery: 0, evidence: 0, solved: 0, failed: 0, best: null, status: "new", target: "easy", code: null, quick: null, codeMistakes: 0, proven: false, levels: [0, 0, 0] } as SkillScore;
+    const hasCode = ladderWeight(e.code) > 0, hasQuick = ladderWeight(e.quick) > 0;
+    const c = hasCode ? ladderScore(e.code) : null, q = hasQuick ? ladderScore(e.quick) : null;   // shown separately in the tooltip
     const codeable = !QUICK_ONLY_SKILLS.includes(key);
-    // not shown in code yet: the other types alone can't reach more than 20%
-    const m = !codeable ? (q ?? c ?? 0) : c == null ? (q ?? 0) * (1 - CODE_SHARE) : q == null ? c : CODE_SHARE * c + (1 - CODE_SHARE) * q;
+    // codeable skill: the weighted ladder once shown in code, else the quizzes alone count for 20% at most
+    const m = !codeable ? ladderScore(e.all) : hasCode ? ladderScore(e.mix, CODE_X) : (q ?? 0) * (1 - CODE_SHARE);
     const mastery = Math.round(100 * m);
-    const w = e.code.w + e.quick.w;
-    const proven = !codeable || e.code.w >= 1;
+    const proven = !codeable || ladderWeight(e.code) >= 1;
     const best = e.best === 3 ? "hard" : e.best === 2 ? "medium" : e.best === 1 ? "easy" : null;
-    const status = w < 2 ? "new" : mastery < 45 ? "weak" : mastery < 75 || !proven ? "ok" : "strong";
-    // the next level: one step above what they reliably solve
-    const target = best === "hard" || (best === "medium" && mastery >= 70) ? "hard" : best === "medium" || (best === "easy" && mastery >= 60) ? "medium" : "easy";
+    const status = e.w < 2 ? "new" : mastery < WEAK_UNDER ? "weak" : mastery < STRONG_AT || !proven ? "ok" : "strong";
+    // next level: the first one they don't succeed at reliably yet (60%+)
+    const p = codeable && hasCode ? levelP(e.mix, CODE_X) : levelP(e.all);
+    const target = p[0] < 0.6 ? "easy" : p[1] < 0.6 ? "medium" : "hard";
     return {
-      key, mastery, evidence: Math.round(w * 10) / 10, solved: e.solved, failed: e.failed, best, status, target,
+      key, mastery, evidence: Math.round(e.w * 10) / 10, solved: e.solved, failed: e.failed, best, status, target,
       code: c == null ? null : Math.round(100 * c), quick: q == null ? null : Math.round(100 * q), codeMistakes: e.mistakes, proven,
+      levels: p.map((x) => Math.round(100 * x)),
     } as SkillScore;
   });
 }
