@@ -9,9 +9,10 @@ import { QUICK_KINDS, guildLangs, maxReward } from "./challenges.ts";
 import { QUICK_LANGS } from "./runner.ts";
 import { arenaChannel } from "./arena.ts";
 import { generateFor } from "./queue.ts";
+import { dailyPlanFor } from "./tracks.ts";
 
-export type DailyKind = "write" | "quick" | "mcq" | "complexity" | "output" | "bug" | "code";
-export const DAILY_KINDS: DailyKind[] = ["write", "quick", "mcq", "complexity", "output", "bug", "code"];
+export type DailyKind = "write" | "quick" | "mcq" | "complexity" | "output" | "bug" | "code" | "sql" | "regex";
+export const DAILY_KINDS: DailyKind[] = ["write", "quick", "mcq", "complexity", "output", "bug", "code", "sql", "regex"];
 const DIFFS: Difficulty[] = ["easy", "medium", "hard"];
 
 export interface DailyConfig {
@@ -26,10 +27,12 @@ export const DEFAULT_PLAN: [Difficulty, DailyKind][] = [
   ["easy", "write"], ["hard", "quick"], ["medium", "code"],
 ];
 
-export function dailyConfig(g: { daily_cfg?: string | null }): DailyConfig {
+export function dailyConfig(g: { daily_cfg?: string | null; track?: string | null; code_lang?: string | null }): DailyConfig {
   let o: any = {};
   try { o = g.daily_cfg ? JSON.parse(g.daily_cfg) : {}; } catch { o = {}; }
-  const plan = DEFAULT_PLAN.map((d, i) => {
+  // the track's default plan (SQL classes: SQL every day) when the teacher hasn't set one
+  const base = (dailyPlanFor(g) as [Difficulty, DailyKind][] | null) ?? DEFAULT_PLAN;
+  const plan = base.map((d, i) => {
     const p = Array.isArray(o.plan) ? o.plan[i] : null;
     return [DIFFS.includes(p?.[0]) ? p[0] : d[0], DAILY_KINDS.includes(p?.[1]) ? p[1] : d[1]] as [Difficulty, DailyKind];
   });
@@ -59,8 +62,8 @@ export async function pickDaily(env: Env, g: GuildRow, difficulty: Difficulty, k
   const kinds = kind === "quick" ? QUICK_KINDS : [kind];
   const langs = langsIn?.length ? langsIn : dailyLangs(g);
   const q = await one<ChallengeRow>(env, `SELECT c.* ${base} AND c.kind IN (${kinds.map(() => "?").join(", ")}) AND c.lang = ?
-      AND (c.code_lang IS NULL OR c.code_lang IN (${langs.map(() => "?").join(", ")})) ORDER BY RANDOM() LIMIT 1`, difficulty, g.id, g.id, ...kinds, g.lang, ...langs);
-  if (q || !allowAi) return q;
+      AND (c.code_lang IS NULL OR c.code_lang IN (${langs.map(() => "?").join(", ")})) AND COALESCE(c.topic, '') != 'git' ORDER BY RANDOM() LIMIT 1`, difficulty, g.id, g.id, ...kinds, g.lang, ...langs);
+  if (q || !allowAi || kind === "sql" || kind === "regex") return q;   // SQL and regex come from the verified bank only
   return generateFor(env, g, kind, difficulty, null, langs[Math.floor(Math.random() * langs.length)]);
 }
 

@@ -14,12 +14,29 @@ Everything public (daily challenge, duels, contests, level-ups, assignments, wee
 
 ---
 
+## One track per class
+
+Each class learns **one thing at a time**, so students never see two languages mixed together. Pick the track in **Overview** (the selector in the header), **Settings**, the **Path** page, or with `/teacher setup code_language:`:
+
+| Track | What students get |
+|---|---|
+| 🟨 JavaScript · 🐘 PHP · 🐍 Python · ☕ Java · 🔧 C · ➕ C++ | The algorithm roadmap (variables → loops → strings → arrays → … → recursion, sorting, dynamic programming), all code in that language |
+| 🗄️ SQL (databases) | Its own roadmap: SELECT → WHERE → ORDER BY → COUNT/SUM → GROUP BY → JOIN → subqueries → INSERT/UPDATE → tables & keys. SQL challenges are run on real data to check the answer |
+| ⚛️ MERN | JavaScript basics, then asynchronous code, the web, Node.js, Express, MongoDB, React |
+| 🤖 Python, AI & LLMs | Python basics, then data with pandas, machine learning, calling LLMs, RAG |
+
+Switching the track changes everything at once: the challenges `/practice` and duels pick, the daily challenge plan, `/today`, the `/path` roadmap and its lessons. Each track keeps its own customized roadmap and lessons, so you can switch a class back and forth without losing your edits. Each class (Discord server) has its own track, so one group can do SQL while another does Java.
+
+**🌐 French / English:** every quick challenge and every lesson has a button that shows it in the other language (the built-in French twin when there is one, otherwise an AI translation that is kept for next time).
+
+---
+
 ## What your students can do (in Discord)
 
 | Command | What happens |
 |---|---|
 | `/link username` | Links their HackerRank account. They must **prove it's theirs** by putting a short code (like `CB-7KQ2`) in their HackerRank bio and pressing Verify, so nobody can claim someone else's solves. You can also verify with `/teacher verify @student`. |
-| `/practice difficulty [type] [topic]` | A challenge at their level, private to them. **Write code**: a real problem (statement, samples, hidden tests including big ones); the statement says exactly what to write: *complete `solve(s)`, which receives the input and **returns** the answer*, with examples shown as calls (`solve("aaab") → "a3b1"`); the template already reads the input and prints what `solve` returns. They write **JavaScript, PHP**, Python, Java, C or C++ in the code editor page, can run the samples first, and the code is **run on the tests** (accepted / wrong answer / too slow / crash), with an **AI coach** explaining mistakes without giving the answer. **Quick** types are answered in Discord: multiple choice, complexity, predict the output, find the bug. **HackerRank problem**: solved on HackerRank, then checked on their verified profile (only solves made after the challenge was given count). A topic like "recursion" makes the AI write a fresh one in the background (about a minute). |
+| `/practice difficulty [type] [topic]` | A challenge at their level, private to them. **Write code**: a real problem (statement, samples, hidden tests including big ones); the statement says exactly what to write: *complete `solve(s)`, which receives the input and **returns** the answer*, with examples shown as calls (`solve("aaab") → "a3b1"`); the template already reads the input and prints what `solve` returns. They write **JavaScript, PHP**, Python, Java, C or C++ in the code editor page, can run the samples first, and the code is **run on the tests** (accepted / wrong answer / too slow / crash), with an **AI coach** explaining mistakes without giving the answer. **Quick** types are answered in Discord: multiple choice, complexity, predict the output, find the bug (always in the class's track language). Also **SQL query**, **regular expression** and **Git** types; choosing `language: SQL` gives a SQL query challenge. **HackerRank problem**: solved on HackerRank, then checked on their verified profile (only solves made after the challenge was given count). A topic like "recursion" makes the AI write a fresh one in the background (about a minute). |
 | `/duel @friend [quick / write / HackerRank] [difficulty] [stake]` | 1 vs 1, posted in #arena: both get the same challenge and the first to solve it wins (10, 45 or 60 minutes). Coins can be staked, and the winner gains Elo rating. |
 | `/daily` | Today's daily challenge. The first three solvers get a bonus, and solving every day builds a 🔥 streak. |
 | `/assignments` | Challenges you assigned to them, with due dates |
@@ -28,7 +45,17 @@ Everything public (daily challenge, duels, contests, level-ups, assignments, wee
 | `/rival add @friend` | They get pinged when their rival passes them in a contest, and can see head-to-head records |
 | `/bet place player amount` | Predict a contest winner with play coins |
 | `/contest standings` | Live contest leaderboard |
-| `/help [topic]` | Every feature, in pages: getting started, challenges, write code, points, duels, daily & assignments, contests, social, teacher tools |
+| `/today [remind]` | Their plan for today: 3 challenges picked for them (a rematch of one they missed, one at their edge, a warm-up), a bonus and a 🗓️ plan streak when they finish it |
+| `/skills` · `/path` | Their skill map (mastery per skill) and most frequent mistakes · a step-by-step path with a 📖 lesson for each step: written for beginners (a plain explanation with an everyday comparison, one tiny example **in the class's track language**, a 🌐 button to switch English/French, one tip) and links to free tutorials to read more (javascript.info, php.net, Python docs, W3Schools, Khan Academy, VisuAlgo…, in French when the class is in French) |
+| `/shop` · `/create` | Spend coins (streak freeze, hint tokens, title, color) · write a challenge for the class (you approve it; they earn points when classmates solve it) |
+| `/help-me` | ✋ Raise their hand: question + optional code go to your live **Help queue**; you come over or answer by DM |
+| `/ask question` · `/faq` | ❓ Looks in the class FAQ first; otherwise you answer (an AI draft is ready for you to check), they get it by DM and it joins the FAQ |
+| `/interview [difficulty]` | 🎤 Mock coding interview: they explain approach, edge cases and complexity to an interviewer, code it, and get a scorecard (+5 pts once a day) |
+| `/project list / submit / check` | 🐙 Link their **public GitHub repository** to a project you created; the bot runs the file against your tests after every push and gives points per test passed |
+| `/league` | 🏆 Class vs class this week (points per student) |
+| `/help [topic]` | Every feature, in pages: getting started, challenges, write code, points, duels, daily & assignments, contests, social, coach, help & projects, teacher tools |
+
+On `/profile`, students can **🔗 share a public profile page** (level, badges, skills, recent solves, never their code; they can stop sharing any time) and open their **🎓 certificate** (print or save as PDF). When you start a new season, every student who scored gets their certificate by DM.
 
 **Points = level base × type multiplier**, so harder and deeper challenges are worth much more:
 
@@ -51,18 +78,25 @@ Then: daily ×1.5 (+15/+10/+5 for the first three), assignment on time ×1.5, du
 
 ## What you can do (dashboard)
 
-- **Overview:** activity over 30 days, accuracy, a highlighted list of students who **need attention** (inactive, points dropping, low accuracy, missed assignments), top earners, latest answers, and self-reported HackerRank solves to approve (they give **no points until you approve**).
+- **Overview:** a **Live in your class** panel at the top (raised hands waiting, questions to answer, student challenges to review, a running class session, live events, projects and their next due date, mock interviews and daily plans this week, helpful peer explanations, your league rank), then activity over 30 days, accuracy, a highlighted list of students who **need attention** (inactive, points dropping, low accuracy, missed assignments), top earners, latest answers, and self-reported HackerRank solves to approve (they give **no points until you approve**).
 - **Students:** sortable and searchable class list with a trend for each student (↑ improving, ↓ slipping, ⏸ inactive). CSV export for grading.
 - **Student page:** points per week, contest results over time, a *strengths and gaps* grid (success rate by challenge type × difficulty), every challenge **solved** and **not solved** (with their wrong answers, and for write-code problems their **submitted code**, verdict and the AI coach's note), assignments, duels and points log. Give bonus points, assign a challenge, or verify / unlink their HackerRank account.
 - **Challenges:** the whole bank with success rates. Write your own (for a write-code problem: statement, a reference solution in Python and test inputs; the expected outputs are computed by running your solution), import any HackerRank problem by link, or **generate one with AI**: write-code problems are kept only if the AI's fast solution and a brute-force solution agree when actually run, and the AI's guess is never trusted for "predict the output". Students can 🚩 report a wrong challenge: two reports pause it until you fix it, and fixing an answer automatically gives credit to students who were actually right.
-- **Daily challenge:** turn it on or off, choose the channel, the time, the language of quick challenges (e.g. only JavaScript) and the level + type for each weekday. See the next 14 days and **pick a specific challenge for any date** (or leave it random), **post one right now** (chosen or random, in any channel), and see how many students opened and solved each past daily.
+- **Daily challenge:** turn it on or off, choose the channel, the time, the language of quick challenges (e.g. only JavaScript) and the level + type for each weekday (including **SQL** and **regex** days). See the next 14 days and **pick a specific challenge for any date** (or leave it random), **post one right now** (chosen or random, in any channel), and see how many students opened and solved each past daily.
 - **Points:** give or remove points for everyone or for selected students, set them to an exact value, and reset the season leaderboard (or everything, levels included). Every change is written to the points log with your reason, and students can be told by DM.
 - **Assignments:** give a challenge to everyone, a team, or chosen students, with a due date and a note. Students get a DM and a channel ping, a reminder 24 h before the deadline, and you see who finished on time, late, or not at all.
 - **Contests:** follow a contest, end it early, see results, awards, bets and a score-race chart.
 - **Teams:** create teams and pick members. A team's contest score is its members' *average*, so helping the weakest member is the best strategy.
 - **Class sessions:** pick a few challenges and a duration; the bot posts a button in #arena (and pings a team if you choose one). Students solve in the code editor and you watch a live grid (✅ ❌ ✏️ ⚑ per student and challenge). When time is up, answers stop being accepted.
 - **Integrity:** every write-code answer sent with warning signs: paste attempts, big blocks of code appearing at once, leaving the editor page, typing with no corrections or impossibly fast, code almost identical to a classmate's, a weak explanation. Watch a **replay of the typing**, then mark it *looks fine* or *remove points* (with an optional DM). Nothing is removed automatically.
-- **Settings:** language (English/French), code language for quick challenges, the #arena channel, daily challenge time, roles, seasons, **scoring per type**, and **Diagnostics** (checks that the code runner, the AI and HackerRank answer, shows the AI budget and the bank size).
+- **Help queue:** live list of raised hands (oldest first, with their code and the challenge they're on), refreshes by itself. *I'm coming* tells the student by DM; *Answer by DM* sends a written reply. Keep it open on a second screen during class.
+- **Questions:** questions from `/ask` with an AI draft to check, edit and approve (optionally posted in #arena); approved answers become the class FAQ. Add your own entries (exam dates, rules…).
+- **Interviews:** every mock interview with its scorecard and full transcript.
+- **Path & lessons:** reorder the steps, see for each step **how many challenges your bank has** for that skill and level (orange when it's running low), and edit any lesson with a live preview of what students see. Each track has its own roadmap; the lesson list shows the roadmap's skills first. Change the track right on this page.
+- **✨ Generate with AI, everywhere:** a lesson for any skill (in the track's language, English + French, linking only to known resources); new challenges for a path step or a skill on the Skills page (each one checked before it's saved, then tagged with the skill; SQL challenges are run on several datasets before they're kept); the challenge generator can target a skill; a live-quiz question; a whole GitHub project (instructions + tests whose expected outputs come from really running the AI's reference solution); FAQ answer drafts.
+- **GitHub projects:** create a project (instructions, language, file to run, input/output tests, points, due date). See every linked repository, its best score and last result, grade one student now or everyone again.
+- **Classes & league:** all your Discord servers side by side (students, active, solved, points per student, accuracy, 4-week trend), join the **class league**, and open or send **certificates** for any season.
+- **Settings:** language (English/French), what the class learns (the track), the #arena channel, daily challenge time, roles, seasons, **scoring per type**, and **Diagnostics** (checks that the code runner, the AI and HackerRank answer, shows the AI budget and the bank size).
 
 Want to look before installing anything? Run `npm install && npm run preview` and open http://localhost:8787 to see the dashboard with a demo class.
 
@@ -183,7 +217,7 @@ Until you do this, the dashboard shows *"Dashboard locked"*. That's on purpose: 
 Open your dashboard URL: you'll get a one-time code by email, and then you're in. The dashboard checks Cloudflare's signed login token on every request, so it can't be reached around Access.
 
 ### 10. First run in Discord
-1. In the channel where the bot should post, run `/teacher setup` (choose language, daily challenge hour in UTC, and the programming language).
+1. In the channel where the bot should post, run `/teacher setup` (choose language, daily challenge hour in UTC, and what the class learns: a language, SQL, MERN or AI).
 2. Optional, for roles: create two roles, e.g. **👑 Champion** (gold, displayed separately) and **🔥 On Fire**. In *Server Settings → Roles*, drag the **bot's role above them**, then pick them in the dashboard under **Settings → Roles**.
 3. Tell students to run `/link <their HackerRank username>`, then `/practice`.
 4. Follow a contest with `/teacher track link:<contest URL>` or from the dashboard's **Contests** page.
@@ -210,6 +244,9 @@ That's it. 🎉
   - **Quick challenges as images** (output, bug, complexity), plus an optional time limit, so the code can't be pasted into a chatbot in time.
   - **Class sessions** for supervised work, and practice points can count less (Settings → Anti-cheat).
   - Flags are reasons to look, not proof. The best check is still asking the student to explain their code in class.
+- **GitHub projects read public repositories only.** The bot downloads one file (the one you name, up to 100 KB) from `raw.githubusercontent.com` and runs it like a write-code answer (stdin in, output compared to your tests). Multi-file projects, packages and unit-test frameworks aren't run. It re-checks every 15 minutes (only when the file changed); students who add the webhook shown in `/project submit` get graded within a minute of each push. Grades never go down: the best run counts, and nothing changes after the due date.
+- **Interviews and FAQ drafts use the AI budget** (about 1 unit per interviewer question, 2 per scorecard, 1 per draft). When the budget is used up, the interviewer asks scripted questions and the scorecard is computed from the judge's results; you write FAQ answers yourself.
+- **Certificates are web pages** made for printing: students (or you) press *Print → Save as PDF*. Links are signed, so they can't be forged; the current season's certificate shows "in progress".
 - **Coins are play money.** Nobody can drop below 10, so nobody is ever out of the game.
 
 ## Troubleshooting

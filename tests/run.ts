@@ -2,8 +2,9 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, discordCalls, discordRoles, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, clock, discordCalls, discordRoles, github, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
+import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
 import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
@@ -20,6 +21,8 @@ function check(cond: unknown, msg: string) {
 function section(name: string) { console.log("• " + name); }
 
 const { env, privateKey } = await makeEnv();
+// run the tests in the daytime (UTC), whatever time it really is: daily posts and reminders depend on the hour
+{ const h = new Date(clock.now() * 1000).getUTCHours(); if (h < 9 || h > 18) clock.advance(((12 - h + 24) % 24) * 3600); }
 const db = (env.DB as any).raw;
 const q = (sql: string, ...a: any[]) => db.prepare(sql).all(...a) as any[];
 const q1 = (sql: string, ...a: any[]) => db.prepare(sql).get(...a) as any;
@@ -481,9 +484,10 @@ section("help: every feature documented, pages in a menu");
   const t2 = await slash(U.prof, "help", { topic: "teacher" });
   all.push(text(t2));
   const joined = all.join("\n");
-  for (const cmd of ["/practice", "/daily", "/assignments", "/duel", "/profile", "/leaderboard", "/rival", "/bet", "/contest", "/link", "/teacher setup", "/teacher track", "/teacher verify", "/teacher season", "/teacher stop", "/teacher dashboard"]) {
+  for (const cmd of ["/practice", "/daily", "/assignments", "/duel", "/profile", "/leaderboard", "/rival", "/bet", "/contest", "/link", "/teacher setup", "/teacher track", "/teacher verify", "/teacher season", "/teacher stop", "/teacher dashboard", "/today", "/skills", "/path", "/shop", "/create", "/help-me", "/ask", "/faq", "/interview", "/project", "/league"]) {
     check(joined.includes(cmd), `help mentions ${cmd}`);
   }
+  for (const w of ["SQL", "Regular expression", "2 vs 2", "Live quiz", "Boss battle", "Bounty", "Streak freeze", "Hint token", "Custom title", "Your color"]) check(joined.includes(w), `help explains: ${w}`);
   const pts = await slash(U.carol, "help", { topic: "points" });
   check(text(pts).includes("Multiple choice") && text(pts).includes("  96") && !text(pts).includes("{table}"), "points page shows the scoring table");
 }
@@ -1176,6 +1180,781 @@ section("automatic roles: created once, moved to the right students");
   clock.advance(600);
   await runCron(env);
   check(JSON.parse(q1("SELECT auto_roles FROM guilds WHERE id = ?", G).auto_roles || "{}").synced > 0, "cron syncs the roles by itself");
+}
+
+section("coach: skill map, mistakes, training, daily plan, path, hints, model solution, weekly report");
+{
+  const E = { id: "105", name: "Eve", teacher: false };
+  // skills: the bot tags every challenge by itself
+  while (await backfillSkills(env, 200)) { /* until done */ }
+  check(q1("SELECT COUNT(*) AS n FROM challenges WHERE skills IS NULL").n === 0, "every challenge gets skills");
+  const rl = q1("SELECT * FROM challenges WHERE test_set = 'run-length' AND lang = 'en'");
+  check(rl.skills === "strings,loops", "hand-tagged write problems keep their skills");
+
+  // a short history for Eve: strong on strings, too slow twice on write code, a failed output 2 days ago
+  const strOut = q("SELECT id FROM challenges WHERE kind = 'output' AND lang = 'en' AND status = 'active' AND (',' || skills || ',') LIKE '%,strings,%' LIMIT 4");
+  const ins = db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, points, result, started_at, finished_at) VALUES (?, ?, ?, 'practice', ?, 1, ?, ?, ?, ?)");
+  const t0 = clock.now();
+  for (const c of strOut.slice(0, 3)) ins.run(G, E.id, c.id, "solved", 5, null, t0 - 5 * 86400, t0 - 5 * 86400);
+  const slow = JSON.stringify({ verdict: "tle", passed: 6, total: 9, maxTime: 2, judge: "tests", failed: { idx: 7, sample: false, big: true } });
+  const hard = q("SELECT id FROM challenges WHERE kind = 'write' AND lang = 'en' AND difficulty = 'hard' LIMIT 2");
+  for (const c of hard) ins.run(G, E.id, c.id, "failed", 0, slow, t0 - 12 * 3600, t0 - 12 * 3600);   // not due for review yet (1 day)
+  const missed = q1("SELECT * FROM challenges WHERE kind = 'output' AND lang = 'en' AND status = 'active' AND id NOT IN (SELECT challenge_id FROM attempts WHERE discord_id = ?) LIMIT 1", E.id);
+  ins.run(G, E.id, missed.id, "failed", 0, null, t0 - 2 * 86400, t0 - 2 * 86400);
+
+  await slash(E as any, "skills", {});
+  let p = lastPatch();
+  check(text(p).includes("Strings") && text(p).includes("Too slow"), "/skills: skill bars and the mistake profile");
+  const train = ids(p).find((i) => i.startsWith("sk:"));
+  check(!!train && ids(p).includes("today:open") && ids(p).includes("path:open"), "buttons: train a skill, plan, path");
+  await click(E as any, train!);
+  const tr = q1("SELECT a.origin, c.skills FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", E.id);
+  check(tr.origin === "practice" && tr.skills.split(",").includes(train!.split(":")[1]) && text(lastPatch()).includes("Training"), "train button: a challenge on that skill");
+  db.prepare("UPDATE attempts SET status = 'expired', finished_at = ? WHERE discord_id = ? AND status = 'pending'").run(clock.now(), E.id);
+
+  // daily plan
+  await slash(E as any, "today", {});
+  p = lastPatch();
+  const plan = JSON.parse(q1("SELECT items FROM daily_plans WHERE discord_id = ?", E.id).items);
+  check(plan.length === 3 && plan[0].kind === "rematch" && plan[0].challenge_id === missed.id, "/today: 3 challenges, the missed one comes back first");
+  check(new Set(plan.map((i: any) => i.challenge_id)).size === 3 && text(p).includes("Rematch") && ids(p).includes("plan:0"), "plan shown with start buttons");
+  await click(E as any, "plan:0");
+  const pa = q1("SELECT * FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", E.id);
+  check(pa.origin === "plan" && pa.challenge_id === missed.id && pa.status === "pending", "start: a plan attempt (the missed challenge can be played again)");
+  // items 2 and 3 done (shortcut), then finish item 1 for real
+  const pl2 = JSON.parse(q1("SELECT items FROM daily_plans WHERE discord_id = ?", E.id).items);
+  pl2[1].status = "solved"; pl2[1].points = 20; pl2[2].status = "failed";
+  db.prepare("UPDATE daily_plans SET items = ? WHERE discord_id = ?").run(JSON.stringify(pl2), E.id);
+  await submit(E as any, `mans:${pa.id}`, missed.answer);
+  const dp = q1("SELECT completed_at, bonus FROM daily_plans WHERE discord_id = ?", E.id);
+  const ev = q1("SELECT plan_streak FROM players WHERE discord_id = ? AND guild_id = ?", E.id, G);
+  check(dp.completed_at && dp.bonus >= 5 && ev.plan_streak === 1 && text(lastPatch()).includes("Plan complete"), `plan complete: streak 1, bonus ${dp.bonus}`);
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'plan_bonus'", E.id).s === dp.bonus, "bonus in the points log");
+  await click(E as any, "plan:remind");
+  check(q1("SELECT plan_dm FROM players WHERE discord_id = ? AND guild_id = ?", E.id, G).plan_dm === 1 && text(lastPatch()).includes("every morning"), "morning reminder on");
+
+  // path
+  await slash(E as any, "path", {});
+  p = lastPatch();
+  check(text(p).includes("Your path") && ids(p).includes("path:go") && ids(p).some((i) => i.startsWith("path:lesson:")), "/path: current step, lesson and next challenge");
+  const les = await click(E as any, ids(p).find((i) => i.startsWith("path:lesson:"))!);
+  const lesText = les.data?.embeds?.[0]?.description ?? "";
+  check(les.data?.flags === 64 && lesText.includes("```py") && lesText.includes("📚") && /\]\(https:\/\//.test(lesText), "lesson: example in the class language (Python) and links to read more");
+  await click(E as any, "path:go");
+  check(q1("SELECT origin FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", E.id).origin === "path", "next challenge from the path");
+  db.prepare("UPDATE attempts SET status = 'expired', finished_at = ? WHERE discord_id = ? AND status = 'pending'").run(clock.now(), E.id);
+
+  // hints in steps on a write-code problem
+  db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, E.id, rl.id, clock.now());
+  const ha = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", E.id).id;
+  const steps = rl.hint ? 3 : 2;
+  for (let i = 0; i < steps; i++) await click(E as any, `hint:${ha}`);
+  const after = q1("SELECT used_hint FROM attempts WHERE id = ?", ha).used_hint;
+  check(after === steps && text(lastPatch()).includes("Approach") && text(lastPatch()).includes("Pseudocode"), `hint steps unlocked one by one (${after})`);
+  check(JSON.parse(q1("SELECT hints FROM challenges WHERE id = ?", rl.id).hints).approach, "approach and pseudocode written once and cached");
+  const more = await click(E as any, `hint:${ha}`);
+  check(text(more).includes("every hint"), "no fourth hint");
+  // model solution once it's over
+  const early = await click(E as any, `sol:${ha}`);
+  check(text(early).includes("once the challenge is over"), "no solution while the challenge is open");
+  db.prepare("UPDATE attempts SET status = 'solved', lang = 'javascript', finished_at = ? WHERE id = ?").run(clock.now(), ha);
+  await click(E as any, `sol:${ha}`);
+  check(text(lastPatch()).includes("Model solution") && text(lastPatch()).includes("function solve"), "model solution in the student's language");
+  check(JSON.parse(q1("SELECT solutions FROM challenges WHERE id = ?", rl.id).solutions).javascript, "translated once and cached");
+
+  // weekly report on Monday + morning plan DM
+  const dnow = new Date(clock.now() * 1000);
+  const toMonday = ((8 - dnow.getUTCDay()) % 7 || 7) * 86400 + (12 - dnow.getUTCHours()) * 3600;
+  clock.advance(toMonday);
+  for (let i = 0; i < 4; i++) await runCron(env);
+  const dmReport = discordCalls.filter((c) => c.method === "POST" && c.path === `/channels/dm-${E.id}/messages` && text(c.body).includes("your week"));
+  check(dmReport.length === 1 && q1("SELECT COUNT(*) AS n FROM weekly_reports WHERE discord_id = ?", E.id).n === 1, "weekly report sent by DM on Monday (once)");
+  check(discordCalls.some((c) => c.method === "POST" && c.path === `/channels/dm-${E.id}/messages` && text(c.body).includes("Good morning")), "morning plan sent to students who asked");
+  await click(E as any, "report:open");
+  check(text(lastPatch()).includes("your week") && text(lastPatch()).includes("solved"), "report button");
+}
+
+section("teacher insight: heatmap, practice sets, mistakes, difficulty check, Monday summary, exams");
+{
+  const hm = await api("GET", `/api/skills/class?g=${G}`);
+  check(hm.status === 200 && hm.data.students.length >= 3 && hm.data.skills.includes("strings") && typeof Object.values(hm.data.average)[0] === "number", "class heatmap: students × skills with class averages");
+  const ps = await api("POST", "/api/skills/practice-set", { g: G, skill: "strings", students: [U.bob.id, U.carol.id], count: 2, due_at: clock.now() + 86400 });
+  check(ps.status === 200 && ps.data.assignments >= 2, `practice set: ${ps.data.assignments} assignments at each student's level`);
+  check(discordCalls.some((c) => c.path === `/channels/dm-${U.bob.id}/messages` && text(c.body).includes("Practice set") && text(c.body).includes("astart:")), "students get a DM with start buttons");
+
+  // mistakes grouped by cause
+  const rl = q1("SELECT * FROM challenges WHERE test_set = 'run-length' AND lang = 'en'");
+  const res = (verdict: string, idx: number, sample = false) => JSON.stringify({ verdict, passed: 3, total: 9, maxTime: 1, judge: "tests", failed: { idx, sample, big: false, expected: "a3", got: "a2" } });
+  const ins = db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, result, answer_given, lang, started_at, finished_at) VALUES (?, ?, ?, 'practice', 'failed', 5, ?, 'code', 'javascript', ?, ?)");
+  for (const [u, v, i] of [["301", "wrong", 4], ["302", "wrong", 4], ["303", "wrong", 4], ["304", "tle", 8]] as const) ins.run(G, u, rl.id, res(v, i), clock.now(), clock.now());
+  const mi = await api("GET", `/api/challenges/${rl.id}/mistakes?g=${G}`);
+  check(mi.status === 200 && mi.data.groups[0].count >= 3 && mi.data.groups[0].label.includes("Wrong answer") && mi.data.groups[0].label.includes("hidden test 4"), "wrong answers grouped by failing test");
+  check(mi.data.groups.some((x: any) => x.label.includes("Too slow")) && mi.data.groups[0].example.input !== undefined, "with the test input that trips them");
+
+  // difficulty check
+  const easy = q1("SELECT * FROM challenges WHERE kind = 'output' AND difficulty = 'easy' AND lang = 'en' AND status = 'active' LIMIT 1");
+  const fin = db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, started_at, finished_at) VALUES (?, ?, ?, 'practice', ?, 1, ?, ?)");
+  for (let i = 0; i < 8; i++) fin.run(G, `40${i}`, easy.id, i < 1 ? "solved" : "failed", clock.now(), clock.now());
+  const dc = await api("GET", `/api/difficulty?g=${G}`);
+  const row = dc.data.find((x: any) => x.id === easy.id);
+  check(row && row.suggest === "medium", "difficulty check: an 'easy' challenge few solve → suggest medium");
+  await api("POST", `/api/challenges/${easy.id}/difficulty`, { g: G, difficulty: "medium" });
+  check(q1("SELECT difficulty FROM challenges WHERE id = ?", easy.id).difficulty === "medium", "apply the suggestion");
+
+  // Monday summary for the teacher
+  const sm = await api("GET", `/api/summary?g=${G}`);
+  check(sm.status === 200 && typeof sm.data.active === "number" && Array.isArray(sm.data.actions), "summary for the dashboard");
+  db.prepare("UPDATE guilds SET teacher_id = ?, last_teacher_digest = NULL WHERE id = ?").run(U.prof.id, G);
+  const wd = new Date(clock.now() * 1000);
+  if (wd.getUTCDay() !== 1) clock.advance(((8 - wd.getUTCDay()) % 7 || 7) * 86400);
+  for (let i = 0; i < 3; i++) await runCron(env);
+  check(discordCalls.some((c) => c.path === `/channels/dm-${U.prof.id}/messages` && text(c.body).includes("Your week")), "Monday summary DM to the teacher");
+
+  // exam: silent judging, best submission counts, grades /20
+  await api("PUT", "/api/settings", { g: G, integrity: { editor: "off" } });
+  const quick = q1("SELECT * FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND status = 'active' LIMIT 1");
+  const ex = await api("POST", "/api/sessions", { g: G, title: "Midterm", challenge_ids: [rl.id, quick.id], minutes: 60, mode: "exam" });
+  check(ex.status === 200 && messagesTo(ARENA).some((m) => text(m).includes("Exam: Midterm")), "exam announced");
+  await click(U.carol, `sgo:${ex.data.id}:${quick.id}`);
+  const qa = q1("SELECT * FROM attempts WHERE discord_id = ? AND origin = 'exam' AND challenge_id = ?", U.carol.id, quick.id);
+  const wrong = quick.answer === "A" ? "B" : "A";
+  const qr = await click(U.carol, `ans:${qa.id}:${wrong}`);
+  check(text(lastPatch()).includes("Answer saved") && !text(lastPatch()).includes("correct"), "quick question: saved, no feedback");
+  void qr;
+  await click(U.carol, `sgo:${ex.data.id}:${rl.id}`);
+  const wa = q1("SELECT * FROM attempts WHERE discord_id = ? AND origin = 'exam' AND challenge_id = ?", U.carol.id, rl.id);
+  await submit(U.carol, `msub:${wa.id}`, "print(1)");
+  check(text(lastPatch()).includes("Submission 1 saved") && !text(lastPatch()).includes("Wrong answer"), "code: judged silently");
+  check(q1("SELECT status FROM attempts WHERE id = ?", wa.id).status === "pending", "can still improve it");
+  clock.advance(3700);
+  await runCron(env);
+  const es = q1("SELECT status, grades FROM sessions WHERE id = ?", ex.data.id);
+  const gr = JSON.parse(es.grades)[U.carol.id];
+  check(es.status === "finished" && gr && gr.grade < 10 && gr.scores[quick.id] === 0, `grades computed (${gr?.grade}/20)`);
+  check(discordCalls.some((c) => c.path === `/channels/dm-${U.carol.id}/messages` && text(c.body).includes("/20")), "each student gets their grade by DM");
+  const csv = await api("GET", `/api/sessions/${ex.data.id}/grades.csv?g=${G}`);
+  check(csv.status === 200 && String(csv.data).includes("Grade /20") && String(csv.data).includes(U.carol.id), "grades CSV export");
+  const grid = await api("GET", `/api/sessions/${ex.data.id}?g=${G}`);
+  check(grid.data.exam === true && grid.data.students.some((x: any) => x.grade !== null), "results grid shows grades");
+}
+
+section("new challenge types: SQL, regex, Git, web problems, challenges written by students");
+{
+  const F = { id: "106", name: "Farah", teacher: false };
+  // SQL
+  await slash(F as any, "practice", { difficulty: "easy", type: "sql" });
+  let p = lastPatch();
+  const sa = q1("SELECT a.id, c.solution, c.kind, c.title FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", F.id);
+  check(sa?.kind === "sql" && text(p).includes("CREATE TABLE") && ids(p).includes(`ansm:${sa.id}`), `SQL challenge shown with its tables (${sa?.title})`);
+  const modalSql = await click(F as any, `ansm:${sa.id}`);
+  check(text(modalSql).includes("SQL"), "SQL answer form");
+  await submit(F as any, `mans:${sa.id}`, "SELECT 1");
+  check(text(lastPatch()).includes("Wrong result on the example data") && q1("SELECT status FROM attempts WHERE id = ?", sa.id).status === "pending", "wrong query: expected vs your rows, try again");
+  await submit(F as any, `mans:${sa.id}`, "DELETE FROM students; SELECT 1");
+  check(text(lastPatch()).includes("ONE query"), "only one statement allowed");
+  await submit(F as any, `mans:${sa.id}`, sa.solution);
+  check(q1("SELECT status, points FROM attempts WHERE id = ?", sa.id).status === "solved" && text(lastPatch()).includes("datasets"), "right query: solved on every dataset (shown + hidden)");
+  // a query right on the example data but wrong on hidden data
+  const hid = q1("SELECT * FROM challenges WHERE test_set = 'sql-customers-without-orders' AND lang = 'en'");
+  db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, F.id, hid.id, clock.now());
+  const ha = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", F.id).id;
+  const notIn = "SELECT name FROM customers WHERE id NOT IN (SELECT customer_id FROM orders) ORDER BY name";
+  await submit(F as any, `mans:${ha}`, notIn);
+  check(/hidden dataset|example data|SQL error/.test(text(lastPatch())), "hidden datasets catch queries that only fit the example");
+  // regex
+  await slash(F as any, "practice", { difficulty: "easy", type: "regex" });
+  const ra = q1("SELECT a.id, c.answer, c.kind FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", F.id);
+  check(ra.kind === "regex" && text(lastPatch()).includes("Must match"), "regex challenge shows strings to match and reject");
+  await submit(F as any, `mans:${ra.id}`, ".*");
+  check(text(lastPatch()).includes("should NOT match"), "wrong regex: which strings fail");
+  await submit(F as any, `mans:${ra.id}`, "(a+)+");
+  check(text(lastPatch()).includes("nested repetition"), "dangerous patterns refused");
+  await submit(F as any, `mans:${ra.id}`, ra.answer);
+  check(q1("SELECT status FROM attempts WHERE id = ?", ra.id).status === "solved", "right regex: solved");
+  // git
+  await slash(F as any, "practice", { difficulty: "easy", type: "git" });
+  const ga = q1("SELECT c.skills, c.kind FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", F.id);
+  check(ga.kind === "mcq" && ga.skills === "git", "Git questions");
+  // web problems are function-mode write problems
+  const web = q1("SELECT * FROM challenges WHERE test_set = 'web-url-slug' AND lang = 'en'");
+  check(web && web.signature && web.skills.includes("web"), "web problems: function mode, tagged web");
+
+  // a student writes a challenge
+  const cm = await slash(F as any, "create", { type: "write", difficulty: "easy" });
+  check(cm.type === 9 && text(cm).includes("mcreate:write-easy"), "/create opens the form");
+  const fields = (vals: Record<string, string>) => call(raw(5, F as any, { custom_id: "mcreate:write-easy", components: Object.entries(vals).map(([k, v]) => ({ type: 1, components: [{ type: 4, custom_id: k, value: v }] })) }));
+  await fields({ title: "Double it", statement: "Read one integer n and print 2 × n. Input: one integer. Output: one integer.", tests: "3\n---\n10\n---\n-4", solution: "const n = Number(require('fs').readFileSync(0, 'utf8').trim()); console.log(2 * n);", lang: "javascript" });
+  const mine = q1("SELECT * FROM challenges WHERE source = 'student' AND created_by = ? ORDER BY id DESC LIMIT 1", F.id);
+  check(mine && mine.status === "pending" && text(lastPatch()).includes("all 3 tests"), "student challenge: their own solution computes the tests, then it waits for review");
+  check(q("SELECT expected FROM challenge_tests WHERE test_set = ? ORDER BY idx", mine.test_set).map((x: any) => x.expected).join(",") === "6,20,-8", "expected outputs from the student's solution");
+  await fields({ title: "Broken", statement: "Read one integer n and print 2 × n. Input: one integer. Output: one integer.", tests: "3\n---\n10", solution: "throw new Error('oops')", lang: "javascript" });
+  check(text(lastPatch()).includes("failed on test"), "a solution that crashes is refused");
+  const list = await api("GET", `/api/student-challenges?g=${G}`);
+  check(list.data.some((x: any) => x.id === mine.id), "teacher sees it in the dashboard");
+  await api("POST", `/api/student-challenges/${mine.id}`, { g: G, approve: true });
+  check(q1("SELECT status FROM challenges WHERE id = ?", mine.id).status === "active" && discordCalls.some((c) => c.path === `/channels/dm-${F.id}/messages` && text(c.body).includes("approved")), "approved: in rotation, author told");
+  const before = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ? AND reason = 'author'", F.id).s;
+  db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, U.bob.id, mine.id, clock.now());
+  const ba = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", U.bob.id).id;
+  await api("PUT", "/api/settings", { g: G, integrity: { editor: "off", explain: false } });
+  await select(U.bob, `lang:${ba}`, ["python"]);
+  await submit(U.bob, `msub:${ba}`, "print(2 * int(input()))");
+  check(q1("SELECT status FROM attempts WHERE id = ?", ba).status === "solved" && q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ? AND reason = 'author'", F.id).s === before + 3, "a classmate solves it: +3 for the author");
+  const mq = call(raw(5, F as any, { custom_id: "mcreate:mcq-medium", components: [["title", "Strict equality"], ["question", "What does 1 === '1' give in JavaScript?"], ["choices", "true\nfalse\nundefined\nan error"], ["answer", "B"], ["explanation", "=== compares types too."]].map(([k, v]) => ({ type: 1, components: [{ type: 4, custom_id: k, value: v }] })) }));
+  await mq;
+  check(q1("SELECT kind, answer, status FROM challenges WHERE source = 'student' AND created_by = ? AND kind = 'mcq'", F.id)?.answer === "B", "students can write multiple-choice questions too");
+}
+
+section("events: live quiz from the dashboard, boss battle, bounties");
+{
+  const mcqs = q("SELECT id, answer FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND guild_id IS NULL AND status = 'active' AND choices IS NOT NULL ORDER BY id LIMIT 2");
+  const writeId = q1("SELECT id FROM challenges WHERE kind = 'write' AND lang = 'en' AND status = 'active' LIMIT 1").id;
+  const bad = await api("POST", "/api/quizzes", { g: G, title: "x", challenge_ids: [writeId] });
+  check(bad.status === 400, "a live quiz refuses write-code questions");
+  const cq = await api("POST", "/api/quizzes", { g: G, title: "Friday quiz", seconds: 20, challenge_ids: mcqs.map((m: any) => m.id) });
+  check(cq.status === 200 && cq.data.channel_id === ARENA && cq.data.current === -1, "quiz created, posted in #arena");
+  check((await api("POST", "/api/quizzes", { g: G, title: "y", challenge_ids: [mcqs[0].id] })).status === 409, "one live quiz at a time");
+  const qid = cq.data.id;
+  let live = await api("POST", `/api/quizzes/${qid}/next`, { g: G });
+  check(live.data.current === 0 && messagesTo(ARENA).some((m) => ids(m).includes(`qz:${qid}:0:A`)), "Start posts question 1 with A–D buttons");
+  const wrong0 = ["A", "B", "C", "D"].find((l) => l !== mcqs[0].answer)!;
+  clock.advance(2);
+  const ra = await click(U.alice, `qz:${qid}:0:${mcqs[0].answer}`);
+  check(ra.data?.flags === 64 && text(ra).includes(mcqs[0].answer), "answer locked privately");
+  check(text(await click(U.alice, `qz:${qid}:0:${wrong0}`)).includes("already"), "one answer per question");
+  clock.advance(8);
+  await click(U.bob, `qz:${qid}:0:${wrong0}`);
+  live = await api("GET", `/api/quizzes/${qid}?g=${G}`);
+  check(live.data.answers.reduce((a: number, x: any) => a + x.n, 0) === 2 && live.data.standings[0].discord_id === U.alice.id, "teacher sees answers and the live leaderboard");
+  const sA = q1("SELECT score FROM quiz_answers WHERE quiz_id = ? AND discord_id = ?", qid, U.alice.id).score;
+  check(sA > 500 && sA < 1000 && q1("SELECT score FROM quiz_answers WHERE quiz_id = ? AND discord_id = ?", qid, U.bob.id).score === 0, `right + fast scores more (${sA}), wrong scores 0`);
+  await api("POST", `/api/quizzes/${qid}/reveal`, { g: G });
+  check(text(await click(U.carol, `qz:${qid}:0:A`)).includes("closed"), "no answers after the reveal");
+  check(messagesTo(ARENA).some((m) => text(m).includes(mcqs[0].answer) && text(m).includes("✅")), "answer and distribution shown in #arena");
+  await api("POST", `/api/quizzes/${qid}/next`, { g: G });
+  clock.advance(30);
+  check(text(await click(U.carol, `qz:${qid}:1:${mcqs[1].answer}`)).includes("late"), "answers after the timer are refused");
+  const coins0 = q1("SELECT coins FROM players WHERE discord_id = ?", U.alice.id).coins;
+  const end = await api("POST", `/api/quizzes/${qid}/end`, { g: G });
+  check(end.data.status === "done" && q1("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'quiz' AND ref = ?", U.alice.id, String(qid))?.amount === Math.round(sA / 100), "quiz over: points = score ÷ 100");
+  check(q1("SELECT coins FROM players WHERE discord_id = ?", U.alice.id).coins === coins0 + 15, "podium gets coins");
+  check(text(await click(U.alice, `qz:${qid}:1:A`)).includes("closed"), "buttons dead after the end");
+
+  // boss battle
+  const bw = q1("SELECT * FROM challenges WHERE kind = 'write' AND lang = 'en' AND status = 'active' AND solution IS NOT NULL AND difficulty = 'easy' LIMIT 1");
+  check((await api("POST", "/api/bosses", { g: G, challenge_id: mcqs[0].id })).status === 400, "a boss needs a write-code challenge");
+  const cb = await api("POST", "/api/bosses", { g: G, challenge_id: bw.id, name: "Null Pointer", hp: 70, hours: 24, reward: 25, coins: 12 });
+  const bid = cb.data.id;
+  check(cb.status === 200 && messagesTo(ARENA).some((m) => ids(m).includes(`boss:${bid}`)), "boss posted in #arena with a Fight button");
+  const fight = async (u: User, code: string) => {
+    await click(u, `boss:${bid}`);
+    const aid = q1("SELECT id FROM attempts WHERE origin = 'boss' AND ref = ? AND discord_id = ?", bid, u.id).id;
+    await select(u, `lang:${aid}`, ["python"]);
+    await submit(u, `msub:${aid}`, code);
+    return aid;
+  };
+  await fight(U.alice, "print(0)");
+  const hit0 = q1("SELECT damage FROM boss_hits WHERE boss_id = ? AND discord_id = ?", bid, U.alice.id)?.damage ?? 0;
+  check(hit0 < 40, `partial damage for a wrong answer (${hit0})`);
+  await submit(U.alice, `msub:${q1("SELECT id FROM attempts WHERE origin = 'boss' AND ref = ? AND discord_id = ?", bid, U.alice.id).id}`, bw.solution);
+  check(q1("SELECT damage FROM boss_hits WHERE boss_id = ? AND discord_id = ?", bid, U.alice.id).damage === 40 && text(lastPatch()).includes("40"), "a full solve hits for 40");
+  check(discordCalls.some((c) => c.method === "PATCH" && c.path.startsWith(`/channels/${ARENA}/messages/`) && text(c.body).includes("30/70")), "health bar updated in #arena");
+  check(q1("SELECT status FROM bosses WHERE id = ?", bid).status === "active", "still alive at 30 HP");
+  await fight(U.bob, bw.solution);
+  check(q1("SELECT status FROM bosses WHERE id = ?", bid).status === "won", "class defeats the boss");
+  check(q("SELECT discord_id FROM ledger WHERE reason = 'boss' AND ref = ?", String(bid)).length === 2, "every fighter gets the reward");
+  check(messagesTo(ARENA).some((m) => text(m).includes("Null Pointer") && /defeat/i.test(text(m))), "victory announced");
+  const lost = await api("POST", "/api/bosses", { g: G, challenge_id: bw.id, name: "Segfault", hp: 500, hours: 1 });
+  clock.advance(3700);
+  await runCron(env);
+  check(q1("SELECT status FROM bosses WHERE id = ?", lost.data.id).status === "lost", "a boss not beaten in time escapes");
+
+  // bounty
+  const bq = q1("SELECT * FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND status = 'active' AND guild_id IS NULL ORDER BY id DESC LIMIT 1");
+  const cbt = await api("POST", "/api/bounties", { g: G, challenge_id: bq.id, points: 40, coins: 30, hours: 24 });
+  const tid = cbt.data.id;
+  check(messagesTo(ARENA).some((m) => ids(m).includes(`bty:${tid}`)), "bounty posted in #arena");
+  await click(U.carol, `bty:${tid}`);
+  const ca = q1("SELECT id FROM attempts WHERE origin = 'bounty' AND ref = ? AND discord_id = ?", tid, U.carol.id).id;
+  const before = q1("SELECT coins FROM players WHERE discord_id = ?", U.carol.id).coins;
+  await click(U.carol, `ans:${ca}:${bq.answer}`);
+  const bt = q1("SELECT * FROM bounties WHERE id = ?", tid);
+  check(bt.status === "claimed" && bt.winner_id === U.carol.id && q1("SELECT amount FROM ledger WHERE reason = 'bounty' AND ref = ?", String(tid))?.amount === 40, "first correct answer claims the bounty");
+  check(q1("SELECT coins FROM players WHERE discord_id = ?", U.carol.id).coins >= before + 30, "bounty coins paid");
+  check(text(await click(U.bob, `bty:${tid}`)).includes("claimed this bounty first"), "too late for the others");
+  const ev = await api("GET", `/api/events?g=${G}`);
+  check(ev.data.bosses.length === 2 && ev.data.bounties[0].winner_id === U.carol.id && !ev.data.live, "dashboard Events page data");
+}
+
+section("2 vs 2 duels, coin shop, peer help, streak freeze");
+{
+  const more = { gina: { id: "107", name: "Gina", teacher: false }, hugo: { id: "108", name: "Hugo", teacher: false }, ines: { id: "109", name: "Ines", teacher: false }, jad: { id: "110", name: "Jad", teacher: false } };
+  Object.assign(U, more);
+  const { gina, hugo, ines, jad } = more;
+  for (const u of [gina, hugo, ines, jad]) await slash(u, "profile");
+  // 2 vs 2
+  await slash(gina, "duel", { opponent: ines.id, partner: hugo.id, opponent2: jad.id, mode: "quick", difficulty: "easy" });
+  const inv = messagesTo(ARENA).reverse().find((m) => text(m).includes("dacc:") && text(m).includes(`<@${jad.id}>`));
+  const acc = ids(inv).find((i) => i.startsWith("dacc:"))!;
+  const did = Number(acc.split(":")[1]);
+  check(!!inv && q1("SELECT partner_id FROM duels WHERE id = ?", did).partner_id === hugo.id, "2 vs 2 invitation in #arena");
+  check(text(await click(U.carol, acc)).includes("popcorn"), "outsiders can't accept");
+  await click(hugo, acc); await click(ines, acc);
+  check(q1("SELECT status FROM duels WHERE id = ?", did).status === "pending", "waits for all three");
+  await click(jad, acc);
+  const d = q1("SELECT * FROM duels WHERE id = ?", did);
+  check(d.status === "active", "starts when everyone accepted");
+  await click(gina, `dopen:${did}`);
+  const first = ids(lastPatch()).find((i) => /^(ans|ansm):/.test(i))!;
+  const aid = Number(first.split(":")[1]);
+  const c = solveAnswer(d.challenge_id);
+  if (first.startsWith("ans:")) await click(gina, `ans:${aid}:${c.answer}`); else await submit(gina, `mans:${aid}`, c.answer);
+  check(q1("SELECT winner_id FROM duels WHERE id = ?", did).winner_id === gina.id, "Gina's team wins");
+  check(q1("SELECT note FROM ledger WHERE discord_id = ? AND reason = 'duel' AND ref = ?", hugo.id, String(did))?.note === "team win", "the teammate wins the same points");
+  check(q("SELECT 1 FROM ledger WHERE reason = 'duel' AND ref = ? AND discord_id IN (?, ?)", String(did), ines.id, jad.id).length === 2, "the other team gets participation points");
+
+  // coin shop
+  db.prepare("UPDATE players SET coins = 500 WHERE guild_id = ? AND discord_id = ?").run(G, gina.id);
+  await slash(gina, "shop");
+  check(text(lastPatch()).includes("shop:freeze") && text(lastPatch()).includes("500"), "/shop lists the items and your coins");
+  await click(gina, "shop:freeze");
+  await click(gina, "shop:hint");
+  let pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
+  check(pg.coins === 410 && pg.streak_freezes === 1 && pg.hint_tokens === 1, "freeze + hint token bought");
+  const tm = await click(gina, "shop:title");
+  check(tm.type === 9, "title opens a form");
+  await submit(gina, "mshop:title", "<@100> Bug Slayer https://x.y");
+  pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
+  check(pg.title === "Bug Slayer" && pg.coins === 310, "title cleaned (no pings or links) and bought");
+  await slash(gina, "profile");
+  check(text(lastPatch()).includes("Bug Slayer"), "title shown on the profile");
+  await submit(gina, "mshop:color", "red");
+  check(text(lastPatch()).includes("⚠️"), "bad color refused, no coins taken");
+  await submit(gina, "mshop:color", "#ff0066");
+  pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
+  check(pg.color_role && pg.coins === 110 && discordCalls.some((x) => x.method === "PUT" && x.path === `/guilds/${G}/members/${gina.id}/roles/${pg.color_role}`), "color role created and given");
+  db.prepare("UPDATE players SET coins = 20 WHERE guild_id = ? AND discord_id = ?").run(G, gina.id);
+  await click(gina, "shop:freeze");
+  check(text(lastPatch()).includes("Not enough coins") && q1("SELECT coins, streak_freezes FROM players WHERE discord_id = ?", gina.id).streak_freezes === 1, "can't buy without enough coins");
+  // hint token makes the next hint free
+  await slash(gina, "practice", { difficulty: "easy", type: "write" });
+  const wa = Number(ids(lastPatch()).find((i) => i.startsWith("sub:"))!.split(":")[1]);
+  await click(gina, `hint:${wa}`);
+  check(q1("SELECT free_hints FROM attempts WHERE id = ?", wa).free_hints === 1 && q1("SELECT hint_tokens FROM players WHERE discord_id = ?", gina.id).hint_tokens === 0, "hint token used: that hint is free");
+  // streak freeze
+  await runCron(env);
+  const day = new Date(Date.now()).toISOString().slice(0, 10);
+  const dl = q1("SELECT * FROM daily WHERE guild_id = ? AND day = ?", G, day);
+  const twoAgo = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  db.prepare("UPDATE players SET last_daily_day = ?, daily_streak = 4 WHERE guild_id = ? AND discord_id = ?").run(twoAgo, G, gina.id);
+  if (dl) {
+    await click(gina, `dsolve:${day.replace(/-/g, "")}`);
+    const dc = solveAnswer(dl.challenge_id);
+    const f = ids(lastPatch()).find((i) => /^(ans|ansm|sub|chk):/.test(i))!;
+    const da = Number(f.split(":")[1]);
+    if (dc.kind === "write") { await select(gina, `lang:${da}`, ["python"]); await submit(gina, `msub:${da}`, dc.solution); }
+    else if (f.startsWith("ans:")) await click(gina, `ans:${da}:${dc.answer}`);
+    else if (dc.kind !== "code") await submit(gina, `mans:${da}`, dc.answer);
+    if (dc.kind !== "code") {
+      pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
+      check(pg.daily_streak === 5 && pg.streak_freezes === 0, `streak freeze covered the missed day (streak ${pg.daily_streak})`);
+    }
+  }
+  // expiry
+  clock.advance(8 * 86400);
+  await runCron(env);
+  pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
+  check(!pg.title && !pg.color_role && discordCalls.some((x) => x.method === "DELETE" && x.path.includes("/roles/")), "title and color role removed after 7 days");
+
+  // peer help
+  await slash(hugo, "practice", { difficulty: "easy", type: "write" });
+  const ha = Number(ids(lastPatch()).find((i) => i.startsWith("sub:"))!.split(":")[1]);
+  check(!ids(lastPatch()).some((i) => i.startsWith("ask:")), "no Ask button before a first try");
+  await select(hugo, `lang:${ha}`, ["python"]);
+  await submit(hugo, `msub:${ha}`, "print(0)");
+  check(ids(lastPatch()).includes(`ask:${ha}`), "Ask a classmate after a wrong try");
+  await click(hugo, `ask:${ha}`);
+  const post = messagesTo(ARENA).reverse().find((m) => text(m).includes("hlp:"));
+  const rid = Number(ids(post).find((i) => i.startsWith("hlp:"))!.split(":")[1]);
+  check(!!post && text(post).includes("print(0)"), "request posted in #arena with the code");
+  check(text(await click(hugo, `hlp:${rid}`)).includes("own"), "can't answer your own request");
+  check((await click(ines, `hlp:${rid}`)).type === 9, "a classmate opens the explain form");
+  await submit(ines, `mhelp:${rid}`, "def solve(a):\n    s = 0\n    for x in a:\n        if x > 0:\n            s += x\n    return s\nprint(solve(list(map(int, input().split()))))");
+  check(/words|solution/i.test(text(lastPatch())) && !q1("SELECT 1 AS x FROM help_answers WHERE request_id = ?", rid), "pasting a solution is refused");
+  await submit(ines, `mhelp:${rid}`, "You print a constant. Read the input first, then think about what happens when every number is negative.");
+  const dmHugo = discordCalls.filter((x) => x.path === `/channels/dm-${hugo.id}/messages`).pop();
+  const rate = ids(dmHugo?.body).find((i) => i.startsWith("hrate:") && i.endsWith(":1"))!;
+  check(!!rate, "explanation DMed with 👍/👎");
+  check(text(await click(ines, rate)).includes("not") || text(lastPatch()).includes("not yours") || !q1("SELECT rating FROM help_answers WHERE request_id = ?", rid).rating, "only the asker can rate");
+  const c0 = q1("SELECT coins FROM players WHERE discord_id = ?", ines.id).coins;
+  await click(hugo, rate);
+  check(q1("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'review' AND ref = ?", ines.id, String(rid))?.amount === 8 && q1("SELECT coins FROM players WHERE discord_id = ?", ines.id).coins === c0 + 5, "helpful: +8 points +5 coins for the helper");
+  check(q1("SELECT status FROM help_requests WHERE id = ?", rid).status === "closed", "request closed");
+  // daily cap
+  for (let i = 0; i < 2; i++) db.prepare("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, ref, created_at) VALUES (?, ?, 'x', 8, 'review', 'x', ?)").run(G, ines.id, clock.now());
+  await slash(jad, "practice", { difficulty: "easy", type: "write" });
+  const ja = Number(ids(lastPatch()).find((i) => i.startsWith("sub:"))!.split(":")[1]);
+  await select(jad, `lang:${ja}`, ["python"]);
+  await submit(jad, `msub:${ja}`, "print(1)");
+  await click(jad, `ask:${ja}`);
+  const rid2 = Number(ids(messagesTo(ARENA).reverse().find((m) => text(m).includes("hlp:"))).find((i) => i.startsWith("hlp:"))!.split(":")[1]);
+  await submit(ines, `mhelp:${rid2}`, "Your output does not depend on the input at all. Store the numbers in a list and loop over them.");
+  const rate2 = ids(discordCalls.filter((x) => x.path === `/channels/dm-${jad.id}/messages`).pop()?.body).find((i) => i.startsWith("hrate:") && i.endsWith(":1"))!;
+  await click(jad, rate2);
+  check(!q1("SELECT 1 AS x FROM ledger WHERE discord_id = ? AND reason = 'review' AND ref = ?", ines.id, String(rid2)), "max 3 rewarded explanations a day");
+  const ev = await api("GET", `/api/events?g=${G}`);
+  check(ev.data.shop.find((x: any) => x.key === "title").n === 1 && ev.data.help.helpful === 2, "dashboard shows shop and help stats");
+}
+
+section("help queue: /help-me, live queue in the dashboard, replies by DM");
+{
+  const kai = { id: "111", name: "Kai", teacher: false }, lea = { id: "112", name: "Lea", teacher: false };
+  const raise = (u: User, q: string, code = "") => call(raw(5, u, { custom_id: "mhand", components: [
+    { type: 1, components: [{ type: 4, custom_id: "q", value: q }] }, { type: 1, components: [{ type: 4, custom_id: "code", value: code }] }] }));
+  const m = await slash(kai, "help-me");
+  check(m.type === 9 && m.data.custom_id === "mhand", "/help-me opens a form (question + optional code)");
+  await raise(kai, "My loop never stops", "while True:\n    pass");
+  check(text(lastPatch()).includes("next"), "first in the queue: 'you're next'");
+  await raise(lea, "How do I read two numbers?");
+  check(text(lastPatch()).includes("#2"), "second student is #2");
+  check(text(await (async () => { await raise(kai, "again"); return lastPatch(); })()).includes("already"), "one raised hand at a time");
+  const st = await slash(kai, "help-me");
+  const kaiHand = q1("SELECT * FROM hands WHERE discord_id = ?", kai.id), leaHand = q1("SELECT * FROM hands WHERE discord_id = ?", lea.id);
+  check(ids(st.data).includes(`hand:cancel:${kaiHand.id}`) && text(st).includes("next"), "/help-me again shows the place and a cancel button");
+  let qd = await api("GET", `/api/hands?g=${G}`);
+  check(qd.data.open.length === 2 && qd.data.stats.waiting === 2 && qd.data.open[0].code.includes("while True"), "dashboard queue lists both, with the code");
+  check((await api("GET", `/api/pills?g=${G}`)).data.hands === 2, "nav badge counts waiting hands");
+  await api("PUT", `/api/hands/${kaiHand.id}?g=${G}`, { action: "take" });
+  check(text(discordCalls.filter((x) => x.path === `/channels/dm-${kai.id}/messages`).pop()?.body).includes("coming"), "'I'm coming' is DMed");
+  check(q1("SELECT position FROM (SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS position FROM hands WHERE status = 'waiting') WHERE id = ?", leaHand.id)?.position === 1, "Lea moves up when Kai is being helped");
+  qd = await api("PUT", `/api/hands/${leaHand.id}?g=${G}`, { action: "reply", reply: "Use input().split() and map(int, ...)." });
+  check(text(discordCalls.filter((x) => x.path === `/channels/dm-${lea.id}/messages`).pop()?.body).includes("map(int"), "written reply is DMed with the question");
+  check(qd.data.open.length === 1 && qd.data.done.length === 1, "answered hand leaves the queue");
+  const c = await click(lea, `hand:cancel:${leaHand.id}`);
+  check(c.type === 7 && text(c).includes("closed"), "cancelling a closed hand says so");
+  await api("PUT", `/api/hands/${kaiHand.id}?g=${G}`, { action: "done" });
+  qd = await api("GET", `/api/hands?g=${G}`);
+  check(qd.data.open.length === 0 && qd.data.stats.helped === 2 && qd.data.stats.avgWait != null, "queue empty, average wait computed");
+}
+
+section("questions bank: /ask, AI draft, teacher approves, FAQ");
+{
+  const kai = { id: "111", name: "Kai", teacher: false }, lea = { id: "112", name: "Lea", teacher: false };
+  const max = { id: "113", name: "Max", teacher: false }, nora = { id: "114", name: "Nora", teacher: false };
+  await slash(kai, "ask", { question: "What is the difference between a for loop and a while loop?" });
+  check(text(lastPatch()).includes("Sent to your teacher"), "new question goes to the teacher");
+  let f = q1("SELECT * FROM faq WHERE guild_id = ? AND status = 'pending'", G);
+  check(f && f.draft && f.draft.includes("while"), "the AI wrote a draft answer");
+  await slash(lea, "ask", { question: "difference between for loops and while loops" });
+  check(text(lastPatch()).includes("already asked"), "same question joins the existing one");
+  check(JSON.parse(q1("SELECT askers FROM faq WHERE id = ?", f.id).askers).length === 2, "both students wait for the answer");
+  check(text(await slash(kai, "ask", { question: "short" })).length > 0 && !q1("SELECT 1 AS x FROM faq WHERE question = 'short'"), "too short questions are refused");
+  let list = await api("GET", `/api/faq?g=${G}`);
+  check(list.data.items[0].status === "pending" && list.data.items[0].askers.length === 2, "dashboard lists the pending question");
+  check((await api("GET", `/api/pills?g=${G}`)).data.faq === 1, "nav badge counts pending questions");
+  const before = discordCalls.length;
+  await api("PUT", `/api/faq/${f.id}?g=${G}`, { answer: "Use **for** when you know how many times to loop, **while** when you loop until a condition changes.", status: "approved", announce: true });
+  const dms = discordCalls.slice(before).filter((x) => x.path.startsWith("/channels/dm-"));
+  check(dms.length === 2 && text(dms[0].body).includes("know how many times"), "approved answer DMed to everyone who asked");
+  check(messagesTo(ARENA).some((x) => text(x).includes("New in the class FAQ")), "announced in #arena");
+  await slash(max, "ask", { question: "for loop vs while loop: what is the difference?" });
+  const found = lastPatch();
+  check(text(found).includes("already be answered") && ids(found).some((i) => i.startsWith("faqok:")), "a close question is answered from the FAQ right away");
+  await click(max, ids(found).find((i) => i.startsWith("faqok:"))!);
+  check(q1("SELECT hits FROM faq WHERE id = ?", f.id).hits === 1 && !q1("SELECT 1 AS x FROM faq WHERE status = 'suggested' AND asked_by = ?", max.id), "'that answers it' counts a hit");
+  await slash(nora, "ask", { question: "Is a while loop faster than a for loop in Python?" });
+  const f2 = lastPatch();
+  const esc2 = ids(f2).find((i) => i.startsWith("faqask:"));
+  if (esc2) { await click(nora, esc2); check(text(lastPatch()).includes("Sent to your teacher"), "'ask my teacher' sends it on"); }
+  else check(text(f2).includes("Sent to your teacher"), "unrelated question goes to the teacher");
+  check(q1("SELECT COUNT(*) AS n FROM faq WHERE status = 'pending'").n === 1, "one new pending question");
+  const fq = await slash(max, "faq");
+  check(text(fq).includes("for loop and a while loop"), "/faq lists approved questions");
+  const fs = await slash(max, "faq", { search: "while loop" });
+  check(text(fs).includes("know how many times"), "/faq search shows the answer");
+  const mine = await api("POST", `/api/faq?g=${G}`, { question: "When is the exam?", answer: "Friday at 9:00 in room B12." });
+  check(mine.data.items.some((x: any) => x.question === "When is the exam?" && x.status === "approved"), "teacher can add an FAQ entry directly");
+  const p2 = q1("SELECT id FROM faq WHERE status = 'pending'").id;
+  await api("PUT", `/api/faq/${p2}?g=${G}`, { status: "rejected", answer: "Let's discuss it in class tomorrow." });
+  check(text(discordCalls.filter((x) => x.path === `/channels/dm-${nora.id}/messages`).pop()?.body).includes("discuss it in class"), "rejecting with a note tells the student");
+}
+
+section("mock interview: interviewer, code, scorecard");
+{
+  db.prepare("DELETE FROM ai_usage").run();   // fresh AI budget for this section
+  const kai = { id: "111", name: "Kai", teacher: false };
+  db.prepare("UPDATE guilds SET integrity = ? WHERE id = ?").run(JSON.stringify({ editor: "off", explain: false, codeImage: false, similarity: false }), G);
+  await slash(kai, "interview", { difficulty: "easy" });
+  const v = lastPatch();
+  const iv = q1("SELECT * FROM interviews WHERE discord_id = ? ORDER BY id DESC", kai.id);
+  const a = q1("SELECT * FROM attempts WHERE id = ?", iv.attempt_id);
+  check(iv && a.origin === "interview" && ids(v).includes(`ivr:${iv.id}`) && ids(v).includes(`ive:${iv.id}`) && text(v).includes("Interviewer"), "interview opens with the problem, the interviewer and buttons");
+  check((await click(kai, `ivr:${iv.id}`)).type === 9, "Answer opens a form");
+  check(text(await click(U.bob, `ivr:${iv.id}`)).includes("isn't yours"), "someone else can't answer");
+  await submit(kai, `miv:${iv.id}`, "I keep a running best sum and reset when it gets worse.");
+  check(text(lastPatch()).includes("only negative numbers"), "the interviewer reacts with a follow-up question");
+  await submit(kai, `miv:${iv.id}`, "Then I start from the first element instead of zero. It's O(n) time and O(1) memory.");
+  await submit(kai, `miv:${iv.id}`, "I'd test one element, all negatives, and a big random array against brute force.");
+  check(JSON.parse(q1("SELECT transcript FROM interviews WHERE id = ?", iv.id).transcript).length === 7, "transcript kept (opening + 3 answers + 3 questions)");
+  const c = q1("SELECT * FROM challenges WHERE id = ?", iv.challenge_id);
+  await select(kai, `lang:${a.id}`, ["python"]);
+  await submit(kai, `msub:${a.id}`, c.solution);
+  check(q1("SELECT status FROM attempts WHERE id = ?", a.id).status === "solved", "code judged like any write-code challenge");
+  await click(kai, `ive:${iv.id}`);
+  const card = lastPatch();
+  check(text(card).includes("scorecard") && text(card).includes("Hire") && text(card).includes("★"), "scorecard with verdict and stars");
+  const bonusRows = () => q1("SELECT COUNT(*) AS n, SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'interview' AND ref LIKE '____-__-__'", kai.id);
+  check(bonusRows().s === 5, "+5 pts for a completed interview");
+  await click(kai, `ive:${iv.id}`);
+  check(bonusRows().n === 1, "ending twice gives no second bonus");
+  check(text(await click(kai, `ivr:${iv.id}`)).includes("over"), "no answers after the end");
+  // without AI: scripted questions and a score from the judge
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare("INSERT OR REPLACE INTO ai_usage (day, count) VALUES (?, 999999)").run(today);   // AI budget used up
+  await slash(kai, "interview", { difficulty: "easy" });
+  const iv2 = q1("SELECT * FROM interviews WHERE discord_id = ? ORDER BY id DESC", kai.id);
+  await submit(kai, `miv:${iv2.id}`, "I would sort first.");
+  check(text(lastPatch()).includes("step by step"), "scripted interviewer question when the AI is down");
+  await click(kai, `ive:${iv2.id}`);
+  check(text(lastPatch()).includes("judge's results") && q1("SELECT status FROM attempts WHERE id = ?", iv2.attempt_id).status === "expired", "stats scorecard, unfinished attempt closed");
+  db.prepare("DELETE FROM ai_usage").run();
+  const li = await api("GET", `/api/interviews?g=${G}`);
+  check(li.data.items.length >= 2 && li.data.items.some((x: any) => x.scores?.verdict === "Hire"), "dashboard lists interviews with scores");
+}
+
+section("GitHub projects: link a repo, graded tests, points, push webhook");
+{
+  const kai = { id: "111", name: "Kai", teacher: false }, lea = { id: "112", name: "Lea", teacher: false };
+  const bad = await api("POST", `/api/projects?g=${G}`, { title: "x", lang: "python", entry: "../etc", testsText: "1\n>>>\n1" });
+  check(bad.status === 400, "unsafe entry path refused");
+  const cr = await api("POST", `/api/projects?g=${G}`, { title: "Sum of two", lang: "python", entry: "main.py", points: 40, announce: true,
+    testsText: "1 2\n>>>\n3\n---\n5 7\n>>>\n12\n---\n100 1\n>>>\n101\n---\n-4 4\n>>>\n0" });
+  const pid = cr.data.project.id;
+  check(cr.status === 200 && cr.data.project.tests.length === 4, "teacher creates a project with 4 tests");
+  check(messagesTo(ARENA).some((x) => text(x).includes("Sum of two") && text(x).includes("/project submit")), "project announced in #arena with instructions");
+  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a - b)\n";
+  await slash(kai, "project", { repo: "https://github.com/kai/tp1" }, "submit");
+  let out = text(lastPatch());
+  check(out.includes("Linked") && out.includes("0/4") && out.includes("Expected"), "repo linked and graded: 0/4 with the first sample shown");
+  check(text(await (async () => { await slash(lea, "project", { repo: "kai/tp1" }, "submit"); return lastPatch(); })()).includes("Another student"), "a repo belongs to one student");
+  await slash(lea, "project", { repo: "not a repo!!" }, "submit");
+  check(text(lastPatch()).includes("doesn't look like"), "bad link explained");
+  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a + b)\n";
+  await slash(kai, "project", {}, "check");
+  check(text(lastPatch()).includes("Wait 30 seconds"), "checks are rate-limited");
+  clock.advance(31);
+  await slash(kai, "project", {}, "check");
+  out = text(lastPatch());
+  check(out.includes("All tests pass") && out.includes("+40"), "fixed code: 4/4 and 40 pts");
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40, "points in the ledger");
+  check(messagesTo(ARENA).some((x) => text(x).includes("passes every test")), "full score celebrated in #arena");
+  clock.advance(31);
+  await slash(kai, "project", {}, "check");
+  check(text(lastPatch()).includes("No change"), "unchanged file isn't run again");
+  // a push makes it re-check on the next cron; a worse version never removes points
+  github.files["kai/tp1/HEAD/main.py"] = "print(0)\n";
+  const hook = await bot.fetch(new Request("https://bot.example.workers.dev/gh/hook", { method: "POST", headers: { "x-github-event": "push", "content-type": "application/json" }, body: JSON.stringify({ repository: { full_name: "Kai/TP1" } }) }), env, makeCtx());
+  check(hook.status === 202 && q1("SELECT due_check FROM project_repos WHERE discord_id = ?", kai.id).due_check === 1, "push webhook queues a check");
+  const ping = await bot.fetch(new Request("https://bot.example.workers.dev/gh/hook", { method: "POST", headers: { "x-github-event": "ping" }, body: "{}" }), env, makeCtx());
+  check(ping.status === 200, "webhook ping answered");
+  const dmBefore = discordCalls.filter((x) => x.path === `/channels/dm-${kai.id}/messages`).length;
+  await runCron(env);
+  const dmAfter = discordCalls.filter((x) => x.path === `/channels/dm-${kai.id}/messages`).slice(dmBefore);
+  check(dmAfter.some((x) => text(x.body).includes("1/4") && text(x.body).includes("kai/tp1")), "cron re-grades after the push and DMs the result");
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40 && q1("SELECT best FROM project_repos WHERE discord_id = ?", kai.id).best === 4, "best score and points kept");
+  await slash(lea, "project", { repo: "github.com/lea/homework" }, "submit");
+  check(text(lastPatch()).includes("public"), "missing file / private repo explained");
+  const ac = await call({ ...raw(4, lea, { name: "project", options: [{ type: 1, name: "check", options: [{ name: "project", value: "sum", focused: true, type: 3 }] }] }) });
+  check(ac.type === 8 && ac.data.choices[0].name === "Sum of two", "project name autocomplete");
+  await slash(lea, "project", {}, "list");
+  check(text(lastPatch()).includes("lea/homework") && text(lastPatch()).includes("Sum of two"), "/project list shows my status");
+  const pl = await api("GET", `/api/projects?g=${G}`);
+  check(pl.data.items[0].linked === 2 && pl.data.items[0].complete === 1 && pl.data.hook.endsWith("/gh/hook"), "dashboard list: linked and complete counts, webhook URL");
+  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a + b)\n";
+  const rc = await api("POST", `/api/projects/${pid}/check?g=${G}`, { discord_id: kai.id });
+  check(rc.data.repos.find((r: any) => r.discord_id === kai.id).passed === 4, "teacher can re-grade one student now");
+  const ed = await api("PUT", `/api/projects/${pid}?g=${G}`, { ...cr.data.project, testsText: cr.data.project.testsText + "\n---\n2 2\n>>>\n4", tests: undefined });
+  check(ed.data.project.tests.length === 5 && q1("SELECT due_check FROM project_repos WHERE discord_id = ?", kai.id).due_check === 1, "editing tests re-grades everyone");
+  db.prepare("UPDATE projects SET due_at = ? WHERE id = ?").run(clock.now() - 10, pid);
+  clock.advance(31);
+  await slash(kai, "project", {}, "check");
+  check(text(lastPatch()).includes("due date has passed") && q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40, "after the due date: graded, no new points");
+}
+
+section("profiles you can share, certificates, class league, all classes");
+{
+  const kai = { id: "111", name: "Kai", teacher: false };
+  const prof = await slash(kai, "profile");
+  check(ids(prof.data).includes("share:on") && ids(prof.data).includes("cert:0"), "/profile has Share and Certificate buttons");
+  check(!ids((await slash(kai, "profile", { member: U.alice.id })).data).includes("share:on"), "no share button on someone else's profile");
+  await click(kai, "share:on");
+  const key = q1("SELECT share_key FROM players WHERE guild_id = ? AND discord_id = ?", G, kai.id).share_key;
+  check(key && text(lastPatch()).includes(`/u/${key}`), "sharing gives a public link");
+  const page = await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx());
+  const html = await page.text();
+  check(page.status === 200 && html.includes("Kai") && html.includes("noindex") && html.includes("Skills") && !html.includes("print(a + b)"), "profile page shows level/skills, never code");
+  await click(kai, "share:off");
+  check((await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).status === 404, "stop sharing: the link dies");
+  await click(kai, "cert:0");
+  const certLink = (lastPatch()?.components?.[0]?.components ?? [])[0]?.url ?? "";
+  const cp = await bot.fetch(new Request(certLink), env, makeCtx());
+  const ch = await cp.text();
+  check(cp.status === 200 && ch.includes("Certificate of Achievement") && ch.includes("Kai") && ch.includes("IN PROGRESS"), "certificate page for the current season");
+  const forged = certLink.replace(/.$/, (c: string) => (c === "A" ? "B" : "A"));
+  check((await bot.fetch(new Request(forged), env, makeCtx())).status === 404, "forged certificate link refused");
+  const cl = await api("GET", `/api/certificates?g=${G}`);
+  check(cl.data.items.length > 3 && cl.data.items[0].url.includes("/cert/"), "dashboard lists certificate links");
+
+  // league between two classes
+  db.prepare("INSERT OR IGNORE INTO guilds (id, name, lang, season, code_lang, created_at) VALUES ('g2', 'Other class', 'en', 'S1', 'python', ?)").run(clock.now());
+  db.prepare("UPDATE guilds SET league = ? WHERE id = 'g2'").run(JSON.stringify({ on: true, name: "Group B" }));
+  db.prepare("INSERT INTO players (guild_id, discord_id, name, last_active, created_at) VALUES ('g2', '901', 'Zed', ?, ?)").run(clock.now(), clock.now());
+  db.prepare("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('g2', '901', 'S1', 20, 'practice', ?)").run(clock.now());
+  db.prepare("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('g2', '901', 'S1', 500, 'bonus', ?)").run(clock.now());
+  check((await slash(kai, "league")).type === 5 && text(lastPatch()).includes("isn't in the league"), "/league before joining");
+  const lg = await api("PUT", `/api/league?g=${G}`, { on: true, name: "Group A" });
+  check(lg.data.cfg.on && lg.data.table.length === 2, "class joins the league");
+  check(lg.data.table.find((r: any) => r.guild_id === "g2").score === 4, "teacher bonuses don't count, small classes count as 5");
+  await slash(kai, "league");
+  check(text(lastPatch()).includes("Group A") && text(lastPatch()).includes("Group B") && text(lastPatch()).includes("your class"), "/league shows both classes");
+  const cmp = await api("GET", "/api/compare");
+  check(cmp.data.classes.length >= 2 && cmp.data.classes.every((c: any) => c.trend.length === 4), "dashboard compares all classes with a 4-week trend");
+  // new season: certificates by DM
+  const old = q1("SELECT season FROM guilds WHERE id = ?", G).season;
+  const n0 = discordCalls.length;
+  const ss = await slash(U.prof, "teacher", { name: "Spring term" }, "season");
+  const certDms = discordCalls.slice(n0).filter((x) => x.path.startsWith("/channels/dm-") && text(x.body).includes("/cert/"));
+  check(text(ss).includes("certificate") && certDms.length >= 3, "new season: every student who scored gets a certificate by DM");
+  const oldLink = (certDms[0].body.components[0].components[0].url) as string;
+  const oc = await (await bot.fetch(new Request(oldLink), env, makeCtx())).text();
+  check(oc.includes(old) && !oc.includes("IN PROGRESS"), "last season's certificate is final");
+  // Monday: league result posted
+  const d = new Date(clock.now() * 1000);
+  clock.advance((((8 - d.getUTCDay()) % 7 || 7) * 86400) + (12 - d.getUTCHours()) * 3600);
+  db.prepare("UPDATE guilds SET daily_hour = 23 WHERE id <> ?").run(G);
+  await runCron(env);
+  check(messagesTo(ARENA).some((x) => text(x).includes("last week's result")), "Monday: last week's league result in #arena");
+}
+
+section("lessons follow the class languages, AI buttons, live overview, SQL in /practice");
+{
+  const { renderLesson, LESSONS } = await import("../src/shared/lessons.ts");
+  const js = renderLesson("loops", "en", ["javascript"]);
+  check(js.includes("```js") && !js.includes("```php") && !js.includes("```py") && js.includes("javascript.info/"), "one language at a time: a JavaScript class sees only JavaScript");
+  const fr = renderLesson("loops", "fr", ["php"]);
+  check(fr.includes("Pour aller plus loin") && fr.includes("```php") && fr.includes("php.net/manual/fr/"), "French lesson links to French tutorials");
+  check(renderLesson("dicts", "en", ["c"]).includes("```c"), "C class gets C examples");
+  check(Object.keys(LESSONS).every((k) => renderLesson(k, "en", ["python"]).length > 100 && renderLesson(k, "fr", ["java"]).length > 100), "every skill has a lesson in every language");
+  const kai = { id: "111", name: "Kai", teacher: false };
+  const pv = await api("GET", `/api/path?g=${G}`);
+  check(pv.data.langs.includes("python") && pv.data.defaults.lessons.loops.en.includes("```py") && typeof pv.data.coverage["loops-easy"] === "number", "dashboard path: lessons in the class language and bank coverage");
+  check(pv.data.skills.find((x: any) => x.key === "async").fits === true, "async fits a Python class");
+  await slash(U.prof, "teacher", { code_language: "php" }, "setup");
+  const pv2 = await api("GET", `/api/path?g=${G}`);
+  check(pv2.data.skills.find((x: any) => x.key === "async").fits === false && !pv2.data.defaults.steps.some((s: any) => s.skill === "async") && pv2.data.defaults.lessons.basics.en.includes("```php"), "PHP class: PHP examples, no async step");
+  await slash(U.prof, "teacher", { code_language: "python" }, "setup");
+  // AI: lesson
+  db.prepare("DELETE FROM ai_usage").run();
+  const ls = await api("POST", `/api/path/lesson-ai?g=${G}`, { skill: "loops" });
+  check(ls.status === 200 && ls.data.en.includes("**Loops**") && ls.data.fr.length > 20, "✨ AI writes a lesson (EN + FR)");
+  check(ai.prompts.some((p) => p.includes("BEGINNERS") && p.includes("docs.python.org")), "the AI is told to write for beginners, with real links only");
+  // AI: challenge for a skill
+  const before = pv.data.coverage["strings-easy"] ?? 0;
+  const gc = await api("POST", `/api/ai/challenge?g=${G}`, { skill: "strings", difficulty: "easy", kind: "mcq" });
+  check(gc.status === 200 && gc.data.challenge.skills.split(",")[0] === "strings" && gc.data.coverage["strings-easy"] === before + 1, "✨ a new challenge for a skill: saved, tagged, coverage goes up");
+  check((await api("POST", `/api/ai/challenge?g=${G}`, { skill: "regex", difficulty: "easy", kind: "quick" })).status === 400, "no AI challenges for regex and Git (can't be checked)");
+  const gw = await api("POST", `/api/challenges/generate?g=${G}`, { difficulty: "medium", kind: "mcq", skill: "dicts" });
+  check(gw.status === 200 && gw.data.skills === "dicts", "challenge generator takes a skill");
+  // AI: project
+  const pj = await api("POST", `/api/projects/ai?g=${G}`, { idea: "sum of two numbers", difficulty: "easy" });
+  check(pj.status === 200 && pj.data.tests >= 2 && pj.data.testsText.includes(">>>\n3"), "✨ AI project: tests computed by running the reference");
+  // live overview
+  const lv = await api("GET", `/api/overview/live?g=${G}`);
+  check(lv.status === 200 && "hands" in lv.data && "projects" in lv.data && "plans" in lv.data && lv.data.league?.name, "overview: live class data");
+  // SQL as a /practice language
+  await slash(kai, "practice", { difficulty: "easy", language: "sql" });
+  const last = q1("SELECT c.kind FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", kai.id);
+  check(last?.kind === "sql" && q1("SELECT code_lang FROM players WHERE guild_id = ? AND discord_id = ?", G, kai.id).code_lang !== "sql", "/practice language:SQL gives a SQL challenge, remembered language unchanged");
+  const nora = { id: "114", name: "Nora", teacher: false };
+  let gitSeen = 0, mcqs = 0;
+  for (let i = 0; i < 12; i++) {
+    await slash(nora, "practice", { difficulty: "easy", type: "mcq", language: "javascript" });
+    const c = q1("SELECT c.kind, c.topic FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", nora.id);
+    if (c?.kind === "mcq") mcqs++;
+    if (c?.topic === "git") gitSeen++;
+  }
+  check(mcqs > 0 && gitSeen === 0, `multiple choice in JavaScript never gives a Git question (${mcqs} picked, ${gitSeen} Git)`);
+  await slash(nora, "practice", { difficulty: "easy", type: "git" });
+  check(q1("SELECT c.topic FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", nora.id)?.topic === "git", "Git questions still come with type:Git");
+  const ds = await api("PUT", `/api/daily/settings?g=${G}`, { plan: [["easy", "sql"], ["easy", "regex"], ["easy", "write"], ["easy", "write"], ["easy", "write"], ["easy", "write"], ["easy", "write"]] });
+  check(ds.status === 200 && JSON.stringify(ds.data).includes('"sql"'), "daily challenge plan accepts SQL and regex days");
+}
+
+section("tracks: one language or stack per class (SQL, MERN, AI…), AI SQL challenges, French/English buttons");
+{
+  const sam = { id: "115", name: "Sam", teacher: false };
+  // SQL track
+  const tr = await api("PUT", `/api/track?g=${G}`, { track: "sql" });
+  check(tr.status === 200 && tr.data.guild.track === "sql", "dashboard: the class switches to the SQL track");
+  const pv = await api("GET", `/api/path?g=${G}`);
+  check(pv.data.track.key === "sql" && pv.data.steps[0].skill === "sql_select" && pv.data.steps.some((s: any) => s.skill === "sql_join") && pv.data.defaults.lessons.sql_join.en.includes("```sql"), "SQL track: its own roadmap and SQL lessons");
+  check(pv.data.skills.find((x: any) => x.key === "sql_join").fits && !pv.data.skills.find((x: any) => x.key === "react").fits, "skills that don't belong to the track are marked");
+  const dl = await api("GET", `/api/daily?g=${G}`);
+  check(JSON.stringify(dl.data).includes('"sql"'), "SQL track: the daily challenge plan is SQL");
+  await slash(sam, "practice", { difficulty: "easy" });
+  check(q1("SELECT c.kind FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", sam.id)?.kind === "sql", "SQL track: /practice gives a SQL challenge");
+  await backfillSkills(env, 500);
+  check(q1("SELECT skills FROM challenges WHERE solution LIKE '%JOIN%' AND kind = 'sql' LIMIT 1")?.skills?.includes("sql_join"), "bank SQL challenges are tagged with finer SQL skills");
+  db.prepare("DELETE FROM ai_usage").run();
+  const sq = await api("POST", `/api/ai/challenge?g=${G}`, { skill: "sql_join", difficulty: "medium", kind: "quick" });
+  check(sq.status === 200 && sq.data.challenge.kind === "sql" && sq.data.challenge.skills.includes("sql_join"), "✨ AI SQL challenge: written, checked by running the query, tagged");
+  const tsq = q("SELECT expected, sample FROM challenge_tests WHERE test_set = ? ORDER BY idx", sq.data.challenge.test_set);
+  check(tsq.length === 3 && tsq[0].sample === 1 && JSON.parse(tsq[0].expected).length > 0, "its datasets and expected rows come from running the reference");
+  // MERN track
+  await api("PUT", `/api/track?g=${G}`, { track: "mern" });
+  const pm = await api("GET", `/api/path?g=${G}`);
+  check(pm.data.langs[0] === "javascript" && pm.data.steps.some((s: any) => s.skill === "react") && pm.data.defaults.lessons.loops.en.includes("```js"), "MERN track: JavaScript, with React/Express/MongoDB steps");
+  for (let i = 0; i < 4; i++) await slash(sam, "practice", { difficulty: "easy", type: "output" });
+  const langs = q("SELECT DISTINCT c.code_lang FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? AND c.kind = 'output'", sam.id).map((r: any) => r.code_lang);
+  check(langs.length > 0 && langs.every((l: string) => l === "javascript"), `MERN track: quick challenges only in JavaScript (${langs.join(",")})`);
+  const rc = await api("POST", `/api/ai/challenge?g=${G}`, { skill: "react", difficulty: "easy", kind: "output" });
+  check(rc.status === 200 && rc.data.challenge.kind === "mcq", "React can't run on the judge: the AI writes multiple choice instead");
+  // AI track, and /teacher setup
+  await slash(U.prof, "teacher", { code_language: "ai" }, "setup");
+  const pa = await api("GET", `/api/path?g=${G}`);
+  check(q1("SELECT track, code_lang FROM guilds WHERE id = ?", G).code_lang === "python" && pa.data.steps.some((s: any) => s.skill === "ai_llm") && pa.data.defaults.lessons.ai_llm.en.includes("```py"), "/teacher setup sets the AI track: Python, LLM steps");
+  // a saved path belongs to its track
+  await api("PUT", `/api/path?g=${G}`, { steps: [{ skill: "ai_data", level: "easy", need: 1 }] });
+  await api("PUT", `/api/track?g=${G}`, { track: "python" });
+  const pp = await api("GET", `/api/path?g=${G}`);
+  check(pp.data.steps[0].skill === "basics" && !pp.data.custom, "each track keeps its own path");
+  await api("PUT", `/api/track?g=${G}`, { track: "ai" });
+  check((await api("GET", `/api/path?g=${G}`)).data.steps[0].skill === "ai_data", "…and finds it again when coming back");
+  await api("PUT", `/api/track?g=${G}`, { track: "python" });
+  // 🌐 translations
+  db.prepare("UPDATE guilds SET lang = 'en' WHERE id = ?").run(G);
+  await slash(sam, "practice", { difficulty: "easy", type: "mcq", language: "python" });
+  const view = lastPatch();
+  const trId = ids(view).find((i) => i.startsWith("tr:"));
+  check(!!trId, "challenges have a 🌐 French version button");
+  const a1 = q1("SELECT a.challenge_id, c.source FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", sam.id);
+  await click(sam, trId!);
+  const trv = lastPatch();
+  check(trv?.embeds?.[0]?.title?.startsWith("🌐") && text(trv).includes("Réponds avec les boutons"), `French version shown (${a1.source === "seed" ? "built-in twin" : "AI translation"})`);
+  // an AI challenge has no twin: the AI translates once, then it's kept
+  db.prepare("UPDATE guilds SET lang = 'en' WHERE id = ?").run(G);
+  const aiC = q1("SELECT id FROM challenges WHERE source = 'ai' AND kind = 'mcq' AND lang = 'en' LIMIT 1");
+  if (aiC) {
+    db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, sam.id, aiC.id, clock.now());
+    const aid = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", sam.id).id;
+    await click(sam, `tr:${aid}`);
+    check(JSON.parse(q1("SELECT translations FROM challenges WHERE id = ?", aiC.id).translations || "{}").fr?.title, "AI translation kept for next time");
+  }
+  // lessons: 🌐 switches English ⇄ French
+  const les = await click(sam, "path:lesson:loops");
+  const flip = ids(les.data).find((i) => i.startsWith("path:lesson:loops:"));
+  const fr2 = await click(sam, flip!);
+  check(flip === "path:lesson:loops:fr" && fr2.type === 7 && fr2.data.embeds[0].description.includes("Une **boucle**"), "lessons: 🌐 shows the French version");
 }
 
 section("i18n: every key exists in English and French");

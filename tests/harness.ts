@@ -65,6 +65,8 @@ export const hr = {
   down: false,
 };
 export const runner = { down: false, wandboxDown: false, calls: 0 };
+/** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
+export const github = { files: {} as Record<string, string>, calls: 0 };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -176,6 +178,12 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (m) return Response.json({ models: (hr.solves[m[1].toLowerCase()] ?? []).map((s) => ({ ch_slug: s.slug, name: s.slug, created_at: new Date(s.at * 1000).toISOString() })) });
     return new Response("unknown", { status: 404 });
   }
+  if (url.hostname === "raw.githubusercontent.com") {
+    github.calls++;
+    const key = decodeURIComponent(url.pathname.slice(1));
+    const f = github.files[key];
+    return f === undefined ? new Response("404: Not Found", { status: 404 }) : new Response(f, { status: 200 });
+  }
   if (url.hostname.endsWith("cloudflareaccess.com")) return Response.json(access.jwks ?? { keys: [] });
   throw new Error("unexpected fetch to " + url.href);
 }) as typeof fetch;
@@ -233,6 +241,38 @@ function fakeAI() {
       }
       if (sys.includes("strict programming judge")) {
         return { response: JSON.stringify({ verdict: ai.judgeVerdict, feedback: "Looks right on the samples." }) };
+      }
+      if (sys.includes("help students who are stuck")) {
+        return { response: JSON.stringify({ approach: "Count consecutive equal letters with one pass; O(n).", pseudo: "result = empty\nfor each run of equal letters\n  add letter and run length\nreturn result" }) };
+      }
+      if (sys.includes("write model solutions")) {
+        const js = user.includes("Python") && sys.includes("JavaScript");
+        return { response: JSON.stringify({ code: js ? "function solve(s) {\n  // model\n  return s;\n}" : "def solve(s):\n    return s", note: "One pass, O(n)." }) };
+      }
+      if (sys.includes("weekly note to one student")) {
+        return { response: "You solved more this week and your loops are cleaner. Watch the edge cases. Next week: three dictionary problems." };
+      }
+      if (sys.includes("You write SQL exercises")) {
+        return { response: JSON.stringify({ title: "Students and their courses", question: "Return each student's name with the title of their course. Columns: name, title. Sort by name.", schema: "CREATE TABLE students (id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE courses (id INTEGER PRIMARY KEY, title TEXT);\nCREATE TABLE enrollments (student_id INTEGER, course_id INTEGER);", sample: "INSERT INTO students VALUES (1,'Lina'),(2,'Omar');\nINSERT INTO courses VALUES (1,'SQL'),(2,'Web');\nINSERT INTO enrollments VALUES (1,1),(2,2);", hidden: ["INSERT INTO students VALUES (1,'Zed');\nINSERT INTO courses VALUES (1,'AI');\nINSERT INTO enrollments VALUES (1,1);", "INSERT INTO students VALUES (1,'Ana'),(2,'Bob');\nINSERT INTO courses VALUES (1,'Git');\nINSERT INTO enrollments VALUES (2,1);"], query: "SELECT s.name, c.title FROM students s JOIN enrollments e ON e.student_id = s.id JOIN courses c ON c.id = e.course_id ORDER BY s.name", ordered: true, hint: "Two JOINs." }) };
+      }
+      if (sys.includes("Translate this programming exercise")) {
+        const src = JSON.parse(user);
+        return { response: JSON.stringify({ title: "FR " + src.title, question: "FR " + (src.question ?? ""), choices: src.choices ? src.choices.map((c: string) => "FR " + c) : null, hint: null }) };
+      }
+      if (sys.includes("lessons for complete BEGINNERS")) {
+        return { response: JSON.stringify({ en: "**Loops**\nA loop repeats instructions.\n```py\nfor i in range(3):\n    print(i)\n```\n💡 Check the last turn.", fr: "**Boucles**\nUne boucle répète des instructions." }) };
+      }
+      if (sys.includes("design small programming projects")) {
+        return { response: JSON.stringify({ title: "Add two numbers", description: "Read two integers and print their sum.\n**Input** two integers. **Output** their sum.", reference: "a, b = map(int, input().split())\nprint(a + b)", inputs: ["1 2\n", "10 -4\n", "0 0\n", "oops\n"] }) };
+      }
+      if (sys.includes("teaching assistant")) {
+        return { response: "A `for` loop repeats a block a known number of times; a `while` loop repeats while a condition is true. Use `for` when you know how many steps." };
+      }
+      if (sys.includes("technical interviewer")) {
+        return { response: "Interesting. What happens with your approach when the list contains only negative numbers?" };
+      }
+      if (sys.includes("interview scorecard")) {
+        return { response: JSON.stringify({ problem: 4, communication: 5, code: 5, complexity: 4, verdict: "Hire", strengths: "Clear thinking out loud.", improve: "State the complexity earlier." }) };
       }
       if (sys.includes("kind but demanding")) {
         return { response: "Your loop never considers the case where every number is negative: start from the first element instead of 0." };

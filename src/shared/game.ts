@@ -5,6 +5,7 @@ export const RULES = {
   dailyMultiplier: 1.5,
   dailyFirstBonus: [15, 10, 5],         // first, second, third solver of the daily
   assignmentOnTimeMultiplier: 1.5,
+  codeAnswerTries: 3,                   // SQL and regex answers
   hintFactor: 0.5,                      // using a hint halves the reward
   secondTryFactor: 0.5,                 // typed answer right on the second try = half points
   writeTryStep: 0.15,                   // write-code: -15% per extra submission…
@@ -16,6 +17,8 @@ export const RULES = {
   duelLoserPoints: 3,                   // a little something for showing up
   teamPoints: { 1: 60, 2: 40, 3: 20 } as Record<number, number>,
   startCoins: 100,
+  dailyCoins: 5,                        // coins for solving the daily challenge
+  planCoins: 10,                        // coins for finishing the daily plan
   minCoins: 10,
   betWinMultiplier: 3,
   streakRoleContests: 3,                // contests in a row for the streak role
@@ -42,13 +45,13 @@ export interface Scoring {
 }
 export const DEFAULT_SCORING: Scoring = {
   base: { easy: 3, medium: 6, hard: 12 },
-  mult: { mcq: 1, complexity: 2, output: 3, bug: 5, write: 8, code: 10 },
+  mult: { mcq: 1, complexity: 2, output: 3, bug: 5, regex: 3, sql: 6, write: 8, code: 10 },
   cap: 150,
   quick: { full: 5, reduced: 5, pct: 20 },
   contest: { first: 120, second: 90, third: 70, top10: 40, play: 15 },
   award: 25,
 };
-export const SCORE_KINDS = ["mcq", "complexity", "output", "bug", "write", "code"];
+export const SCORE_KINDS = ["mcq", "complexity", "output", "bug", "regex", "sql", "write", "code"];
 
 export function scoringOf(g: { scoring?: string | null } | null | undefined): Scoring {
   let o: any = {};
@@ -72,7 +75,7 @@ export function scoringOf(g: { scoring?: string | null } | null | undefined): Sc
 }
 
 /** Quick types can be answered in seconds, so they're the ones worth limiting. Write code and HackerRank never are. */
-export const LIMITED_KINDS = ["mcq", "complexity", "output", "bug"];
+export const LIMITED_KINDS = ["mcq", "complexity", "output", "bug", "regex"];
 export const isLimitedKind = (kind: string) => LIMITED_KINDS.includes(kind);
 
 /** Share of the points a quick solve earns, given how many quick solves (practice + duels) already scored today. */
@@ -136,11 +139,14 @@ export function isCorrectOutput(given: string, answer: string, alternatives: str
   return false;
 }
 
+/** Share of the points kept after each hint step on write-code problems. */
+export const HINT_STEPS = [1, 0.85, 0.65, 0.4];
+
 export function pointsFor(sc: Scoring, opts: {
   kind: string;
   difficulty: Difficulty;
   origin: string;
-  usedHint: boolean;
+  usedHint: boolean | number;   // hint level: write code has 3 steps (nudge, approach, pseudocode)
   tries: number;
   seconds: number;
   onTime?: boolean;
@@ -149,10 +155,12 @@ export function pointsFor(sc: Scoring, opts: {
   if (opts.origin === "daily") p *= RULES.dailyMultiplier;
   if (opts.origin === "assignment" && opts.onTime !== false) p *= RULES.assignmentOnTimeMultiplier;
   if (opts.origin === "duel") p *= RULES.duelWinFactor;
-  if (opts.usedHint) p *= RULES.hintFactor;
+  const hint = Number(opts.usedHint) || 0;
+  if (hint) p *= opts.kind === "write" ? HINT_STEPS[Math.min(3, hint)] : RULES.hintFactor;
   if (opts.kind === "write") p *= Math.max(RULES.writeMinFactor, 1 - RULES.writeTryStep * (Math.max(1, opts.tries) - 1));
+  else if (opts.kind === "sql" || opts.kind === "regex") p *= opts.tries > 1 ? (opts.tries > 2 ? 0.5 : 0.75) : 1;
   else if (opts.tries > 1) p *= RULES.secondTryFactor;
-  const quick = opts.kind !== "code" && opts.kind !== "write";
+  const quick = opts.kind !== "code" && opts.kind !== "write" && opts.kind !== "sql";
   if (quick && opts.seconds <= RULES.speedBonusSeconds) p *= 1 + RULES.speedBonusFactor;
   return Math.max(1, Math.round(p));
 }

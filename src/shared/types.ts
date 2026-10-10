@@ -46,7 +46,7 @@ export interface Env {
 
 export type Lang = "en" | "fr";
 export type Difficulty = "easy" | "medium" | "hard";
-export type Kind = "code" | "write" | "mcq" | "output" | "bug" | "complexity";
+export type Kind = "code" | "write" | "mcq" | "output" | "bug" | "complexity" | "sql" | "regex";
 
 export interface GuildRow {
   id: string;
@@ -59,6 +59,7 @@ export interface GuildRow {
   daily_hour: number;
   champion_role: string | null;
   auto_roles?: string | null;
+  track?: string | null;
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;
@@ -70,6 +71,10 @@ export interface GuildRow {
   commands_version?: string | null;
   daily_cfg?: string | null;
   integrity?: string | null;
+  path_cfg?: string | null;
+  teacher_id?: string | null;
+  last_teacher_digest?: string | null;
+  last_plan_dm?: string | null;
   created_at: number;
 }
 
@@ -88,6 +93,17 @@ export interface PlayerRow {
   hr_verified: number;
   hr_code: string | null;
   created_at: number;
+  plan_streak?: number;
+  plan_best?: number;
+  last_plan_day?: string | null;
+  plan_dm?: number;
+  path_done?: string | null;
+  hint_tokens?: number;
+  streak_freezes?: number;
+  title?: string | null;
+  title_until?: number | null;
+  color_role?: string | null;
+  color_until?: number | null;
 }
 
 export interface ChallengeRow {
@@ -116,6 +132,9 @@ export interface ChallengeRow {
   time_limit: number | null;
   solution: string | null;
   signature?: string | null;
+  skills?: string | null;
+  hints?: string | null;
+  solutions?: string | null;
 }
 
 export interface AttemptRow {
@@ -123,7 +142,7 @@ export interface AttemptRow {
   guild_id: string;
   discord_id: string;
   challenge_id: number;
-  origin: "practice" | "daily" | "assignment" | "duel" | "session";
+  origin: "practice" | "daily" | "assignment" | "duel" | "session" | "plan" | "path" | "exam" | "bounty" | "boss" | "interview";
   ref: number | null;
   status: "pending" | "solved" | "claimed" | "failed" | "expired";
   tries: number;
@@ -142,6 +161,7 @@ export interface AttemptRow {
   explain?: string | null;
   runs?: number;
   reviewed?: number;
+  free_hints?: number;
 }
 
 export interface DuelRow {
@@ -159,6 +179,9 @@ export interface DuelRow {
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
+  partner_id?: string | null;
+  opponent2_id?: string | null;
+  accepted?: string | null;
 }
 
 export interface ContestRow {

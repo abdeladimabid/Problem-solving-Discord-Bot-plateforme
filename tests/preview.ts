@@ -6,6 +6,7 @@ import { join, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeEnv } from "./harness.ts";
 import admin from "../src/admin/index.ts";
+import bot from "../src/bot/index.ts";
 import { analyzeLog, fingerprint } from "../src/shared/integrity.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -163,6 +164,27 @@ asgC.forEach((c, j) => {
   });
 });
 
+// events: a live quiz, a boss, bounties, shop and help activity
+{
+  const mc = db.prepare("SELECT id, answer FROM challenges WHERE kind = 'mcq' AND lang = 'en' LIMIT 5").all() as any[];
+  const wr = db.prepare("SELECT id FROM challenges WHERE kind = 'write' AND lang = 'en' AND difficulty = 'hard' LIMIT 2").all() as any[];
+  const qz = db.prepare("INSERT INTO quizzes (guild_id, title, channel_id, questions, seconds, current, q_started, revealed, give_points, status, created_at) VALUES (?, 'Friday quiz: complexity', 'arena1', ?, 20, 2, ?, 0, 1, 'live', ?)")
+    .run(G, JSON.stringify(mc.map((c) => c.id)), Math.floor(Date.now() / 1000) - 6, now - 600);
+  const qid = Number(qz.lastInsertRowid);
+  for (let i = 0; i < 9; i++) for (let k = 0; k < 3; k++) {
+    const right = rnd() < 0.4 + skill[i] * 0.5, ms = Math.floor(2000 + rnd() * 15000);
+    const ans = right ? mc[k].answer : "ABCD".replace(mc[k].answer, "")[Math.floor(rnd() * 3)];
+    db.prepare("INSERT INTO quiz_answers (quiz_id, q_idx, discord_id, answer, correct, ms, score) VALUES (?, ?, ?, ?, ?, ?, ?)").run(qid, k, String(100 + i), ans, right ? 1 : 0, ms, right ? 500 + Math.round(500 * (1 - ms / 20000)) : 0);
+  }
+  const b1 = Number(db.prepare("INSERT INTO bosses (guild_id, challenge_id, name, hp, deadline, reward, coins, channel_id, status, created_at) VALUES (?, ?, 'The Null Pointer', 240, ?, 30, 20, 'arena1', 'active', ?)").run(G, wr[0].id, now + 30 * 3600, now - 18 * 3600).lastInsertRowid);
+  [40, 40, 26, 40, 12, 33].forEach((d, i) => db.prepare("INSERT INTO boss_hits (boss_id, discord_id, damage, updated_at) VALUES (?, ?, ?, ?)").run(b1, String(100 + i), d, now - i * 3000));
+  const b2 = Number(db.prepare("INSERT INTO bosses (guild_id, challenge_id, name, hp, deadline, reward, coins, channel_id, status, created_at, finished_at) VALUES (?, ?, 'Segfault Dragon', 120, ?, 25, 15, 'arena1', 'won', ?, ?)").run(G, wr[1].id, now - 5 * DAY, now - 7 * DAY, now - 6 * DAY).lastInsertRowid);
+  [40, 40, 40, 22].forEach((d, i) => db.prepare("INSERT INTO boss_hits (boss_id, discord_id, damage, updated_at) VALUES (?, ?, ?, ?)").run(b2, String(103 + i), d, now - 6 * DAY));
+  db.prepare("INSERT INTO bounties (guild_id, challenge_id, points, coins, deadline, channel_id, status, winner_id, created_at, claimed_at) VALUES (?, ?, 40, 30, NULL, 'arena1', 'claimed', '102', ?, ?)").run(G, mc[3].id, now - 2 * DAY, now - 2 * DAY + 400);
+  db.prepare("INSERT INTO bounties (guild_id, challenge_id, points, coins, deadline, channel_id, status, created_at) VALUES (?, ?, 60, 40, ?, 'arena1', 'open', ?)").run(G, wr[0].id, now + 20 * 3600, now - 4 * 3600);
+  for (const [item, cost, n] of [["freeze", 60, 4], ["hint", 30, 9], ["title", 100, 2], ["color", 200, 1]] as const) for (let k = 0; k < n; k++) db.prepare("INSERT INTO purchases (guild_id, discord_id, item, cost, created_at) VALUES (?, ?, ?, ?, ?)").run(G, String(100 + k), item, cost, now - k * DAY);
+}
+
 // discord lookups used by the settings page
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
@@ -186,11 +208,61 @@ env.ASSETS = {
   },
 };
 
+
+// ------------------------------------------- help queue, questions, interviews, projects, league
+{
+  const hand = db.prepare("INSERT INTO hands (guild_id, discord_id, name, question, code, status, created_at, taken_at, done_at, reply) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  hand.run(G, "102", "Lina", "My program prints the right answer for the example but fails the hidden tests. Why?", "n = int(input())\na = list(map(int, input().split()))\nprint(max(a) - min(a))", "helping", now - 420, now - 60, null, null);
+  hand.run(G, "106", "Imane", "How do I read several lines until the end of the input in PHP?", null, "waiting", now - 300, null, null, null);
+  hand.run(G, "108", "Nora", "I don't understand what 'consecutive' means in Best streak.", null, "waiting", now - 95, null, null, null);
+  hand.run(G, "101", "Omar", "Is recursion allowed?", null, "done", now - 7200, now - 7000, now - 6900, "Yes! Just watch the recursion depth for big inputs.");
+  const fq = db.prepare("INSERT INTO faq (guild_id, question, answer, draft, asked_by, askers, status, hits, created_at, answered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  fq.run(G, "What is the difference between a for loop and a while loop?", null, "A `for` loop repeats a known number of times (or over a list); a `while` loop repeats as long as a condition is true. Use `for` when you know how many steps, `while` when you wait for something to change.", "103", JSON.stringify(["103", "107"]), "pending", 0, now - 3600, null);
+  fq.run(G, "Why does my JavaScript code print undefined?", null, null, "110", JSON.stringify(["110"]), "pending", 0, now - 600, null);
+  fq.run(G, "When is the next exam?", "Friday 9:00, room B12. Bring your student card.", null, null, "[]", "approved", 12, now - 9 * DAY, now - 9 * DAY);
+  fq.run(G, "How do I read input in PHP?", "Use `fgets(STDIN)` for one line, or `stream_get_contents(STDIN)` for everything, then `explode` it.", null, "106", JSON.stringify(["106"]), "approved", 7, now - 5 * DAY, now - 5 * DAY);
+  const w = db.prepare("SELECT id FROM challenges WHERE kind = 'write' AND lang = 'en' AND difficulty = 'easy' AND status = 'active' LIMIT 1").get() as any;
+  const ivs = [["100", 4.5, "Strong hire 🌟"], ["104", 3.3, "Almost there 🙂"], ["102", 2.3, "Not yet: keep practicing 💪"]] as const;
+  for (const [i, [uid, overall, verdict]] of ivs.entries()) {
+    const a = db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, started_at, finished_at) VALUES (?, ?, ?, 'interview', ?, 1, ?, ?)").run(G, uid, w.id, i === 0 ? "solved" : "expired", now - (i + 1) * DAY, now - (i + 1) * DAY + 1500);
+    const sc = { problem: Math.round(overall), communication: Math.min(5, Math.round(overall) + 1), code: i === 0 ? 5 : 2, complexity: Math.max(1, Math.round(overall) - 1), overall, verdict, strengths: "You explained your plan before coding.", improve: "State the complexity before you start.", ai: i === 0 };
+    db.prepare("INSERT INTO interviews (guild_id, discord_id, challenge_id, attempt_id, transcript, stage, status, scores, created_at, finished_at) VALUES (?, ?, ?, ?, ?, 3, 'done', ?, ?, ?)")
+      .run(G, uid, w.id, Number(a.lastInsertRowid), JSON.stringify([{ who: "ai", text: "Hi! Tell me how you would solve it." }, { who: "me", text: "I keep the best sum ending at each position." }, { who: "ai", text: "What if every number is negative?" }, { who: "me", text: "I start from the first element, so it still works. O(n) time, O(1) memory." }]), JSON.stringify(sc), now - (i + 1) * DAY, now - (i + 1) * DAY + 1600);
+  }
+  const pj = db.prepare("INSERT INTO projects (guild_id, title, description, lang, entry, tests, points, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(G, "Grade calculator", "Read n grades and print the average (2 decimals), the best grade and the number of grades ≥ 10.", "python", "main.py", JSON.stringify([{ input: "3\n12 8 15\n", output: "11.67 15 2" }, { input: "1\n10\n", output: "10.00 10 1" }, { input: "4\n0 0 0 0\n", output: "0.00 0 0" }]), 60, now + 6 * DAY, now - 3 * DAY);
+  const pid = Number(pj.lastInsertRowid);
+  const rp = db.prepare("INSERT INTO project_repos (project_id, guild_id, discord_id, repo, passed, total, best, points, result, error, runs, checked_at, created_at) VALUES (?, ?, ?, ?, ?, 3, ?, ?, ?, ?, ?, ?, ?)");
+  rp.run(pid, G, "100", "yasmine-dev/grades", 3, 3, 60, JSON.stringify({ verdict: "accepted", passed: 3, total: 3 }), null, 4, now - 900, now - 2 * DAY);
+  rp.run(pid, G, "101", "omar99/tp-grades", 2, 2, 40, JSON.stringify({ verdict: "wrong", passed: 2, total: 3 }), null, 2, now - 1800, now - DAY);
+  rp.run(pid, G, "104", "sara-codes/grades", 0, 0, 0, null, "proj.err_missing", 1, now - 3600, now - 3600);
+  db.prepare("INSERT INTO projects (guild_id, title, lang, entry, tests, points, status, created_at) VALUES (?, 'Palindromes (PHP)', 'php', 'index.php', ?, 40, 'closed', ?)").run(G, JSON.stringify([{ input: "kayak\n", output: "YES" }]), now - 20 * DAY);
+  // a second class, both in the league
+  const G2 = "900000000000000002";
+  db.prepare("INSERT INTO guilds (id, name, lang, season, code_lang, daily_hour, league, created_at) VALUES (?, 'CS 2nd year · Group A', 'fr', 'Autumn 2026', 'javascript,php', 9, ?, ?)").run(G2, JSON.stringify({ on: true, name: "Group A" }), now - 60 * DAY);
+  db.prepare("UPDATE guilds SET league = ? WHERE id = ?").run(JSON.stringify({ on: true, name: "Group B" }), G);
+  db.prepare("UPDATE players SET share_key = 'demoprofile1' WHERE guild_id = ? AND discord_id = '100'").run(G);
+  db.prepare("INSERT OR IGNORE INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, '100', 'first_solve', ?), (?, '100', 'solves_10', ?), (?, '100', 'duel_win', ?)").run(G, now, G, now, G, now);
+  for (let i = 0; i < 9; i++) {
+    db.prepare("INSERT INTO players (guild_id, discord_id, name, last_active, created_at) VALUES (?, ?, ?, ?, ?)").run(G2, String(500 + i), "Student " + (i + 1), now - DAY, now - 50 * DAY);
+    for (let k = 0; k < 6; k++) db.prepare("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'Autumn 2026', ?, 'practice', ?)").run(G2, String(500 + i), 6 + (i % 4) * 3, now - Math.floor(rnd() * 20) * DAY);
+  }
+}
+
 createServer(async (req, res) => {
+  // public pages of the bot Worker (shared profile, certificates)
+  if (/^\/(u|cert)\//.test(req.url ?? "")) {
+    const r = await bot.fetch(new Request("http://localhost" + req.url), env, { waitUntil() {} } as any);
+    res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });
+    res.end(await r.text());
+    return;
+  }
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
   const request = new Request(`http://localhost:${PORT}${req.url}`, { method: req.method, headers: req.headers as any, body: chunks.length ? Buffer.concat(chunks) : undefined });
   const response = await admin.fetch(request, env, { waitUntil() {} });
-  res.writeHead(response.status, Object.fromEntries(response.headers));
+  const headers: Record<string, string> = {};
+  response.headers.forEach((v, k) => (headers[k] = v));
+  res.writeHead(response.status, headers);
   res.end(Buffer.from(await response.arrayBuffer()));
 }).listen(PORT, () => console.log(`Dashboard preview with a demo class: http://localhost:${PORT}`));

@@ -10,7 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 from signatures import S  # noqa: E402
-from bank_write import W  # noqa: E402
+from bank_write import W as W1  # noqa: E402
+from bank_web import W2  # noqa: E402
+
+S = {**S, **{p["slug"]: p["sig"] for p in W2}}
+W = W1 + W2
 from gen_bank import make_gen, materialize  # noqa: E402
 
 LANGS = ["javascript", "php", "python", "java", "cpp", "c"]

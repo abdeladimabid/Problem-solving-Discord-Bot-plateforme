@@ -40,6 +40,9 @@ async function hmac(env: Env, msg: string): Promise<string> {
   return b64url(new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(msg)))).slice(0, 32);
 }
 
+/** Sign any short text with the bot's secret (32 url-safe characters). */
+export const signText = (env: Env, msg: string) => hmac(env, "sig:" + msg);
+
 /** A private link to the code editor for one attempt (valid 12 hours). */
 export async function editorToken(env: Env, attemptId: number, userId: string, hours = 12): Promise<string> {
   const exp = Math.floor(Date.now() / 1000) + hours * 3600;
