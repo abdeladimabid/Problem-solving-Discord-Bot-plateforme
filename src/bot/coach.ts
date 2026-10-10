@@ -10,15 +10,14 @@ import type { StepState } from "../shared/path.ts";
 import { latestReport } from "../shared/report.ts";
 import { SKILLS, bar, skillName, studentProfile } from "../shared/skills.ts";
 import { focusSkills } from "../shared/plan.ts";
+import { roadmapFor, trackLabel } from "../shared/tracks.ts";
 import { pickForSkill } from "../shared/coach.ts";
 import { getChallenge, renderFor, startAttempt, guildLangs } from "../shared/challenges.ts";
 import { enqueue } from "../shared/queue.ts";
 import { type Ix, deferReply, later, memberName, reply, say, update } from "./ix.ts";
 
-const STATUS_ICON: Record<string, string> = { strong: "🟢", ok: "🟡", weak: "🔴", new: "⚪" };
 // skills that are mostly practiced by writing code
 const CODE_SKILLS = ["loops", "strings", "arrays", "dicts", "math", "sorting", "recursion", "stack", "twopointers", "prefix", "binsearch", "greedy", "dp", "graphs", "sql", "web"];
-const CORE = SKILLS.map((s) => s.key).filter((k) => !["async", "sql", "regex", "git", "web"].includes(k));
 
 export async function cmdSkills(ix: Ix, memberId: string) {
   const L = ix.L;
@@ -28,24 +27,41 @@ export async function cmdSkills(ix: Ix, memberId: string) {
     await getPlayer(ix.env, ix.guild.id, memberId, name);
     const p = await studentProfile(ix.env, ix.guild, memberId);
     const tried = p.skills.filter((s) => s.evidence > 0);
-    const lines = tried
-      .sort((a, b) => SKILLS.findIndex((x) => x.key === a.key) - SKILLS.findIndex((x) => x.key === b.key))
-      .map((s) => t(L, "skills.line", { icon: STATUS_ICON[s.status], skill: skillName(s.key, L), bar: bar(s.mastery), pct: s.mastery, next: t(L, `diff.${s.target}`) })
-        + (!s.proven ? ` · ${t(L, "skills.no_code")}` : "") + (s.codeMistakes ? ` · ${t(L, "skills.code_mistakes", { n: s.codeMistakes })}` : ""));
-    const untried = CORE.filter((k) => !tried.some((s) => s.key === k)).map((k) => skillName(k, L));
-    const desc = [
-      lines.length ? lines.join("\n") : t(L, "skills.empty"),
-      untried.length ? "\n" + t(L, "skills.untried", { list: untried.slice(0, 10).join(" · ") }) : "",
-    ].join("\n").slice(0, 4000);
-    const fields = [{
+    // one line per skill: aligned bar + %, the skill, and short markers (💻 not shown in code yet, 🐞 mistakes in their code)
+    const line = (s: (typeof tried)[number]) =>
+      `\`${bar(s.mastery, 10)} ${String(s.mastery).padStart(3)}%\` ${skillName(s.key, L)}${!s.proven ? " 💻" : ""}${s.codeMistakes ? ` 🐞${s.codeMistakes}` : ""}`;
+    const block = (list: typeof tried, max = 12) => {
+      const shown = list.slice(0, max).map(line);
+      if (list.length > max) shown.push(t(L, "skills.more", { n: list.length - max }));
+      return shown.join("\n").slice(0, 1024);
+    };
+    const by = (st: string) => tried.filter((s) => s.status === st);
+    const strong = by("strong").sort((a, b) => b.mastery - a.mastery);
+    const ok = by("ok").sort((a, b) => b.mastery - a.mastery);
+    const weak = by("weak").sort((a, b) => a.mastery - b.mastery);
+    const fresh = by("new").sort((a, b) => b.mastery - a.mastery);
+    // not tried yet: only what this class's track teaches, in roadmap order
+    const road = [...new Set(roadmapFor(ix.guild).map((x) => x.skill))];
+    const untried = road.filter((k) => !tried.some((s) => s.key === k));
+    const fields: { name: string; value: string; inline?: boolean }[] = [];
+    if (strong.length) fields.push({ name: t(L, "skills.g_strong", { n: strong.length }), value: block(strong) });
+    if (ok.length) fields.push({ name: t(L, "skills.g_ok", { n: ok.length }), value: block(ok) });
+    if (weak.length) fields.push({ name: t(L, "skills.g_weak", { n: weak.length }), value: block(weak) });
+    if (fresh.length) fields.push({ name: t(L, "skills.g_new", { n: fresh.length }), value: block(fresh, 8) });
+    if (untried.length) fields.push({ name: t(L, "skills.g_untried", { n: untried.length }),
+      value: (untried.slice(0, 10).map((k) => skillName(k, L)).join(" · ") + (untried.length > 10 ? " · " + t(L, "skills.more", { n: untried.length - 10 }) : "")).slice(0, 1024) });
+    fields.push({
       name: t(L, "skills.mistakes_title"),
-      value: p.mistakes.length ? p.mistakes.slice(0, 4).map((m) => t(L, `mistake.${m.key}`, { n: m.count, total: m.total })).join("\n\n").slice(0, 1024) : t(L, "skills.no_mistakes"),
-    }];
+      value: p.mistakes.length ? p.mistakes.slice(0, 3).map((m) => t(L, `mistake.${m.key}`, { n: m.count, total: m.total })).join("\n").slice(0, 1024) : t(L, "skills.no_mistakes"),
+    });
+    const desc = tried.length
+      ? t(L, "skills.summary", { track: trackLabel(ix.guild, L), strong: strong.length, ok: ok.length, weak: weak.length + fresh.length })
+      : t(L, "skills.empty");
     const focus = memberId === ix.userId ? focusSkills(p.skills) : [];
     const buttons = focus.map((s) => btn(t(L, "skills.train_btn", { skill: skillName(s.key, L) }).slice(0, 78), `sk:${s.key}:${s.target}`, 1));
     if (memberId === ix.userId) buttons.push(btn(t(L, "today.btn"), "today:open", 2, "📋"), btn(t(L, "path.btn"), "path:open", 2, "🧭"), btn(t(L, "report.btn"), "report:open", 2, "📈"));
     return {
-      embeds: [{ title: t(L, "skills.title", { name }), description: desc.slice(0, 4000), color: COLORS.blue, fields, footer: { text: t(L, "skills.footer") } }],
+      embeds: [{ title: t(L, "skills.title", { name }), description: desc, color: COLORS.blue, fields: fields.slice(0, 25), footer: { text: t(L, "skills.footer") } }],
       components: memberId === ix.userId ? [row(...buttons.slice(0, 5))] : [],
     };
   });
