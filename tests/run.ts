@@ -7,6 +7,8 @@ import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
 import { safeNext } from "../src/admin/password.ts";
+import { masteryFrom } from "../src/shared/skills.ts";
+import { mistakeSkills, skillsInCode } from "../src/shared/codeskills.ts";
 import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
@@ -1714,6 +1716,58 @@ section("teacher DMs: /help-me and /ask notify the teacher, /teacher notify, set
   await slash(U.prof, "teacher", { language: "en" }, "setup");
   check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "/teacher setup also makes you the one who gets them");
   run1("DELETE FROM faq WHERE guild_id = ? AND (question LIKE '%internet%' OR question LIKE '%lab open%')", G);
+}
+
+section("skill mastery: code proves it (80%), every submission updates the skills it uses");
+{
+  const att = (kind: string, status: string, skills: string, difficulty = "easy") => ({ status, used_hint: 0, tries: 1, kind, difficulty, skills, result: null, finished_at: 1, challenge_id: 1 });
+  const ev = (skill: string, ok: boolean, weight = 1) => ({ status: ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: "easy", skills: skill, result: null, finished_at: 1, challenge_id: 0, weight });
+  const sk = (list: any[], key: string) => masteryFrom(list as any).find((x) => x.key === key)!;
+  const quickOnly = sk(Array.from({ length: 6 }, () => att("mcq", "solved", "loops")), "loops");
+  check(quickOnly.mastery <= 20 && !quickOnly.proven && quickOnly.status !== "strong", `6 multiple-choice right, no code: at most 20% (${quickOnly.mastery}%)`);
+  const withCode = sk([...Array.from({ length: 6 }, () => att("mcq", "solved", "loops")), att("write", "solved", "loops", "medium"), att("write", "solved", "loops", "medium")], "loops");
+  check(withCode.mastery >= 70 && withCode.proven && withCode.code! > withCode.mastery - 15, `then 2 write-code solves: it's the code that lifts it (${withCode.mastery}%, code ${withCode.code}%)`);
+  const codeBad = sk([...Array.from({ length: 8 }, () => att("mcq", "solved", "loops")), att("write", "failed", "loops", "medium"), att("write", "failed", "loops", "medium")], "loops");
+  check(codeBad.mastery < 40, `perfect quizzes can't hide failed code (${codeBad.mastery}%)`);
+  const big = sk(Array.from({ length: 5 }, () => att("complexity", "solved", "complexity")), "complexity");
+  check(big.mastery >= 70 && big.proven, `skills that can't be coded (Big-O) are measured by their own challenges (${big.mastery}%)`);
+  const before = sk([att("write", "solved", "binsearch,arrays", "medium"), att("write", "solved", "arrays")], "arrays");
+  const after = sk([ev("arrays", false), ev("arrays", false), ev("arrays", false), att("write", "solved", "binsearch,arrays", "medium"), att("write", "solved", "arrays")], "arrays");
+  check(after.mastery < before.mastery - 15 && after.codeMistakes === 3, `array mistakes found in their code lower "arrays" (${before.mastery}% → ${after.mastery}%)`);
+
+  check(JSON.stringify(skillsInCode("for i in range(n):\n    total += a[i]\n# a comment with while\n")) === JSON.stringify(["arrays", "loops"]) || skillsInCode("for i in range(n):\n    total += a[i]").includes("loops"), "skills seen in code: loops, arrays");
+  check(mistakeSkills({ verdict: "runtime", failed: { error: "IndexError: list index out of range" } } as any).skills[0] === "arrays", "IndexError → arrays");
+  check(mistakeSkills({ verdict: "runtime", failed: { error: "RecursionError: maximum recursion depth exceeded" } } as any).skills[0] === "recursion", "RecursionError → recursion");
+  check(mistakeSkills({ verdict: "runtime", failed: { error: "KeyError: 'x'" } } as any).skills[0] === "dicts", "KeyError → dictionaries");
+  check(mistakeSkills({ verdict: "compile", error: "SyntaxError" } as any).skills[0] === "basics", "doesn't compile → basics");
+  check(mistakeSkills({ verdict: "wrong" } as any, "", ["strings"]).skills[0] === "strings", "the AI's tag wins");
+
+  // a real submission: a wrong answer, the AI review says the mistake is in loops
+  const E = { id: "120", name: "Ezra", teacher: false };
+  const w = q1("SELECT * FROM challenges WHERE source = 'seed' AND kind = 'write' AND lang = 'en' AND difficulty = 'easy' AND solution IS NOT NULL ORDER BY id DESC LIMIT 1");
+  db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, 'practice', ?)").run(G, E.id, w.id, clock.now());
+  const wid = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", E.id).id;
+  run1("DELETE FROM ai_usage");
+  await select(E as any, `lang:${wid}`, ["python"]);
+  await submit(E as any, `msub:${wid}`, "print(0)");
+  const shown = text(lastPatch());
+  check(!shown.includes("SKILLS") && shown.includes("every number is negative"), "the AI's skill tag is hidden from the student");
+  let rows = q("SELECT * FROM skill_evidence WHERE discord_id = ? ORDER BY id", E.id);
+  check(rows.length === 1 && rows[0].skill === "loops" && rows[0].ok === 0 && rows[0].why === "AI review", `wrong answer: a mistake in loops is recorded (${JSON.stringify(rows.map((r: any) => r.skill + ":" + r.ok))})`);
+  // the AI budget is used up: the error message decides
+  const day = new Date().toISOString().slice(0, 10);
+  run1("INSERT OR REPLACE INTO ai_usage (day, count) VALUES (?, 99999)", day);
+  await submit(E as any, `msub:${wid}`, "a = [1, 2]\nprint(a[7])");
+  rows = q("SELECT * FROM skill_evidence WHERE discord_id = ? ORDER BY id", E.id);
+  check(rows.at(-1).skill === "arrays" && rows.at(-1).ok === 0 && rows.at(-1).why.includes("IndexError"), `crash on an index: a mistake in arrays (${rows.at(-1)?.why})`);
+  run1("DELETE FROM ai_usage");
+  await submit(E as any, `msub:${wid}`, w.solution);
+  rows = q("SELECT * FROM skill_evidence WHERE discord_id = ? AND ok = 1", E.id);
+  const own = String(w.skills ?? "").split(",");
+  check(rows.every((r: any) => !own.includes(r.skill)), `accepted code: skills it uses get credit (${rows.map((r: any) => r.skill).join(",") || "none beyond the challenge's own"})`);
+  const page = await api("GET", `/api/students/${E.id}?g=${G}`);
+  const arr = page.data.coach?.skills?.find((x: any) => x.key === "arrays");
+  check(arr && arr.codeMistakes >= 1 && arr.code != null, `student page shows code mistakes per skill (${JSON.stringify(arr && { m: arr.mastery, code: arr.code, quick: arr.quick, mistakes: arr.codeMistakes })})`);
 }
 
 section("dashboard links keep their page through the sign-in");

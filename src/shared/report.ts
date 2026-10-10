@@ -22,13 +22,13 @@ export interface WeekFacts {
 export async function weekFacts(env: Env, g: GuildRow, userId: string): Promise<WeekFacts> {
   const since = now() - 7 * 86400;
   const attempts = await studentAttempts(env, g.id, userId);
-  const week = attempts.filter((a) => (a.finished_at ?? 0) >= since);
+  const week = attempts.filter((a) => (a.finished_at ?? 0) >= since && a.kind !== "evidence");
   const before = attempts.filter((a) => (a.finished_at ?? 0) < since);
   const nowM = masteryFrom(attempts), oldM = masteryFrom(before);
   let improved: WeekFacts["improved"] = null;
   for (const s of nowM) {
     const o = oldM.find((x) => x.key === s.key)!;
-    const touched = week.some((a) => (a.skills ?? "").split(",").includes(s.key));
+    const touched = attempts.some((a) => (a.finished_at ?? 0) >= since && (a.skills ?? "").split(",").includes(s.key));
     const delta = s.mastery - (o.evidence ? o.mastery : 50);
     if (touched && s.evidence >= 2 && delta > 0 && (!improved || delta > improved.delta)) improved = { key: s.key, delta };
   }

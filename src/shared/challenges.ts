@@ -11,7 +11,8 @@ import { judgeRegex, judgeSql, regexData, rowsText } from "./sqlrx.ts";
 import { rewardAuthor } from "./create.ts";
 import { bossHit, claimBounty } from "./events.ts";
 import type { SqlVerdict } from "./sqlrx.ts";
-import { aiJudge, codeFeedback, explainQuestions, generateHints, gradeExplanation, modelSolution } from "./ai.ts";
+import { aiJudge, codeFeedback, codeReview, explainQuestions, generateHints, gradeExplanation, modelSolution } from "./ai.ts";
+import { recordCodeEvidence, recordSqlEvidence, skillChoices } from "./codeskills.ts";
 import type { GeneratedQuick, GeneratedWrite, QuickExample } from "./ai.ts";
 import { HackerRankError, recentSolves } from "./hackerrank.ts";
 import { LANGS, QUICK_LANGS, RunnerUnavailable, STARTER, isCodeLang, judge } from "./runner.ts";
@@ -395,6 +396,7 @@ async function answerCode(env: Env, guild: GuildRow, a: AttemptRow, c: Challenge
   let ok = false;
   const notice: string[] = [];
   let note = "";
+  let sqlError = "";
   if (c.kind === "sql") {
     let v: SqlVerdict;
     try {
@@ -404,6 +406,7 @@ async function answerCode(env: Env, guild: GuildRow, a: AttemptRow, c: Challenge
       return { payload: renderChallenge(guild, c, a, { notice: t(L, "judge.unavailable") }), solved: false, finished: false };
     }
     ok = v.ok;
+    sqlError = v.error ?? "";
     if (v.error) notice.push(t(L, "sql.error", { error: v.error }));
     else if (!ok && v.failedSample) notice.push(t(L, "sql.wrong_sample", { got: codeBlock(rowsText(v.got ?? [])), want: codeBlock(rowsText(v.want ?? [])) }));
     else if (!ok) notice.push(t(L, "sql.wrong_hidden", { passed: v.passed, total: v.total }));
@@ -420,6 +423,7 @@ async function answerCode(env: Env, guild: GuildRow, a: AttemptRow, c: Challenge
   }
   const tries = a.tries + 1;
   await run(env, "UPDATE attempts SET tries = ?, answer_given = ? WHERE id = ?", tries, given.slice(0, 2000), a.id);
+  if (c.kind === "sql") await recordSqlEvidence(env, guild, a, c, given, ok, sqlError).catch((e) => console.error("skill evidence", e));
   const fresh = { ...a, tries, answer_given: given };
   if (a.origin === "exam") {
     if (ok || tries >= RULES.codeAnswerTries) {
@@ -485,12 +489,18 @@ export async function submitCode(env: Env, guild: GuildRow, a: AttemptRow, c: Ch
     await run(env, `UPDATE attempts SET tries = ?, lang = ?${better ? ", answer_given = ?, result = ?" : ""} WHERE id = ?`,
       ...(better ? [tries, lang, code.slice(0, 8000), JSON.stringify({ ...j, failed: undefined }), a.id] : [tries, lang, a.id]));
     await recordIntegrity(env, guild, a, c, code, lang, log, via).catch((e) => console.error("integrity", e));
+    await recordCodeEvidence(env, guild, a, c, code, j).catch((e) => console.error("skill evidence", e));
     return { payload: { content: t(L, "exam.submitted", { n: tries }), embeds: [], components: [] }, solved: false, finished: false };
   }
   let feedback = aiNote;
+  let mistakeIn: string[] = [];
   if (!accepted && !feedback) {
-    feedback = (await codeFeedback(env, { lang: L, codeLang: lang, statement: c.question ?? "", code, judgement: j, accepted: false }).catch(() => null)) ?? "";
+    const r = await codeReview(env, { lang: L, codeLang: lang, statement: c.question ?? "", code, judgement: j, accepted: false, skills: skillChoices(L) }).catch(() => null);
+    feedback = r?.text ?? "";
+    mistakeIn = r?.skills ?? [];
   }
+  // every submission updates the skills its code uses (a loop bug in a binary search lowers "loops")
+  await recordCodeEvidence(env, guild, a, c, code, j, feedback, mistakeIn).catch((e) => console.error("skill evidence", e));
   await run(env, "UPDATE attempts SET tries = ?, answer_given = ?, lang = ?, result = ?, feedback = ? WHERE id = ?",
     tries, code.slice(0, 8000), lang, JSON.stringify({ ...j, failed: j.failed ? { ...j.failed, input: undefined } : undefined }), feedback || null, a.id);
   await recordIntegrity(env, guild, a, c, code, lang, log, via).catch((e) => console.error("integrity", e));

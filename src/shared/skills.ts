@@ -89,7 +89,7 @@ const BY_SLUG: Record<string, string[]> = {
   "largest-rectangle": ["stack"],
 };
 // Topic words (from the challenge's topic, title or statement) → skills
-const TOPIC_RULES: [RegExp, string][] = [
+export const TOPIC_RULES: [RegExp, string][] = [
   [/\breact\b|usestate|useeffect|\bjsx\b|\bprops\b|component/i, "react"],
   [/\bexpress\b|middleware|\bapp\.(get|post|use)\b|rest api|endpoint/i, "express"],
   [/mongo|mongoose|\bnosql\b|collection|document database/i, "mongodb"],
@@ -123,7 +123,7 @@ const TOPIC_RULES: [RegExp, string][] = [
   [/variable|condition|boolean|truthiness|type|coercion|equality|comparison|operator|initiali|input/i, "basics"],
 ];
 // What the code itself shows (quick challenges)
-const CODE_RULES: [RegExp, string][] = [
+export const CODE_RULES: [RegExp, string][] = [
   [/\bawait\b|\.then\(|Promise|setTimeout/, "async"],
   [/\bclass\s+\w+|new\s+(?!Map|Set|Array|Date|Promise|Error|Object)[A-Z]\w*\(|\$this->|\bself\./, "oop"],
   [/function\s*\(|\blambda\b|\byield\b|\bfn\s*\(|\)\s*=>/, "functions"],
@@ -169,50 +169,85 @@ export async function setSkills(env: Env, id: number, skills: string[]) {
 }
 
 // ------------------------------------------------------------ mastery
+// Code proves understanding: for a skill that can be practised in code, mastery is 80% what the
+// student shows in CODE (write code, HackerRank, SQL, regex, plus what every code submission
+// shows about the skills it uses) and 20% the other types (multiple choice, output, bug…).
+// Skills that can't be run on the judge (Big-O, Git, web, MERN, AI) are measured by the other types.
 const DIFF_W: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
+export const CODE_KINDS = ["write", "code", "sql", "regex", "evidence"];
+export const QUICK_ONLY_SKILLS = ["complexity", "git", "web", "node", "express", "mongodb", "react", "ai_data", "ai_ml", "ai_llm", "ai_rag"];
+export const CODE_SHARE = 0.8;
 export interface SkillScore {
   key: string; mastery: number; evidence: number; solved: number; failed: number;
   best: "easy" | "medium" | "hard" | null;   // hardest level solved
   status: "new" | "weak" | "ok" | "strong";
   target: "easy" | "medium" | "hard";        // the level to work at next
+  code: number | null;                       // % from code (null = not shown in code yet)
+  quick: number | null;                      // % from the other types
+  codeMistakes: number;                      // mistakes found in their code for this skill
+  proven: boolean;                           // shown in code (or a skill that isn't measured in code)
 }
 export interface AttemptLite {
   status: string; used_hint: number; tries: number; kind: string; difficulty: string; skills: string | null;
   result: string | null; finished_at: number | null; challenge_id: number; title?: string; test_set?: string | null; hr_slug?: string | null; topic?: string | null; code?: string | null; question?: string | null;
+  weight?: number;                           // "evidence" rows: how much this observation counts
 }
 
 export async function studentAttempts(env: Env, guildId: string, discordId: string): Promise<AttemptLite[]> {
-  return all<AttemptLite>(env,
+  const attempts = await all<AttemptLite>(env,
     `SELECT a.status, a.used_hint, a.tries, a.result, a.finished_at, a.challenge_id, c.kind, c.difficulty, c.skills, c.title, c.test_set, c.hr_slug, c.topic
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id
       WHERE a.guild_id = ? AND a.discord_id = ? AND a.status IN ('solved', 'failed', 'expired', 'claimed') ORDER BY a.id DESC LIMIT 400`, guildId, discordId);
+  // what their code showed, submission by submission (also while the challenge is still open)
+  const ev = await all<AttemptLite>(env,
+    `SELECT CASE WHEN ok = 1 THEN 'solved' ELSE 'failed' END AS status, 0 AS used_hint, 1 AS tries, NULL AS result, created_at AS finished_at,
+            0 AS challenge_id, 'evidence' AS kind, 'easy' AS difficulty, skill AS skills, weight
+       FROM skill_evidence WHERE guild_id = ? AND discord_id = ? ORDER BY id DESC LIMIT 300`, guildId, discordId).catch(() => [] as AttemptLite[]);
+  return [...attempts, ...ev];
 }
 
 /** Mastery of every skill from a student's attempts (recent ones count more). */
 export function masteryFrom(attempts: AttemptLite[]): SkillScore[] {
-  const acc = new Map<string, { w: number; s: number; solved: number; failed: number; best: number }>();
-  attempts.forEach((a, i) => {
-    if (a.status === "claimed") return;
-    const recency = i < 40 ? 1 : i < 120 ? 0.6 : 0.3;
-    const w = (DIFF_W[a.difficulty] ?? 1) * recency;
+  type Acc = { w: number; s: number };
+  const acc = new Map<string, { code: Acc; quick: Acc; solved: number; failed: number; best: number; mistakes: number }>();
+  let nAtt = 0, nEv = 0;
+  for (const a of attempts) {
+    if (a.status === "claimed") continue;
+    const isEv = a.kind === "evidence";
+    const i = isEv ? nEv++ : nAtt++;
+    const recency = isEv ? (i < 60 ? 1 : i < 180 ? 0.6 : 0.3) : (i < 40 ? 1 : i < 120 ? 0.6 : 0.3);
+    const w = (isEv ? a.weight ?? 1 : DIFF_W[a.difficulty] ?? 1) * recency;
     const ok = a.status === "solved";
-    const v = ok ? (a.used_hint ? 0.7 : 1) * (a.tries > 2 ? 0.8 : 1) : 0;
-    for (const k of skillsOf({ ...a, skills: a.skills } as any)) {
-      const e = acc.get(k) ?? { w: 0, s: 0, solved: 0, failed: 0, best: 0 };
-      e.w += w; e.s += w * v;
-      if (ok) { e.solved++; e.best = Math.max(e.best, DIFF_W[a.difficulty] ?? 1); } else e.failed++;
+    const v = ok ? (isEv ? 1 : (a.used_hint ? 0.7 : 1) * (a.tries > 2 ? 0.8 : 1)) : 0;
+    const keys = isEv ? [a.skills ?? ""].filter((k) => SKILL_KEYS.includes(k)) : skillsOf({ ...a, skills: a.skills } as any);
+    for (const k of keys) {
+      const e = acc.get(k) ?? { code: { w: 0, s: 0 }, quick: { w: 0, s: 0 }, solved: 0, failed: 0, best: 0, mistakes: 0 };
+      const part = CODE_KINDS.includes(a.kind) ? e.code : e.quick;
+      part.w += w; part.s += w * v;
+      if (isEv) { if (!ok) e.mistakes++; }
+      else if (ok) { e.solved++; e.best = Math.max(e.best, DIFF_W[a.difficulty] ?? 1); } else e.failed++;
       acc.set(k, e);
     }
-  });
+  }
+  const pct = (p: Acc) => (p.w > 0 ? (p.s + 0.5) / (p.w + 1) : null);   // gentle prior: 50% after one try
   return SKILL_KEYS.map((key) => {
     const e = acc.get(key);
-    if (!e) return { key, mastery: 0, evidence: 0, solved: 0, failed: 0, best: null, status: "new", target: "easy" } as SkillScore;
-    const mastery = Math.round((100 * (e.s + 0.5)) / (e.w + 1));       // gentle prior: 50% after nothing
+    if (!e) return { key, mastery: 0, evidence: 0, solved: 0, failed: 0, best: null, status: "new", target: "easy", code: null, quick: null, codeMistakes: 0, proven: false } as SkillScore;
+    const c = pct(e.code), q = pct(e.quick);
+    const codeable = !QUICK_ONLY_SKILLS.includes(key);
+    // not shown in code yet: the other types alone can't reach more than 20%
+    const m = !codeable ? (q ?? c ?? 0) : c == null ? (q ?? 0) * (1 - CODE_SHARE) : q == null ? c : CODE_SHARE * c + (1 - CODE_SHARE) * q;
+    const mastery = Math.round(100 * m);
+    const w = e.code.w + e.quick.w;
+    const proven = !codeable || e.code.w >= 1;
     const best = e.best === 3 ? "hard" : e.best === 2 ? "medium" : e.best === 1 ? "easy" : null;
-    const status = e.w < 2 ? "new" : mastery < 45 ? "weak" : mastery < 75 ? "ok" : "strong";
+    const status = w < 2 ? "new" : mastery < 45 ? "weak" : mastery < 75 || !proven ? "ok" : "strong";
     // the next level: one step above what they reliably solve
     const target = best === "hard" || (best === "medium" && mastery >= 70) ? "hard" : best === "medium" || (best === "easy" && mastery >= 60) ? "medium" : "easy";
-    return { key, mastery, evidence: Math.round(e.w * 10) / 10, solved: e.solved, failed: e.failed, best, status, target } as SkillScore;
+    return {
+      key, mastery, evidence: Math.round(w * 10) / 10, solved: e.solved, failed: e.failed, best, status, target,
+      code: c == null ? null : Math.round(100 * c), quick: q == null ? null : Math.round(100 * q), codeMistakes: e.mistakes, proven,
+    } as SkillScore;
   });
 }
 
@@ -224,7 +259,7 @@ export interface Mistake { key: string; count: number; total: number }
  * compile, tracing (predict the output), bugs (find the bug), bigo (complexity), concepts (multiple choice), hints.
  */
 export function mistakesFrom(attempts: AttemptLite[]): Mistake[] {
-  const recent = attempts.slice(0, 120);
+  const recent = attempts.filter((a) => a.kind !== "evidence").slice(0, 120);
   const write = recent.filter((a) => (a.kind === "write" || a.kind === "sql") && a.result);
   const verdicts = write.map((a) => { try { return JSON.parse(a.result!); } catch { return null; } }).filter(Boolean);
   const failedW = verdicts.filter((r: any) => r.verdict && r.verdict !== "accepted");

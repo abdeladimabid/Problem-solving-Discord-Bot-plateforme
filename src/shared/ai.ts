@@ -317,6 +317,17 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
 export async function codeFeedback(env: Env, o: {
   lang: string; codeLang: CodeLang; statement: string; code: string; judgement: Judgement; accepted: boolean;
 }): Promise<string | null> {
+  return (await codeReview(env, o))?.text ?? null;
+}
+
+/**
+ * The AI's note on a submission, plus (when `skills` is given) the skills where the student's
+ * mistake is, e.g. a binary search that fails because of an off-by-one in the loop → ["loops"].
+ */
+export async function codeReview(env: Env, o: {
+  lang: string; codeLang: CodeLang; statement: string; code: string; judgement: Judgement; accepted: boolean;
+  skills?: { key: string; name: string }[];
+}): Promise<{ text: string; skills: string[] } | null> {
   if (!(await aiBudgetOk(env, AI_COST.feedback))) return null;
   await aiBudgetUse(env, AI_COST.feedback);
   const language = o.lang === "fr" ? "French" : "English";
@@ -332,12 +343,20 @@ export async function codeFeedback(env: Env, o: {
           : j.failed?.sample
             ? `WRONG ANSWER on a sample test.\nInput:\n${j.failed.input}\nExpected: ${j.failed.expected}\nGot: ${j.failed.got || "(nothing)"}`
             : `WRONG ANSWER on hidden test ${j.failed?.idx}${j.failed?.big ? " (big input)" : ""}. ${j.passed}/${j.total} tests passed. Find the most likely bug or missed edge case by reading the code.`;
-  const text = await chat(env, [
-    { role: "system", content: `You are a kind but demanding programming teacher. Write in ${language}, 2 to 4 short sentences, addressed to the student ("you"). Point to the exact line or idea that is wrong and why. NEVER write the corrected code or the full solution. Plain text, no headings.` },
+  const tagging = o.skills?.length && !o.accepted
+    ? `\n\nThen, on a LAST separate line, write "SKILLS:" followed by the 1 or 2 keys (comma-separated) of the basic skills where the student's MISTAKE actually is (not the topic of the problem unless the mistake is in it), chosen ONLY from: ${o.skills.map((x) => `${x.key} (${x.name})`).join(", ")}. Example: "SKILLS: loops, arrays". Write "SKILLS: none" if you can't tell.`
+    : "";
+  const raw = await chat(env, [
+    { role: "system", content: `You are a kind but demanding programming teacher. Write in ${language}, 2 to 4 short sentences, addressed to the student ("you"). Point to the exact line or idea that is wrong and why. NEVER write the corrected code or the full solution. Plain text, no headings.${tagging}` },
     { role: "user", content: `Problem:\n${o.statement.slice(0, 2500)}\n\nStudent code (${LANGS[o.codeLang].label}):\n${o.code.slice(0, 4000)}\n\n${situation}` },
   ], { maxTokens: 2500, temperature: 0.3, timeoutMs: 25000 }).catch(() => "");
-  const clean = text.replace(/```[\s\S]*?```/g, "").trim();
-  return clean ? clean.slice(0, 900) : null;
+  const allowed = new Set((o.skills ?? []).map((x) => x.key));
+  let skills: string[] = [];
+  const text = raw.replace(/^\s*\**\s*(SKILLS|COMPÉTENCES|COMPETENCES)\s*\**\s*:\s*(.*)$/gim, (_, __, list: string) => {
+    skills = list.toLowerCase().split(/[,;\s]+/).map((x) => x.trim()).filter((x) => allowed.has(x)).slice(0, 2);
+    return "";
+  }).replace(/```[\s\S]*?```/g, "").trim();
+  return text || skills.length ? { text: text.slice(0, 900), skills } : null;
 }
 
 /** Fallback when the code runner is unreachable: the AI reads the code and decides. */
