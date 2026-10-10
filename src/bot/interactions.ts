@@ -5,7 +5,7 @@ import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow,
 import { notifyCfg, notifyTest, saveNotifyCfg, setTeacher } from "../shared/notify.ts";
 import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
-import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, titleKey } from "../shared/game.ts";
+import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, secondsToNextDay, titleKey } from "../shared/game.ts";
 import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
 import {
   answer, feedbackFor, finish, getAttempt, getChallenge, pickChallenge, renderFor, startAttempt, submitCode, verifyCoding,
@@ -171,6 +171,8 @@ async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: 
   if (mode === "coding" && !p?.hr_username) return say(t(L, "err.not_linked_self"));
   if (mode === "coding" && !p?.hr_verified) return reply(linkMessage(L, p!.hr_display ?? p!.hr_username!, p!.hr_code ?? "?"), true);
   const kind = mode === "quick" && type !== "quick" ? type : null;
+  // quick challenges (multiple choice, complexity, output, bug, regex, Git): once today's allowance is used, none until tomorrow
+  if ((mode === "quick" && type !== "sql") && (await quickLocked(ix))) return say(quickLockedText(ix));
   // SQL, regex and Git: picked by skill (no AI generation for these: the bank is verified)
   const special = ({ sql: { skill: "sql", kind: "sql" }, regex: { skill: "regex", kind: "regex" }, git: { skill: "git", kind: "mcq" } } as Record<string, { skill: string; kind: string }>)[type];
   if (special) {
@@ -212,6 +214,18 @@ async function cmdPractice(ix: Ix, difficulty: Difficulty, type: string, topic: 
 }
 
 // ----------------------------------------------------------------- duels
+/** True when the student used today's point-earning quick challenges and the class locks them until tomorrow. */
+async function quickLocked(ix: Ix, uid = ix.userId): Promise<boolean> {
+  const sc = scoringOf(ix.guild);
+  if (!sc.quick.lock) return false;
+  return quickFactor(sc, await quickSolvesToday(ix.env, ix.guild.id, uid)) === 0;
+}
+function quickLockedText(ix: Ix, who?: string) {
+  const sc = scoringOf(ix.guild);
+  const left = secondsToNextDay(), h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60);
+  return t(ix.L, who ? "quick.locked_duel" : "quick.locked", { max: sc.quick.full + sc.quick.reduced, wait: h ? `${h} h ${m} min` : `${m} min`, user: who ?? "" });
+}
+
 async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficulty, stake: number, partner: string | null = null, opponent2: string | null = null) {
   const L = ix.L;
   if (opponent === ix.userId) return say(t(L, "duel.self"));
@@ -226,6 +240,7 @@ async function cmdDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Difficu
   for (const [id, nm] of [[ix.userId, ix.userName], [opponent, oppName]]) {
     const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ? OR partner_id = ? OR opponent2_id = ?)", ix.guild.id, id, id, id, id);
     if (busy) return say(t(L, "duel.busy", { name: nm }));
+    if (mode === "quick" && (await quickLocked(ix, id))) return say(id === ix.userId ? quickLockedText(ix) : quickLockedText(ix, nm));
   }
   const arena = await strictArena(ix.env, ix.guild);
   if (!arena) return say(t(L, "duel.no_arena"));
@@ -266,6 +281,7 @@ async function cmdTeamDuel(ix: Ix, opponent: string, mode: Mode, difficulty: Dif
     if (mode === "coding" && !p.hr_verified) return say(t(L, "duel.need_link"));
     const busy = await one(ix.env, "SELECT id FROM duels WHERE guild_id = ? AND status IN ('pending', 'starting', 'active') AND (challenger_id = ? OR opponent_id = ? OR partner_id = ? OR opponent2_id = ?)", ix.guild.id, u, u, u, u);
     if (busy) return say(t(L, "duel.busy", { name: names.get(u) }));
+    if (mode === "quick" && (await quickLocked(ix, u))) return say(u === ix.userId ? quickLockedText(ix) : quickLockedText(ix, names.get(u) ?? "?"));
   }
   const arena = await strictArena(ix.env, ix.guild);
   if (!arena) return say(t(L, "duel.no_arena"));
@@ -609,6 +625,7 @@ function helpPage(ix: Ix, topic: string) {
     const head = `\`${t(L, "help.points_type").padEnd(18)} ${"🟢".padStart(4)} ${"🟡".padStart(4)} ${"🔴".padStart(4)}\``;
     const lines = SCORE_KINDS.map((k) => `\`${t(L, `kind.${k}`).slice(0, 18).padEnd(18)} ${String(basePoints(sc, k, "easy")).padStart(4)} ${String(basePoints(sc, k, "medium")).padStart(4)} ${String(basePoints(sc, k, "hard")).padStart(4)}\``);
     body = body.replace("{table}", [head, ...lines].join("\n")).replace("{cap}", String(sc.cap)).replace("{qfull}", String(sc.quick.full)).replace("{qred}", String(sc.quick.reduced)).replace("{qpct}", String(sc.quick.pct))
+      .replace("{qafter}", sc.quick.lock ? (ix.L === "fr" ? ", puis plus aucun jusqu'au lendemain" : ", then no more until tomorrow") : (ix.L === "fr" ? ", puis 0" : ", then 0"))
       .replace("{c1}", String(sc.contest.first)).replace("{c2}", String(sc.contest.second)).replace("{c3}", String(sc.contest.third))
       .replace("{c10}", String(sc.contest.top10)).replace("{cplay}", String(sc.contest.play)).replace("{award}", String(sc.award));
   }

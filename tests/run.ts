@@ -1045,10 +1045,10 @@ section("anti-farming: quick challenges shrink after a few a day, write code nev
 {
   const D = { id: "104", name: "Dave", teacher: false };
   clock.advance(86400);
-  const mcqs = q("SELECT * FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND status = 'active' AND id NOT IN (SELECT challenge_id FROM attempts WHERE discord_id = ?) ORDER BY id LIMIT 14", D.id);
+  const mcqs = q("SELECT * FROM challenges WHERE kind = 'mcq' AND lang = 'en' AND status = 'active' AND id NOT IN (SELECT challenge_id FROM attempts WHERE discord_id = ?) ORDER BY id LIMIT 16", D.id);
   const base0 = (await api("GET", `/api/settings?g=${G}`)).data.scoring;
   const full = (c: any) => Math.max(1, Math.round(base0.base[c.difficulty] * base0.mult.mcq * 1.2));   // answered fast: +20%
-  check(mcqs.length >= 13, "enough multiple-choice challenges for the test");
+  check(mcqs.length >= 16, "enough multiple-choice challenges for the test");
   const solveMcq = async (c: any, origin = "practice") => {
     db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at) VALUES (?, ?, ?, ?, ?)").run(G, D.id, c.id, origin, clock.now());
     const aid = q1("SELECT id FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", D.id).id;
@@ -1058,16 +1058,37 @@ section("anti-farming: quick challenges shrink after a few a day, write code nev
   const pts: number[] = [];
   let msgs: string[] = [];
   for (let i = 0; i < 11; i++) { const r = await solveMcq(mcqs[i]); pts.push(r.pts); msgs.push(r.msg); }
-  check(pts.slice(0, 5).every((p, i) => p === full(mcqs[i])), `first 5 quick solves: full points (${pts.slice(0, 5)})`);
-  check(pts.slice(5, 10).every((p, i) => p === Math.max(1, Math.round(full(mcqs[i + 5]) * 0.2))), `next 5: 20% (${pts.slice(5, 10)})`);
-  check(pts[10] === 0 && msgs[10].includes("practice only"), "11th quick solve: no points");
-  check(msgs[3].includes("full-value quick challenge") && msgs[6].includes("20%"), "students are told before and when points shrink");
+  check(pts.slice(0, 3).every((p, i) => p === full(mcqs[i])), `first 3 quick solves: full points (${pts.slice(0, 3)})`);
+  check(pts.slice(3, 5).every((p, i) => p === Math.max(1, Math.round(full(mcqs[i + 3]) * 0.5))), `next 2: 50% (${pts.slice(3, 5)})`);
+  check(pts.slice(5).every((p) => p === 0) && msgs[5].includes("practice only"), "6th quick solve and after: no points");
+  check(msgs[1].includes("full-value quick challenge") && msgs[3].includes("50%"), `students are told before and when points shrink (${msgs[1]} | ${msgs[3]})`);
   // asking for another quick challenge: heads-up
+  check(msgs[4].includes("last quick challenge for today"), "the 5th quick solve says it was the last one today");
+  const locked = await slash(D as any, "practice", { difficulty: "easy", type: "output" });
+  check(text(locked).includes("come back in") || text(locked).includes("They come back"), `quick challenges are locked until tomorrow (${text(locked).slice(0, 80)})`);
+  check(text(await slash(D as any, "practice", { difficulty: "easy", type: "quick" })).includes("🔒"), "any quick type is locked too");
+  check(text(await slash(D as any, "practice", { difficulty: "easy", type: "git" })).includes("🔒"), "Git questions are locked too");
+  check(text(await slash(D as any, "duel", { opponent: U.bob.id, mode: "quick" })).includes("🔒"), "no quick duel when the allowance is used");
+  { const r = await slash(U.bob as any, "duel", { opponent: D.id, mode: "quick" }); check(text(r).includes("🔒") && text(r).includes("quick duel"), `a classmate can't pull them into a quick duel either (${text(r).slice(0, 90)})`); }
+  await slash(D as any, "practice", { difficulty: "easy", type: "write" });
+  check(!text(lastPatch()).includes("🔒"), "write code is never locked");
+  // the teacher can turn the lock off: then quick challenges are allowed again, for practice only
+  const sc0 = (await api("GET", `/api/settings?g=${G}`)).data.scoring;
+  await api("PUT", `/api/settings?g=${G}`, { scoring: { ...sc0, quick: { ...sc0.quick, lock: false } } });
   await slash(D as any, "practice", { difficulty: "easy", type: "output" });
-  check(text(lastPatch()).includes("won't give points"), "heads-up when the day's quick allowance is used");
+  check(text(lastPatch()).includes("won't give points"), "lock off: allowed again, with a heads-up that it gives no points");
+  await api("PUT", `/api/settings?g=${G}`, { scoring: sc0 });
+  clock.advance(86400);
+  await slash(D as any, "practice", { difficulty: "easy", type: "output" });
+  check(!text(lastPatch()).includes("🔒") && !text(lastPatch()).includes("won't give points"), "the next day quick challenges are back");
+  clock.advance(-86400);
   // an assignment is the teacher's choice: never limited
   const asg = await solveMcq(mcqs[11], "assignment");
-  check(asg.pts > 0, "assignments still give points after the quick allowance");
+  check(asg.pts === full(mcqs[11]) || asg.pts > full(mcqs[11]), `assignments still give full points after the quick allowance (${asg.pts})`);
+  const pth = await solveMcq(mcqs[14], "path");
+  check(pth.pts === full(mcqs[14]), `/path steps always give full points, even after the allowance (${pth.pts} vs ${full(mcqs[14])})`);
+  const pln = await solveMcq(mcqs[15], "plan");
+  check(pln.pts === full(mcqs[15]), `/today plan challenges always give full points (${pln.pts})`);
   // solving the same challenge again: nothing
   const again = await solveMcq(mcqs[0]);
   check(again.pts === 0 && again.msg.includes("already solved"), "re-solving a challenge gives no points");

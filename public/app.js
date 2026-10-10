@@ -1175,6 +1175,7 @@ async function viewSettings() {
             <div><label for="sq-red">then this many more</label><input type="number" min="0" max="1000" id="sq-red" value="${sc.quick.reduced}"></div>
             <div><label for="sq-pct">at (% of the points)</label><input type="number" min="0" max="100" id="sq-pct" value="${sc.quick.pct}"></div>
           </div>
+          <label class="check"><input type="checkbox" id="sq-lock" ${sc.quick.lock !== false ? "checked" : ""}> 🔒 After that, students <b>can't pick quick challenges</b> until the next day (in <code>/practice</code> and quick duels)</label>
           <p class="muted small" id="sq-sum"></p>
           <div class="field-row">
             <div><label for="s-cap">Max quick-challenge points a day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
@@ -1199,7 +1200,7 @@ async function viewSettings() {
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),
     cap: Number($("#s-cap").value), award: Number($("#s-award").value),
-    quick: { full: Number($("#sq-full").value), reduced: Number($("#sq-red").value), pct: Number($("#sq-pct").value) },
+    quick: { full: Number($("#sq-full").value), reduced: Number($("#sq-red").value), pct: Number($("#sq-pct").value), lock: $("#sq-lock").checked },
     contest: Object.fromEntries(["first", "second", "third", "top10", "play"].map((k) => [k, Number($(`#sc-${k}`).value)])),
   });
   const preview = () => {
@@ -1211,7 +1212,7 @@ async function viewSettings() {
   preview();
   const qsum = () => {
     const f = Number($("#sq-full").value), r = Number($("#sq-red").value), p = Number($("#sq-pct").value);
-    $("#sq-sum").textContent = `Each day a student gets full points for ${f} quick challenge${f === 1 ? "" : "s"}, ${r ? `${p}% for the next ${r}, ` : ""}then 0 (they can keep playing for practice).`;
+    $("#sq-sum").textContent = `Each day a student gets full points for ${f} quick challenge${f === 1 ? "" : "s"}, ${r ? `${p}% for the next ${r}, ` : ""}${$("#sq-lock").checked ? "then no more quick challenges until the next day (midnight UTC). Write code, SQL and HackerRank stay unlimited." : "then 0 (they can keep playing for practice)."}`;
   };
   $$("[id^=sq-]").forEach((i) => (i.oninput = qsum));
   qsum();
