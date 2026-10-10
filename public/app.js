@@ -263,6 +263,7 @@ function lineChart(labels, series, { height = 180, yMax = null, ySuffix = "", le
 /** Tooltip of a skill bar: where the % comes from. */
 function skillTip(x) {
   const parts = [];
+  if (x.levels) parts.push(`success · easy ${x.levels[0]}% · medium ${x.levels[1]}% · hard ${x.levels[2]}%`);
   if (x.code != null) parts.push(`code ${x.code}% (counts 80%)`);
   if (x.quick != null) parts.push(`other types ${x.quick}%${x.code != null ? " (20%)" : ""}`);
   if (x.code == null && x.proven === false) parts.push("not shown in code yet");
@@ -332,8 +333,9 @@ async function loadSkillDefs() {
 }
 const skillLabel = (k) => { const d = (S.skillDefs || []).find((x) => x.key === k); return d ? `${d.emoji} ${d.en}` : k; };
 const skillTags = (csv) => (csv || "").split(",").filter(Boolean).map((k) => `<span class="tag skill">${esc(skillLabel(k))}</span>`).join(" ");
-const masteryColor = (m) => (m == null ? "var(--surface-2)" : m >= 75 ? "var(--up-bg)" : m >= 45 ? "var(--warn-bg)" : "var(--down-bg)");
-const masteryInk = (m) => (m == null ? "var(--ink-faint)" : m >= 75 ? "var(--up)" : m >= 45 ? "var(--warn)" : "var(--down)");
+// same thresholds as the bot: 65%+ strong (reliable at medium or hard), 35–64% getting there, under 35% needs work
+const masteryColor = (m) => (m == null ? "var(--surface-2)" : m >= 65 ? "var(--up-bg)" : m >= 35 ? "var(--warn-bg)" : "var(--down-bg)");
+const masteryInk = (m) => (m == null ? "var(--ink-faint)" : m >= 65 ? "var(--up)" : m >= 35 ? "var(--warn)" : "var(--down)");
 
 // ============================================================ router
 const routes = {
@@ -514,7 +516,7 @@ function coachPanel(c) {
     <div class="grid cols-2-even">
       <div>
         <h3>Skills <span class="muted small">(weakest first)</span></h3>
-        <p class="muted small skill-legend">80% from code, 20% from the other types · <span class="sk-pill">no code</span> not shown in code yet (max 20%) · <span class="sk-pill bad">🐞 2</span> mistakes found in their code · hover a bar for details</p>
+        <p class="muted small skill-legend">Harder challenges reach higher: easy alone tops out at 50% · 80% from code, 20% from the other types · <span class="sk-pill">no code</span> not shown in code yet (max 20%) · <span class="sk-pill bad">🐞 2</span> mistakes found in their code · hover a bar for details</p>
         ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar ${x.proven === false ? "unproven" : ""}" title="${esc(skillTip(x))}">
           <span class="sk-name">${esc(skillLabel(x.key))}</span>
           <span class="track"><i style="width:${Math.max(2, x.mastery)}%;background:${masteryInk(x.mastery)}"></i></span>
@@ -2153,7 +2155,7 @@ async function viewSkills() {
             const tip = v ? `${v.mastery}%${v.code != null ? ` · code ${v.code}%` : v.proven === false ? " · not shown in code yet" : ""}${v.codeMistakes ? ` · ${v.codeMistakes} mistake(s) in their code` : ""}` : "not tried";
             return `<td class="heat-cell ${v && v.proven === false ? "unproven" : ""}" style="background:${v && v.evidence >= 2 ? masteryColor(v.mastery) : "transparent"}" title="${esc(skillLabel(k))}: ${esc(tip)}">${v && v.evidence >= 2 ? `<b style="color:${masteryInk(v.mastery)}">${v.mastery}</b>` : `<span class="muted">${v ? "·" : ""}</span>`}</td>`;
           }).join("")}</tr>`).join("")}</tbody></table></div>
-          <p class="muted small">🟩 75%+ solid · 🟨 45–74% getting there · 🟥 under 45% needs work · empty = not enough tries yet · <i>italic</i> = not shown in code yet (max 20%). Harder challenges count more.</p>`
+          <p class="muted small">🟩 65%+ solid (reliable at medium or hard) · 🟨 35–64% getting there · 🟥 under 35% needs work · empty = not enough tries yet · <i>italic</i> = not shown in code yet (max 20%). Easy challenges alone go up to 50%: harder ones are needed to reach the top.</p>`
         : `<p class="empty">No results yet. The map fills in as students solve challenges.</p>`}
       </section>
     </div>`;
@@ -2161,7 +2163,7 @@ async function viewSkills() {
     const k = th.dataset.sort;
     openDialog(skillLabel(k), `<p>Class average: <b>${d.average[k] ?? "—"}%</b></p>`, [
       { label: "Sort by this skill", action: async () => { sessionStorage.setItem("classbot.skSort", k); dlg.close(); viewSkills(); } },
-      { label: "✨ Generate challenges", action: async () => genForSkillDialog(k, (d.average[k] ?? 50) < 45 ? "easy" : "medium") },
+      { label: "✨ Generate challenges", action: async () => genForSkillDialog(k, (d.average[k] ?? 50) < 35 ? "easy" : "medium") },
       { label: "Send a practice set", primary: true, action: async () => practiceSetDialog(k, d) },
     ]);
   });
@@ -2177,7 +2179,7 @@ function practiceSetDialog(skill, d) {
     <div class="field-row">
       <div><label for="ps-n">Challenges each</label><input type="number" id="ps-n" min="1" max="5" value="3"></div>
       <div><label for="ps-due">Due</label><select id="ps-due"><option value="">No due date</option><option value="2">In 2 days</option><option value="7" selected>In a week</option><option value="14">In 2 weeks</option></select></div>
-      <div><label for="ps-th">Select students under</label><select id="ps-th"><option value="45">45%</option><option value="60" selected>60%</option><option value="75">75%</option><option value="101">everyone</option></select></div>
+      <div><label for="ps-th">Select students under</label><select id="ps-th"><option value="35">35%</option><option value="50" selected>50%</option><option value="65">65%</option><option value="101">everyone</option></select></div>
     </div>
     <label for="ps-note">Note <span class="muted">(optional)</span></label><input type="text" id="ps-note" style="width:100%" maxlength="300" placeholder="e.g. We'll correct these on Thursday">
     <div class="pick-students" id="ps-list"></div>`,

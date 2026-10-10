@@ -26,12 +26,14 @@ export async function classHeatmap(env: Env, g: GuildRow) {
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id
       WHERE a.guild_id = ? AND a.finished_at >= ? AND a.status IN ('solved', 'failed', 'expired')
       GROUP BY a.discord_id, c.id, ok, hinted`, g.id, since);
-  const ev = await all<{ discord_id: string; skill: string; ok: number; w: number }>(env,
-    "SELECT discord_id, skill, ok, SUM(weight) AS w FROM skill_evidence WHERE guild_id = ? AND created_at >= ? GROUP BY discord_id, skill, ok", g.id, since).catch(() => []);
+  const ev = await all<{ discord_id: string; skill: string; ok: number; w: number; difficulty: string }>(env,
+    `SELECT e.discord_id, e.skill, e.ok, SUM(e.weight) AS w, COALESCE(c.difficulty, 'easy') AS difficulty
+       FROM skill_evidence e LEFT JOIN attempts a ON a.id = e.attempt_id LEFT JOIN challenges c ON c.id = a.challenge_id
+      WHERE e.guild_id = ? AND e.created_at >= ? GROUP BY e.discord_id, e.skill, e.ok, difficulty`, g.id, since).catch(() => []);
   const per = new Map<string, AttemptLite[]>();
   const push = (id: string, a: AttemptLite) => { const l = per.get(id) ?? []; l.push(a); per.set(id, l); };
   for (const r of rows) push(r.discord_id, { ...(r as any), status: r.ok ? "solved" : "failed", used_hint: r.hinted, tries: 1, result: null, finished_at: null, challenge_id: 0, weight: r.n });
-  for (const e of ev) push(e.discord_id, { status: e.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: "easy", skills: e.skill, result: null, finished_at: null, challenge_id: 0, weight: e.w });
+  for (const e of ev) push(e.discord_id, { status: e.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: e.difficulty, skills: e.skill, result: null, finished_at: null, challenge_id: 0, weight: e.w });
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name]));
   const students = [...per.entries()].map(([id, list]) => ({
     discord_id: id, name: names.get(id) ?? null,
@@ -67,14 +69,16 @@ export async function practiceSet(env: Env, g: GuildRow, o: { skill: string; stu
       WHERE a.guild_id = ? AND a.discord_id IN (${inList}) AND a.status IN ('solved', 'failed', 'expired')
         AND (',' || COALESCE(c.skills, '') || ',') LIKE ?
       GROUP BY a.discord_id, c.kind, c.difficulty, c.skills, ok, hinted`, g.id, ...students, like);
-  const ev = await all<{ discord_id: string; ok: number; w: number }>(env,
-    `SELECT discord_id, ok, SUM(weight) AS w FROM skill_evidence WHERE guild_id = ? AND skill = ? AND discord_id IN (${inList}) GROUP BY discord_id, ok`,
+  const ev = await all<{ discord_id: string; ok: number; w: number; difficulty: string }>(env,
+    `SELECT e.discord_id, e.ok, SUM(e.weight) AS w, COALESCE(c.difficulty, 'easy') AS difficulty
+       FROM skill_evidence e LEFT JOIN attempts a ON a.id = e.attempt_id LEFT JOIN challenges c ON c.id = a.challenge_id
+      WHERE e.guild_id = ? AND e.skill = ? AND e.discord_id IN (${inList}) GROUP BY e.discord_id, e.ok, difficulty`,
     g.id, o.skill, ...students).catch(() => []);
   const level = new Map<string, Difficulty>();
   for (const uid of students) {
     const list: AttemptLite[] = [
       ...att.filter((r) => r.discord_id === uid).map((r) => ({ status: r.ok ? "solved" : "failed", used_hint: r.hinted, tries: 1, kind: r.kind, difficulty: r.difficulty, skills: r.skills, result: null, finished_at: null, challenge_id: 0, weight: r.n })),
-      ...ev.filter((r) => r.discord_id === uid).map((r) => ({ status: r.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: "easy", skills: o.skill, result: null, finished_at: null, challenge_id: 0, weight: r.w })),
+      ...ev.filter((r) => r.discord_id === uid).map((r) => ({ status: r.ok ? "solved" : "failed", used_hint: 0, tries: 1, kind: "evidence", difficulty: r.difficulty, skills: o.skill, result: null, finished_at: null, challenge_id: 0, weight: r.w })),
     ];
     level.set(uid, (masteryFrom(list, { recency: false }).find((x) => x.key === o.skill)?.target ?? "easy") as Difficulty);
   }
