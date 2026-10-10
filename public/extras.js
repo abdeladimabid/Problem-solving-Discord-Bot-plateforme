@@ -24,7 +24,7 @@ const waitText = (s) => (s < 60 ? `${Math.max(0, Math.round(s))} s` : s < 3600 ?
 
 // ============================================================ help queue
 let handsTimer = null;
-async function viewHands() {
+async function viewHands(focusId, refresh = false) {
   clearTimeout(handsTimer);
   const d = await api("/hands");
   const now = Date.now() / 1000;
@@ -37,7 +37,7 @@ async function viewHands() {
     </div>
     <div class="stack" style="margin-top:18px">
       ${d.open.length ? d.open.map((h, i) => `
-        <section class="panel hand-card ${h.status === "helping" ? "helping" : ""}">
+        <section class="panel hand-card ${h.status === "helping" ? "helping" : ""}" id="hand-${h.id}">
           <div class="panel-head">
             <h2>${h.status === "helping" ? "🏃" : `#${d.open.filter((x) => x.status === "waiting").indexOf(h) + 1}`} <a href="#/student/${esc(h.discord_id)}">${esc(h.name || h.discord_id)}</a></h2>
             <span class="small ${now - h.created_at > 600 ? "late-wait" : "muted"}">${h.status === "helping" ? "being helped · " : ""}waiting ${waitText(now - h.created_at)}</span>
@@ -69,7 +69,12 @@ async function viewHands() {
       [{ label: "Send", primary: true, action: async () => { const v = $("#hr-t", dlg).value.trim(); if (!v) throw new Error("Write an answer"); await api(`/hands/${h.id}`, { method: "PUT", body: { action: "reply", reply: v } }); dlg.close(); toast("Answer sent"); refreshPills(); viewHands(); } }]);
     setTimeout(() => $("#hr-t", dlg)?.focus(), 50);
   });
-  handsTimer = setTimeout(() => { if (location.hash === "#/hands" && !dlg.open) viewHands().catch(() => {}); }, 5000);
+  if (focusId) {
+    const card = $(`#hand-${CSS.escape(String(focusId))}`);
+    if (card) { card.classList.add("flash"); if (!refresh) card.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    else if (!refresh && d.done.some((h) => String(h.id) === String(focusId))) toast("This request is already closed (see the last 24 hours below)");
+  }
+  handsTimer = setTimeout(() => { if (location.hash.startsWith("#/hands") && !dlg.open) viewHands(location.hash.split("/")[2], true).catch(() => {}); }, 5000);
 }
 
 // ======================================================== questions/FAQ

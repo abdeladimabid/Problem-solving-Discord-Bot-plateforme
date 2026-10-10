@@ -5,7 +5,7 @@ import { all, now, one } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { COLORS, btn, linkBtn, modal, row, truncate } from "../shared/discord.ts";
 import { getChallenge, pickChallenge, renderFor, startAttempt } from "../shared/challenges.ts";
-import { HandError, cancelHand, handText, myHand, raiseHand } from "../shared/hands.ts";
+import { HandError, cancelHand, handText, myHand, notifyTeacher, raiseHand } from "../shared/hands.ts";
 import { FaqError, ask, draftAnswer, escalate, helped, searchFaq } from "../shared/faq.ts";
 import type { FaqRow } from "../shared/faq.ts";
 import { MAX_ANSWERS, finishInterview, getInterview, interviewReply, openInterview, stars, transcriptOf } from "../shared/interview.ts";
@@ -37,6 +37,7 @@ export function handSubmit(ix: Ix, components: any[]) {
   later(ix, async () => {
     try {
       const r = await raiseHand(ix.env, ix.guild, ix.userId, ix.userName, val("q"), val("code") || null);
+      ix.ctx.waitUntil(notifyTeacher(ix.env, ix.guild, r.id).catch((e) => console.error("hand notify", e)));
       return { content: handText(L, { question: val("q"), code: val("code") || null }, r.position), components: [row(btn(t(L, "hand.cancel"), `hand:cancel:${r.id}`, 4, "✖️"))] };
     } catch (e) {
       if (!(e instanceof HandError)) throw e;

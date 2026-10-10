@@ -6,6 +6,7 @@ import { access, ai, clock, discordCalls, discordRoles, github, hr, makeCtx, mak
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
+import { safeNext } from "../src/admin/password.ts";
 import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
@@ -1615,8 +1616,19 @@ section("help queue: /help-me, live queue in the dashboard, replies by DM");
   check(m.type === 9 && m.data.custom_id === "mhand", "/help-me opens a form (question + optional code)");
   await raise(kai, "My loop never stops", "while True:\n    pass");
   check(text(lastPatch()).includes("next"), "first in the queue: 'you're next'");
+  const teacherId = q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id;
+  const tdm = () => discordCalls.filter((x) => x.path === `/channels/dm-${teacherId}/messages`);
+  const nBefore = tdm().length;
   await raise(lea, "How do I read two numbers?");
   check(text(lastPatch()).includes("#2"), "second student is #2");
+  {
+    const sent = tdm().slice(nBefore), b = sent.at(-1)?.body;
+    const btn = b?.components?.[0]?.components?.[0];
+    const leaId = q1("SELECT id FROM hands WHERE discord_id = ?", lea.id).id;
+    check(!!teacherId && sent.length === 1 && JSON.stringify(b.embeds).includes("Lea") && JSON.stringify(b.embeds).includes("read two numbers") && JSON.stringify(b.embeds).includes("**2**"),
+      "the teacher gets a DM with the student, the question and how many are waiting");
+    check(btn?.style === 5 && btn.url.includes(`g=${G}`) && btn.url.includes(encodeURIComponent(`hands/${leaId}`)), "the DM has a button that opens this request in the dashboard");
+  }
   check(text(await (async () => { await raise(kai, "again"); return lastPatch(); })()).includes("already"), "one raised hand at a time");
   const st = await slash(kai, "help-me");
   const kaiHand = q1("SELECT * FROM hands WHERE discord_id = ?", kai.id), leaHand = q1("SELECT * FROM hands WHERE discord_id = ?", lea.id);
@@ -1635,6 +1647,12 @@ section("help queue: /help-me, live queue in the dashboard, replies by DM");
   await api("PUT", `/api/hands/${kaiHand.id}?g=${G}`, { action: "done" });
   qd = await api("GET", `/api/hands?g=${G}`);
   check(qd.data.open.length === 0 && qd.data.stats.helped === 2 && qd.data.stats.avgWait != null, "queue empty, average wait computed");
+}
+
+section("dashboard links keep their page through the sign-in");
+{
+  check(safeNext("/?g=1&open=hands%2F3") === "/?g=1&open=hands%2F3", "a page of the dashboard is kept");
+  check(["//evil.example", "https://evil.example", "/\\evil.example", "/login?next=/", "", null].every((x) => safeNext(x as any) === "/"), "other sites and odd values go to the home page");
 }
 
 section("questions bank: /ask, AI draft, teacher approves, FAQ");
