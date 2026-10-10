@@ -260,6 +260,17 @@ function lineChart(labels, series, { height = 180, yMax = null, ySuffix = "", le
     ${legend ? `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>` : ""}</div>`;
 }
 
+/** Tooltip of a skill bar: where the % comes from. */
+function skillTip(x) {
+  const parts = [];
+  if (x.code != null) parts.push(`code ${x.code}% (counts 80%)`);
+  if (x.quick != null) parts.push(`other types ${x.quick}%${x.code != null ? " (20%)" : ""}`);
+  if (x.code == null && x.proven === false) parts.push("not shown in code yet");
+  if (x.codeMistakes) parts.push(`${x.codeMistakes} mistake(s) found in their code`);
+  parts.push(`${x.solved} solved, ${x.failed} not`, `next level: ${x.target}`);
+  return parts.join(" · ");
+}
+
 // ======================================================= sortable table
 // The rows are in the returned HTML right away, so a view can wire its buttons
 // ($$("[data-del]")…) just after rendering. Sorting moves the existing rows instead of
@@ -502,8 +513,8 @@ function coachPanel(c) {
   return `<section class="panel"><h2>Coach</h2>
     <div class="grid cols-2-even">
       <div>
-        <h3>Skills <span class="muted small">(weakest first)</span></h3>
-        ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar" title="${x.solved} solved, ${x.failed} not · next level: ${x.target}"><span>${esc(skillLabel(x.key))}</span><span class="track"><i style="width:${x.mastery}%;background:${masteryInk(x.mastery)}"></i></span><b class="num" style="color:${masteryInk(x.mastery)}">${x.mastery}%</b></div>`).join("")}</div>` : `<p class="empty">Not enough results yet.</p>`}
+        <h3>Skills <span class="muted small">(weakest first · 80% from code, 20% from the other types · hover a bar for details)</span></h3>
+        ${skills.length ? `<div class="skill-bars">${skills.map((x) => `<div class="skill-bar" title="${esc(skillTip(x))}"><span>${esc(skillLabel(x.key))}${x.proven === false ? ` <small class="muted" title="Not shown in code yet: quick challenges alone count for at most 20%">· no code yet</small>` : ""}${x.codeMistakes ? ` <small class="late-wait">· ${x.codeMistakes} code mistake${x.codeMistakes > 1 ? "s" : ""}</small>` : ""}</span><span class="track"><i style="width:${x.mastery}%;background:${masteryInk(x.mastery)}"></i></span><b class="num" style="color:${masteryInk(x.mastery)}">${x.mastery}%</b></div>`).join("")}</div>` : `<p class="empty">Not enough results yet.</p>`}
         ${few ? `<p class="muted small">+ ${few} skill(s) with too few tries to judge yet.</p>` : ""}
       </div>
       <div>

@@ -275,7 +275,7 @@ function fakeAI() {
         return { response: JSON.stringify({ problem: 4, communication: 5, code: 5, complexity: 4, verdict: "Hire", strengths: "Clear thinking out loud.", improve: "State the complexity earlier." }) };
       }
       if (sys.includes("kind but demanding")) {
-        return { response: "Your loop never considers the case where every number is negative: start from the first element instead of 0." };
+        return { response: "Your loop never considers the case where every number is negative: start from the first element instead of 0." + (sys.includes('"SKILLS:"') ? "\nSKILLS: loops, notaskill" : "") };
       }
       const kindMatch = sys.match(/kind "(\w+)"/);
       const kind = kindMatch?.[1] ?? "output";

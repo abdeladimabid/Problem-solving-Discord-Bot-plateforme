@@ -30,12 +30,13 @@ export async function cmdSkills(ix: Ix, memberId: string) {
     const tried = p.skills.filter((s) => s.evidence > 0);
     const lines = tried
       .sort((a, b) => SKILLS.findIndex((x) => x.key === a.key) - SKILLS.findIndex((x) => x.key === b.key))
-      .map((s) => t(L, "skills.line", { icon: STATUS_ICON[s.status], skill: skillName(s.key, L), bar: bar(s.mastery), pct: s.mastery, next: t(L, `diff.${s.target}`) }));
+      .map((s) => t(L, "skills.line", { icon: STATUS_ICON[s.status], skill: skillName(s.key, L), bar: bar(s.mastery), pct: s.mastery, next: t(L, `diff.${s.target}`) })
+        + (!s.proven ? ` · ${t(L, "skills.no_code")}` : "") + (s.codeMistakes ? ` · ${t(L, "skills.code_mistakes", { n: s.codeMistakes })}` : ""));
     const untried = CORE.filter((k) => !tried.some((s) => s.key === k)).map((k) => skillName(k, L));
     const desc = [
       lines.length ? lines.join("\n") : t(L, "skills.empty"),
       untried.length ? "\n" + t(L, "skills.untried", { list: untried.slice(0, 10).join(" · ") }) : "",
-    ].join("\n");
+    ].join("\n").slice(0, 4000);
     const fields = [{
       name: t(L, "skills.mistakes_title"),
       value: p.mistakes.length ? p.mistakes.slice(0, 4).map((m) => t(L, `mistake.${m.key}`, { n: m.count, total: m.total })).join("\n\n").slice(0, 1024) : t(L, "skills.no_mistakes"),
