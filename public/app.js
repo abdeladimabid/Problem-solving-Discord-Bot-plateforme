@@ -261,31 +261,37 @@ function lineChart(labels, series, { height = 180, yMax = null, ySuffix = "", le
 }
 
 // ======================================================= sortable table
+// The rows are in the returned HTML right away, so a view can wire its buttons
+// ($$("[data-del]")…) just after rendering. Sorting moves the existing rows instead of
+// redrawing them, so those buttons keep working after a sort too.
 function table(columns, rows, { onRow, sort, empty = "Nothing here yet." } = {}) {
   const id = "t" + Math.random().toString(36).slice(2, 8);
   let key = sort?.key ?? null, asc = sort?.asc ?? false;
+  const order = () => (key ? [...rows.keys()].sort((x, y) => {
+    const va = rows[x][key], vb = rows[y][key];
+    const r = va == null ? 1 : vb == null ? -1 : typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
+    return asc ? r : -r;
+  }) : [...rows.keys()]);
+  const thClass = (c) => `${c.num ? "num" : ""} ${c.sort && c.sort === key ? `sorted ${asc ? "asc" : ""}` : ""}`;
   setTimeout(() => {
     const root = document.getElementById(id);
     if (!root) return;
-    const draw = () => {
-      const sorted = key ? [...rows].sort((a, b) => {
-        const va = a[key], vb = b[key];
-        const r = va == null ? 1 : vb == null ? -1 : typeof va === "number" ? va - vb : String(va).localeCompare(String(vb));
-        return asc ? r : -r;
-      }) : rows;
-      root.innerHTML = `<table><thead><tr>${columns.map((c) => `<th ${c.sort ? `data-sort="${c.sort}"` : ""} class="${c.num ? "num" : ""} ${c.sort && c.sort === key ? `sorted ${asc ? "asc" : ""}` : ""}">${esc(c.label)}</th>`).join("")}</tr></thead>
-        <tbody>${sorted.map((r, i) => `<tr data-i="${rows.indexOf(r)}" ${onRow ? 'class="clickable" tabindex="0"' : ""}>${columns.map((c) => `<td class="${c.num ? "num" : ""}">${c.html(r)}</td>`).join("")}</tr>`).join("")}</tbody></table>
-        ${rows.length ? "" : `<p class="empty">${esc(empty)}</p>`}`;
-      $$("th[data-sort]", root).forEach((th) => th.onclick = () => { const k = th.dataset.sort; asc = key === k ? !asc : false; key = k; draw(); });
-      if (onRow) $$("tbody tr", root).forEach((tr) => {
-        const go = (e) => { if (e.target.closest("button, a, input")) return; onRow(rows[Number(tr.dataset.i)]); };
-        tr.onclick = go;
-        tr.onkeydown = (e) => { if (e.key === "Enter") go(e); };
-      });
-    };
-    draw();
+    const tbody = $("tbody", root);
+    $$("th[data-sort]", root).forEach((th) => th.onclick = () => {
+      const k = th.dataset.sort; asc = key === k ? !asc : false; key = k;
+      $$("th", root).forEach((h, n) => (h.className = thClass(columns[n])));
+      const trs = Object.fromEntries($$("tr", tbody).map((tr) => [tr.dataset.i, tr]));
+      order().forEach((i) => tbody.appendChild(trs[i]));
+    });
+    if (onRow) $$("tbody tr", root).forEach((tr) => {
+      const go = (e) => { if (e.target.closest("button, a, input, select, textarea, summary")) return; onRow(rows[Number(tr.dataset.i)]); };
+      tr.onclick = go;
+      tr.onkeydown = (e) => { if (e.key === "Enter" && e.target === tr) go(e); };
+    });
   });
-  return `<div class="table-wrap" id="${id}"></div>`;
+  return `<div class="table-wrap" id="${id}"><table><thead><tr>${columns.map((c) => `<th ${c.sort ? `data-sort="${c.sort}"` : ""} class="${thClass(c)}">${esc(c.label)}</th>`).join("")}</tr></thead>
+    <tbody>${order().map((i) => `<tr data-i="${i}" ${onRow ? 'class="clickable" tabindex="0"' : ""}>${columns.map((c) => `<td class="${c.num ? "num" : ""}">${c.html(rows[i])}</td>`).join("")}</tr>`).join("")}</tbody></table>
+    ${rows.length ? "" : `<p class="empty">${esc(empty)}</p>`}</div>`;
 }
 
 async function loadWeekSummary() {
