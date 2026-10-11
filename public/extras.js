@@ -32,9 +32,9 @@ async function viewHands(focusId, refresh = false) {
   view.innerHTML = `
     <div class="page-head"><div><h1>Help queue</h1><p class="sub">Students raise their hand with <code>/help-me</code>. Oldest first. This page refreshes by itself: keep it open during class.</p></div></div>
     <div class="figures">
-      <div class="figure"><div class="ico">✋</div><b>${d.stats.waiting}</b><span>waiting</span></div>
-      <div class="figure"><div class="ico">${icon("check")}</div><b>${d.stats.helped}</b><span>helped in the last 24 h</span></div>
-      <div class="figure"><div class="ico">⏱️</div><b>${d.stats.avgWait == null ? "—" : waitText(d.stats.avgWait)}</b><span>average wait</span></div>
+      <div class="figure"><div class="ico">✋</div><div><b>${d.stats.waiting}</b><span>waiting</span></div></div>
+      <div class="figure"><div class="ico">${icon("check")}</div><div><b>${d.stats.helped}</b><span>helped in the last 24 h</span></div></div>
+      <div class="figure"><div class="ico">⏱️</div><div><b>${d.stats.avgWait == null ? "—" : waitText(d.stats.avgWait)}</b><span>average wait</span></div></div>
     </div>
     <div class="stack" style="margin-top:18px">
       ${d.open.length ? d.open.map((h, i) => `
@@ -151,10 +151,10 @@ async function viewInterviews() {
   view.innerHTML = `
     <div class="page-head"><div><h1>Mock interviews</h1><p class="sub">Students practice with <code>/interview</code>: they explain their approach, edge cases and complexity to an interviewer, write the code, and get a scorecard (+5 pts once a day).</p></div></div>
     <div class="figures">
-      <div class="figure"><div class="ico">🎤</div><b>${d.items.length}</b><span>interviews</span></div>
-      <div class="figure"><div class="ico">🧩</div><b>${avg("problem")}</b><span>avg problem solving /5</span></div>
-      <div class="figure"><div class="ico">💬</div><b>${avg("communication")}</b><span>avg communication /5</span></div>
-      <div class="figure"><div class="ico">📈</div><b>${avg("complexity")}</b><span>avg complexity /5</span></div>
+      <div class="figure"><div class="ico">🎤</div><div><b>${d.items.length}</b><span>interviews</span></div></div>
+      <div class="figure"><div class="ico">🧩</div><div><b>${avg("problem")}</b><span>avg problem solving /5</span></div></div>
+      <div class="figure"><div class="ico">💬</div><div><b>${avg("communication")}</b><span>avg communication /5</span></div></div>
+      <div class="figure"><div class="ico">📈</div><div><b>${avg("complexity")}</b><span>avg complexity /5</span></div></div>
     </div>
     <section class="panel" style="margin-top:18px">${table([
       { label: "Student", sort: "name", html: (x) => `<a href="#/student/${esc(x.discord_id)}">${esc(x.name || x.discord_id)}</a>` },
@@ -249,9 +249,9 @@ async function viewProject(id) {
       <p class="sub"><code>${esc(p.entry)}</code> · ${esc(LANG[p.lang] || p.lang)} · ${p.tests.length} tests · ${p.points} pts · ${p.due_at ? `due ${fmtDateTime(p.due_at)}` : "no due date"} · ${p.status === "open" ? status("active", "Open") : status("expired", "Closed")}</p></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="pj-recheck">Re-check everyone</button><button class="btn" id="pj-edit">Edit</button><button class="btn danger" id="pj-del">Delete</button></div></div>
     <div class="figures">
-      <div class="figure"><div class="ico">🔗</div><b>${d.repos.length}</b><span>repositories linked</span></div>
-      <div class="figure"><div class="ico">${icon("check")}</div><b>${full}</b><span>pass every test</span></div>
-      <div class="figure"><div class="ico">⚠️</div><b>${d.repos.filter((r) => r.error).length}</b><span>can't be read (private or missing file)</span></div>
+      <div class="figure"><div class="ico">🔗</div><div><b>${d.repos.length}</b><span>repositories linked</span></div></div>
+      <div class="figure"><div class="ico">${icon("check")}</div><div><b>${full}</b><span>pass every test</span></div></div>
+      <div class="figure"><div class="ico">⚠️</div><div><b>${d.repos.filter((r) => r.error).length}</b><span>can't be read (private or missing file)</span></div></div>
     </div>
     <section class="panel" style="margin-top:18px">${table([
       { label: "Student", sort: "name", html: (r) => `<a href="#/student/${esc(r.discord_id)}">${esc(r.name || r.discord_id)}</a>` },
@@ -572,86 +572,132 @@ async function loadNotify(state) {
 
 
 // ======================================================= 🪙 coins & shop
+let coinsTab = "coins";
+try { coinsTab = localStorage.getItem("coinsTab") || "coins"; } catch {}
 async function viewCoins() {
   const d = await api("/coins");
   const selected = new Set();
   const builtinName = { freeze: "Streak freeze", hint: "Hint token", double: "Double code hour", contract: "Challenge contract", shield: "Duel shield",
     title: "Custom title", color: "Name color", theme: "Profile theme", motto: "Motto", emoji: "Profile emoji", showcase: "Badge showcase", lang: "Favourite language",
     pin: "Proudest solve", frame: "Avatar frame", victory: "Victory message", levelup: "Level-up style", flair: "Leaderboard flair" };
-  const builtinHelp = { freeze: "a missed day doesn't break their streak", hint: "their next hint costs no points",
-    double: "×2 points on write-code they pick (practice, /today, /path); never on your assignments, daily or sessions",
-    contract: "they pick a goal (5 easy, 3 medium or 2 hard code/SQL solves); reach it within the hours set → they win the reward",
-    shield: "a lost duel doesn't cost Elo rating", title: "a title next to their name", color: "their name in a color they pick",
-    theme: "a color theme on /profile and their shared page", motto: "a short sentence on their profile", emoji: "an emoji next to their name",
-    showcase: "their 3 favourite badges shown first", lang: "a 💻 language badge on their profile", pin: "a solved challenge pinned on their profile",
-    frame: "a frame around their profile", victory: "their own line when they win a duel", levelup: "a special #arena announcement when they level up",
-    flair: "a symbol next to their name on every leaderboard" };
-  const groupName = { item: "🎒 Items", boost: "⚡ Boosts", profile: "🪪 Profile", game: "🎮 In the game" };
+  const builtinHelp = { freeze: "A missed day doesn't break their streak.", hint: "Their next hint costs no points.",
+    double: "×2 points on write-code they pick (practice, /today, /path). Never on your assignments, the daily or sessions.",
+    contract: "They pick a goal (5 easy, 3 medium or 2 hard code/SQL solves) and win the reward if they reach it in time.",
+    shield: "A lost duel doesn't cost Elo rating.", title: "A title next to their name.", color: "Their name in a color they pick (a Discord role).",
+    theme: "A color theme on /profile and their shared page.", motto: "A short sentence on their profile.", emoji: "An emoji next to their name.",
+    showcase: "Their 3 favourite badges shown first.", lang: "A 💻 language badge on their profile.", pin: "A solved challenge pinned on their profile.",
+    frame: "A frame around their profile.", victory: "Their own line when they win a duel.", levelup: "A special #arena announcement when they level up.",
+    flair: "A symbol next to their name on every leaderboard." };
+  const groups = [["item", "🎒 Items", "Useful things they keep until they use them."], ["boost", "⚡ Boosts", "Short-lived advantages. They never change work you assign."],
+    ["profile", "🪪 Profile", "How they look in /profile and on their shared page."], ["game", "🎮 In the game", "How they show up in #arena and on leaderboards."]];
   const cfg = d.shop.cfg;
   let custom = (cfg.custom || []).map((c) => ({ ...c }));
+  const built = d.shop.items.filter((it) => !it.custom);
+  const avg = d.students.length ? Math.round(d.total / d.students.length) : 0;
+  const soldTotal = Object.values(d.shop.sold).reduce((a, n) => a + n, 0);
+  const maxCoins = Math.max(1, ...d.students.map((p) => p.coins || 0));
+  const anyTexts = d.students.some((p) => (p.texts || []).length);
+
   view.innerHTML = `
-    <div class="page-head"><div><h1>Coins &amp; shop</h1><p class="sub">Students earn coins (daily challenge, plan, path, duels, events, helping classmates) and spend them in <code>/shop</code>. ${d.students.length} students · ${d.total} 🪙 in total.</p></div></div>
-    ${d.pending.length ? `<section class="panel"><h2>🎁 Rewards to give <span class="pill-inline">${d.pending.length}</span></h2>
-      <p class="muted small">Students bought these with their coins. Give them, then mark them as given (or refund the coins).</p>
-      ${table([
-        { label: "Student", html: (r) => `<a href="#/student/${esc(r.discord_id)}">${esc(r.name || r.discord_id)}</a>` },
-        { label: "Reward", html: (r) => esc(r.label) },
-        { label: "Cost", num: true, html: (r) => `${r.cost} 🪙` },
-        { label: "Bought", html: (r) => `<span class="small">${esc(fmtAgo(r.created_at))}</span>` },
-        { label: "", html: (r) => `<span class="toolbar" style="margin:0"><button class="btn small primary" data-given="${r.id}">✅ Given</button><button class="btn small" data-refund="${r.id}">↩️ Refund</button></span>` },
-      ], d.pending)}</section>` : ""}
-    <div class="grid cols-2-even" style="align-items:start">
-      <section class="panel"><div class="panel-head"><h2>Students' coins</h2>
-        <span class="toolbar" style="margin:0"><input type="search" id="cs-q" placeholder="Search" style="max-width:150px"><button class="btn small" id="cs-all">Select all</button><button class="btn small" id="cs-none">Clear</button></span></div>
-        <div id="cs-list"></div></section>
-      <section class="panel"><h2>Change coins</h2>
-        <label>Who</label>
-        <div class="seg" id="cs-who"><button type="button" data-who="all" aria-pressed="true">Everyone (${d.students.length})</button><button type="button" data-who="sel" aria-pressed="false">Selected (<span id="cs-n">0</span>)</button></div>
-        <label>What</label>
-        <div class="seg" id="cs-op"><button type="button" data-op="add" aria-pressed="true">＋ Give</button><button type="button" data-op="remove" aria-pressed="false">− Remove</button><button type="button" data-op="set" aria-pressed="false">= Set to</button></div>
-        <div class="field-row"><div><label for="cs-amt">Coins</label><input type="number" id="cs-amt" min="0" value="20"></div>
-          <div style="align-self:end"><button class="btn small" id="cs-zero" title="Set to 0">Set to 0</button></div></div>
-        <label for="cs-why">Reason <span class="muted">(shown in their DM)</span></label><input type="text" id="cs-why" maxlength="200" style="width:100%" placeholder="e.g. great teamwork today">
-        <label class="check"><input type="checkbox" id="cs-dm"><span>Tell the students in a Discord DM (up to 20)</span></label>
-        <p class="notice small" id="cs-sum"></p>
-        <p><button class="btn primary" id="cs-go">Apply</button></p>
-        ${d.log.length ? `<details><summary class="small"><b>History of changes</b> (${d.log.length})</summary>${table([
+    <div class="page-head"><div><h1>Coins &amp; shop</h1><p class="sub">Students earn coins (daily challenge, plan, path, duels, events, helping classmates) and spend them in <code>/shop</code>.</p></div></div>
+    <div class="figures cs-figs">
+      <div class="figure"><div class="ico">👥</div><div><b>${d.students.length}</b><span>students</span></div></div>
+      <div class="figure"><div class="ico">🪙</div><div><b>${d.total}</b><span>coins in total</span></div></div>
+      <div class="figure"><div class="ico">⚖️</div><div><b>${avg}</b><span>average per student</span></div></div>
+      <div class="figure"><div class="ico">🛒</div><div><b>${soldTotal}</b><span>things bought</span></div></div>
+      <div class="figure${d.pending.length ? " cs-attn" : ""}"><div class="ico">🎁</div><div><b>${d.pending.length}</b><span>rewards to give</span></div></div>
+    </div>
+    <div class="tabs cs-tabs" role="tablist">
+      <button role="tab" data-ct="coins">🪙 Coins</button>
+      <button role="tab" data-ct="shop">🛒 Shop</button>
+      <button role="tab" data-ct="give">🎁 Rewards to give${d.pending.length ? ` <span class="pill">${d.pending.length}</span>` : ""}</button>
+      <button role="tab" data-ct="hist">🧾 History</button>
+    </div>
+    <div id="ct-coins" class="cs-pane">
+      <div class="cs-grid">
+        <section class="panel cs-list-panel"><div class="panel-head"><h2>Students' coins</h2>
+          <span class="toolbar" style="margin:0"><input type="search" id="cs-q" placeholder="Search a student" style="max-width:170px"><button class="btn small" id="cs-all">Select all</button><button class="btn small" id="cs-none">Clear</button></span></div>
+          <div id="cs-list" class="cs-scroll"></div></section>
+        <section class="panel cs-change"><h2>Change coins</h2>
+          <label>Who</label>
+          <div class="seg" id="cs-who"><button type="button" data-who="all" aria-pressed="true">Everyone (${d.students.length})</button><button type="button" data-who="sel" aria-pressed="false">Selected (<span id="cs-n">0</span>)</button></div>
+          <label>What</label>
+          <div class="seg" id="cs-op"><button type="button" data-op="add" aria-pressed="true">＋ Give</button><button type="button" data-op="remove" aria-pressed="false">− Remove</button><button type="button" data-op="set" aria-pressed="false">= Set to</button></div>
+          <label for="cs-amt">Coins</label>
+          <div class="cs-amt-row"><input type="number" id="cs-amt" min="0" value="20">
+            ${[5, 10, 20, 50].map((n) => `<button type="button" class="btn small" data-amt="${n}">${n}</button>`).join("")}
+            <button type="button" class="btn small" id="cs-zero" title="Set everyone selected to 0">Set to 0</button></div>
+          <label for="cs-why">Reason <span class="muted">(shown in their DM)</span></label><input type="text" id="cs-why" maxlength="200" style="width:100%" placeholder="e.g. great teamwork today">
+          <label class="check"><input type="checkbox" id="cs-dm"><span>Tell the students in a Discord DM (up to 20)</span></label>
+          <p class="notice small" id="cs-sum"></p>
+          <p style="margin-bottom:0"><button class="btn primary" id="cs-go" style="width:100%">Apply</button></p>
+        </section>
+      </div>
+    </div>
+    <div id="ct-shop" class="cs-pane">
+      ${groups.map(([g, title, sub]) => {
+        const list = built.filter((it) => it.group === g);
+        if (!list.length) return "";
+        return `<section class="panel"><div class="panel-head"><div><h2>${title}</h2><p class="muted small" style="margin:2px 0 0">${sub}</p></div></div>
+          <div class="shop-grid">${list.map((it) => `
+            <div class="shop-card${it.on ? "" : " off"}" data-card="${it.key}">
+              <div class="shop-top"><span class="shop-emoji">${it.emoji}</span>
+                <div class="shop-name"><b>${esc(builtinName[it.key] || it.key)}</b><span class="muted small">${d.shop.sold[it.key] ?? 0} bought</span></div>
+                <label class="switch" title="Sold in /shop"><input type="checkbox" data-b-on="${it.key}" ${it.on ? "checked" : ""} aria-label="Sell ${esc(builtinName[it.key] || it.key)}"><span></span></label></div>
+              <p class="shop-desc">${esc(builtinHelp[it.key] || "")}</p>
+              <div class="shop-fields">
+                <label>Price<span class="unit-in"><input type="number" min="0" data-b-price="${it.key}" value="${it.price}"><i>🪙</i></span></label>
+                ${it.max != null ? `<label>Max held<span class="unit-in"><input type="number" min="1" max="50" data-b-max="${it.key}" value="${it.max}"></span></label>` : ""}
+                ${it.days != null ? `<label>Lasts<span class="unit-in"><input type="number" min="1" max="90" data-b-days="${it.key}" value="${it.days}"><i>days</i></span></label>` : ""}
+                ${it.hours != null ? `<label>Lasts<span class="unit-in"><input type="number" min="1" max="72" data-b-hours="${it.key}" value="${it.hours}"><i>hours</i></span></label>` : ""}
+                ${it.reward != null ? `<label>Reward<span class="unit-in"><input type="number" min="0" data-b-reward="${it.key}" value="${it.reward}"><i>🪙</i></span></label>` : ""}
+              </div>
+            </div>`).join("")}</div></section>`;
+      }).join("")}
+      <section class="panel"><div class="panel-head"><div><h2>🎁 Your own rewards</h2><p class="muted small" style="margin:2px 0 0">Real-life rewards you hand out. When a student buys one, you get a DM and it waits in <b>Rewards to give</b>.</p></div></div>
+        <div id="sh-custom" class="shop-grid"></div>
+        <p class="muted small" style="margin:12px 0 0">Ideas: 🎧 music while coding · 🪑 choose your seat · 📄 one homework skipped · ⏰ 10 more minutes on a test · 🍬 a snack. Leave "stock" empty for unlimited.</p>
+      </section>
+      <div class="save-bar" id="sh-bar"><span id="sh-state" class="muted small">All changes saved</span><button class="btn primary" id="sh-save">Save the shop</button></div>
+    </div>
+    <div id="ct-give" class="cs-pane">
+      <section class="panel"><h2>🎁 Rewards to give</h2>
+        <p class="muted small">Students bought these with their coins. Give them, then mark them as given (or refund the coins).</p>
+        ${d.pending.length ? table([
+          { label: "Student", html: (r) => `<a href="#/student/${esc(r.discord_id)}">${avatar(r.name, r.discord_id)} ${esc(r.name || r.discord_id)}</a>` },
+          { label: "Reward", html: (r) => esc(r.label) },
+          { label: "Cost", num: true, html: (r) => `${r.cost} 🪙` },
+          { label: "Bought", html: (r) => `<span class="small">${esc(fmtAgo(r.created_at))}</span>` },
+          { label: "", html: (r) => `<span class="toolbar" style="margin:0;justify-content:flex-end"><button class="btn small primary" data-given="${r.id}">✅ Given</button><button class="btn small" data-refund="${r.id}">↩️ Refund</button></span>` },
+        ], d.pending) : `<p class="empty">Nothing to give right now. 🎉</p>`}</section>
+    </div>
+    <div id="ct-hist" class="cs-pane">
+      <div class="grid cols-2-even" style="align-items:start">
+        <section class="panel"><h2>🛒 Recent purchases</h2>${d.purchases.length ? table([
+          { label: "Student", html: (r) => esc(r.name || r.discord_id) },
+          { label: "Item", html: (r) => `${esc(r.label)}${r.detail && !r.label.includes(r.detail) ? `<div class="muted small">${esc(r.detail)}</div>` : ""}` },
+          { label: "Cost", num: true, html: (r) => `${r.cost}` },
+          { label: "Status", html: (r) => (r.status === "pending" ? status("review", "To give") : r.status === "given" ? status("done", "Given") : r.status === "refunded" ? status("expired", "Refunded") : '<span class="muted small">—</span>') },
+          { label: "When", html: (r) => `<span class="small">${esc(fmtAgo(r.created_at))}</span>` },
+        ], d.purchases) : `<p class="empty">Nobody bought anything yet.</p>`}</section>
+        <section class="panel"><h2>✍️ Your coin changes</h2>${d.log.length ? table([
           { label: "Student", html: (r) => esc(r.name || r.discord_id) },
           { label: "Change", num: true, html: (r) => `<b style="color:${r.delta > 0 ? "var(--up)" : "var(--down)"}">${r.delta > 0 ? "+" : ""}${r.delta}</b>` },
           { label: "Now", num: true, html: (r) => `${r.balance}` },
           { label: "Reason", html: (r) => `<span class="small">${esc(r.reason || "—")}</span>` },
           { label: "When", html: (r) => `<span class="small">${esc(fmtAgo(r.created_at))}</span>` },
-        ], d.log)}</details>` : ""}
-      </section>
-    </div>
-    <section class="panel"><div class="panel-head"><h2>🛒 The shop</h2><button class="btn primary small" id="sh-save">Save the shop</button></div>
-      <p class="muted small">What students see in <code>/shop</code>. Change prices and limits, turn items off, and add your own rewards: when a student buys one, you get a DM and it appears in <b>Rewards to give</b> above.</p>
-      <h3>Built-in items</h3>
-      <div class="table-wrap"><table><thead><tr><th>On</th><th>Item</th><th class="num">Price 🪙</th><th class="num">Settings</th><th class="num">Bought</th></tr></thead><tbody>
-        ${["item", "boost", "profile", "game"].map((grp) => `<tr><th colspan="5" style="background:var(--soft,#f1f5f9)">${groupName[grp]}</th></tr>` + d.shop.items.filter((it) => !it.custom && it.group === grp).map((it) => `<tr>
-          <td><input type="checkbox" data-b-on="${it.key}" ${it.on ? "checked" : ""} aria-label="Sell ${esc(builtinName[it.key] || it.key)}"></td>
-          <td>${it.emoji} <b>${esc(builtinName[it.key] || it.key)}</b><div class="muted small">${esc(builtinHelp[it.key] || "")}</div></td>
-          <td class="num"><input type="number" min="0" data-b-price="${it.key}" value="${it.price}" style="width:90px"></td>
-          <td class="num">${[
-            it.max != null ? `<input type="number" min="1" max="50" data-b-max="${it.key}" value="${it.max}" style="width:70px" title="How many a student can hold"> <span class="muted small">max held</span>` : "",
-            it.days != null ? `<input type="number" min="1" max="90" data-b-days="${it.key}" value="${it.days}" style="width:70px" title="How long it lasts"> <span class="muted small">days</span>` : "",
-            it.hours != null ? `<input type="number" min="1" max="72" data-b-hours="${it.key}" value="${it.hours}" style="width:70px" title="How long it lasts"> <span class="muted small">hours</span>` : "",
-            it.reward != null ? `<input type="number" min="0" data-b-reward="${it.key}" value="${it.reward}" style="width:80px" title="Coins they win when they reach the goal"> <span class="muted small">🪙 reward</span>` : "",
-          ].filter(Boolean).join("<br>")}</td>
-          <td class="num">${d.shop.sold[it.key] ?? 0}</td></tr>`).join("")).join("")}
-      </tbody></table></div>
-      <h3 style="margin-top:18px">Your own rewards</h3>
-      <p class="muted small">Ideas: 🎧 music while coding · 🪑 choose your seat · 📄 one homework skipped · ⏰ 10 more minutes on a test · 🍬 a snack. Leave "stock" empty for unlimited.</p>
-      <div id="sh-custom"></div>
-      <p><button class="btn small" id="sh-add">${icon("plus")} Add a reward</button></p>
-    </section>
-    ${d.purchases.length ? `<section class="panel"><details><summary><b>Recent purchases</b> (${d.purchases.length})</summary>${table([
-      { label: "Student", html: (r) => esc(r.name || r.discord_id) },
-      { label: "Item", html: (r) => `${esc(r.label)}${r.detail && !r.label.includes(r.detail) ? ` <span class="muted small">${esc(r.detail)}</span>` : ""}` },
-      { label: "Cost", num: true, html: (r) => `${r.cost}` },
-      { label: "Status", html: (r) => (r.status === "pending" ? status("review", "To give") : r.status === "given" ? status("done", "Given") : r.status === "refunded" ? status("expired", "Refunded") : '<span class="muted small">—</span>') },
-      { label: "When", html: (r) => `<span class="small">${esc(fmtAgo(r.created_at))}</span>` },
-    ], d.purchases)}</details></section>` : ""}`;
+        ], d.log) : `<p class="empty">You haven't changed anyone's coins yet.</p>`}</section>
+      </div>
+    </div>`;
+
+  // ---- tabs
+  const showTab = (k) => {
+    coinsTab = k; try { localStorage.setItem("coinsTab", k); } catch {}
+    $$("[data-ct]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.ct === k)));
+    $$(".cs-pane").forEach((p) => (p.hidden = p.id !== `ct-${k}`));
+  };
+  $$("[data-ct]").forEach((b) => b.onclick = () => showTab(b.dataset.ct));
+  showTab(["coins", "shop", "give", "hist"].includes(coinsTab) ? coinsTab : "coins");
 
   // ---- students list
   const drawList = () => {
@@ -660,16 +706,16 @@ async function viewCoins() {
     $("#cs-list").innerHTML = table([
       { label: "", html: (p) => `<input type="checkbox" data-sel="${esc(p.discord_id)}" ${selected.has(p.discord_id) ? "checked" : ""} aria-label="Select">` },
       { label: "Student", sort: "name", html: (p) => `<a href="#/student/${esc(p.discord_id)}">${avatar(p.name, p.discord_id)} ${esc(p.name || p.discord_id)}</a>` },
-      { label: "Coins", sort: "coins", num: true, html: (p) => `<b>${p.coins}</b>` },
-      { label: "🧊", num: true, html: (p) => `${p.streak_freezes || 0}` },
-      { label: "🎟️", num: true, html: (p) => `${p.hint_tokens || 0}` },
-      { label: "Their texts", html: (p) => (p.texts || []).map((x) => `<span class="sk-pill" title="${esc(x.key)}">${esc(x.v)} <button class="icon-btn" style="padding:0 4px" data-clear="${esc(p.discord_id)}|${esc(x.key)}" title="Remove this ${esc(x.key)} (no refund)">×</button></span>`).join(" ") || '<span class="muted small">—</span>' },
-    ], rows, { empty: "No students yet." });
-    setTimeout(() => $$("[data-clear]").forEach((b) => b.onclick = () => {
+      { label: "Coins", sort: "coins", html: (p) => `<span class="coin-cell"><span class="coin-bar"><i style="width:${Math.round(((p.coins || 0) / maxCoins) * 100)}%"></i></span><b>${p.coins}</b></span>` },
+      { label: "🧊", num: true, html: (p) => (p.streak_freezes ? `${p.streak_freezes}` : '<span class="muted">·</span>') },
+      { label: "🎟️", num: true, html: (p) => (p.hint_tokens ? `${p.hint_tokens}` : '<span class="muted">·</span>') },
+      ...(anyTexts ? [{ label: "Their texts", html: (p) => (p.texts || []).map((x) => `<span class="sk-pill" title="${esc(x.key)}">${esc(x.v)} <button class="icon-btn" style="padding:0 4px" data-clear="${esc(p.discord_id)}|${esc(x.key)}" title="Remove this ${esc(x.key)} (no refund)">×</button></span>`).join(" ") }] : []),
+    ], rows, { empty: q ? "No student with that name." : "No students yet." });
+    $$("[data-sel]").forEach((c) => c.onchange = () => { c.checked ? selected.add(c.dataset.sel) : selected.delete(c.dataset.sel); setWho(selected.size ? "sel" : "all"); });
+    $$("[data-clear]").forEach((b) => b.onclick = () => {
       const [student, key] = b.dataset.clear.split("|");
       confirmDialog("Remove this text?", "It disappears from their profile right away. The coins aren't given back.", "Remove", async () => { await api("/shop/clear", { method: "POST", body: { student, key } }); toast("Removed"); viewCoins(); }, true);
-    }), 0);
-    setTimeout(() => $$("[data-sel]").forEach((c) => c.onchange = () => { c.checked ? selected.add(c.dataset.sel) : selected.delete(c.dataset.sel); if (selected.size) setWho("sel"); summary(); }), 0);
+    });
   };
   let who = "all", op = "add";
   const setWho = (w) => { who = w; $$("#cs-who [data-who]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.who === w))); summary(); };
@@ -677,16 +723,18 @@ async function viewCoins() {
   const summary = () => {
     $("#cs-n").textContent = selected.size;
     const n = who === "all" ? d.students.length : selected.size, a = Math.max(0, Number($("#cs-amt").value) || 0);
-    $("#cs-sum").textContent = !n ? "Select students in the list, or choose Everyone." : op === "set" ? `${n} student(s) will have exactly ${a} coins.` : `${op === "add" ? "+" : "−"}${a} coins for ${n} student(s)${op === "remove" ? " (never below 0)" : ""}.`;
+    $("#cs-sum").textContent = !n ? "Tick students in the list, or choose Everyone." : op === "set" ? `${n} student(s) will have exactly ${a} coins.` : `${op === "add" ? "+" : "−"}${a} coins for ${n} student(s)${op === "remove" ? " (never below 0)" : ""}.`;
+    $("#cs-go").textContent = !n ? "Apply" : op === "set" ? `Set ${n} student(s) to ${a}` : `${op === "add" ? "Give" : "Remove"} ${a} coins · ${n} student(s)`;
   };
   $$("#cs-who [data-who]").forEach((b) => b.onclick = () => setWho(b.dataset.who));
   $$("#cs-op [data-op]").forEach((b) => b.onclick = () => setOp(b.dataset.op));
+  $$("[data-amt]").forEach((b) => b.onclick = () => { $("#cs-amt").value = b.dataset.amt; summary(); });
   $("#cs-amt").oninput = summary;
   $("#cs-q").oninput = drawList;
   $("#cs-all").onclick = () => { d.students.forEach((p) => selected.add(p.discord_id)); setWho("sel"); drawList(); };
   $("#cs-none").onclick = () => { selected.clear(); setWho("all"); drawList(); };
   $("#cs-zero").onclick = () => { setOp("set"); $("#cs-amt").value = 0; summary(); };
-  $("#cs-go").onclick = (e) => {
+  $("#cs-go").onclick = () => {
     const n = who === "all" ? d.students.length : selected.size;
     if (!n) return toast("Select students first", true);
     const a = Math.max(0, Number($("#cs-amt").value) || 0);
@@ -699,33 +747,47 @@ async function viewCoins() {
   drawList(); summary();
 
   // ---- shop editor
+  let dirty = false;
+  const markDirty = () => { dirty = true; $("#sh-bar").classList.add("dirty"); $("#sh-state").textContent = "You have unsaved changes"; };
+  $$("#ct-shop [data-b-on], #ct-shop [data-b-price], #ct-shop [data-b-max], #ct-shop [data-b-days], #ct-shop [data-b-hours], #ct-shop [data-b-reward]").forEach((el) => el.addEventListener("input", markDirty));
+  $$("[data-b-on]").forEach((c) => c.addEventListener("change", () => { $(`[data-card="${c.dataset.bOn}"]`).classList.toggle("off", !c.checked); markDirty(); }));
   const drawCustom = () => {
-    $("#sh-custom").innerHTML = custom.length ? `<div class="table-wrap"><table><thead><tr><th>On</th><th>Emoji</th><th>Name</th><th>What it is</th><th class="num">Price 🪙</th><th class="num">Stock</th><th class="num">Per student</th><th class="num">Bought</th><th></th></tr></thead><tbody>
-      ${custom.map((c, i) => `<tr>
-        <td><input type="checkbox" data-c="${i}" data-f="on" ${c.on !== false ? "checked" : ""}></td>
-        <td><input type="text" data-c="${i}" data-f="emoji" value="${esc(c.emoji || "🎁")}" maxlength="8" style="width:52px"></td>
-        <td><input type="text" data-c="${i}" data-f="name" value="${esc(c.name || "")}" maxlength="60" placeholder="e.g. Choose your seat" style="min-width:150px"></td>
-        <td><input type="text" data-c="${i}" data-f="desc" value="${esc(c.desc || "")}" maxlength="160" placeholder="optional" style="min-width:160px"></td>
-        <td class="num"><input type="number" min="0" data-c="${i}" data-f="price" value="${c.price ?? 50}" style="width:80px"></td>
-        <td class="num"><input type="number" min="0" data-c="${i}" data-f="stock" value="${c.stock ?? ""}" placeholder="∞" style="width:70px"></td>
-        <td class="num"><input type="number" min="1" data-c="${i}" data-f="per_student" value="${c.per_student ?? ""}" placeholder="∞" style="width:70px"></td>
-        <td class="num">${c.id ? d.shop.sold[`c_${c.id}`] ?? 0 : 0}</td>
-        <td><button class="icon-btn" data-cdel="${i}" title="Remove">×</button></td></tr>`).join("")}</tbody></table></div>`
-      : `<p class="empty">No reward of your own yet.</p>`;
-    $$("[data-c]").forEach((el) => el.oninput = el.onchange = () => { const c = custom[Number(el.dataset.c)]; c[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value; });
-    $$("[data-cdel]").forEach((b) => b.onclick = () => { custom.splice(Number(b.dataset.cdel), 1); drawCustom(); });
+    $("#sh-custom").innerHTML = custom.map((c, i) => `
+      <div class="shop-card own${c.on !== false ? "" : " off"}">
+        <div class="shop-top"><input type="text" class="own-emoji" data-c="${i}" data-f="emoji" value="${esc(c.emoji || "🎁")}" maxlength="8" aria-label="Emoji">
+          <div class="shop-name"><input type="text" data-c="${i}" data-f="name" value="${esc(c.name || "")}" maxlength="60" placeholder="Name, e.g. Choose your seat"><span class="muted small">${c.id ? d.shop.sold[`c_${c.id}`] ?? 0 : 0} bought</span></div>
+          <label class="switch" title="Sold in /shop"><input type="checkbox" data-c="${i}" data-f="on" ${c.on !== false ? "checked" : ""}><span></span></label></div>
+        <input type="text" class="own-desc" data-c="${i}" data-f="desc" value="${esc(c.desc || "")}" maxlength="160" placeholder="What it is (optional)">
+        <div class="shop-fields">
+          <label>Price<span class="unit-in"><input type="number" min="0" data-c="${i}" data-f="price" value="${c.price ?? 50}"><i>🪙</i></span></label>
+          <label>Stock<span class="unit-in"><input type="number" min="0" data-c="${i}" data-f="stock" value="${c.stock ?? ""}" placeholder="∞"></span></label>
+          <label>Per student<span class="unit-in"><input type="number" min="1" data-c="${i}" data-f="per_student" value="${c.per_student ?? ""}" placeholder="∞"></span></label>
+          <button class="icon-btn own-del" data-cdel="${i}" title="Remove this reward">🗑️</button>
+        </div>
+      </div>`).join("") + `<button class="shop-card add-card" id="sh-add">${icon("plus")}<b>Add a reward</b><span class="muted small">${custom.length}/15</span></button>`;
+    $$("[data-c]").forEach((el) => el.oninput = el.onchange = () => {
+      const c = custom[Number(el.dataset.c)]; c[el.dataset.f] = el.type === "checkbox" ? el.checked : el.value;
+      if (el.type === "checkbox") el.closest(".shop-card").classList.toggle("off", !el.checked);
+      markDirty();
+    });
+    $$("[data-cdel]").forEach((b) => b.onclick = () => { custom.splice(Number(b.dataset.cdel), 1); markDirty(); drawCustom(); });
+    $("#sh-add").onclick = () => {
+      if (custom.length >= 15) return toast("15 rewards at most", true);
+      custom.push({ emoji: "🎁", name: "", desc: "", price: 100, stock: "", per_student: 1, on: true }); markDirty(); drawCustom();
+      $$("#sh-custom [data-f=name]").pop()?.focus();
+    };
   };
   drawCustom();
-  $("#sh-add").onclick = () => { if (custom.length >= 15) return toast("15 rewards at most", true); custom.push({ emoji: "🎁", name: "", desc: "", price: 100, stock: "", per_student: 1, on: true }); drawCustom(); $$("[data-f=name]").pop()?.focus(); };
   $("#sh-save").onclick = (e) => busy(e.currentTarget, async () => {
     const items = {};
-    for (const it of d.shop.items.filter((x) => !x.custom)) {
+    for (const it of built) {
       const num = (f) => $(`[data-b-${f}="${it.key}"]`) ? { [f]: Number($(`[data-b-${f}="${it.key}"]`).value) } : {};
       items[it.key] = { on: $(`[data-b-on="${it.key}"]`).checked, price: Number($(`[data-b-price="${it.key}"]`).value), ...num("max"), ...num("days"), ...num("hours"), ...num("reward") };
     }
     const bad = custom.find((c) => String(c.name || "").trim().length < 2);
     if (bad) throw new Error("Give each reward a name (or remove the empty one)");
     await api("/shop", { method: "PUT", body: { items, custom } });
+    dirty = false;
     toast("Shop saved: students see it in /shop"); viewCoins();
   });
   $$("[data-given]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/shop/purchases/${b.dataset.given}`, { method: "POST", body: { action: "given" } }); toast("Marked as given"); refreshPills(); viewCoins(); }));
