@@ -8,6 +8,7 @@ import { levelInfo, titleKey } from "./game.ts";
 import { masteryFrom, skillName, SKILLS, studentAttempts } from "./skills.ts";
 import { signText } from "./integrity.ts";
 import { LANGS } from "./runner.ts";
+import { FRAMES, THEMES, cosmeticLabel, cosmeticsOf } from "./shop.ts";
 
 const base = (env: Env) => (env.PUBLIC_URL || "").replace(/\/$/, "");
 const b64u = (s: string) => btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -77,6 +78,10 @@ export async function profileData(env: Env, g: GuildRow, uid: string) {
     "SELECT c.title, c.difficulty, c.kind, a.finished_at FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.discord_id = ? AND a.status = 'solved' ORDER BY a.finished_at DESC LIMIT 8", g.id, uid);
   const p: any = s.player;
   const lv = levelInfo(s.total);
+  // what they bought in /shop
+  const cos = cosmeticsOf(p);
+  const show = (cos.showcase ?? "").split(",").filter((b) => s.badges.includes(b));
+  const pin = cos.pin ? await one<{ title: string; difficulty: string; kind: string }>(env, "SELECT title, difficulty, kind FROM challenges WHERE id = ?", Number(cos.pin)) : null;
   return {
     L: g.lang, className: g.name ?? "", season: g.season,
     name: p.name ?? "?", title: p.title && p.title_until > now() ? p.title : null,
@@ -84,7 +89,12 @@ export async function profileData(env: Env, g: GuildRow, uid: string) {
     seasonPoints: s.seasonPoints, seasonRank: s.seasonRank, seasonSize: s.seasonSize,
     solved: s.solved, accuracy: s.accuracy, streak: p.daily_streak ?? 0, planBest: p.plan_best ?? 0,
     duels: s.duels, rating: p.rating ?? 1000, contests: s.contests,
-    badges: s.badges.map((b) => t(g.lang, `badge.${b}`)),
+    badges: [...show, ...s.badges.filter((b) => !show.includes(b))].map((b) => t(g.lang, `badge.${b}`)), showcased: show.length,
+    look: {
+      theme: cos.theme && THEMES[cos.theme] ? THEMES[cos.theme] : null, frame: cos.frame && FRAMES[cos.frame] ? FRAMES[cos.frame] : null,
+      emoji: cos.emoji ?? null, motto: cos.motto ?? null, lang: cos.lang ? cosmeticLabel(g.lang, "lang", cos.lang) : null,
+      pin: pin ? { title: pin.title, difficulty: pin.difficulty, kind: t(g.lang, `kind.${pin.kind}`) } : null,
+    },
     skills, langs: langs.map((x) => ({ name: LANGS[x.lang as keyof typeof LANGS]?.label ?? x.lang, n: x.n })),
     kinds: kinds.map((x) => ({ name: t(g.lang, `kind.${x.kind}`), n: x.n })),
     recent: recent.map((r) => ({ ...r, kind: t(g.lang, `kind.${r.kind}`) })),

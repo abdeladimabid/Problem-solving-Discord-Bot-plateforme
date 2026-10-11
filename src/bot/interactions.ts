@@ -24,7 +24,7 @@ import { type Ix, deferReply, deferUpdate, errorText, guildFromButton, json, lat
 export { errorText } from "./ix.ts";
 import { pickForSkill } from "../shared/coach.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
-import { activeTitle, useHintToken } from "../shared/shop.ts";
+import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
 import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
 import {
@@ -492,12 +492,25 @@ async function cmdProfile(ix: Ix, memberId: string) {
     { name: t(L, "prof.badges"), value: s.badges.length ? s.badges.map((b) => t(L, `badge.${b}`)).join(" · ") : t(L, "prof.no_badges"), inline: false },
   ];
   if (rivals.length) fields.push({ name: t(L, "prof.rivals"), value: rivals.map((r) => mention(r.rival_id)).join(" "), inline: false });
+  // what they bought in /shop
+  const cos = cosmeticsOf(s.player);
+  if (cos.showcase) {
+    const show = cos.showcase.split(",").filter((b) => s.badges.includes(b));
+    const bf = fields.find((f) => f.name === t(L, "prof.badges"));
+    if (bf && show.length) bf.value = [...show.map((b) => `**${t(L, `badge.${b}`)}**`), ...s.badges.filter((b) => !show.includes(b)).map((b) => t(L, `badge.${b}`))].join(" · ").slice(0, 1024);
+  }
+  if (cos.lang) fields.push({ name: t(L, "prof.fav_lang"), value: cosmeticLabel(L, "lang", cos.lang), inline: true });
+  if (cos.pin) {
+    const pc = await one<{ title: string; difficulty: string; kind: string }>(ix.env, "SELECT title, difficulty, kind FROM challenges WHERE id = ?", Number(cos.pin));
+    if (pc) fields.push({ name: t(L, "prof.pin"), value: `${pc.title} · ${t(L, `diff.${pc.difficulty}`)} · ${t(L, `kind.${pc.kind}`)}`.slice(0, 1024), inline: true });
+  }
+  const fr = cos.frame ? FRAMES[cos.frame]?.emoji ?? "" : "";
   const hr = s.player?.hr_display ? t(L, s.player.hr_verified ? "prof.hr" : "prof.hr_unverified", { hr: s.player.hr_display }) : t(L, "prof.no_hr");
   return reply({
     embeds: [{
-      title: `🪪 ${name}${activeTitle(s.player as any) ? ` · 🏷️ ${activeTitle(s.player as any)}` : ""}`,
-      description: `**${t(L, "prof.level", { level: lv.level, title: t(L, titleKey(lv.level)) })}**\n${progressBar(lv.progress, 14)} ${s.total}/${lv.next}\n${hr}`,
-      color: COLORS.blue,
+      title: `${fr ? `${fr} ` : "🪪 "}${cos.emoji ? `${cos.emoji} ` : ""}${name}${fr ? ` ${fr}` : ""}${activeTitle(s.player as any) ? ` · 🏷️ ${activeTitle(s.player as any)}` : ""}`.slice(0, 256),
+      description: `${cos.motto ? t(L, "prof.motto", { motto: cos.motto }) + "\n" : ""}**${t(L, "prof.level", { level: lv.level, title: t(L, titleKey(lv.level)) })}**\n${progressBar(lv.progress, 14)} ${s.total}/${lv.next}\n${hr}`,
+      color: cos.theme && THEMES[cos.theme] ? parseInt(THEMES[cos.theme].color.slice(1), 16) : COLORS.blue,
       fields,
     }],
     components: memberId === ix.userId ? [profileButtons(L)] : [],
@@ -508,8 +521,15 @@ async function cmdLeaderboard(ix: Ix, board: string) {
   const L = ix.L, g = ix.guild;
   let title = "", lines: string[] = [];
   const medal = (i: number) => MEDALS[i + 1] ?? `\`${i + 1}.\``;
-  const titles = new Map((await all<{ discord_id: string; title: string }>(ix.env, "SELECT discord_id, title FROM players WHERE guild_id = ? AND title IS NOT NULL AND title_until > ?", g.id, now())).map((x) => [x.discord_id, x.title]));
-  const who = (r: { discord_id: string | null; name: string }) => (r.discord_id ? mention(r.discord_id) + (titles.get(r.discord_id) ? ` *🏷️ ${titles.get(r.discord_id)}*` : "") : `**${r.name}**`);
+  // titles, emojis and flairs bought in /shop
+  const deco = new Map((await all<{ discord_id: string; title: string | null; title_until: number | null; cosmetics: string | null }>(ix.env,
+    "SELECT discord_id, title, title_until, cosmetics FROM players WHERE guild_id = ? AND ((title IS NOT NULL AND title_until > ?) OR cosmetics IS NOT NULL)", g.id, now()))
+    .map((x) => [x.discord_id, { title: activeTitle(x), ...cosmeticsOf(x) }]));
+  const who = (r: { discord_id: string | null; name?: string }) => {
+    if (!r.discord_id) return `**${r.name}**`;
+    const d = deco.get(r.discord_id);
+    return `${d?.flair ? `${d.flair} ` : ""}${mention(r.discord_id)}${d?.emoji ? ` ${d.emoji}` : ""}${d?.title ? ` *🏷️ ${d.title}*` : ""}`;
+  };
   if (board === "season" || board === "level") {
     const rows = await standings(ix.env, g.id, board === "season" ? g.season : null, 15);
     title = board === "season" ? t(L, "lb.season", { season: g.season }) : t(L, "lb.level");
@@ -520,11 +540,11 @@ async function cmdLeaderboard(ix: Ix, board: string) {
          FROM players p WHERE p.guild_id = ? AND EXISTS (SELECT 1 FROM duels d WHERE d.guild_id = p.guild_id AND d.status = 'finished' AND (d.challenger_id = p.discord_id OR d.opponent_id = p.discord_id))
         ORDER BY p.rating DESC LIMIT 15`, g.id);
     title = t(L, "lb.duels");
-    lines = rows.map((r, i) => `${medal(i)} ${mention(r.discord_id)} · **${r.rating}** · ${r.w}W`);
+    lines = rows.map((r, i) => `${medal(i)} ${who(r)} · **${r.rating}** · ${r.w}W`);
   } else if (board === "coins") {
     const rows = await all<{ discord_id: string; coins: number }>(ix.env, "SELECT discord_id, coins FROM players WHERE guild_id = ? ORDER BY coins DESC LIMIT 15", g.id);
     title = t(L, "lb.coins");
-    lines = rows.map((r, i) => `${medal(i)} ${mention(r.discord_id)} · ${r.coins} 🪙`);
+    lines = rows.map((r, i) => `${medal(i)} ${who(r)} · ${r.coins} 🪙`);
   } else {
     const rows = await all<{ name: string; pts: number }>(ix.env,
       `SELECT t.name, COALESCE(SUM(tp.points), 0) AS pts FROM teams t LEFT JOIN team_points tp ON tp.team_id = t.id AND tp.season = ?
@@ -795,6 +815,8 @@ async function component(ix: Ix): Promise<Response> {
     case "boss": return bossButton(ix, id);
     case "bty": return bountyButton(ix, id);
     case "shop": return shopButton(ix, x);
+    case "shopm": case "shopmc": return shopButton(ix, String(ix.raw.data.values?.[0] ?? ""));
+    case "shopsel": return doBuy(ix, x, (ix.raw.data.values ?? []).map(String).join(","), true);
     case "ask": return askButton(ix, id);
     case "hlp": return explainButton(ix, id);
     case "hrate": return rateButton(ix, id, y === "1");

@@ -106,6 +106,8 @@ export interface PlayerRow {
   title_until?: number | null;
   color_role?: string | null;
   color_until?: number | null;
+  cosmetics?: string | null;
+  boosts?: string | null;
 }
 
 export interface ChallengeRow {

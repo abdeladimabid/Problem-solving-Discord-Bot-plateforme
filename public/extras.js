@@ -575,8 +575,18 @@ async function loadNotify(state) {
 async function viewCoins() {
   const d = await api("/coins");
   const selected = new Set();
-  const builtinName = { freeze: "Streak freeze", hint: "Hint token", title: "Custom title", color: "Name color" };
-  const builtinHelp = { freeze: "a missed day doesn't break their streak", hint: "their next hint costs no points", title: "a title next to their name", color: "their name in a color they pick" };
+  const builtinName = { freeze: "Streak freeze", hint: "Hint token", double: "Double code hour", contract: "Challenge contract", shield: "Duel shield",
+    title: "Custom title", color: "Name color", theme: "Profile theme", motto: "Motto", emoji: "Profile emoji", showcase: "Badge showcase", lang: "Favourite language",
+    pin: "Proudest solve", frame: "Avatar frame", victory: "Victory message", levelup: "Level-up style", flair: "Leaderboard flair" };
+  const builtinHelp = { freeze: "a missed day doesn't break their streak", hint: "their next hint costs no points",
+    double: "×2 points on write-code they pick (practice, /today, /path); never on your assignments, daily or sessions",
+    contract: "they pick a goal (5 easy, 3 medium or 2 hard code/SQL solves); reach it within the hours set → they win the reward",
+    shield: "a lost duel doesn't cost Elo rating", title: "a title next to their name", color: "their name in a color they pick",
+    theme: "a color theme on /profile and their shared page", motto: "a short sentence on their profile", emoji: "an emoji next to their name",
+    showcase: "their 3 favourite badges shown first", lang: "a 💻 language badge on their profile", pin: "a solved challenge pinned on their profile",
+    frame: "a frame around their profile", victory: "their own line when they win a duel", levelup: "a special #arena announcement when they level up",
+    flair: "a symbol next to their name on every leaderboard" };
+  const groupName = { item: "🎒 Items", boost: "⚡ Boosts", profile: "🪪 Profile", game: "🎮 In the game" };
   const cfg = d.shop.cfg;
   let custom = (cfg.custom || []).map((c) => ({ ...c }));
   view.innerHTML = `
@@ -617,13 +627,18 @@ async function viewCoins() {
     <section class="panel"><div class="panel-head"><h2>🛒 The shop</h2><button class="btn primary small" id="sh-save">Save the shop</button></div>
       <p class="muted small">What students see in <code>/shop</code>. Change prices and limits, turn items off, and add your own rewards: when a student buys one, you get a DM and it appears in <b>Rewards to give</b> above.</p>
       <h3>Built-in items</h3>
-      <div class="table-wrap"><table><thead><tr><th>On</th><th>Item</th><th class="num">Price 🪙</th><th class="num">Limit</th><th class="num">Bought</th></tr></thead><tbody>
-        ${d.shop.items.filter((it) => !it.custom).map((it) => `<tr>
-          <td><input type="checkbox" data-b-on="${it.key}" ${it.on ? "checked" : ""} aria-label="Sell ${esc(builtinName[it.key])}"></td>
+      <div class="table-wrap"><table><thead><tr><th>On</th><th>Item</th><th class="num">Price 🪙</th><th class="num">Settings</th><th class="num">Bought</th></tr></thead><tbody>
+        ${["item", "boost", "profile", "game"].map((grp) => `<tr><th colspan="5" style="background:var(--soft,#f1f5f9)">${groupName[grp]}</th></tr>` + d.shop.items.filter((it) => !it.custom && it.group === grp).map((it) => `<tr>
+          <td><input type="checkbox" data-b-on="${it.key}" ${it.on ? "checked" : ""} aria-label="Sell ${esc(builtinName[it.key] || it.key)}"></td>
           <td>${it.emoji} <b>${esc(builtinName[it.key] || it.key)}</b><div class="muted small">${esc(builtinHelp[it.key] || "")}</div></td>
           <td class="num"><input type="number" min="0" data-b-price="${it.key}" value="${it.price}" style="width:90px"></td>
-          <td class="num">${it.max != null ? `<input type="number" min="1" max="50" data-b-max="${it.key}" value="${it.max}" style="width:70px" title="How many a student can hold"> <span class="muted small">max held</span>` : `<input type="number" min="1" max="90" data-b-days="${it.key}" value="${it.days}" style="width:70px" title="How long it lasts"> <span class="muted small">days</span>`}</td>
-          <td class="num">${d.shop.sold[it.key] ?? 0}</td></tr>`).join("")}
+          <td class="num">${[
+            it.max != null ? `<input type="number" min="1" max="50" data-b-max="${it.key}" value="${it.max}" style="width:70px" title="How many a student can hold"> <span class="muted small">max held</span>` : "",
+            it.days != null ? `<input type="number" min="1" max="90" data-b-days="${it.key}" value="${it.days}" style="width:70px" title="How long it lasts"> <span class="muted small">days</span>` : "",
+            it.hours != null ? `<input type="number" min="1" max="72" data-b-hours="${it.key}" value="${it.hours}" style="width:70px" title="How long it lasts"> <span class="muted small">hours</span>` : "",
+            it.reward != null ? `<input type="number" min="0" data-b-reward="${it.key}" value="${it.reward}" style="width:80px" title="Coins they win when they reach the goal"> <span class="muted small">🪙 reward</span>` : "",
+          ].filter(Boolean).join("<br>")}</td>
+          <td class="num">${d.shop.sold[it.key] ?? 0}</td></tr>`).join("")).join("")}
       </tbody></table></div>
       <h3 style="margin-top:18px">Your own rewards</h3>
       <p class="muted small">Ideas: 🎧 music while coding · 🪑 choose your seat · 📄 one homework skipped · ⏰ 10 more minutes on a test · 🍬 a snack. Leave "stock" empty for unlimited.</p>
@@ -648,7 +663,12 @@ async function viewCoins() {
       { label: "Coins", sort: "coins", num: true, html: (p) => `<b>${p.coins}</b>` },
       { label: "🧊", num: true, html: (p) => `${p.streak_freezes || 0}` },
       { label: "🎟️", num: true, html: (p) => `${p.hint_tokens || 0}` },
+      { label: "Their texts", html: (p) => (p.texts || []).map((x) => `<span class="sk-pill" title="${esc(x.key)}">${esc(x.v)} <button class="icon-btn" style="padding:0 4px" data-clear="${esc(p.discord_id)}|${esc(x.key)}" title="Remove this ${esc(x.key)} (no refund)">×</button></span>`).join(" ") || '<span class="muted small">—</span>' },
     ], rows, { empty: "No students yet." });
+    setTimeout(() => $$("[data-clear]").forEach((b) => b.onclick = () => {
+      const [student, key] = b.dataset.clear.split("|");
+      confirmDialog("Remove this text?", "It disappears from their profile right away. The coins aren't given back.", "Remove", async () => { await api("/shop/clear", { method: "POST", body: { student, key } }); toast("Removed"); viewCoins(); }, true);
+    }), 0);
     setTimeout(() => $$("[data-sel]").forEach((c) => c.onchange = () => { c.checked ? selected.add(c.dataset.sel) : selected.delete(c.dataset.sel); if (selected.size) setWho("sel"); summary(); }), 0);
   };
   let who = "all", op = "add";
@@ -700,8 +720,8 @@ async function viewCoins() {
   $("#sh-save").onclick = (e) => busy(e.currentTarget, async () => {
     const items = {};
     for (const it of d.shop.items.filter((x) => !x.custom)) {
-      items[it.key] = { on: $(`[data-b-on="${it.key}"]`).checked, price: Number($(`[data-b-price="${it.key}"]`).value),
-        ...(it.max != null ? { max: Number($(`[data-b-max="${it.key}"]`).value) } : { days: Number($(`[data-b-days="${it.key}"]`).value) }) };
+      const num = (f) => $(`[data-b-${f}="${it.key}"]`) ? { [f]: Number($(`[data-b-${f}="${it.key}"]`).value) } : {};
+      items[it.key] = { on: $(`[data-b-on="${it.key}"]`).checked, price: Number($(`[data-b-price="${it.key}"]`).value), ...num("max"), ...num("days"), ...num("hours"), ...num("reward") };
     }
     const bad = custom.find((c) => String(c.name || "").trim().length < 2);
     if (bad) throw new Error("Give each reward a name (or remove the empty one)");
