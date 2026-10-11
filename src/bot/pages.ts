@@ -27,6 +27,8 @@ const CSS = `
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:16px}
 .card h2{margin:0 0 10px;font-size:16px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}.chip{background:var(--soft);border-radius:99px;padding:4px 12px;font-size:13px}
+.chip.star{background:linear-gradient(135deg,#fde68a,#fbbf24);color:#422006;font-weight:700}
+.motto{font-style:italic;opacity:.95;margin-top:6px!important}.pin{display:flex;gap:10px;align-items:center;font-size:15px}
 .sk{display:grid;grid-template-columns:minmax(120px,200px) 1fr 44px;gap:10px;align-items:center;margin:6px 0;font-size:14px}
 .sk .t{height:8px;border-radius:9px;background:var(--soft);overflow:hidden}.sk .t i{display:block;height:100%;background:var(--blue)}
 .sk .strong i{background:var(--good)}.sk .weak i{background:var(--bad)}
@@ -50,8 +52,9 @@ export async function profilePage(env: Env, key: string): Promise<Response> {
 <meta name="robots" content="noindex"><title>${esc(d.name)} · ClassBot</title>
 <meta property="og:title" content="${esc(d.name)} · ${T("page.level", { level: d.level })} ${esc(d.levelTitle)}"><meta property="og:description" content="${T("page.og", { n: d.solved.total, streak: d.streak })}">
 <style>${CSS}</style></head><body><div class="wrap">
-<section class="hero"><div class="av" aria-hidden="true">${esc(initials(d.name))}</div><div>
-<h1>${esc(d.name)}${d.title ? ` <small style="font-size:15px;opacity:.9">· 🏷️ ${esc(d.title)}</small>` : ""}</h1>
+<section class="hero"${d.look.theme ? ` style="background:linear-gradient(135deg,${esc(d.look.theme.color)},${esc(d.look.theme.to)})"` : ""}><div class="av" aria-hidden="true"${d.look.frame ? ` style="box-shadow:0 0 0 4px ${esc(d.look.frame.css)},0 0 18px ${esc(d.look.frame.css)};position:relative"` : ""}>${esc(initials(d.name))}${d.look.frame ? `<span style="position:absolute;right:-6px;bottom:-6px;font-size:22px">${esc(d.look.frame.emoji)}</span>` : ""}</div><div>
+<h1>${d.look.emoji ? `${esc(d.look.emoji)} ` : ""}${esc(d.name)}${d.title ? ` <small style="font-size:15px;opacity:.9">· 🏷️ ${esc(d.title)}</small>` : ""}</h1>
+${d.look.motto ? `<p class="motto">“${esc(d.look.motto)}”</p>` : ""}
 <p>${T("page.level", { level: d.level })} · ${esc(d.levelTitle)} · ${esc(d.total)} pts${d.className ? ` · ${esc(d.className)}` : ""}</p>
 <div class="bar" role="img" aria-label="${Math.round(d.progress * 100)}%"><i style="width:${Math.round(d.progress * 100)}%"></i></div></div></section>
 <div class="grid">
@@ -63,8 +66,9 @@ export async function profilePage(env: Env, key: string): Promise<Response> {
 ${d.contests.played ? `<div class="stat"><b>🏁 ${esc(d.contests.played)}</b><span>${T("page.contests", { w: d.contests.wins, p: d.contests.podiums })}</span></div>` : ""}
 </div>
 ${d.skills.length ? `<section class="card"><h2>${T("page.skills")}</h2>${d.skills.map((s) => `<div class="sk"><span>${esc(s.name)}</span><span class="t ${esc(s.status)}"><i style="width:${s.mastery}%"></i></span><span class="muted">${s.mastery}%</span></div>`).join("")}</section>` : ""}
-${d.badges.length ? `<section class="card"><h2>${T("page.badges")}</h2><div class="chips">${d.badges.map((b) => `<span class="chip">${esc(b)}</span>`).join("")}</div></section>` : ""}
-${d.langs.length || d.kinds.length ? `<section class="card"><h2>${T("page.languages")}</h2><div class="chips">${d.langs.map((x) => `<span class="chip">💻 ${esc(x.name)} · ${esc(x.n)}</span>`).join("")}${d.kinds.map((x) => `<span class="chip">${esc(x.name)} · ${esc(x.n)}</span>`).join("")}</div></section>` : ""}
+${d.look.pin ? `<section class="card"><h2>${T("page.pin")}</h2><div class="pin">${DIFF[d.look.pin.difficulty] ?? ""} <b>${esc(d.look.pin.title)}</b> <span class="muted">· ${esc(d.look.pin.kind)}</span></div></section>` : ""}
+${d.badges.length ? `<section class="card"><h2>${T("page.badges")}</h2><div class="chips">${d.badges.map((b, i) => `<span class="chip${i < d.showcased ? " star" : ""}">${esc(b)}</span>`).join("")}</div></section>` : ""}
+${d.look.lang || d.langs.length || d.kinds.length ? `<section class="card"><h2>${T("page.languages")}</h2><div class="chips">${d.look.lang ? `<span class="chip star">💻 ${esc(d.look.lang)} ❤️</span>` : ""}${d.langs.map((x) => `<span class="chip">💻 ${esc(x.name)} · ${esc(x.n)}</span>`).join("")}${d.kinds.map((x) => `<span class="chip">${esc(x.name)} · ${esc(x.n)}</span>`).join("")}</div></section>` : ""}
 ${d.recent.length ? `<section class="card"><h2>${T("page.recent")}</h2><ul class="r">${d.recent.map((r) => `<li><span>${DIFF[r.difficulty] ?? ""} ${esc(r.title)} <span class="muted">· ${esc(r.kind)}</span></span><span class="muted" style="white-space:nowrap">${new Date(r.finished_at * 1000).toISOString().slice(0, 10)}</span></li>`).join("")}</ul></section>` : ""}
 ${d.hr ? `<p class="muted" style="margin-top:14px">HackerRank: <a href="https://www.hackerrank.com/profile/${encodeURIComponent(d.hr)}" rel="noopener nofollow">${esc(d.hr)}</a></p>` : ""}
 <footer>${T("page.footer")}</footer></div></body></html>`);

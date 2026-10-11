@@ -63,7 +63,7 @@ export function errorText(L: string, e: unknown): string {
 export async function guildFromButton(env: Env, customId: string, userId: string): Promise<string | null> {
   const [kind, x] = customId.split(":");
   const id = Number(x);
-  const noId = ["plan", "path", "today", "report", "skills", "sk", "help", "shop", "share", "cert", "ivnew", "hand", "faqok", "faqask"].includes(kind);
+  const noId = ["plan", "path", "today", "report", "skills", "sk", "help", "shop", "shopm", "shopmc", "shopsel", "share", "cert", "ivnew", "hand", "faqok", "faqask"].includes(kind);
   if (kind === "hrate") {
     const r = await one<{ guild_id: string }>(env, "SELECT r.guild_id FROM help_answers h JOIN help_requests r ON r.id = h.request_id WHERE h.id = ? AND r.discord_id = ?", id, userId);
     return r?.guild_id ?? null;

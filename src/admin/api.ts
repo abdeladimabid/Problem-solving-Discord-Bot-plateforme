@@ -29,7 +29,7 @@ import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from ".
 import type { DailyKind } from "../shared/daily.ts";
 import { QUIZ_KINDS, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
 import type { QuizRow } from "../shared/events.ts";
-import { SHOP, ShopError, changeCoins, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
+import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
 import { ProjectError, gradeRepo, projectDetail, projectList, saveProject } from "../shared/projects.ts";
@@ -419,6 +419,12 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       await saveShop(env, g, body);
       return ok(await coinsView(env, await getGuild(env, g.id)));
+    }
+    if (path === "/shop/clear" && method === "POST") {
+      // the teacher removes a student's title, motto, emoji or victory message (e.g. not appropriate); no refund
+      const g = await guild();
+      await clearCosmetic(env, g, String(body.student ?? ""), String(body.key ?? ""));
+      return ok(await coinsView(env, g));
     }
     const pm = path.match(/^\/shop\/purchases\/(\d+)$/);
     if (pm && method === "POST") {
@@ -1364,11 +1370,17 @@ async function notifyState(env: Env, g: GuildRow) {
 
 /** Coins & shop page: every student's coins, the shop settings, rewards to hand out, recent purchases and coin changes. */
 async function coinsView(env: Env, g: GuildRow) {
-  const students = await all<{ discord_id: string; name: string | null; coins: number; streak_freezes: number; hint_tokens: number }>(env,
-    "SELECT discord_id, name, coins, streak_freezes, hint_tokens FROM players WHERE guild_id = ? ORDER BY coins DESC, name", g.id);
+  const rows = await all<{ discord_id: string; name: string | null; coins: number; streak_freezes: number; hint_tokens: number; title: string | null; title_until: number | null; cosmetics: string | null }>(env,
+    "SELECT discord_id, name, coins, streak_freezes, hint_tokens, title, title_until, cosmetics FROM players WHERE guild_id = ? ORDER BY coins DESC, name", g.id);
+  // texts students wrote themselves (title, motto, emoji, victory message), so the teacher can remove one
+  const students = rows.map(({ title, title_until, cosmetics, ...p }) => {
+    const c = cosmeticsOf({ cosmetics }), tt = activeTitle({ title, title_until });
+    const texts = [tt ? { key: "title", v: tt } : null, ...(["emoji", "motto", "victory"] as const).map((k) => (c[k] ? { key: k, v: c[k]! } : null))].filter(Boolean);
+    return { ...p, texts };
+  });
   const names = new Map(students.map((p) => [p.discord_id, p.name]));
   const items = shopItems(g, true);
-  const label = (key: string) => { const it = items.find((x) => x.key === key); return it ? `${it.emoji} ${it.custom ? it.name : key}` : key; };
+  const label = (key: string) => { const it = items.find((x) => x.key === key); return it ? `${it.emoji} ${it.custom ? it.name : t(g.lang, `shop.name.${key}`)}` : key; };
   const purchases = await all<{ id: number; discord_id: string; item: string; cost: number; detail: string | null; status: string | null; created_at: number }>(env,
     "SELECT id, discord_id, item, cost, detail, status, created_at FROM purchases WHERE guild_id = ? ORDER BY id DESC LIMIT 60", g.id);
   const pending = await all<typeof purchases[number]>(env,

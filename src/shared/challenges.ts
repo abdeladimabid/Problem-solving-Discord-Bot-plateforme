@@ -18,6 +18,8 @@ import { HackerRankError, recentSolves } from "./hackerrank.ts";
 import { LANGS, QUICK_LANGS, RunnerUnavailable, STARTER, isCodeLang, judge } from "./runner.ts";
 import type { CodeLang, Judgement, TestCase } from "./runner.ts";
 import { arenaChannel } from "./arena.ts";
+import { CODE_BOOST_KINDS, DOUBLE_ORIGINS, boostsOf, contractStep, cosmeticsOf, doubleActive, shieldActive } from "./shop.ts";
+import type { Boosts } from "./shop.ts";
 import { analyzeLog, editorToken, editorUrl, fingerprint, integrityOf, similarity } from "./integrity.ts";
 import type { EditorLog, IntegrityReport } from "./integrity.ts";
 import { makeStarter, parseSignature, sampleCall, signatureLine } from "./starter.ts";
@@ -549,6 +551,8 @@ export async function finish(
   }
 
   let duelWon: boolean | null = null;
+  let boosts: Boosts | null = null;
+  const shout: string[] = [];
   if (a.origin === "duel" && a.ref && solved && !o.claimed) {
     const res = await run(env, "UPDATE duels SET status = 'finished', winner_id = ?, finished_at = ? WHERE id = ? AND status = 'active'", a.discord_id, t0, a.ref);
     duelWon = !!res.meta.changes;
@@ -594,6 +598,14 @@ export async function finish(
         }
       }
     }
+    // 💎 double code hour (bought in /shop): write-code the student picked themselves, never assigned work
+    if (CODE_BOOST_KINDS.includes(c.kind)) {
+      boosts = boostsOf(await one<{ boosts: string | null }>(env, "SELECT boosts FROM players WHERE guild_id = ? AND discord_id = ?", guild.id, a.discord_id));
+      if (c.kind === "write" && DOUBLE_ORIGINS.includes(a.origin) && points > 0 && doubleActive(boosts, t0)) {
+        points *= 2;
+        extra.push(t(L, "res.double"));
+      }
+    }
     // "explain your code": half the points now, the rest after a good explanation
     if (c.kind === "write" && a.origin !== "duel" && o.judgement?.judge === "tests" && points >= 2 && integrityOf(guild).explain) {
       held = points - Math.ceil(points / 2);
@@ -603,6 +615,14 @@ export async function finish(
     if (points) {
       await addPoints(env, guild, { discordId: a.discord_id, amount: points, reason: a.origin, ref: a.id });
       await run(env, "UPDATE attempts SET points = ? WHERE id = ?", points, a.id);
+    }
+    // 🎯 challenge contract (bought in /shop): every new code/SQL solve at the goal level counts
+    if (boosts?.contract) {
+      const k = await contractStep(env, guild, a.discord_id, boosts, c).catch((e) => { console.error("contract", e); return null; });
+      if (k) {
+        extra.push(k.done ? t(L, "res.contract_done", { coins: k.reward }) : t(L, "res.contract_step", { n: k.n, target: k.target }));
+        if (k.done) shout.push(t(L, "arena.contract_done", { user: mention(a.discord_id), coins: k.reward }));
+      }
     }
   }
 
@@ -626,10 +646,11 @@ export async function finish(
   // --- level, badges, arena shout-outs
   const totalAfter = totalBefore + points;
   const lvBefore = levelInfo(totalBefore), lv = levelInfo(totalAfter);
-  const shout: string[] = [];
   if (lv.level > lvBefore.level) {
     extra.push(t(L, "res.levelup", { level: lv.level, title: t(L, titleKey(lv.level)) }));
-    shout.push(t(L, "arena.levelup", { user: mention(a.discord_id), level: lv.level, title: t(L, titleKey(lv.level)) }));
+    // 🎉 level-up style (bought in /shop)
+    const style = cosmeticsOf(await one<{ cosmetics: string | null }>(env, "SELECT cosmetics FROM players WHERE guild_id = ? AND discord_id = ?", guild.id, a.discord_id)).levelup;
+    shout.push(t(L, style ? `arena.lv.${style}` : "arena.levelup", { user: mention(a.discord_id), level: lv.level, title: t(L, titleKey(lv.level)) }));
   }
   if (solved && !o.claimed) {
     for (const b of await checkBadges(env, guild, a.discord_id)) {
@@ -783,7 +804,11 @@ async function settleDuelWin(env: Env, guild: GuildRow, duelId: number, winnerId
   }
   const loserId = d.challenger_id === winnerId ? d.opponent_id : d.challenger_id;
   const w = await findPlayer(env, guild.id, winnerId), l = await findPlayer(env, guild.id, loserId);
-  const [wr, lr] = elo(w?.rating ?? 1000, l?.rating ?? 1000, 1);
+  const [wr, lr0] = elo(w?.rating ?? 1000, l?.rating ?? 1000, 1);
+  // 🛡️ duel shield (bought in /shop): the loser keeps their rating
+  const shielded = shieldActive(boostsOf(l)) && lr0 < (l?.rating ?? 1000);
+  const lr = shielded ? (l?.rating ?? 1000) : lr0;
+  const victory = cosmeticsOf(w).victory;
   await env.DB.batch([
     env.DB.prepare("UPDATE players SET rating = ?, coins = coins + ? WHERE guild_id = ? AND discord_id = ?").bind(wr, d.stake * 2, guild.id, winnerId),
     env.DB.prepare("UPDATE players SET rating = ? WHERE guild_id = ? AND discord_id = ?").bind(lr, guild.id, loserId),
@@ -793,8 +818,8 @@ async function settleDuelWin(env: Env, guild: GuildRow, duelId: number, winnerId
   await send(env, d.channel_id, {
     content: t(L, "duel.won", {
       w: mention(winnerId), l: mention(loserId), time: fmtDuration(now() - (d.started_at ?? now())), p: points,
-      coins: d.stake ? t(L, "duel.won_coins", { n: d.stake * 2 }) : "", wr, lr, d: wr - (w?.rating ?? 1000),
-    }),
+      coins: d.stake ? t(L, "duel.won_coins", { n: d.stake * 2 }) : "", wr, lr, d: wr - (w?.rating ?? 1000), ld: shielded ? "🛡️ ±0" : `−${(l?.rating ?? 1000) - lr}`,
+    }) + (victory ? `\n⚔️ ${mention(winnerId)}: “${victory}”` : ""),
     allowed_mentions: pingUsers([winnerId, loserId]),
   }).catch(() => {});
 }

@@ -12,6 +12,8 @@ import { mistakeSkills, skillsInCode } from "../src/shared/codeskills.ts";
 import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
+import { finish } from "../src/shared/challenges.ts";
+import { getGuild } from "../src/shared/db.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -30,6 +32,7 @@ const db = (env.DB as any).raw;
 const q = (sql: string, ...a: any[]) => db.prepare(sql).all(...a) as any[];
 const q1 = (sql: string, ...a: any[]) => db.prepare(sql).get(...a) as any;
 const run1 = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
+const cosmeticsOfRow = (p: any) => Object.fromEntries(Object.entries(JSON.parse(p?.cosmetics || "{}")).map(([k, v]: any) => [k, v.v]));
 
 const G = "g1", CH = "ch1", ARENA = "arena1";
 const U = {
@@ -1543,7 +1546,7 @@ section("2 vs 2 duels, coin shop, peer help, streak freeze");
   // coin shop
   db.prepare("UPDATE players SET coins = 500 WHERE guild_id = ? AND discord_id = ?").run(G, gina.id);
   await slash(gina, "shop");
-  check(text(lastPatch()).includes("shop:freeze") && text(lastPatch()).includes("500"), "/shop lists the items and your coins");
+  check(text(lastPatch()).includes('"custom_id":"shopm"') && text(lastPatch()).includes('"value":"freeze"') && text(lastPatch()).includes("500"), "/shop lists the items and your coins");
   await click(gina, "shop:freeze");
   await click(gina, "shop:hint");
   let pg = q1("SELECT * FROM players WHERE discord_id = ?", gina.id);
@@ -1886,7 +1889,7 @@ section("coins & shop: the teacher gives, removes and zeroes coins, and manages 
   const bob = U.bob as any;
   await slash(bob, "shop");
   let sh = text(lastPatch());
-  check(sh.includes("Choose your seat") && !sh.includes("shop:hint") && sh.includes("shop:freeze") && sh.includes("40"), "/shop shows the teacher's prices, hides items turned off, lists own rewards");
+  check(sh.includes("Choose your seat") && !sh.includes('"value":"hint"') && sh.includes('"value":"freeze"') && sh.includes(`"value":"${seat.key}"`) && sh.includes("40"), "/shop shows the teacher's prices, hides items turned off, lists own rewards");
   const tb = discordCalls.length;
   await click(bob, `shop:${seat.key}`);
   check(coins(B) === 70 && q1("SELECT status FROM purchases WHERE guild_id = ? AND discord_id = ? AND item = ?", G, B, seat.key)?.status === "pending", "buying an own reward takes the coins and waits for the teacher");
@@ -1899,8 +1902,142 @@ section("coins & shop: the teacher gives, removes and zeroes coins, and manages 
   check((await api("GET", `/api/pills?g=${G}`)).data.shop === 1, "…with a badge in the menu");
   v = await api("POST", `/api/shop/purchases/${v.data.pending[0].id}?g=${G}`, { action: "refund" });
   check(coins(B) === 100 && v.data.pending.length === 0, "refund: the coins come back");
-  await click(U.alice as any, "shop:hint");
-  check(text(lastPatch()).includes("isn't in the shop"), "an item turned off can't be bought");
+  const off = await select(U.alice as any, "shopm", ["hint"]);
+  check(text(off).includes("isn't in the shop"), "an item turned off can't be bought");
+  await api("PUT", `/api/shop?g=${G}`, { items: {}, custom: [] });
+}
+
+section("shop: boosts and profile extras");
+{
+  const A = U.alice.id, B = U.bob.id, alice = U.alice as any, bob = U.bob as any;
+  const coins = (id: string) => q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, id).coins;
+  const P = (id: string) => q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, id);
+  run1("UPDATE players SET coins = 5000, cosmetics = NULL, boosts = NULL WHERE guild_id = ? AND discord_id IN (?, ?)", G, A, B);
+  await slash(alice, "shop");
+  const menu = text(lastPatch());
+  check(["double", "contract", "shield", "theme", "motto", "emoji", "showcase", "lang", "pin", "frame", "victory", "levelup", "flair"].every((k) => menu.includes(`"value":"${k}"`)), "the 13 new items are in the /shop menu");
+  check((lastPatch().embeds ?? []).length >= 4 && menu.length < 12000, "the shop is split into groups (items, boosts, profile, game)");
+
+  // pickers and forms
+  const pick = await select(alice, "shopm", ["theme"]);
+  check(pick.type === 5 && text(lastPatch()).includes("shopsel:theme") && text(lastPatch()).includes("ocean"), "a choice item opens a picker");
+  const up = await select(alice, "shopsel:theme", ["ocean"]);
+  check(up.type === 6 && JSON.parse(P(A).cosmetics).theme.v === "ocean" && text(lastPatch()).includes("Ocean"), "picking a theme buys it");
+  check((await select(alice, "shopm", ["motto"])).type === 9, "motto opens a form");
+  await submit(alice, "mshop:motto", "Never give up @everyone https://spam.example");
+  const mot = JSON.parse(P(A).cosmetics).motto.v;
+  check(mot === "Never give up", `motto cleaned of pings and links (${mot})`);
+  const c0 = coins(A);
+  await submit(alice, "mshop:emoji", "hello");
+  check(coins(A) === c0 && text(lastPatch()).includes("one emoji"), "a non-emoji is refused, nothing charged");
+  await submit(alice, "mshop:emoji", "🦊");
+  await submit(alice, "mshop:victory", "GG, see you next time!");
+  await select(alice, "shopsel:flair", ["🔥"]);
+  await select(alice, "shopsel:lang", ["python"]);
+  await select(alice, "shopsel:frame", ["fire"]);
+  await select(alice, "shopsel:levelup", ["dragon"]);
+  run1("INSERT OR IGNORE INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, ?, 'first_solve', 1)", G, A);
+  await select(alice, "shopsel:showcase", ["first_solve", "not_mine"]);
+  check(JSON.parse(P(A).cosmetics).showcase?.v === "first_solve", "showcase keeps only badges they own");
+  const solvedId = q1("SELECT challenge_id FROM attempts WHERE guild_id = ? AND discord_id = ? AND status = 'solved' LIMIT 1", G, A)?.challenge_id;
+  if (solvedId) await select(alice, "shopsel:pin", [String(solvedId)]);
+  const c1 = coins(A);
+  await select(alice, "shopsel:pin", ["999999"]);
+  check(coins(A) === c1, "can't pin a challenge you didn't solve");
+  const cos = JSON.parse(P(A).cosmetics);
+  check(["theme", "motto", "emoji", "victory", "flair", "lang", "frame", "levelup", "showcase"].every((k) => cos[k]?.until > clock.now()), "every profile extra is saved with an end date");
+  const n0 = q1("SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND discord_id = ?", G, A).n;
+  check(n0 >= 9, "purchases are logged");
+
+  // shown on the profile and the leaderboard
+  const prof = (await slash(alice, "profile")).data, pt = text(prof);
+  check(pt.includes("🦊") && pt.includes("Never give up") && pt.includes("🔥") && pt.includes("Python") && prof.embeds[0].color === 0x0ea5e9, "profile shows emoji, motto, frame, favourite language and theme color");
+  check(text(await slash(bob, "leaderboard", { board: "coins" })).includes(`🔥 <@${A}> 🦊`), "leaderboard shows the flair and emoji");
+
+  // the teacher can remove a text
+  let v = await api("GET", `/api/coins?g=${G}`);
+  const st = v.data.students.find((x: any) => x.discord_id === A);
+  check(st.texts.some((x: any) => x.key === "motto" && x.v === "Never give up"), "the dashboard lists the texts students wrote");
+  v = await api("POST", `/api/shop/clear?g=${G}`, { student: A, key: "motto" });
+  check(v.status === 200 && !cosmeticsOfRow(P(A)).motto && cosmeticsOfRow(P(A)).emoji === "🦊", "…and can remove one (the others stay)");
+
+  // 💎 double code hour: only on write-code the student picked
+  const g = await getGuild(env, G);
+  const w = q1("SELECT * FROM challenges WHERE kind = 'write' AND difficulty = 'medium' LIMIT 1");
+  const mk = (origin: string) => { const r = run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at, tries) VALUES (?, ?, ?, ?, ?, 1)", G, A, w.id, origin, clock.now() - 600); return q1("SELECT * FROM attempts WHERE id = ?", Number(r.lastInsertRowid)); };
+  const plain = await finish(env, g!, mk("practice"), w, true);
+  const base = q1("SELECT points FROM attempts ORDER BY id DESC LIMIT 1").points;
+  await select(alice, "shopm", ["double"]);
+  check(JSON.parse(P(A).boosts).double_until > clock.now(), "double code hour bought");
+  const dbl = await finish(env, g!, mk("practice"), w, true);
+  const pd = q1("SELECT points FROM attempts ORDER BY id DESC LIMIT 1").points;
+  check(base > 0 && pd === base * 2 && text(dbl.payload).includes("×2"), `practice write-code gives ×2 (${base} → ${pd})`);
+  const asg = await finish(env, g!, mk("assignment"), w, true);
+  check(!text(asg.payload).includes("Double code"), "assigned work isn't doubled");
+  clock.advance(3700);
+  await finish(env, g!, mk("practice"), w, true);
+  check(q1("SELECT points FROM attempts ORDER BY id DESC LIMIT 1").points === base, "after the hour, points are normal again");
+
+  // 🎯 contract: 3 medium code solves → reward
+  await select(alice, "shopm", ["contract"]);
+  const c2 = coins(A);
+  await select(alice, "shopsel:contract", ["medium"]);
+  check(coins(A) === c2 - 50 && JSON.parse(P(A).boosts).contract.target === 3, "contract signed (50 coins, 3 medium)");
+  check(Math.abs(JSON.parse(P(A).boosts).contract.until - clock.now() - 86400) < 5, "the contract lasts 24 hours");
+  const c3 = coins(A);
+  await select(alice, "shopsel:contract", ["easy"]);
+  check(coins(A) === c3 && text(lastPatch()).includes("already have a contract"), "one contract at a time");
+  const ws = q("SELECT * FROM challenges WHERE kind IN ('write', 'sql') AND difficulty IN ('medium', 'hard') LIMIT 3");
+  const easy = q1("SELECT * FROM challenges WHERE kind = 'write' AND difficulty = 'easy' LIMIT 1");
+  const at = (c: any) => { const r = run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at, tries) VALUES (?, ?, ?, 'practice', ?, 1)", G, A, c.id, clock.now() - 600); return q1("SELECT * FROM attempts WHERE id = ?", Number(r.lastInsertRowid)); };
+  if (easy) await finish(env, g!, at(easy), easy, true);
+  check(JSON.parse(P(A).boosts).contract.ids.length === 0, "an easy solve doesn't count for a medium contract");
+  const r1 = await finish(env, g!, at(ws[0]), ws[0], true);
+  check(text(r1.payload).includes("Contract: 1/3"), "progress shown after a solve");
+  await finish(env, g!, at(ws[0]), ws[0], true);
+  check(JSON.parse(P(A).boosts).contract.ids.length === 1, "the same challenge twice counts once");
+  await finish(env, g!, at(ws[1]), ws[1], true);
+  const c4 = coins(A);
+  const r3 = await finish(env, g!, at(ws[2]), ws[2], true);
+  check(text(r3.payload).includes("Contract complete") && coins(A) === c4 + 150 && JSON.parse(P(A).boosts).contract.done, "contract complete: +150 coins");
+  check(messagesTo(ARENA).some((m) => text(m).includes("completed their challenge contract")), "…announced in #arena");
+
+  // 🛡️ shield + ⚔️ victory message in a duel
+  await select(bob, "shopm", ["shield"]);
+  run1("UPDATE players SET rating = 1000 WHERE guild_id = ? AND discord_id IN (?, ?)", G, A, B);
+  const qc = q1("SELECT * FROM challenges WHERE kind = 'mcq' LIMIT 1");
+  const dr = run1("INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, mode, difficulty, stake, challenge_id, status, created_at, started_at) VALUES (?, ?, ?, ?, 'quick', 'easy', 0, ?, 'active', ?, ?)", G, ARENA, A, B, qc.id, clock.now(), clock.now());
+  const did = Number(dr.lastInsertRowid);
+  const da = run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, ref, started_at, tries) VALUES (?, ?, ?, 'duel', ?, ?, 1)", G, A, qc.id, did, clock.now());
+  await finish(env, g!, q1("SELECT * FROM attempts WHERE id = ?", Number(da.lastInsertRowid)), qc, true);
+  check(P(A).rating > 1000 && P(B).rating === 1000, `the shield keeps the loser's rating (bob ${P(B).rating})`);
+  const won = messagesTo(ARENA).reverse().find((m) => /wins the duel|Victory for/.test(text(m)));
+  check(text(won).includes("GG, see you next time!") && text(won).includes("🛡️"), "the win shows the victory message and the shield");
+
+  // 🎉 level-up style
+  const levelGap = (t: number) => { const lv = Math.floor(Math.sqrt(Math.max(0, t) / 25)) + 1; return 25 * lv * lv - t - 1; };
+  const tot = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, A).s;
+  run1("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, ?, ?, 'manual', ?)", G, A, g!.season, levelGap(tot), clock.now());
+  await finish(env, g!, mk("practice"), w, true);
+  check(messagesTo(ARENA).some((m) => text(m).includes("A dragon roars")), "level-up announced in the bought style");
+
+  // the public profile page
+  run1("UPDATE players SET share_key = 'shopkey1234' WHERE guild_id = ? AND discord_id = ?", G, A);
+  const page = await (await bot.fetch(new Request("https://bot.example/u/shopkey1234"), env, makeCtx())).text();
+  check(page.includes("#0ea5e9") && page.includes("🦊") && page.includes("chip star"), "shared page uses the theme, emoji and showcase");
+
+  // settings from the dashboard
+  v = await api("PUT", `/api/shop?g=${G}`, { items: { double: { on: true, price: 99, hours: 2 }, contract: { on: true, price: 40, hours: 12, reward: 300 } }, custom: [] });
+  const its = v.data.shop.items;
+  check(its.find((x: any) => x.key === "double").hours === 2 && its.find((x: any) => x.key === "contract").reward === 300 && its.find((x: any) => x.key === "contract").hours === 12, "hours, days and reward are set in the dashboard");
+  // Discord limits with a full shop: 15 long own rewards
+  await api("PUT", `/api/shop?g=${G}`, { items: {}, custom: Array.from({ length: 15 }, (_, i) => ({ name: `Reward number ${i} `.padEnd(60, "x"), emoji: "🎁", price: 10, desc: "d".repeat(160) })) });
+  await slash(alice, "shop");
+  const full = lastPatch();
+  const embedChars = (full.embeds as any[]).reduce((n, e) => n + (e.title ?? "").length + (e.description ?? "").length + (e.footer?.text ?? "").length, 0);
+  const opts = (full.components as any[]).flatMap((r) => r.components[0].options);
+  check(embedChars <= 6000 && full.embeds.length <= 10 && full.components.length === 2 && opts.length === 32 && opts.every((o: any) => o.label.length <= 100 && (o.description ?? "").length <= 100),
+    `a full shop fits Discord's limits (${embedChars} characters, ${opts.length} options)`);
   await api("PUT", `/api/shop?g=${G}`, { items: {}, custom: [] });
 }
 
