@@ -29,7 +29,7 @@ import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from ".
 import type { DailyKind } from "../shared/daily.ts";
 import { QUIZ_KINDS, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
 import type { QuizRow } from "../shared/events.ts";
-import { SHOP } from "../shared/shop.ts";
+import { SHOP, ShopError, changeCoins, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
 import { ProjectError, gradeRepo, projectDetail, projectList, saveProject } from "../shared/projects.ts";
@@ -395,6 +395,38 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
 
     // ----------------------------------------------------------- settings
+    // ---- coins & shop
+    if (path === "/coins" && method === "GET") return ok(await coinsView(env, await guild()));
+    if (path === "/coins" && method === "POST") {
+      const g = await guild();
+      const op = ["add", "remove", "set"].includes(body.op) ? body.op : "add";
+      let changed;
+      try {
+        changed = await changeCoins(env, g, { students: body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), op, amount: Number(body.amount), reason: body.reason });
+      } catch (e) { if (e instanceof ShopError) throw new HttpError(400, e.message); throw e; }
+      if (body.notify && changed.length) {
+        const why = body.reason ? ` (${String(body.reason).slice(0, 120)})` : "";
+        ctx.waitUntil((async () => {
+          for (const c of changed.slice(0, 20)) {
+            const n = Math.abs(c.after - c.before);
+            await dm(env, c.discord_id, { content: t(g.lang, op === "set" ? "coins.dm_set" : op === "add" ? "coins.dm_add" : "coins.dm_remove", { n, total: c.after, reason: why }) }).catch(() => {});
+          }
+        })());
+      }
+      return ok({ changed: changed.length, ...(await coinsView(env, await getGuild(env, g.id))) });
+    }
+    if (path === "/shop" && method === "PUT") {
+      const g = await guild();
+      await saveShop(env, g, body);
+      return ok(await coinsView(env, await getGuild(env, g.id)));
+    }
+    const pm = path.match(/^\/shop\/purchases\/(\d+)$/);
+    if (pm && method === "POST") {
+      const g = await guild();
+      try { await settlePurchase(env, g, Number(pm[1]), body.action === "refund" ? "refund" : "given"); }
+      catch (e) { if (e instanceof ShopError) throw new HttpError(400, e.message); throw e; }
+      return ok(await coinsView(env, g));
+    }
     if (path === "/notify" && method === "GET") return ok(await notifyState(env, await guild()));
     if (path === "/notify" && method === "PUT") {
       const g = await guild();
@@ -444,7 +476,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       const h = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id);
       const f = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id);
-      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0 });
+      const sh = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND status = 'pending'", g.id);
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0 });
     }
     // -------------------------------------------------- ✨ AI generation
     if (path === "/path/lesson-ai" && method === "POST") return ok(await writeLesson(env, await guild(), String(body.skill ?? ""), String(body.hint ?? "")));
@@ -1326,4 +1359,29 @@ async function notifyState(env: Env, g: GuildRow) {
     teacher = { id: g.teacher_id, name: m?.nick ?? m?.user?.global_name ?? m?.user?.username ?? g.teacher_id };
   }
   return { teacher, cfg: notifyCfg(g), dashboard: !!env.DASHBOARD_URL };
+}
+
+
+/** Coins & shop page: every student's coins, the shop settings, rewards to hand out, recent purchases and coin changes. */
+async function coinsView(env: Env, g: GuildRow) {
+  const students = await all<{ discord_id: string; name: string | null; coins: number; streak_freezes: number; hint_tokens: number }>(env,
+    "SELECT discord_id, name, coins, streak_freezes, hint_tokens FROM players WHERE guild_id = ? ORDER BY coins DESC, name", g.id);
+  const names = new Map(students.map((p) => [p.discord_id, p.name]));
+  const items = shopItems(g, true);
+  const label = (key: string) => { const it = items.find((x) => x.key === key); return it ? `${it.emoji} ${it.custom ? it.name : key}` : key; };
+  const purchases = await all<{ id: number; discord_id: string; item: string; cost: number; detail: string | null; status: string | null; created_at: number }>(env,
+    "SELECT id, discord_id, item, cost, detail, status, created_at FROM purchases WHERE guild_id = ? ORDER BY id DESC LIMIT 60", g.id);
+  const pending = await all<typeof purchases[number]>(env,
+    "SELECT id, discord_id, item, cost, detail, status, created_at FROM purchases WHERE guild_id = ? AND status = 'pending' ORDER BY id LIMIT 100", g.id);
+  const log = await all<{ discord_id: string; delta: number; balance: number; reason: string | null; created_at: number }>(env,
+    "SELECT discord_id, delta, balance, reason, created_at FROM coin_log WHERE guild_id = ? ORDER BY id DESC LIMIT 40", g.id);
+  const sold = await all<{ item: string; n: number }>(env, "SELECT item, COUNT(*) AS n FROM purchases WHERE guild_id = ? AND COALESCE(status, '') != 'refunded' GROUP BY item", g.id);
+  const withName = <T extends { discord_id: string }>(r: T) => ({ ...r, name: names.get(r.discord_id) ?? null });
+  return {
+    students, total: students.reduce((a, p) => a + (p.coins ?? 0), 0),
+    shop: { cfg: shopCfg(g), items, defaults: SHOP, sold: Object.fromEntries(sold.map((r) => [r.item, r.n])) },
+    pending: pending.map((r) => ({ ...withName(r), label: label(r.item) })),
+    purchases: purchases.map((r) => ({ ...withName(r), label: label(r.item) })),
+    log: log.map(withName),
+  };
 }

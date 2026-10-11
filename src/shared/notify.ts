@@ -6,17 +6,17 @@ import { one, run } from "./db.ts";
 import { t } from "./i18n.ts";
 import { COLORS, DiscordError, codeBlock, dapi, send, truncate } from "./discord.ts";
 
-export type NotifyKind = "hands" | "ask";
-export interface NotifyCfg { hands: boolean; ask: boolean }
+export type NotifyKind = "hands" | "ask" | "shop";
+export interface NotifyCfg { hands: boolean; ask: boolean; shop: boolean }
 
 export function notifyCfg(g: Pick<GuildRow, "notify">): NotifyCfg {
   let v: Partial<NotifyCfg> = {};
   try { v = JSON.parse(g.notify || "{}") ?? {}; } catch { v = {}; }
-  return { hands: v.hands !== false, ask: v.ask !== false };
+  return { hands: v.hands !== false, ask: v.ask !== false, shop: v.shop !== false };
 }
 
 export async function saveNotifyCfg(env: Env, g: GuildRow, b: Partial<NotifyCfg>) {
-  const cfg = { ...notifyCfg(g), ...Object.fromEntries(Object.entries(b).filter(([k, v]) => (k === "hands" || k === "ask") && typeof v === "boolean")) };
+  const cfg = { ...notifyCfg(g), ...Object.fromEntries(Object.entries(b).filter(([k, v]) => (k === "hands" || k === "ask" || k === "shop") && typeof v === "boolean")) };
   await run(env, "UPDATE guilds SET notify = ? WHERE id = ?", JSON.stringify(cfg), g.id);
   return cfg;
 }
@@ -100,5 +100,14 @@ export function notifyTest(env: Env, g: GuildRow): Promise<DmResult> {
   return toTeacher(env, g, null, {
     embeds: [{ title: t(L, "notify.test_title"), description: t(L, "notify.test_body", { server: g.name ?? "" }), color: COLORS.green }],
     components: linkRow(t(L, "notify.open_dashboard"), dashLink(env, g, "hands"), "🧭"),
+  });
+}
+
+/** 🛒 A student bought one of the teacher's own rewards: the teacher has something to hand out. */
+export function notifyPurchase(env: Env, g: GuildRow, studentName: string, reward: string, price: number): Promise<DmResult> {
+  const L = g.lang;
+  return toTeacher(env, g, "shop", {
+    embeds: [{ title: t(L, "shop.notify_title", { name: studentName || "?", server: g.name ?? "" }), description: t(L, "shop.notify_body", { reward, price }), color: COLORS.gold }],
+    components: linkRow(t(L, "shop.notify_open"), dashLink(env, g, "coins"), "🎁"),
   });
 }

@@ -654,10 +654,12 @@ section("dashboard API: assignments with DMs, start, on-time, reminder, missed")
   const c = solveAnswer(cid);
   await click(U.alice, `ans:${aid}:${c.answer}`);
   check(q1("SELECT status FROM assignments WHERE id = ?", asgA).status === "done", "assignment done on time");
-  const dmsBefore = discordCalls.filter((x) => x.path.startsWith("/channels/dm-")).length;
+  // count only reminder DMs (on a Monday the weekly reports go out too)
+  const reminders = () => discordCalls.filter((x) => x.path.startsWith("/channels/dm-") && JSON.stringify(x.body).includes("Reminder: your assignment")).length;
+  const dmsBefore = reminders();
   clock.advance(86400 + 3600);
   await runCron(env);
-  check(discordCalls.filter((x) => x.path.startsWith("/channels/dm-")).length === dmsBefore + 1, "reminder DM 24h before due");
+  check(reminders() === dmsBefore + 1, "reminder DM 24h before due");
   clock.advance(86400);
   await runCron(env);
   const asgC = q1("SELECT status FROM assignments WHERE discord_id = ? AND challenge_id = ?", U.carol.id, cid);
@@ -1855,6 +1857,51 @@ section("student page: what to work on, with the evidence behind it");
   check(!!wa && (wa.failedCode.length + wa.missedQuick.length) >= 1 && /didn't solve|missed/i.test(wa.why), `failed challenges are listed by name (${wa?.why})`);
   const q = wa?.missedQuick?.[0];
   if (q) check(/answered “/.test(q.detail), `a missed question shows what they answered (${q.detail})`);
+}
+
+section("coins & shop: the teacher gives, removes and zeroes coins, and manages the shop");
+{
+  const coins = (id: string) => q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, id).coins;
+  const A = U.alice.id, B = U.bob.id;
+  run1("UPDATE players SET coins = 100 WHERE guild_id = ? AND discord_id IN (?, ?)", G, A, B);
+  let r = await api("POST", `/api/coins?g=${G}`, { students: [A, B], op: "add", amount: 50, reason: "great teamwork", notify: true });
+  check(r.status === 200 && r.data.changed === 2 && coins(A) === 150 && coins(B) === 150, "give 50 coins to two students");
+  check(discordCalls.some((x) => x.path === `/channels/dm-${A}/messages` && JSON.stringify(x.body).includes("great teamwork")), "…they're told by DM, with the reason");
+  r = await api("POST", `/api/coins?g=${G}`, { students: [A], op: "remove", amount: 500 });
+  check(coins(A) === 0, "removing more than they have stops at 0");
+  r = await api("POST", `/api/coins?g=${G}`, { students: [B], op: "set", amount: 0 });
+  check(coins(B) === 0 && r.data.log.length >= 3 && r.data.log[0].delta === -150, "set to 0, and every change is in the history");
+  const n = q1("SELECT COUNT(*) AS n FROM players WHERE guild_id = ?", G).n;
+  r = await api("POST", `/api/coins?g=${G}`, { students: "all", op: "add", amount: 10 });
+  check(r.data.changed === n, `everyone at once (${r.data.changed} students)`);
+
+  // shop: new prices, an item turned off, an own reward
+  r = await api("PUT", `/api/shop?g=${G}`, { items: { freeze: { on: true, price: 40, max: 3 }, hint: { on: false, price: 30, max: 5 }, title: { on: true, price: 100, days: 7 }, color: { on: true, price: 200, days: 7 } },
+    custom: [{ name: "Choose your seat", emoji: "🪑", price: 30, desc: "for one class", stock: 1, per_student: 1 }] });
+  const items = r.data.shop.items;
+  check(items.find((x: any) => x.key === "freeze").price === 40 && items.find((x: any) => x.key === "hint").on === false, "prices and items on/off are saved");
+  const seat = items.find((x: any) => x.custom);
+  check(seat && seat.name === "Choose your seat" && seat.price === 30, "an own reward is added");
+  run1("UPDATE players SET coins = 100 WHERE guild_id = ? AND discord_id IN (?, ?)", G, A, B);
+  const bob = U.bob as any;
+  await slash(bob, "shop");
+  let sh = text(lastPatch());
+  check(sh.includes("Choose your seat") && !sh.includes("shop:hint") && sh.includes("shop:freeze") && sh.includes("40"), "/shop shows the teacher's prices, hides items turned off, lists own rewards");
+  const tb = discordCalls.length;
+  await click(bob, `shop:${seat.key}`);
+  check(coins(B) === 70 && q1("SELECT status FROM purchases WHERE guild_id = ? AND discord_id = ? AND item = ?", G, B, seat.key)?.status === "pending", "buying an own reward takes the coins and waits for the teacher");
+  const teacherId = q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id;
+  check(discordCalls.slice(tb).some((x) => x.path === `/channels/dm-${teacherId}/messages` && JSON.stringify(x.body).includes("Choose your seat")), "…the teacher gets a DM");
+  await click(U.alice as any, `shop:${seat.key}`);
+  check(text(lastPatch()).includes("Sold out") && coins(A) === 100, "stock 1: the next student sees it sold out and pays nothing");
+  let v = await api("GET", `/api/coins?g=${G}`);
+  check(v.data.pending.length === 1 && v.data.pending[0].name, "the dashboard lists the reward to give");
+  check((await api("GET", `/api/pills?g=${G}`)).data.shop === 1, "…with a badge in the menu");
+  v = await api("POST", `/api/shop/purchases/${v.data.pending[0].id}?g=${G}`, { action: "refund" });
+  check(coins(B) === 100 && v.data.pending.length === 0, "refund: the coins come back");
+  await click(U.alice as any, "shop:hint");
+  check(text(lastPatch()).includes("isn't in the shop"), "an item turned off can't be bought");
+  await api("PUT", `/api/shop?g=${G}`, { items: {}, custom: [] });
 }
 
 section("dashboard links keep their page through the sign-in");

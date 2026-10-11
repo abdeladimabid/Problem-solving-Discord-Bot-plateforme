@@ -61,6 +61,7 @@ export interface GuildRow {
   auto_roles?: string | null;
   track?: string | null;
   notify?: string | null;    // JSON: which teacher DMs are on
+  shop?: string | null;      // JSON: shop prices, items on/off, own rewards
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;

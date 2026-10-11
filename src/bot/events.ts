@@ -6,7 +6,8 @@ import { one } from "../shared/db.ts";
 import { getAttempt, getChallenge, renderFor, startAttempt } from "../shared/challenges.ts";
 import { quizAnswer } from "../shared/events.ts";
 import type { BossRow, BountyRow } from "../shared/events.ts";
-import { SHOP, ShopError, buy, inventory } from "../shared/shop.ts";
+import { ShopError, buy, inventory, shopItems } from "../shared/shop.ts";
+import { notifyPurchase } from "../shared/notify.ts";
 import { HelpError, answerHelp, askHelp, rateHelp } from "../shared/help.ts";
 import { type Ix, deferReply, json, later, say } from "./ix.ts";
 
@@ -50,16 +51,23 @@ export async function bountyButton(ix: Ix, id: number) {
 async function shopView(ix: Ix, note = "") {
   const L = ix.L;
   const inv = await inventory(ix.env, ix.guild, ix.userId);
-  const lines = SHOP.map((it) => t(L, `shop.item.${it.key}`, { price: it.price, emoji: it.emoji, days: it.days ?? 0, max: it.max ?? 0 }));
+  const items = shopItems(ix.guild);
+  const lines = items.map((it) => it.custom
+    ? `${it.emoji} **${it.name}** · **${it.price}** 🪙${it.desc ? `\n${it.desc}` : ""}`
+    : t(L, `shop.item.${it.key}`, { price: it.price, emoji: it.emoji, days: it.days ?? 0, max: it.max ?? 0 }));
   const owned = [
     t(L, "shop.owned", { coins: inv.coins, freezes: inv.freezes, hints: inv.hints }),
     inv.title ? t(L, "shop.owned_title", { title: inv.title, until: `<t:${inv.titleUntil}:R>` }) : "",
     inv.color ? t(L, "shop.owned_color", { until: `<t:${inv.colorUntil}:R>` }) : "",
   ].filter(Boolean).join("\n");
+  const buttons = items.map((it) => btn((it.custom ? t(L, "shop.buy.custom", { name: it.name ?? "", price: it.price }) : t(L, `shop.buy.${it.key}`, { price: it.price })).slice(0, 78),
+    `shop:${it.key}`, it.custom ? 2 : 1, it.emoji, inv.coins < it.price));
+  const rows = [];
+  for (let i = 0; i < buttons.length && rows.length < 5; i += 5) rows.push(row(...buttons.slice(i, i + 5)));
   return {
     content: note,
-    embeds: [{ title: t(L, "shop.title"), description: lines.join("\n\n") + "\n\n" + owned, color: COLORS.gold, footer: { text: t(L, "shop.footer") } }],
-    components: [row(...SHOP.map((it) => btn(t(L, `shop.buy.${it.key}`, { price: it.price }), `shop:${it.key}`, 1, it.emoji, inv.coins < it.price)))],
+    embeds: [{ title: t(L, "shop.title"), description: ((lines.length ? lines.join("\n\n") : t(L, "shop.empty")) + "\n\n" + owned).slice(0, 4000), color: COLORS.gold, footer: { text: t(L, "shop.footer") } }],
+    components: rows,
   };
 }
 
@@ -80,6 +88,10 @@ export function doBuy(ix: Ix, key: string, detail: string) {
   later(ix, async () => {
     try {
       const r = await buy(ix.env, ix.guild, ix.userId, key, detail);
+      if (r.item?.custom) {
+        ix.ctx.waitUntil(notifyPurchase(ix.env, ix.guild, ix.userName, r.item.name ?? "", r.item.price).catch((e) => console.error("shop notify", e)));
+        return shopView(ix, t(L, "shop.bought.custom", { name: r.item.name ?? "" }));
+      }
       return shopView(ix, t(L, `shop.bought.${r.key}`, { detail: r.detail ?? "" }));
     } catch (e) {
       if (!(e instanceof ShopError)) throw e;
