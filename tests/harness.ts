@@ -202,6 +202,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   }
   if (url.hostname === "api.github.com") {
     // a repo's commits (newest first) and its files at a commit or HEAD
+    if (/^\/app-manifests\/[\w-]+\/conversions$/.test(url.pathname) && (init.method || "GET").toUpperCase() === "POST") {
+      github.calls++;
+      return url.pathname.includes("/bad-") ? Response.json({ message: "Not Found" }, { status: 404 })
+        : Response.json({ id: 424242, slug: "classbot-cs-class", client_id: "Iv23made", client_secret: "made_secret", webhook_secret: "made_whsec", pem: "-----BEGIN RSA PRIVATE KEY-----\nmade\n-----END RSA PRIVATE KEY-----" }, { status: 201 });
+    }
     let gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits$/);
     if (gm && github.commits[gm[1]]) return Response.json(github.commits[gm[1]]);
     gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([^/]+)$/);

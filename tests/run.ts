@@ -2894,6 +2894,33 @@ section("brief steps: found in the brief, dated in working days, proposed from t
   env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
 }
 
+section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
+{
+  const was = env.PUBLIC_URL;
+  env.PUBLIC_URL = "https://bot.example.workers.dev";
+  const raw = async (p: string) => { const ctx = makeCtx(); const r = await admin.fetch(new Request("https://dash.example.workers.dev" + p), env, ctx); await ctx.flush(); return r; };
+  const mf = await api("POST", "/api/github/manifest", { g: G });
+  const st = String(mf.data.action || "").split("state=")[1];
+  check(mf.status === 200 && /^https:\/\/github\.com\/settings\/apps\/new\?state=[a-f0-9]{32}$/.test(mf.data.action), "a form to post to GitHub, with a one-time state");
+  const m = mf.data.manifest;
+  check(m.hook_attributes.url === `https://bot.example.workers.dev/github/webhook/${G}` && m.callback_urls[0] === "https://bot.example.workers.dev/github/callback" && m.setup_url === "https://bot.example.workers.dev/github/setup", "the class's three URLs are filled in");
+  check(m.public === true && m.default_permissions.contents === "read" && m.default_permissions.pull_requests === "read" && m.default_events.includes("push") && m.default_events.includes("pull_request_review") && m.name.length <= 34, "permissions and events filled in, students can install it");
+  check(/\/api\/github\/manifest\/done$/.test(m.redirect_url), "GitHub comes back to the dashboard");
+  const done = await raw(`/api/github/manifest/done?state=${st}&code=abc123`);
+  check(done.status === 303 && /gh=created&slug=classbot-cs-class#\/settings\/github$/.test(done.headers.get("location") || ""), "back from GitHub: the App is created");
+  const gh = await api("GET", `/api/github?g=${G}`);
+  check(gh.data.setup.own && gh.data.setup.slug === "classbot-cs-class" && gh.data.setup.key && gh.data.setup.oauth && gh.data.setup.webhook && !JSON.stringify(gh.data).includes("made_secret"), "…saved as the class's own App (secrets never sent back)");
+  const again = await raw(`/api/github/manifest/done?state=${st}&code=abc123`);
+  check(again.status === 303 && /gh=failed/.test(again.headers.get("location") || ""), "a state is used once");
+  const mf2 = await api("POST", "/api/github/manifest", { g: G });
+  const bad = await raw(`/api/github/manifest/done?state=${String(mf2.data.action).split("state=")[1]}&code=bad-x`);
+  check(bad.status === 303 && /gh=failed/.test(bad.headers.get("location") || ""), "GitHub refusing the code: a clear message");
+  env.PUBLIC_URL = "";
+  check((await api("POST", "/api/github/manifest", { g: G })).status === 400, "no bot address yet: refused");
+  env.PUBLIC_URL = was;
+  await api("DELETE", `/api/github/app?g=${G}`);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
