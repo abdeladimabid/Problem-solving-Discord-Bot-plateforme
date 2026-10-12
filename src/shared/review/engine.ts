@@ -161,7 +161,7 @@ const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.t
 
 // Comment in the teacher's style, built only from the checklist (checks + brief requirements + competencies).
 // Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
-export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null) {
+export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null) {
   const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
   const ok = (id) => !!c[id] && c[id].ok === true;
   const ko = (id) => !!c[id] && c[id].ok === false;
@@ -170,7 +170,7 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const part = (t) => { const m = String(t).match(/je (vais|veux|dois|souhaite|peux)\s+(.+?)(,?\s+(afin|pour que|pour qu’|pour qu')\b|$)/i); return (m ? m[2] : String(t)).replace(/\.$/, ''); };
   const tw = /Tailwind/.test(d('responsive'));
   const sec = { 'Fonctionnalités': [], 'Intégration': [], 'Responsive': [], 'JavaScript': [], 'POO / Architecture': [], 'Base de données': [], 'Sécurité': [], 'API': [], 'Tests': [],
-    'Bonnes pratiques': [], 'Git / GitHub': [], 'Hébergement': [], 'Bonus': [], 'Mise en situation': [] };
+    'Bonnes pratiques': [], 'Git / GitHub': [], 'Suivi du projet': [], 'Hébergement': [], 'Bonus': [], 'Mise en situation': [] };
   const pages = (d('pages').match(/page\(s\) : ([^;]+)/) || [])[1];
   if (ok('pages') && pages) sec['Intégration'].push(`Ton site contient bien plusieurs pages (${pages.trim()}).`);
   if (ok('nav')) sec['Intégration'].push(`Le menu permet d’accéder à toutes les pages${ok('active') ? ' et indique la page en cours' : ''}.`);
@@ -292,6 +292,22 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   for (const [id, text] of ADV) if (ko(id) && !bonusOnly.has(id) && !(id === 'responsive' && ko('breakpoints'))) advice.push(text);
   for (const id of Object.keys(DETECTORS)) if (ko(id) && !bonusOnly.has(id)) advice.push(DETECTORS[id][3]);
   advice.push(...gitAdvice);
+  // Steps of the brief: the teacher's result for each step, and when the work was done (see steps.ts)
+  const stepsDone = suivi && Array.isArray(suivi.steps) ? suivi.steps.filter((x) => STEP_RESULTS.includes(x.final)) : [];
+  const SP = sec['Suivi du projet'];
+  if (stepsDone.length) {
+    if (stepsDone.length === suivi.steps.length && stepsDone.every((x) => x.final === 'a_temps')) {
+      SP.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
+      for (const x of stepsDone) if (x.note) SP.push(`${x.name} : ${x.note}`);
+    } else for (const x of stepsDone) SP.push(`${x.name} : ${STEP_FR[x.final]}.${x.note ? ' ' + x.note : ''}`);
+    if (stepsDone.some((x) => x.final !== 'a_temps')) advice.push('de terminer chaque partie à la date prévue : découpe le travail et avance à chaque étape');
+  }
+  const rh = suivi && suivi.rhythm, nSteps = suivi && suivi.steps ? suivi.steps.length : 0;
+  const total = rh ? rh.reduce((a, b) => a + b, 0) : 0;
+  if (rh && nSteps >= 2 && total >= 5) {
+    const last = (rh[nSteps - 1] || 0) + (rh[nSteps] || 0);
+    if (last / total >= 0.6) SP.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
+  }
   for (const e of exigences.filter((x) => (x.type === 'livrable' || x.type === 'critere') && own(x))) advice.push(`de compléter ce point du brief : ${String(e.texte).replace(/\s*:$/, '').replace(/\.$/, '')}`);
   const parts = [`Bonjour${firstName ? ` ${firstName}` : ''},`];
   for (const [title, lines] of Object.entries(sec)) if (lines.length) parts.push(`-${title} :\n${lines.join('\n')}`);
@@ -304,7 +320,7 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const compOk = competences.filter((x) => x.ok === true).map((x) => skillDisplay(x.code));
   const compKo = competences.filter((x) => x.ok === false).map((x) => skillDisplay(x.code));
   if (compOk.length || compKo.length) parts.push([compOk.length ? `Compétences validées : ${compOk.join(', ')}.` : '', compKo.length ? `Compétences non validées : ${compKo.join(', ')}.` : ''].filter(Boolean).join('\n'));
-  const unfinished = exigences.some((x) => x.type !== 'bonus' && !itemValid(x)) || compKo.length > 0 || !!(ch && ch.result !== 'valide');
+  const unfinished = exigences.some((x) => x.type !== 'bonus' && !itemValid(x)) || compKo.length > 0 || !!(ch && ch.result !== 'valide') || stepsDone.some((x) => x.final === 'non_fait');
   parts.push(advice.length || unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
   return parts.join('\n\n');
 }
@@ -323,6 +339,9 @@ export function reviewStates(rec) {
   return { ck, ex, co, mes };
 }
 export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
+// The teacher's result for a step of the brief (see steps.ts)
+export const STEP_RESULTS = ['a_temps', 'en_retard', 'non_fait'];
+export const STEP_FR = { a_temps: 'validée à temps', en_retard: 'validée en retard', non_fait: 'non validée' };
 
 // The comment from the final checklist states
 export function buildComment(firstName, rec, states) {
@@ -332,7 +351,7 @@ export function buildComment(firstName, rec, states) {
   const items = (r.exigences || []).map((e, i) => ({ ...e, ok: st.ex[i] }));
   const comps = (r.competences || []).map((x) => ({ code: x.code, ok: st.co[x.code] }));
   const ch = rec.challenge ? { ...rec.challenge, result: st.mes.r, note: st.mes.note } : null;
-  return buildFeedback(firstName, checks, items, comps, ch);
+  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null);
 }
 
 // The sure checks win over the AI: a requirement that a check proves (or disproves) gets the check's answer
@@ -1041,6 +1060,9 @@ export function memberComment(m, rec, ms) {
       : `Ton travail au sein du squad est bien visible : ${work}${m.reviews ? `, et ${m.reviews} relecture${m.reviews > 1 ? 's' : ''} de pull request` : ''}.`);
     if (m.cards != null) lines.push(m.cards ? `Sur le tableau de planification, ${m.cards} carte${m.cards > 1 ? 's' : ''} t’${m.cards > 1 ? 'étaient attribuées' : 'était attribuée'}, dont ${m.cardsDone} terminée${m.cardsDone > 1 ? 's' : ''}.`
       : 'Aucune carte ne t’était attribuée sur le tableau de planification : pense à t’assigner tes tâches.');
+    if (Array.isArray(m.perStep) && Array.isArray(rec.stepNames) && rec.stepNames.length) {
+      lines.push(`Tes commits par étape : ${rec.stepNames.map((nm, i) => `${nm} : ${m.perStep[i] || 0}`).join(', ')}${m.perStep[rec.stepNames.length] ? `, après la dernière étape : ${m.perStep[rec.stepNames.length]}` : ''}.`);
+    }
     if (m.sm && ck('pr_review') === false) lines.push('Pense à faire approuver chaque pull request avant de la fusionner : c’est ton rôle de garantir la qualité du code fusionné.');
   }
   // Quiz

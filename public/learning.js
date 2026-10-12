@@ -642,7 +642,16 @@ async function briefGridTab(root) {
       <textarea id="gr-t" class="code" style="min-height:360px" spellcheck="false">${esc(B.gridText)}</textarea>
       <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="gr-save">Save the grid</button></p>
       <details class="small"><summary>Automatic checks you can link</summary><div id="gr-ids" class="muted">Loading…</div></details>
-    </section></div>`;
+    </section></div>
+    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Steps <span class="muted">parts to validate at given dates</span></h2><button class="btn small" id="st-ai">✨ Find them in the brief</button></div>
+      ${B.steps?.length ? `<ol class="grid-items">${B.steps.map((s) => `<li><b>${esc(s.name)}</b> · ${fmtDateTime(s.due)}${s.expected ? ` · ${esc(s.expected)}` : ""}</li>`).join("")}</ol>`
+        : `<p class="empty">No steps. Lines like « Partie 1, fin du jour 1 : … » become steps when you publish the brief.</p>`}
+      <textarea id="st-t" class="code" style="min-height:110px" spellcheck="false" placeholder="Partie 1 | 2026-10-05 23:59 | Maquette et backlog">${esc(B.stepsText || "")}</textarea>
+      <p class="muted small">One line: name | YYYY-MM-DD HH:MM (UTC) | what is expected. Empty = no steps.</p>
+      <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="st-save">Save the steps</button></p>
+    </section>`;
+  $("#st-ai").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/steps`, { method: "POST", body: {} }); toast(BR.B.steps.length ? `${BR.B.steps.length} step(s) found` : "No steps in this brief"); renderBrief(); });
+  $("#st-save").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/steps`, { method: "PUT", body: { text: $("#st-t").value } }); toast("Steps saved"); renderBrief(); });
   $("#gr-ai").onclick = (e) => busy(e.currentTarget, async () => { toast("⏳ Writing the grid…"); BR.B = await api(`/briefs/${B.brief.id}/grid`, { method: "POST", body: {} }); toast("Grid written"); renderBrief(); });
   $("#gr-save").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/grid`, { method: "PUT", body: { text: $("#gr-t").value } }); toast("Grid saved"); renderBrief(); });
   api("/github").then((x) => { $("#gr-ids").innerHTML = x.checks.map((c) => `<div><code>${esc(c.id)}</code> ${esc(c.label)}</div>`).join(""); }).catch(() => { $("#gr-ids").textContent = ""; });
@@ -757,10 +766,11 @@ function renderDebrief() {
   if ($("#db-an")) $("#db-an").onclick = () => analyzeDialog();
   const body = $("#db-body");
   if (!rec) {
-    body.innerHTML = `<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
+    body.innerHTML = `${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
       <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
       <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
     $("#db-an2").onclick = () => analyzeDialog();
+    renderSteps(false);
     return;
   }
   const r = rec.result || {};
@@ -804,6 +814,7 @@ function renderDebrief() {
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span> <span class="lvl ${a[0]}">${esc(a[1])}</span>
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
+      ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
       <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
@@ -817,6 +828,56 @@ function renderDebrief() {
     </aside></div>`;
   updateMeter();
   wireDebrief();
+  renderSteps(final);
+}
+
+// Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
+const STEP_LBL = { a_temps: "On time", en_retard: "Late", non_fait: "Not validated", a_verifier: "To check", a_venir: "Not due yet" };
+function renderSteps(final) {
+  const box = $("#db-steps");
+  if (!box) return;
+  const { R, bid, who } = DB;
+  const recs = R.stepRecs || {};
+  box.innerHTML = `<h2>Steps <span class="muted small">${R.review ? "they go into the comment" : "follow the project"}</span></h2>
+    <div class="db-rows">${R.steps.map((s) => { const r = recs[s.n] || {}, p = r.prop;
+      return `<div class="db-step" data-step="${s.n}">
+        <div><b>${esc(s.name)}</b> <span class="muted small">· due ${fmtDateTime(s.due)}</span>${s.expected ? `<div class="small muted">${esc(s.expected)}</div>` : ""}</div>
+        <p class="small" style="margin:6px 0">${p ? `<b>Proposed: ${esc(STEP_LBL[p.statut] || p.statut)}</b>${p.raison ? ` · ${esc(p.raison)}` : ""}${p.before != null ? ` <span class="muted">· ${p.before} commit(s) before the date, ${p.after} after</span>` : ""}` : `<span class="muted">No proposal yet.</span>`}</p>
+        ${final ? `<b>${esc(STEP_LBL[r.final] || "—")}</b>${r.note ? ` · ${esc(r.note)}` : ""}`
+          : `<div class="toolbar" style="margin:0">${segHtml(`st${s.n}`, [["a_temps", "On time"], ["en_retard", "Late"], ["non_fait", "Not validated"]], r.final || "")}
+            <button class="btn small" data-stcheck="${s.n}">${p ? "↻ Propose again" : "Propose validation"}</button></div>
+          <input type="text" data-stnote="${s.n}" value="${esc(r.note || "")}" placeholder="Note (optional), added to the comment" style="width:100%;margin-top:8px">`}
+      </div>`; }).join("")}</div>`;
+  if (final) return;
+  const save = async (n) => {
+    const cur = $(`[data-seg="st${n}"] [aria-pressed="true"]`, box)?.dataset.v ?? "";
+    const R2 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: cur, note: $(`[data-stnote="${n}"]`, box).value } });
+    DB.R = { ...DB.R, stepRecs: R2.stepRecs };
+    if (DB.R.review && $("#db-c")) saveStatesSoon();
+  };
+  for (const s of R.steps) {
+    wireSeg(box, `st${s.n}`, (v) => {
+      // a second click on the chosen result clears it
+      const b = $(`[data-seg="st${s.n}"] [data-v="${v}"]`, box);
+      if ((recs[s.n] || {}).final === v) b.setAttribute("aria-pressed", "false");
+      save(s.n).catch((e) => toast(e.message, true));
+    });
+    $(`[data-stnote="${s.n}"]`, box).onchange = () => save(s.n).catch((e) => toast(e.message, true));
+  }
+  $$("[data-stcheck]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const n = Number(b.dataset.stcheck);
+    toast("⏳ Reading the repo at the step's date…");
+    const R2 = await api(`/briefs/${bid}/review/stepcheck`, { method: "POST", body: { who, n } });
+    DB.R = { ...DB.R, stepRecs: R2.stepRecs };
+    // nothing decided yet: the proposal becomes the choice (the teacher can change it)
+    const st = R2.prop?.statut;
+    if (!(DB.R.stepRecs[n] || {}).final && ["a_temps", "en_retard", "non_fait"].includes(st)) {
+      const R3 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: st, note: (DB.R.stepRecs[n] || {}).note || "" } });
+      DB.R = { ...DB.R, stepRecs: R3.stepRecs };
+      if (DB.R.review && $("#db-c")) saveStatesSoon();
+    }
+    renderSteps(false);
+  }));
 }
 
 function mesHtml(ch, mes, final, member = "") {
