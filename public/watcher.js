@@ -44,7 +44,23 @@
 .sp-dec.ok.on { background: var(--up); border-color: var(--up); color: #fff; } .sp-dec.ko.on { background: var(--down); border-color: var(--down); color: #fff; }
 .sp-dec.note { opacity: .5; } .sp-dec.note.has { opacity: 1; border-color: var(--blue); }
 .sp-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
-.sp-box { display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-s); } .sp-box b { font-size: 22px; }`;
+.sp-box { display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-s); } .sp-box b { font-size: 22px; }
+.panel.wf { padding: 0; } .wf > summary, .wf-sec > summary { list-style: none; cursor: pointer; }
+.wf > summary::-webkit-details-marker, .wf-sec > summary::-webkit-details-marker { display: none; }
+.wf > summary { padding: 16px 20px; } .wf-body { padding: 0 20px 16px; } [data-wf] + [data-wf] { margin-top: 12px; }
+.wf-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; } .wf-head h3, .wf-top > h3 { margin: 0; font-size: 16px; }
+.wf > summary h3::before, .wf-sec > summary b::before { content: "▸"; display: inline-block; width: 16px; color: var(--ink-faint); transition: transform .15s; }
+.wf[open] > summary h3::before, .wf-sec[open] > summary b::before { transform: rotate(90deg); }
+.wf-badges { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wf-bar { display: flex; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; } .wf-bar i.on { background: var(--up); } .wf-bar i.late { background: var(--warn); }
+.wf-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 8px; }
+.wf-key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.wf-key.on { background: var(--up); } .wf-key.late { background: var(--warn); } .wf-key.none { background: var(--line-strong); }
+.wf-sec { border-top: 1px solid var(--line); } .wf-sec > summary { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; }
+.wf-sec-body { padding: 0 0 12px; } .wf-sec-body textarea { width: 100%; } .wf-sec-body textarea.mono { font-family: var(--mono); font-size: 12.5px; }
+.wf-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; } .wf-groups h4 { margin: 0 0 6px; }
+.wf-names { display: flex; flex-wrap: wrap; gap: 6px; } .wf-names .w-chip { text-decoration: none; }
+.wf-act { border-top: 1px solid var(--line); padding-top: 12px; margin: 0; } .wf-h { margin: 22px 0 10px; font-size: 15px; color: var(--ink-soft); }`;
   document.head.append(st);
 })();
 
@@ -225,9 +241,9 @@ async function viewGithubAll() {
 // the announce button: "again" once announced, none after the due date
 const wAnnBtn = (b) => (b.due_at && b.due_at <= Date.now() / 1000 ? ""
   : `<button class="btn small" data-wann="${b.id}" ${b.announced_at ? `data-again="${esc(fmtAgo(b.announced_at))}"` : ""}>📣 ${b.announced_at ? "Announce again" : "Announce"}</button>`);
-function wireBriefButtons(root) {
+function wireBriefButtons(root, after = viewGithubAll) {
   $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog(b.dataset.again ? "Announce this brief again?" : "Announce this brief in Discord?", b.dataset.again ? `It was announced ${b.dataset.again}.` : "In French: dates, steps, squads and how to hand in.", "Announce",
-    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); viewGithubAll(); }));
+    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); after(); }));
   $$("[data-wstat]", root).forEach((b) => b.onclick = () => busy(b, async () => {
     const r = await api(`/briefs/${b.dataset.wstat}/watcher/status`, { method: "POST", body: {} });
     toast(`Status posted: ${r.on + r.late} pushed, ${r.none} not yet`);
@@ -421,21 +437,21 @@ function wSprintsOf(P) {
 }
 const wShort = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 /** The sprint of a brief in a form: by its week or due date (the sprint is named), none (e.g. a cross defense), or one chosen.
-    `cur`: null = automatic, 0 = none, n = sprint n. Fills [data-wsprint] in root; the value is read from #w-sp. */
+    `cur`: null = automatic, 0 = none, n = sprint n. Fills [data-wsprint] in root; the value is read from .w-sp in root. */
 async function wSprintField(root, cur, dueSel, week = null) {
   const box = $("[data-wsprint]", root);
   if (!box) return;
   const P = await wProgram().catch(() => null);
   const sps = P ? wSprintsOf(P) : [];
   if (!sps.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<label for="w-sp">Sprint</label><select id="w-sp"><option value=""></option>
+  box.innerHTML = `<label>Sprint</label><select class="w-sp" aria-label="Sprint"><option value=""></option>
     <option value="none" ${cur === 0 ? "selected" : ""}>Not in a sprint (e.g. cross defense)</option>
     ${sps.map((s) => `<option value="${s.n}" ${cur === s.n ? "selected" : ""} title="${esc(s.full)}">${esc(s.title)} · ${wShort(s.start)} → ${wShort(s.end)}</option>`).join("")}</select>`;
   const auto = () => {
     const wk = week ? P.weeks.find((w) => w.n === week) : null;
     const d = $(dueSel, root)?.value || "";
     const sp = wk ? sps.find((s) => s.n === wk.sprint) : d && sps.find((s) => d >= s.start && d <= s.end);
-    $("#w-sp option[value='']", root).textContent = (wk ? "By its week" : "By its due date") + (wk || d ? ` (${sp ? sp.title : "no sprint"})` : "");
+    $(".w-sp option[value='']", root).textContent = (wk ? "By its week" : "By its due date") + (wk || d ? ` (${sp ? sp.title : "no sprint"})` : "");
   };
   $(dueSel, root)?.addEventListener("input", auto);
   auto();
@@ -467,13 +483,13 @@ async function quickBrief() {
       if (start && start > due) throw new Error("The start date must be before the due date.");
       const sq = squads.filter((s) => s.members.length);
       if (kind === "squad" && !sq.length) throw new Error("Load the squads first.");
-      const extra = $("#qb-c").value.split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
+      const extra = $("#qb-c").value.replace(/\s+(?=N\d)/gi, "").split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
       let B = src ? await api("/briefs/import", { method: "POST", body: { ...src, start, due, mode: kind === "squad" ? "squad" : "individuel" } })
         : await api("/briefs", { method: "POST", body: { title: name } });
       const id = B.brief.id, d0 = B.brief.data;
       await api(`/briefs/${id}`, { method: "PUT", body: { data: { ...d0, title: name || d0.title, competencies: [...new Set([...(d0.competencies || []), ...extra])] },
         kind, squads: kind === "squad" ? sq : [], repo_hint: $("#qb-r").value.trim() } });
-      await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("#qb-t").value, sprint: $("#w-sp") ? $("#w-sp").value : "", announce: false } });
+      await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("#qb-t").value, sprint: $(".w-sp", dlg) ? $(".w-sp", dlg).value : "", announce: false } });
       let msg = "Brief added";
       if ($("#qb-a").checked) msg = await api(`/briefs/${id}/watcher/announce`, { method: "POST", body: {} }).then(() => "Brief added and announced", (e) => `Brief added, not announced: ${e.message}`);
       dlg.close(); toast(msg); location.hash = `#/brief/${id}`;
@@ -519,6 +535,200 @@ async function quickBrief() {
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); readFile(e.dataTransfer.files[0]); };
+}
+
+// ================================================================= Briefs → Follow-up: one card per published brief with everything in it
+// (like GitHub Watcher's Briefs): who pushed, hand-ins or squads & debriefs, the brief and its grid and steps, type & squads,
+// dates & sprint, announce / status / delete. Running briefs open, ended ones folded; the teacher's choice is kept in this browser.
+const wfOpen = (id, def, set) => {
+  let m = {};
+  try { m = JSON.parse(localStorage.getItem("cb-wf-open") || "{}") || {}; } catch { m = {}; }
+  if (set === undefined) return typeof m[id] === "boolean" ? m[id] : def;
+  m[id] = set;
+  try { localStorage.setItem("cb-wf-open", JSON.stringify(m)); } catch { /* not remembered */ }
+  return set;
+};
+const wfIso = (u) => (u ? new Date(u * 1000).toISOString() : "");
+
+async function wFollow(root) {
+  const [r, P] = await Promise.all([api("/briefs"), wProgram().catch(() => null)]);
+  const ctx = { P, sps: P ? wSprintsOf(P) : [] };
+  const nowS = Date.now() / 1000;
+  const pub = r.items.filter((b) => b.status === "assigned" && b.due_at);
+  const soon = pub.filter((b) => b.due_at > nowS).sort((a, b) => a.due_at - b.due_at);
+  const ended = pub.filter((b) => b.due_at <= nowS).sort((a, b) => b.due_at - a.due_at);
+  if (!pub.length) {
+    root.innerHTML = `<div class="empty-state"><p class="muted">No published brief yet.</p><button class="btn primary" id="wf-new">+ Quick brief</button></div>`;
+    $("#wf-new", root).onclick = () => quickBrief();
+    return;
+  }
+  const slot = (b) => `<div data-wf="${b.id}"><details class="panel wf"><summary class="wf-top"><h3>${esc(b.title)}</h3></summary></details></div>`;
+  root.innerHTML = soon.map(slot).join("") + (ended.length ? `<h2 class="wf-h">Ended</h2>` + ended.map(slot).join("") : "");
+  for (const b of [...soon, ...ended]) wfCard($(`[data-wf="${b.id}"]`, root), b, ctx);
+}
+
+// one card; the details of a brief ended over 30 days ago load when it is opened
+async function wfCard(box, item, ctx, B = null) {
+  const nowS = Date.now() / 1000, passed = item.due_at <= nowS;
+  const open = wfOpen(item.id, !passed);
+  if (!B && (open || item.due_at > nowS - 30 * 86400)) B = await api(`/briefs/${item.id}`).catch(() => null);
+  const b = B ? B.brief : item, md = B ? b.data.modalities : {};
+  const sp = (() => {
+    if (b.sprint === 0) return null;
+    if (b.sprint) return ctx.sps.find((s) => s.n === b.sprint);
+    const wk = b.week && ctx.P ? ctx.P.weeks.find((w) => w.n === b.week) : null;
+    if (wk) return ctx.sps.find((s) => s.n === wk.sprint);
+    const d = wfIso(b.due_at).slice(0, 10);
+    return ctx.sps.find((s) => d >= s.start && d <= s.end);
+  })();
+  const st = B ? B.students : [], sq = B && B.kind === "squad";
+  const on = st.filter((s) => s.push === "on"), late = st.filter((s) => s.push === "late"), none = st.filter((s) => !s.push);
+  const handed = !B ? "" : sq ? `${B.squadRows.filter((q) => q.handin).length}/${B.squadRows.length} repos` : `${st.filter((s) => s.handin).length}/${st.length} repos`;
+  const sec = (key, title, meta, body, o = false) => `<details class="wf-sec" data-sec="${key}" ${o ? "open" : ""}><summary><b>${title}</b>${meta ? `<span class="small muted">${esc(meta)}</span>` : ""}</summary><div class="wf-sec-body">${body}</div></details>`;
+  const pct = (n) => (st.length ? (100 * n) / st.length : 0);
+  const names = (list) => (list.length ? `<div class="wf-names">${list.map((s) => `<a class="w-chip" href="#/student/${esc(s.discord_id)}">${esc(s.name || s.discord_id)}</a>`).join("")}</div>` : `<p class="muted small">Nobody</p>`);
+  const group = (label, cls, list) => `<div><h4 class="small"><i class="wf-key ${cls}"></i>${label} (${list.length})</h4>${names(list)}</div>`;
+  const repoBtn = (who, h) => `<button class="btn small" data-wf-hi="${esc(who)}" data-repo="${esc(h?.repo || "")}" data-plan="${esc(h?.plan || "")}" title="Set or fix the repo">✏️ Repo</button>
+    <a class="btn small primary" href="#/debrief/${b.id}~${encodeURIComponent(who)}">Debrief →</a>`;
+  const nameOf = (uid) => st.find((s) => s.discord_id === uid)?.name || uid;
+  const handins = !B ? "" : sq ? (B.squadRows.length ? `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Squad</th><th>Handed in</th><th>Debrief</th><th></th></tr></thead><tbody>${B.squadRows.map((q) => `<tr>
+        <td><b>${esc(q.name)}</b><div class="small">${q.members.map((m) => `${esc(nameOf(m))}${m === q.sm ? " <span class='tag'>SM</span>" : ""}`).join(", ")}</div></td>
+        <td>${handinCell(q.handin)}</td><td>${reviewCell(q.review)}</td><td class="nowrap">${repoBtn(`s:${q.id}`, q.handin)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="muted small">No squads yet: make them in “Type &amp; squads”.</p>`)
+    : `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th><th>Handed in</th><th>Debrief</th><th></th></tr></thead><tbody>${st.map((s) => `<tr>
+        <td><a href="#/student/${esc(s.discord_id)}">${esc(s.name || s.discord_id)}</a></td><td>${handinCell(s.handin)}</td><td>${reviewCell(s.review)}</td><td class="nowrap">${repoBtn(`u:${s.discord_id}`, s.handin)}</td></tr>`).join("")}</tbody></table></div>`;
+  const gridN = B && B.grid ? B.grid.items.length : 0;
+  const compIn = (c) => cText(c).replace(/\s+/g, "");
+  const comps = B ? (b.data.competencies || []).map(compIn).join(", ") : "";
+  const briefMeta = !B ? "" : `${gridN ? `${gridN} lines` : "no grid yet"}${B.steps.length ? ` · ${B.steps.length} steps` : ""}${comps ? ` · ${(b.data.competencies || []).map(cText).join(", ")}` : ""}`;
+  const briefBody = !B ? "" : `
+    <div class="toolbar" style="margin:0 0 8px"><label class="btn small">📄 ${b.data.context || (b.data.groups || []).length ? "Replace the brief (.html)" : "Import the brief page (.html)"}<input type="file" accept=".html,.htm,text/html" hidden data-wf-file></label>
+      <button class="btn small" data-wf-grid>✨ ${gridN ? "Make the grid again" : "Make the evaluation grid"}</button><button class="btn small" data-wf-steps>✨ Propose the steps</button></div>
+    <div class="field-row"><div><label>Competencies</label><input type="text" data-wf-comps value="${esc(comps)}" placeholder="C1N1, C3N1, CT1N1…"></div>
+      <div><label>Repo name contains</label><input type="text" data-wf-repo maxlength="100" value="${esc(B.repo_hint)}" placeholder="optional, e.g. fitness"></div></div>
+    <label>Evaluation grid${gridN ? ` · ${gridN} lines · ${B.grid.by === "ai" ? "made by AI" : B.grid.by === "edit" ? "changed by you" : "made without AI"}` : ""}</label>
+    <textarea class="mono" data-wf-gridtext rows="12" spellcheck="false" placeholder="[fonctionnalité] Créer la page Contact (vérif : form, map)">${esc(B.gridText)}</textarea>
+    <p class="muted small" style="margin:2px 0 0">One line per requirement: [type] text (vérif : check).</p>
+    <label>Steps${B.steps.length ? ` · ${B.steps.length}` : ""}</label>
+    <textarea class="mono" data-wf-stepstext rows="${Math.max(3, B.steps.length + 1)}" spellcheck="false" placeholder="Partie 1 | 2026-10-14 17:00 | maquette et structure HTML">${esc(B.stepsText)}</textarea>
+    <p class="muted small" style="margin:2px 0 0">One line: name | YYYY-MM-DD HH:MM | expected.</p>
+    <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-bsave>Save</button></p>`;
+  const typeBody = !B ? "" : `${segHtml("wfk" + b.id, [["solo", "Individual"], ["squad", "Squad (collective)"]], B.kind)}
+    <div data-wf-sqbox ${sq ? "" : "hidden"}><div class="toolbar" style="margin:8px 0"><select data-wf-from><option value="">Loading the class's squads…</option></select><button class="btn small" data-wf-load>Load</button></div><div data-wf-board></div></div>
+    <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-sqsave>Save</button></p>`;
+  const datesBody = !B ? "" : `<div class="field-row"><div><label>From</label><input type="date" data-wf-s value="${esc(md.start || wfIso(b.start_at).slice(0, 10))}"></div>
+      <div><label>Due</label><input type="date" data-wf-d value="${esc(md.due || wfIso(b.due_at).slice(0, 10))}"></div><div><label>At (UTC)</label><input type="time" data-wf-t value="${esc(md.time || wfIso(b.due_at).slice(11, 16))}"></div></div>
+    ${B.steps.length ? `<p class="muted small" style="margin:4px 0 0">The steps move with the dates.</p>` : ""}<div data-wsprint></div>
+    <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-dsave>Save</button></p>`;
+  box.innerHTML = `<details class="panel wf" ${open ? "open" : ""}>
+    <summary class="wf-top"><div class="wf-head"><h3>${esc(B ? b.data.title : item.title)}</h3>
+        <span class="wf-badges">${sp ? `<span class="tag" title="${esc(sp.full)}">${esc(sp.title)}</span>` : b.sprint === 0 ? `<span class="tag">No sprint</span>` : ""}${B ? `<span class="tag">${sq ? "Squad" : "Individual"}</span>` : ""}${dueIn(b.due_at)}</span></div>
+      <p class="small muted" style="margin:4px 0 0">${b.start_at ? fmtDate(b.start_at) + " → " : ""}${fmtDate(b.due_at)}, ${wfIso(b.due_at).slice(11, 16)} UTC${B ? ` · ${on.length + late.length}/${st.length} pushed · ${handed}` : ""}</p></summary>
+    <div class="wf-body">${!B ? `<p class="muted small">⏳ Loading…</p>` : `
+      <div class="wf-bar"><i class="on" style="width:${pct(on.length)}%"></i><i class="late" style="width:${pct(late.length)}%"></i></div>
+      <p class="small muted wf-legend"><span><i class="wf-key on"></i>${on.length} ${passed ? "on time" : "pushed"}</span>${passed ? `<span><i class="wf-key late"></i>${late.length} late</span>` : ""}<span><i class="wf-key none"></i>${none.length} ${passed ? "nothing pushed" : "not yet"}</span></p>
+      ${sec("push", "Who pushed", "", `<div class="wf-groups">${group(passed ? "On time" : "Pushed", "on", on)}${passed ? group("Late", "late", late) : ""}${group(passed ? "Nothing pushed" : "Not yet", "none", none)}</div>`)}
+      ${sec("hand", sq ? "Squads &amp; debriefing" : "Hand-ins", handed, handins, sq)}
+      ${sec("brief", "Brief &amp; evaluation grid", briefMeta, briefBody)}
+      ${sec("type", "Type &amp; squads", sq ? `${B.squadRows.length} squads` : "individual", typeBody)}
+      ${sec("dates", ctx.sps.length ? "Dates &amp; sprint" : "Dates", `${b.start_at ? fmtDate(b.start_at) + " → " : ""}${fmtDate(b.due_at)}${ctx.sps.length ? " · " + (sp ? sp.title : "no sprint") : ""}`, datesBody)}
+      <p class="toolbar wf-act">${wAnnBtn(b)}<button class="btn small" data-wstat="${b.id}">Post status in Discord</button><a class="btn small" href="#/brief/${b.id}">Open the brief</a><button class="btn small danger" data-wf-del>Delete</button></p>`}
+    </div></details>`;
+  const card = $("details.wf", box);
+  card.addEventListener("toggle", () => {
+    if (card.open !== wfOpen(item.id, !passed)) wfOpen(item.id, null, card.open);
+    if (card.open && !B) wfCard(box, item, ctx);
+  });
+  if (!B) return;
+  const id = b.id;
+  const again = async (msg) => { if (msg) toast(msg); const nb = await api(`/briefs/${id}`); item.due_at = nb.brief.due_at; wfCard(box, item, ctx, nb); };
+  wireBriefButtons(box, () => again());
+  // hand-ins: the teacher sets or fixes a repo
+  $$("[data-wf-hi]", box).forEach((x) => x.onclick = () => openDialog("Repo handed in", `
+      <label for="wf-r">GitHub repo <span class="muted">(owner/repo or its link; empty = remove)</span></label><input type="text" id="wf-r" style="width:100%" value="${esc(x.dataset.repo)}">
+      <label for="wf-p">Planning board <span class="muted">(Trello, Jira or GitHub Project, optional)</span></label><input type="url" id="wf-p" style="width:100%" value="${esc(x.dataset.plan)}">`,
+    [{ label: "Save", primary: true, action: async () => {
+      const nb = await api(`/briefs/${id}/handin`, { method: "POST", body: { who: x.dataset.wfHi, repo: $("#wf-r").value, plan: $("#wf-p").value } });
+      dlg.close(); toast("Saved"); wfCard(box, item, ctx, nb);
+    } }]));
+  // the brief, its grid and its steps
+  const sb = $('[data-sec="brief"]', box);
+  const putBrief = (data, extra = {}) => api(`/briefs/${id}`, { method: "PUT", body: { data, kind: B.kind, squads: B.squads, repo_hint: $("[data-wf-repo]", sb).value, ...extra } });
+  $("[data-wf-bsave]", sb).onclick = (e) => busy(e.currentTarget, async () => {
+    const cs = $("[data-wf-comps]", sb).value.replace(/\s+(?=N\d)/gi, "").split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
+    await putBrief({ ...b.data, competencies: [...new Set(cs)] });
+    const gt = $("[data-wf-gridtext]", sb).value, stt = $("[data-wf-stepstext]", sb).value;
+    if (gt.trim() && gt !== B.gridText) await api(`/briefs/${id}/grid`, { method: "PUT", body: { text: gt } });
+    if (stt !== B.stepsText) await api(`/briefs/${id}/steps`, { method: "PUT", body: { text: stt } });
+    await again("Saved");
+  });
+  $("[data-wf-grid]", sb).onclick = (e) => {
+    const btn = e.currentTarget;
+    const go = () => busy(btn, async () => { btn.textContent = "Reading the brief… (up to 1 min)"; await api(`/briefs/${id}/grid`, { method: "POST", body: {} }); await again("New grid made"); });
+    gridN ? confirmDialog("Replace the grid?", "Your changes to this grid are lost.", "Make it again", go) : go();
+  };
+  $("[data-wf-steps]", sb).onclick = (e) => {
+    const btn = e.currentTarget;
+    const go = () => busy(btn, async () => { const r = await api(`/briefs/${id}/steps`, { method: "POST", body: {} }); await again(r.steps.length ? "Steps proposed: check them" : "No steps found in the brief: write them below"); });
+    B.steps.length ? confirmDialog("Replace the steps?", "The steps are written again from the brief.", "Replace", go) : go();
+  };
+  $("[data-wf-file]", sb).onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!/\.html?$/i.test(f.name) && f.type !== "text/html") { toast("Choose the page saved as .html.", true); return; }
+    const run = async () => {
+      await loadRef();
+      const s = simplonParse(await f.text(), REF.referential);
+      const r = await api("/briefs/import", { method: "POST", body: { ...s, preview: true } });
+      toast("Brief read: making the grid…");
+      await putBrief({ ...r.data, title: b.data.title, modalities: { ...r.data.modalities, start: md.start, due: md.due, ...(md.time ? { time: md.time } : {}) } });
+      await api(`/briefs/${id}/grid`, { method: "POST", body: {} }).catch((err) => toast(err.message, true));
+      if (!B.steps.length) await api(`/briefs/${id}/steps`, { method: "POST", body: {} }).catch(() => {});
+      await again("Brief imported, grid made");
+    };
+    (b.data.context || (b.data.groups || []).length) ? confirmDialog("Replace the brief?", "A new grid is made from the new page.", "Replace", run) : run().catch((err) => toast(err.message, true));
+  };
+  // type & squads: the class's squads load when the section opens
+  const sk = $('[data-sec="type"]', box);
+  const squads = JSON.parse(JSON.stringify(B.squads || []));
+  let board = null;
+  const mountBoard = () => {
+    if (board) return;
+    board = true;
+    api("/squads").then((d) => {
+      const sel = $("[data-wf-from]", sk);
+      sel.innerHTML = d.sets.length ? d.sets.map((x) => `<option value="${x.id}" ${x.active ? "selected" : ""}>${esc(x.name)}${x.active ? " · current" : ""} (${x.squads.length} squads)</option>`).join("") : `<option value="">No class squads yet (Teams & squads)</option>`;
+      board = squadBoard($("[data-wf-board]", sk), d.students, squads, () => {});
+      $("[data-wf-load]", sk).onclick = () => {
+        const set = d.sets.find((x) => String(x.id) === sel.value);
+        if (!set) { location.hash = "#/teams"; return; }
+        squads.splice(0, squads.length, ...set.squads.map((x) => ({ ...x, members: [...x.members] })));
+        board.redraw();
+      };
+      if (!squads.length && d.sets.length && segVal(sk, "wfk" + id) === "squad") $("[data-wf-load]", sk).click();
+    }).catch((err) => toast(err.message, true));
+  };
+  wireSeg(sk, "wfk" + id, (v) => { $("[data-wf-sqbox]", sk).hidden = v !== "squad"; if (v === "squad") mountBoard(); });
+  sk.addEventListener("toggle", () => { if (sk.open && sq) mountBoard(); });
+  $("[data-wf-sqsave]", sk).onclick = (e) => busy(e.currentTarget, async () => {
+    const kind = segVal(sk, "wfk" + id), keep = squads.filter((s) => s.members.length);
+    if (kind === "squad" && !keep.length) throw new Error("Make or load the squads first.");
+    await api(`/briefs/${id}`, { method: "PUT", body: { kind, squads: kind === "squad" ? keep : [], repo_hint: B.repo_hint } });
+    await again("Saved");
+  });
+  // dates & sprint
+  const sd = $('[data-sec="dates"]', box);
+  wSprintField(sd, b.sprint ?? null, "[data-wf-d]", b.week);
+  $("[data-wf-dsave]", sd).onclick = (e) => busy(e.currentTarget, async () => {
+    const start = $("[data-wf-s]", sd).value, due = $("[data-wf-d]", sd).value;
+    if (!due) throw new Error("Choose the due date.");
+    if (start && start > due) throw new Error("The start date must be before the due date.");
+    await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("[data-wf-t]", sd).value, ...($(".w-sp", sd) ? { sprint: $(".w-sp", sd).value } : {}), announce: false } });
+    await again("Saved");
+  });
+  $("[data-wf-del]", box).onclick = () => confirmDialog(`Delete “${b.data.title}”?`, "Its reminders stop. Hand-ins and draft debriefs go; finalized debriefs stay.", "Delete",
+    async () => { await api(`/briefs/${id}`, { method: "DELETE" }); box.remove(); toast("Deleted"); }, true);
 }
 
 // one GitHub page (the Watcher's view of it); old Watcher links lead there
