@@ -643,11 +643,10 @@ async function briefGridTab(root) {
       <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="gr-save">Save the grid</button></p>
       <details class="small"><summary>Automatic checks you can link</summary><div id="gr-ids" class="muted">Loading…</div></details>
     </section></div>
-    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Steps <span class="muted">parts to validate at given dates</span></h2><button class="btn small" id="st-ai">✨ Find them in the brief</button></div>
+    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Steps</h2><button class="btn small" id="st-ai">✨ Find them</button></div>
       ${B.steps?.length ? `<ol class="grid-items">${B.steps.map((s) => `<li><b>${esc(s.name)}</b> · ${fmtDateTime(s.due)}${s.expected ? ` · ${esc(s.expected)}` : ""}</li>`).join("")}</ol>`
-        : `<p class="empty">No steps. Lines like « Partie 1, fin du jour 1 : … » become steps when you publish the brief.</p>`}
-      <textarea id="st-t" class="code" style="min-height:110px" spellcheck="false" placeholder="Partie 1 | 2026-10-05 23:59 | Maquette et backlog">${esc(B.stepsText || "")}</textarea>
-      <p class="muted small">One line: name | YYYY-MM-DD HH:MM (UTC) | what is expected. Empty = no steps.</p>
+        : `<p class="empty">No steps.</p>`}
+      <textarea id="st-t" class="code" style="min-height:110px" spellcheck="false" placeholder="Partie 1 | 2026-10-05 23:59 | expected">${esc(B.stepsText || "")}</textarea>
       <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="st-save">Save the steps</button></p>
     </section>`;
   $("#st-ai").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/steps`, { method: "POST", body: {} }); toast(BR.B.steps.length ? `${BR.B.steps.length} step(s) found` : "No steps in this brief"); renderBrief(); });
@@ -838,15 +837,15 @@ function renderSteps(final) {
   if (!box) return;
   const { R, bid, who } = DB;
   const recs = R.stepRecs || {};
-  box.innerHTML = `<h2>Steps <span class="muted small">${R.review ? "they go into the comment" : "follow the project"}</span></h2>
+  box.innerHTML = `<h2>Steps</h2>
     <div class="db-rows">${R.steps.map((s) => { const r = recs[s.n] || {}, p = r.prop;
       return `<div class="db-step" data-step="${s.n}">
         <div><b>${esc(s.name)}</b> <span class="muted small">· due ${fmtDateTime(s.due)}</span>${s.expected ? `<div class="small muted">${esc(s.expected)}</div>` : ""}</div>
-        <p class="small" style="margin:6px 0">${p ? `<b>Proposed: ${esc(STEP_LBL[p.statut] || p.statut)}</b>${p.raison ? ` · ${esc(p.raison)}` : ""}${p.before != null ? ` <span class="muted">· ${p.before} commit(s) before the date, ${p.after} after</span>` : ""}` : `<span class="muted">No proposal yet.</span>`}</p>
+        <p class="small" style="margin:6px 0">${p ? `<b>Proposed: ${esc(STEP_LBL[p.statut] || p.statut)}</b>${p.raison ? ` · ${esc(p.raison)}` : ""}${p.before != null ? ` <span class="muted">· ${p.before} commits before, ${p.after} after</span>` : ""}` : ""}</p>
         ${final ? `<b>${esc(STEP_LBL[r.final] || "—")}</b>${r.note ? ` · ${esc(r.note)}` : ""}`
           : `<div class="toolbar" style="margin:0">${segHtml(`st${s.n}`, [["a_temps", "On time"], ["en_retard", "Late"], ["non_fait", "Not validated"]], r.final || "")}
-            <button class="btn small" data-stcheck="${s.n}">${p ? "↻ Propose again" : "Propose validation"}</button></div>
-          <input type="text" data-stnote="${s.n}" value="${esc(r.note || "")}" placeholder="Note (optional), added to the comment" style="width:100%;margin-top:8px">`}
+            <button class="btn small" data-stcheck="${s.n}">${p ? "↻ Propose" : "Propose"}</button></div>
+          <input type="text" data-stnote="${s.n}" value="${esc(r.note || "")}" placeholder="Note" style="width:100%;margin-top:8px">`}
       </div>`; }).join("")}</div>`;
   if (final) return;
   const save = async (n) => {
