@@ -1692,126 +1692,6 @@ async function viewCompetencies(kind = "all") {
   });
 }
 
-// =========================================================== sprints (the sprint review)
-// Each student in a sprint of the programme: competencies reached, level (proposed, then yours), decision, note;
-// the count per level for the administration's report, and one comment for the whole sprint.
-const SP_LVL = [["excellent", "Excellent"], ["bon", "Bon"], ["moyen", "Moyen"], ["faible", "Faible"], ["critique", "Critique"]];
-const SP_LVL_NAME = Object.fromEntries(SP_LVL);
-let SPR = null;
-
-async function viewSprints(arg) {
-  const O = await api("/sprints");
-  if (!O.sprints.length) {
-    view.innerHTML = `<div class="page-head"><div><h1>Sprints</h1></div></div><section class="panel"><p class="empty">The programme has no sprints. Settings → Programme.</p></section>`;
-    return;
-  }
-  const n = arg === "year" ? null : Number(arg) || O.current || O.sprints[0].n;
-  view.innerHTML = `<div class="page-head"><div><h1>Sprints</h1><p class="sub">Levels and decisions for the sprint review.</p></div>
-      <div class="toolbar" style="margin:0"><select id="sp-sel">${O.sprints.map((s) => `<option value="${s.n}" ${s.n === n ? "selected" : ""}>Sprint ${s.n} · ${esc(s.title)}</option>`).join("")}
-        <option value="year" ${n === null ? "selected" : ""}>All sprints (the year)</option></select></div></div>
-    <div id="sp-body"></div>`;
-  $("#sp-sel").onchange = (e) => { location.hash = `#/sprints/${e.target.value}`; };
-  if (n === null) return sprintYear(O);
-  SPR = { D: await api(`/sprints/${n}`), n, filter: "all", sort: "name" };
-  renderSprint();
-}
-
-function spCell(c) {
-  if (!c || c.r === "none") return `<td class="ctr muted">—</td>`;
-  const cls = c.r === "ok" ? "ok" : c.r === "low" ? "warn" : "bad";
-  return `<td class="ctr"><span class="lvl ${cls}">${c.r === "ok" ? "✓" : "✗"} N${c.level || 1}</span></td>`;
-}
-
-function renderSprint() {
-  const { D } = SPR;
-  const codes = D.sprint.codes, tech = codes.filter((c) => !/^T/.test(c)), soft = codes.filter((c) => /^T/.test(c));
-  const lvlOf = (r) => r.level || r.plevel;
-  const FILTERS = [["all", "Everyone"], ["ko", "Not validated"], ["weak", "Faible / Critique"], ["open", "No decision"]];
-  const keep = { all: () => true, ko: (r) => (r.decision || r.prop) === "non_valide", weak: (r) => ["faible", "critique"].includes(lvlOf(r)), open: (r) => !r.decision };
-  const rank = (r) => { const i = SP_LVL.findIndex(([v]) => v === lvlOf(r)); return i < 0 ? 9 : i; };
-  const SORT = { name: (a, b) => a.name.localeCompare(b.name), level: (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name), most: (a, b) => b.ok - a.ok || a.name.localeCompare(b.name) };
-  const rows = D.rows.filter(keep[SPR.filter]).sort(SORT[SPR.sort]);
-  const ctCell = (r) => {
-    const cs = soft.map((c) => r.cells[c]), ok = cs.filter((c) => c.r === "ok").length, seen = cs.filter((c) => c.r !== "none").length;
-    const cls = ok === cs.length ? "ok" : cs.some((c) => c.r === "ko") ? "bad" : "warn";
-    return `<td class="ctr" title="${esc(soft.map((c) => cText(c) + " " + (r.cells[c].r === "ok" ? "✓" : r.cells[c].r === "none" ? "—" : "✗")).join("\n"))}">${seen ? `<span class="lvl ${cls}">${ok}/${cs.length}</span>` : `<span class="muted">—</span>`}</td>`;
-  };
-  const dec = (r) => ["valide", "non_valide"].map((v) => {
-    const on = r.decision === v, prop = !r.decision && r.prop === v;
-    return `<button type="button" class="sp-dec ${v === "valide" ? "ok" : "ko"} ${on ? "on" : ""} ${prop ? "prop" : ""}" data-dec="${v}" title="${v === "valide" ? "Validated" : "Not validated"}${prop ? " (proposed)" : ""}">${v === "valide" ? "✓" : "✗"}</button>`;
-  }).join("");
-  const sum = SP_LVL.map(([v, l]) => { const list = D.rows.filter((r) => lvlOf(r) === v); return { v, l, list }; });
-  view.querySelector("#sp-body").innerHTML = `
-    <section class="panel"><div class="panel-head"><h2>Sprint ${D.sprint.n} · ${esc(D.sprint.title)}</h2><span class="muted small">${dayLabelOf(D.sprint.start)} → ${dayLabelOf(D.sprint.end)}</span></div>
-      <p class="small" style="margin:0"><b>Briefs:</b> ${D.briefs.length ? D.briefs.map((b) => `<a href="#/brief/${b.id}">${esc(b.title)}</a>`).join(" · ") : `<span class="muted">none yet</span>`}</p>
-      <p class="small"><b>Competencies:</b> ${codes.map((c) => compChip(c)).join(" ") || `<span class="muted">none</span>`}</p>
-      <div class="toolbar" style="margin:0">${segHtml("spf", FILTERS, SPR.filter)}
-        <select id="sp-sort"><option value="name">Name</option><option value="level" ${SPR.sort === "level" ? "selected" : ""}>Level</option><option value="most" ${SPR.sort === "most" ? "selected" : ""}>Most validated</option></select></div>
-    </section>
-    <section class="panel"><div class="table-wrap"><table class="grid-table sp-table">
-      <thead><tr><th>Student</th>${tech.map((c) => `<th class="ctr" title="${esc(D.names[parseC(c).code] || "")}">${esc(cText(c))}</th>`).join("")}${soft.length ? `<th class="ctr" title="${esc(soft.map(cText).join(", "))}">CT</th>` : ""}
-        <th class="num">Briefs</th><th class="num">Grid</th><th>Level</th><th>Decision</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr data-sid="${esc(r.discord_id)}">
-        <td>${avatar(r.name, r.discord_id)} <a href="#/student/${esc(r.discord_id)}">${esc(r.name)}</a></td>
-        ${tech.map((c) => spCell(r.cells[c])).join("")}${soft.length ? ctCell(r) : ""}
-        <td class="num">${r.evald}/${D.briefs.length}</td><td class="num">${r.pct == null ? "—" : r.pct + "%"}</td>
-        <td><select data-lvl title="${esc(r.plevel ? `Proposed: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "")}"><option value="">${r.plevel ? "Proposed: " + SP_LVL_NAME[r.plevel] : "—"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>
-        <td class="sp-decs">${dec(r)}<button type="button" class="sp-dec note ${r.note ? "has" : ""}" data-note title="${esc(r.note || "Note")}">📝</button>
-          <input type="text" data-notein value="${esc(r.note)}" placeholder="Note" ${r.note ? "" : "hidden"}></td></tr>`).join("") || `<tr><td colspan="${tech.length + 6}" class="empty">No students.</td></tr>`}</tbody>
-    </table></div></section>
-    <div class="grid cols-2-even">
-      <section class="panel"><div class="panel-head"><h2>Levels</h2><span class="toolbar" style="margin:0"><button class="btn small primary" id="sp-prop">✨ Propose levels</button><button class="btn small" id="sp-copy">Copy</button></span></div>
-        <div class="sp-sum">${sum.map((x) => `<div class="sp-box"><b>${x.list.length}</b><span class="small muted">${x.l}</span>${(x.v === "faible" || x.v === "critique") && x.list.length ? `<span class="small">${x.list.map((r) => esc(r.name)).join(", ")}</span>` : ""}</div>`).join("")}</div></section>
-      <section class="panel"><div class="panel-head"><h2>Sprint comment</h2><span class="toolbar" style="margin:0"><button class="btn small primary" id="sp-gen">✨ ${D.comment ? "Write again" : "Write it"}</button><button class="btn small" id="sp-save">Save</button><button class="btn small" id="sp-ccopy">Copy</button></span></div>
-        <textarea id="sp-c" style="min-height:220px">${esc(D.comment)}</textarea></section>
-    </div>`;
-  wireSprint();
-}
-
-function wireSprint() {
-  const { D, n } = SPR;
-  wireSeg(view, "spf", (v) => { SPR.filter = v; renderSprint(); });
-  $("#sp-sort").onchange = (e) => { SPR.sort = e.target.value; renderSprint(); };
-  const save = async (sid, fields) => {
-    await api(`/sprints/${n}/decide`, { method: "POST", body: { discord_id: sid, ...fields } });
-    Object.assign(D.rows.find((r) => r.discord_id === sid), fields);
-  };
-  $$("[data-sid]").forEach((tr) => {
-    const sid = tr.dataset.sid, r = D.rows.find((x) => x.discord_id === sid);
-    $("[data-lvl]", tr).onchange = (e) => save(sid, { level: e.target.value }).then(() => renderSprint()).catch((x) => toast(x.message, true));
-    $$("[data-dec]", tr).forEach((b) => b.onclick = () => save(sid, { decision: r.decision === b.dataset.dec ? "" : b.dataset.dec }).then(() => renderSprint()).catch((x) => toast(x.message, true)));
-    $("[data-note]", tr).onclick = () => { const i = $("[data-notein]", tr); i.hidden = !i.hidden; if (!i.hidden) i.focus(); };
-    $("[data-notein]", tr).onchange = (e) => save(sid, { note: e.target.value.trim() }).then(() => toast("Note saved")).catch((x) => toast(x.message, true));
-  });
-  $("#sp-prop").onclick = (e) => busy(e.currentTarget, async () => {
-    const R = await api(`/sprints/${n}/levels`, { method: "POST", body: {} });
-    SPR.D = R; toast(R.by === "ai" ? "Levels proposed" : "Levels computed (no AI)"); renderSprint();
-  });
-  $("#sp-copy").onclick = () => {
-    const lvl = (r) => r.level || r.plevel;
-    const counted = D.rows.filter(lvl);
-    copyText([`Sprint ${D.sprint.n} : ${counted.length} apprenant${counted.length === 1 ? "" : "s"}`,
-      ...SP_LVL.map(([v, l]) => { const list = D.rows.filter((r) => lvl(r) === v); return `Niveau ${l} : ${list.length}${(v === "faible" || v === "critique") && list.length ? ` (${list.map((r) => r.name).join(", ")})` : ""}`; })].join("\n"), "Levels copied");
-  };
-  $("#sp-gen").onclick = (e) => busy(e.currentTarget, async () => {
-    if ($("#sp-c").value.trim() && !confirm("Replace the comment?")) return;
-    toast("⏳ Writing the comment…");
-    const R = await api(`/sprints/${n}/comment`, { method: "POST", body: {} });
-    $("#sp-c").value = D.comment = R.comment;
-  });
-  $("#sp-save").onclick = (e) => busy(e.currentTarget, async () => { const R = await api(`/sprints/${n}/comment`, { method: "PUT", body: { text: $("#sp-c").value } }); D.comment = R.comment; toast("Comment saved"); });
-  $("#sp-ccopy").onclick = () => copyText($("#sp-c").value, "Comment copied");
-}
-
-function sprintYear(O) {
-  view.querySelector("#sp-body").innerHTML = `<section class="panel"><div class="table-wrap"><table class="grid-table sp-table">
-    <thead><tr><th>Student</th>${O.sprints.map((s) => `<th class="ctr"><a href="#/sprints/${s.n}">S${s.n}</a></th>`).join("")}<th class="num">Validated</th></tr></thead>
-    <tbody>${O.year.map((y) => `<tr><td>${avatar(y.name, y.discord_id)} ${esc(y.name)}</td>
-      ${y.per.map((p) => `<td class="ctr">${p.v ? `<span class="lvl ${p.v === "valide" ? "ok" : "bad"}" style="${p.final ? "" : "opacity:.55"}" title="${p.final ? "Your decision" : "Proposed"}${p.level ? " · " + esc(SP_LVL_NAME[p.level] || p.level) : ""}">${p.v === "valide" ? "✓" : "✗"}</span>` : `<span class="muted">—</span>`}</td>`).join("")}
-      <td class="num">${y.per.filter((p) => p.v === "valide").length}/${O.sprints.length}</td></tr>`).join("")}</tbody>
-  </table></div><p class="muted small">Bold = your decision, light = proposed.</p></section>`;
-}
-
 // =========================================================== on the student page
 const SRC_LABEL = (h) => h.source === "brief" ? `<a href="#/brief/${h.ref}">Brief</a>` : h.source === "assessment" ? `<a href="#/assessment/${h.ref}">Assessment</a>` : h.source === "manual" ? "✍️ <b>Teacher's decision</b>" : esc(h.source);
 
@@ -1937,6 +1817,6 @@ function wireLearning(d, sid) {
 }
 
 Object.assign(routes, {
-  briefs: viewBriefs, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies, sprints: viewSprints,
+  briefs: viewBriefs, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies,
   projects: () => { location.hash = "#/briefs"; }, project: () => { location.hash = "#/briefs"; },
 });
