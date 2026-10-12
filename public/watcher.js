@@ -535,6 +535,8 @@ async function quickBrief() {
       src = s;
       if (!$("#qb-name").value.trim()) $("#qb-name").value = r.data.title || "";
       if ((r.data.competencies || []).length) $("#qb-c").value = r.data.competencies.map((c) => cText(c).replace(/\s+/g, "")).join(", ");
+      // "Travail collectif (Squad)": a squad brief
+      if (/squad|collectif|groupe/i.test(r.data.modalities?.mode || "") || /travail collectif|\(squad\)|en squads?\b/i.test(s.text)) $('[data-seg="qbk"] [data-v="squad"]', dlg)?.click();
       const us = (r.data.groups || []).reduce((n, g) => n + (g.stories || []).length, 0);
       pre.innerHTML = `✓ ${esc(r.data.title || f.name)} · ${us ? `${us} user stories` : `${s.text.length.toLocaleString("en")} characters`}${(r.data.competencies || []).length ? "" : ` · <span class="muted">no competency level found: write them below</span>`}`;
     } catch (e) { src = null; pre.innerHTML = `<span style="color:var(--down)">${esc(e.message)}</span>`; }
