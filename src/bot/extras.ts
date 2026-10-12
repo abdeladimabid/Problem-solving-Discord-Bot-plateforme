@@ -10,8 +10,6 @@ import { HandError, cancelHand, handText, myHand, raiseHand } from "../shared/ha
 import { FaqError, ask, draftAnswer, escalate, helped, searchFaq } from "../shared/faq.ts";
 import type { FaqRow } from "../shared/faq.ts";
 import { MAX_ANSWERS, finishInterview, getInterview, interviewReply, openInterview, stars, transcriptOf } from "../shared/interview.ts";
-import { ProjectError, findProject, gradeRepo, linkRepo, openProjects, projectEmbed, resultText } from "../shared/projects.ts";
-import type { RepoRow } from "../shared/projects.ts";
 import { leagueLines, leagueOf, leagueTable, weekStart } from "../shared/league.ts";
 import { certUrl, shareProfile, stopSharing } from "../shared/share.ts";
 import { type Ix, deferReply, json, later, reply, say } from "./ix.ts";
@@ -193,55 +191,13 @@ export function interviewSubmit(ix: Ix, id: number, answer: string) {
 }
 
 // ============================================================ 🐙 projects
-export async function cmdProject(ix: Ix, sub: string, o: Record<string, any>) {
-  const L = ix.L, g = ix.guild;
-  if (sub === "list") {
-    later(ix, async () => {
-      const ps = await openProjects(ix.env, g);
-      if (!ps.length) return { content: t(L, "proj.none") };
-      const mine = await all<RepoRow>(ix.env, "SELECT * FROM project_repos WHERE guild_id = ? AND discord_id = ?", g.id, ix.userId);
-      return {
-        embeds: ps.slice(0, 5).map((p) => {
-          const e = projectEmbed(g, p);
-          const r = mine.find((x) => x.project_id === p.id);
-          return { ...e, fields: [{ name: t(L, "proj.yours"), value: r ? t(L, "proj.status", { repo: r.repo, best: r.best, total: r.total || JSON.parse(p.tests).length, pts: r.points }) + (r.error ? "\n⚠️ " + t(L, r.error, { file: p.entry, repo: r.repo }) : "") : t(L, "proj.not_linked") }] };
-        }),
-      };
-    });
-    return deferReply(true);
-  }
-  const p = await findProject(ix.env, g, o.project ?? null);
-  if (!p) return say(t(L, (await openProjects(ix.env, g)).length ? "proj.which" : "proj.none"));
-  later(ix, async () => {
-    try {
-      let pr: RepoRow | null;
-      if (sub === "submit") pr = await linkRepo(ix.env, g, ix.userId, p, String(o.repo ?? ""));
-      else pr = await one<RepoRow>(ix.env, "SELECT * FROM project_repos WHERE project_id = ? AND discord_id = ?", p.id, ix.userId);
-      if (!pr) return { content: t(L, "proj.link_first") };
-      if (sub === "check" && pr.checked_at && now() - pr.checked_at < 30) return { content: t(L, "proj.wait") };
-      const r = await gradeRepo(ix.env, g, p, pr);
-      const fresh = (await one<RepoRow>(ix.env, "SELECT * FROM project_repos WHERE project_id = ? AND discord_id = ?", p.id, ix.userId))!;
-      return { content: (sub === "submit" ? t(L, "proj.linked", { repo: pr.repo }) + "\n" : "") + resultText(L, p, fresh, r) + (sub === "submit" ? "\n\n" + t(L, "proj.webhook", { url: `${(ix.env.PUBLIC_URL || "").replace(/\/$/, "")}/gh/hook` }) : "") };
-    } catch (e) {
-      if (!(e instanceof ProjectError)) throw e;
-      return { content: t(L, e.message) };
-    }
-  });
-  return deferReply(true);
-}
-
-export async function projectChoices(ix: Ix, cur: string) {
-  return (await openProjects(ix.env, ix.guild)).filter((p) => p.title.toLowerCase().includes(cur)).slice(0, 25).map((p) => ({ name: p.title.slice(0, 100), value: String(p.id) }));
-}
-
-// ============================================================== 🏆 league
 export function cmdLeague(ix: Ix) {
   const L = ix.L;
   later(ix, async () => {
     const lg = leagueOf(ix.guild);
-    const table = await leagueTable(ix.env);
+    const table = await leagueTable(ix.env, undefined, ix.guild);
     if (!lg.on && !table.length) return { content: t(L, "league.off") };
-    const last = await leagueTable(ix.env, weekStart(now()) - 7 * 86400);
+    const last = await leagueTable(ix.env, weekStart(now()) - 7 * 86400, ix.guild);
     return {
       embeds: [{
         title: t(L, "league.title"),

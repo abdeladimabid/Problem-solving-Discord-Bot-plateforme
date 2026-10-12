@@ -11,7 +11,7 @@ import { analyzeLog, fingerprint } from "../src/shared/integrity.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const PORT = Number(process.env.PORT || 8787);
-const { env } = await makeEnv({ DEV_NO_AUTH: "true" });
+const { env } = await makeEnv({ DEV_NO_AUTH: "true", PUBLIC_URL: "http://localhost:8787" });
 const db = (env.DB as any).raw;
 const now = Math.floor(Date.now() / 1000);
 const DAY = 86400;
@@ -229,14 +229,98 @@ env.ASSETS = {
     db.prepare("INSERT INTO interviews (guild_id, discord_id, challenge_id, attempt_id, transcript, stage, status, scores, created_at, finished_at) VALUES (?, ?, ?, ?, ?, 3, 'done', ?, ?, ?)")
       .run(G, uid, w.id, Number(a.lastInsertRowid), JSON.stringify([{ who: "ai", text: "Hi! Tell me how you would solve it." }, { who: "me", text: "I keep the best sum ending at each position." }, { who: "ai", text: "What if every number is negative?" }, { who: "me", text: "I start from the first element, so it still works. O(n) time, O(1) memory." }]), JSON.stringify(sc), now - (i + 1) * DAY, now - (i + 1) * DAY + 1600);
   }
-  const pj = db.prepare("INSERT INTO projects (guild_id, title, description, lang, entry, tests, points, due_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(G, "Grade calculator", "Read n grades and print the average (2 decimals), the best grade and the number of grades ≥ 10.", "python", "main.py", JSON.stringify([{ input: "3\n12 8 15\n", output: "11.67 15 2" }, { input: "1\n10\n", output: "10.00 10 1" }, { input: "4\n0 0 0 0\n", output: "0.00 0 0" }]), 60, now + 6 * DAY, now - 3 * DAY);
-  const pid = Number(pj.lastInsertRowid);
-  const rp = db.prepare("INSERT INTO project_repos (project_id, guild_id, discord_id, repo, passed, total, best, points, result, error, runs, checked_at, created_at) VALUES (?, ?, ?, ?, ?, 3, ?, ?, ?, ?, ?, ?, ?)");
-  rp.run(pid, G, "100", "yasmine-dev/grades", 3, 3, 60, JSON.stringify({ verdict: "accepted", passed: 3, total: 3 }), null, 4, now - 900, now - 2 * DAY);
-  rp.run(pid, G, "101", "omar99/tp-grades", 2, 2, 40, JSON.stringify({ verdict: "wrong", passed: 2, total: 3 }), null, 2, now - 1800, now - DAY);
-  rp.run(pid, G, "104", "sara-codes/grades", 0, 0, 0, null, "proj.err_missing", 1, now - 3600, now - 3600);
-  db.prepare("INSERT INTO projects (guild_id, title, lang, entry, tests, points, status, created_at) VALUES (?, 'Palindromes (PHP)', 'php', 'index.php', ?, 40, 'closed', ?)").run(G, JSON.stringify([{ input: "kayak\n", output: "YES" }]), now - 20 * DAY);
+  // ---- learning: GitHub links and activity, briefs (hand-ins, debriefs), competencies, an assessment
+  const ghNames = ["yasmine-dev", "omar99", "lina-b", "mehdi-codes", "sara-codes", "adam-r", "imane-w", "rayan-x", "nora-k", "ilyas-m", "salma-z"];
+  ghNames.forEach((login, i) => db.prepare("UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_linked_at = ? WHERE guild_id = ? AND discord_id = ?").run(String(9000 + i), login, String(70000 + i), now - 20 * DAY, G, String(100 + i)));
+  const act = db.prepare("INSERT INTO gh_activity (guild_id, discord_id, delivery, day, t, repo, commits, real, tiny, flagged, bad, lines, prs, other) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  let dl = 0;
+  ghNames.forEach((login, i) => {
+    for (let d = 0; d < 14; d++) {
+      if (i === 9 || (i === 4 && d < 5) || rnd() < 0.3 + (i % 3) * 0.1) continue;
+      const t = now - d * DAY - Math.floor(rnd() * 20000), c = 1 + Math.floor(rnd() * 5);
+      act.run(G, String(100 + i), "d" + dl++, new Date(t * 1000).toISOString().slice(0, 10), t, `${login}/${d > 6 ? "hammam-andalous" : "tailwind-landing"}`, c, Math.max(0, c - (rnd() < 0.2 ? 1 : 0)), rnd() < 0.2 ? 1 : 0, i === 7 && d === 2 ? 1 : 0, rnd() < 0.15 ? 1 : 0, 20 + Math.floor(rnd() * 300), rnd() < 0.15 ? 1 : 0, 0);
+    }
+  });
+  const { saveBrief } = await import("../src/shared/briefs.ts");
+  const { finalizeReview } = await import("../src/shared/learning.ts");
+  const { buildComment } = await import("../src/shared/review/engine.ts");
+  const gRow = db.prepare("SELECT * FROM guilds WHERE id = ?").get(G);
+  const stories = (role: string, xs: string[]) => ({ title: role, emoji: role === "Visiteur" ? "👤" : "🛠️", stories: xs });
+  const b1 = await saveBrief(env as any, gRow, null, { program: "builtin:dwwm-2026", week: 1, status: "assigned", source: "ai", data: {
+    title: "Hammam Al Andalous : site vitrine multi-pages", summary: "Intégrer le site vitrine d’un hammam traditionnel de Safi à partir de sa maquette Figma.", tags: ["HTML", "CSS", "Figma", "Git"],
+    context: "Le hammam Al Andalous, à Safi, veut un site simple pour présenter ses soins, ses horaires et permettre de le contacter.",
+    groups: [stories("Visiteur", ["En tant que visiteur, je vais consulter la page d’accueil afin de découvrir le hammam.", "En tant que visiteur, je vais voir la liste des soins et leurs prix afin de choisir.", "En tant que visiteur, je vais remplir le formulaire de contact afin de réserver.", "En tant que visiteur, je vais trouver le plan d’accès afin de venir sur place."])],
+    bonus: ["Ajouter une animation CSS sur les cartes de soins."], modalities: { days: 5, mode: "individuel", start: "2026-10-05", due: "2026-10-09", text: "" },
+    evaluation: { minutes: 15, parts: [{ minutes: 5, label: "Démonstration" }, { minutes: 10, label: "Mise en situation" }] },
+    deliverables: ["Lien du dépôt GitHub", "Lien GitHub Pages", "Lien de la maquette Figma"], criteria: ["Le site respecte la maquette", "Le HTML est sémantique et valide (W3C)", "Le site est responsive (mobile, tablette, desktop)"],
+    situation: { title: "Intégrateur web junior", need: "Le client attend un site en ligne avant l’ouverture de la saison." }, competencies: ["C1N1", "C2N1", "C3N1", "T1N1", "T5N1"], resources: ["https://developer.mozilla.org/fr/docs/Web/HTML"] } });
+  db.prepare("UPDATE briefs SET grid = ? WHERE id = ?").run(JSON.stringify({ items: [
+    { type: "story", texte: "Page d’accueil qui présente le hammam", verif: ["pages"] }, { type: "story", texte: "Page des soins avec les prix" }, { type: "story", texte: "Formulaire de contact", verif: ["form"] },
+    { type: "story", texte: "Plan d’accès", verif: ["map"] }, { type: "technique", texte: "HTML sémantique", verif: ["semantic"] }, { type: "critere", texte: "Responsive", verif: ["responsive"] },
+    { type: "livrable", texte: "Site en ligne sur GitHub Pages", verif: ["pages_site"] }, { type: "bonus", texte: "Animation CSS", verif: ["anim"] }], tech: "HTML, CSS", by: "ai", at: Date.now() }), b1);
+  const handIn = db.prepare("INSERT INTO brief_handins (brief_id, guild_id, who, repo, plan, at, by) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  [0, 1, 2, 3, 5, 6, 8].forEach((i) => handIn.run(b1, G, `u:${100 + i}`, `${ghNames[i]}/hammam-andalous`, i === 0 ? "https://trello.com/b/AbC123xy/hammam" : null, now - 2 * DAY - i * 3000, "student"));
+  const rec = (first: string, good: boolean) => {
+    const checks = [
+      { id: "pages", label: "Site multipage", ok: true, detail: "4 page(s) : index.html, soins.html, contact.html, acces.html" },
+      { id: "semantic", label: "Balises sémantiques", ok: good, detail: good ? "header, nav, main, footer" : "seulement des <div>" },
+      { id: "form", label: "Formulaire", ok: true, detail: "contact.html : 4 champs, bouton envoyer" },
+      { id: "map", label: "Plan d’accès (carte)", ok: good, detail: good ? "iframe Google Maps dans acces.html" : "aucune carte trouvée" },
+      { id: "responsive", label: "Responsive", ok: good, detail: good ? "3 media queries, viewport" : "pas de media query" },
+      { id: "pages_site", label: "Site en ligne (GitHub Pages…)", ok: true, detail: "https://" + first.toLowerCase() + ".github.io/hammam-andalous" },
+      { id: "anim", label: "Animation ou transition CSS", ok: false, detail: "aucune animation" },
+      { id: "docs", label: "README / documentation", info: true, detail: "README de 3 lignes" }];
+    const ex = [
+      { type: "story", texte: "Page d’accueil qui présente le hammam", statut: "fait", preuve: "index.html : hero, présentation, horaires", check: "pages" },
+      { type: "story", texte: "Page des soins avec les prix", statut: good ? "fait" : "partiel", preuve: good ? "soins.html : 6 cartes avec prix" : "soins.html : prix manquants" },
+      { type: "story", texte: "Formulaire de contact", statut: "fait", preuve: "contact.html", check: "form" },
+      { type: "story", texte: "Plan d’accès", statut: good ? "fait" : "absent", preuve: good ? "acces.html : carte" : "page vide", check: "map" },
+      { type: "technique", texte: "HTML sémantique", statut: good ? "fait" : "absent", preuve: "", check: "semantic" },
+      { type: "critere", texte: "Responsive", statut: good ? "fait" : "absent", preuve: "", check: "responsive" },
+      { type: "livrable", texte: "Site en ligne sur GitHub Pages", statut: "fait", preuve: "", check: "pages_site" },
+      { type: "bonus", texte: "Animation CSS", statut: "absent", preuve: "", check: "anim" }];
+    const r: any = { at: Date.now() - 3600000, first, model: "openai/gpt-oss-120b", brief: "Hammam Al Andalous", repos: [first.toLowerCase() + "/hammam-andalous"], count: good ? 23 : 9, files: true, checks, skills: ["C1", "C2", "C3", "T1", "T5"],
+      result: { resume: good ? "Un site complet et fidèle à la maquette, bien structuré. Le bonus n’est pas fait." : "Les pages principales existent mais le site n’est pas responsive et le HTML n’est pas sémantique.",
+        commits: [{ sha: "a1b2c3d", repo: "x", msg: "feat: page soins", ok: true, note: "message clair" }, { sha: "e4f5a6b", repo: "x", msg: "update", ok: false, note: "message trop vague" }],
+        forts: good ? ["Structure claire des pages", "Commits réguliers"] : ["Formulaire complet"], ameliorer: good ? ["Ajouter des transitions"] : ["Media queries", "Balises sémantiques", "Messages de commit"],
+        exigences: ex, competences: [{ code: "C1", avis: "validable", raison: "Dépôt Git propre, site déployé." }, { code: "C2", avis: good ? "validable" : "a_verifier", raison: "Maquette Figma liée dans le README." },
+          { code: "C3", avis: good ? "validable" : "non_visible", raison: good ? "Intégration fidèle et responsive." : "Pas responsive, HTML non sémantique." }, { code: "T1", avis: "a_verifier", raison: "Trello présent." }, { code: "T5", avis: "a_verifier", raison: "À voir à l’oral." }], feedback: "" },
+      challenge: good ? { titre: "Ajouter un soin dans la grille", consigne: "Ajoute une carte « Gommage au savon noir » dans soins.html, avec le même style que les autres, et vérifie qu’elle passe à la ligne sur mobile.", duree: "10 minutes", niveau: 1, observer: ["La carte reprend les classes existantes", "Le rendu mobile reste correct"], item: 1, point: "Page des soins avec les prix", done: true, at: Date.now(), result: "valide", note: "" } : null };
+    r.result.feedback = buildComment(first, r, undefined);
+    return r;
+  };
+  const putRev = db.prepare("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)");
+  putRev.run(b1, G, "u:100", JSON.stringify(rec("Yasmine", true)), now);
+  putRev.run(b1, G, "u:101", JSON.stringify(rec("Omar", false)), now);
+  putRev.run(b1, G, "u:102", JSON.stringify(rec("Lina", true)), now);
+  for (const uid of ["100", "102"]) await finalizeReview(env as any, gRow, { id: b1, title: "Hammam Al Andalous", competencies: "C1N1,C2N1,C3N1,T1N1,T5N1" }, `u:${uid}`, { notify: false });
+  // more results so the class view has something to show
+  const cr = db.prepare("INSERT OR IGNORE INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, ?, ?, ?, 'manual', 0, 'Diagnostic de rentrée', ?)");
+  for (let i = 3; i < 12; i++) for (const c of ["C1", "C2", "C3", "T1", "T5"]) if (rnd() < 0.7) cr.run(G, String(100 + i), c, 1, rnd() < 0.7 ? 1 : 0, now - 10 * DAY);
+  const b2 = await saveBrief(env as any, gRow, null, { program: "builtin:dwwm-2026", week: 2, status: "assigned", source: "ai", data: {
+    title: "Atlas Trek : landing page responsive avec Tailwind", summary: "Une landing page moderne et accessible pour une agence de randonnée dans l’Atlas.", tags: ["HTML", "Tailwind CSS", "Figma"],
+    context: "Atlas Trek organise des randonnées guidées. Elle veut une page qui donne envie de réserver.", groups: [stories("Visiteur", ["En tant que visiteur, je vais voir les circuits afin de choisir une randonnée.", "En tant que visiteur, je vais lire les avis afin d’avoir confiance."])],
+    bonus: [], modalities: { days: 5, mode: "squad", start: "2026-10-12", due: "2026-10-16", text: "" }, evaluation: { minutes: 20, parts: [] }, deliverables: ["Lien du dépôt GitHub"], criteria: ["Accessible (contrastes, alt)"],
+    situation: { title: "", need: "" }, competencies: ["C1N2", "C2N2", "C3N2", "T2N1"], resources: [] } });
+  db.prepare("UPDATE briefs SET kind = 'squad', squads = ? WHERE id = ?").run(JSON.stringify([
+    { id: "a1b2c3", name: "Toubkal", members: ["100", "101", "102", "103"], sm: "100" }, { id: "d4e5f6", name: "Ifrane", members: ["104", "105", "106", "107"], sm: "105" }, { id: "0a0b0c", name: "Ouzoud", members: ["108", "109", "110", "111"], sm: "108" }]), b2);
+  await saveBrief(env as any, gRow, null, { program: "builtin:dwwm-2026", week: 3, source: "ai", data: { title: "Quiz Darija : application JavaScript interactive", summary: "Un quiz pour apprendre la darija, en JavaScript natif.", competencies: ["C3N1", "C4N1"], modalities: { days: 5, mode: "individuel", start: "2026-10-19", due: "2026-10-23" } } });
+  // an assessment in progress
+  const qs = [
+    { id: "q1aa", type: "mcq", prompt: "Quelle propriété aligne les éléments d’un conteneur flex sur l’axe principal ?", choices: ["align-items", "justify-content", "flex-direction", "place-self"], answer: [1], points: 1, skills: ["css"], comp: "C3", level: 1 },
+    { id: "q2bb", type: "mcq", prompt: "Quelles balises sont sémantiques ?", choices: ["<div>", "<nav>", "<span>", "<article>"], answer: [1, 3], points: 1, skills: ["html"], comp: "C3", level: 1 },
+    { id: "q3cc", type: "code", prompt: "Écris le CSS qui affiche 3 cartes côte à côte sur desktop et l’une sous l’autre sous 768px.", lang: "css", expected: ".cards{display:flex;gap:1rem} @media (max-width:768px){.cards{flex-direction:column}}", points: 3, skills: ["css"], comp: "C3", level: 1 },
+    { id: "q4dd", type: "explain", prompt: "Explique la différence entre une marge (margin) et un padding.", expected: "margin = espace extérieur à la bordure ; padding = espace intérieur entre la bordure et le contenu.", points: 2, skills: ["css"], comp: "C3", level: 1 }];
+  const aid = Number(db.prepare("INSERT INTO assessments (guild_id, title, brief_id, status, settings, questions, created_at, opened_at, closes_at) VALUES (?, 'Flexbox et responsive', ?, 'open', ?, ?, ?, ?, ?)")
+    .run(G, b1, JSON.stringify({ minutes: 40, lang: "fr", codeLang: "css", showResults: true, points: 20, passAt: 60 }), JSON.stringify(qs), now - DAY, now - 3 * 3600, now + 3 * DAY).lastInsertRowid);
+  const tk = db.prepare("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, answers, pos, started_at, deadline, submitted_at, locked_at, lock_reason, events, grades, score, summary, invited_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const ans = { q1aa: [1], q2bb: [1, 3], q3cc: ".cards { display: flex; gap: 16px; }\n@media (max-width: 768px) { .cards { flex-direction: column; } }", q4dd: "Le margin c’est dehors de la bordure, le padding dedans." };
+  const grades = { q1aa: { verdict: "correct", score: 100, comment: "" }, q2bb: { verdict: "correct", score: 100, comment: "" }, q3cc: { verdict: "correct", score: 90, comment: "Bonne utilisation de la media query.", right: "La logique est juste : flex sur desktop, colonne sous 768px.", wrong: "Un point-virgule oublié.", marks: [{ line: 2, text: "flex-direction: column", issue: "Il manque le « ; » (sans conséquence ici).", major: false }] }, q4dd: { verdict: "partial", score: 60, comment: "Juste, mais précise ce qui est entre quoi." } };
+  tk.run(aid, G, "100", "graded", 11, JSON.stringify(ans), 3, now - 7000, now - 4600, now - 5200, null, null, JSON.stringify([[now - 7000, "start"], [now - 5200, "submit"]]), JSON.stringify(grades), 91, "Très bien : flexbox maîtrisé.", now - DAY);
+  tk.run(aid, G, "101", "submitted", 12, JSON.stringify({ ...ans, q2bb: [1], q4dd: "" }), 3, now - 6000, now - 3600, now - 4000, null, null, JSON.stringify([[now - 6000, "start"], [now - 4000, "submit"]]), null, null, null, now - DAY);
+  tk.run(aid, G, "102", "locked", 13, JSON.stringify({ q1aa: [1] }), 1, now - 900, now + 1500, null, now - 300, "fullscreen", JSON.stringify([[now - 900, "start"], [now - 600, "paste"], [now - 300, "fullscreen"]]), null, null, null, now - DAY);
+  tk.run(aid, G, "103", "active", 14, JSON.stringify({ q1aa: [0], q3cc: ".cards{display:grid}" }), 2, now - 600, now + 1800, null, null, null, JSON.stringify([[now - 600, "start"]]), null, null, null, now - DAY);
+  for (const u of ["104", "105", "106"]) tk.run(aid, G, u, "invited", 15 + Number(u), null, 0, null, null, null, null, null, null, null, null, null, now - DAY);
   // a second class, both in the league
   const G2 = "900000000000000002";
   db.prepare("INSERT INTO guilds (id, name, lang, season, code_lang, daily_hour, league, created_at) VALUES (?, 'CS 2nd year · Group A', 'fr', 'Autumn 2026', 'javascript,php', 9, ?, ?)").run(G2, JSON.stringify({ on: true, name: "Group A" }), now - 60 * DAY);
@@ -251,15 +335,17 @@ env.ASSETS = {
 
 createServer(async (req, res) => {
   // public pages of the bot Worker (shared profile, certificates)
-  if (/^\/(u|cert)\//.test(req.url ?? "")) {
-    const r = await bot.fetch(new Request("http://localhost" + req.url), env, { waitUntil() {} } as any);
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const body = chunks.length ? Buffer.concat(chunks) : undefined;
+  // public pages of the bot Worker (shared profile, certificates, the assessment page)
+  if (/^\/(u|cert|quiz|battle|league)\//.test(req.url ?? "")) {
+    const r = await bot.fetch(new Request("http://localhost" + req.url, { method: req.method, headers: req.headers as any, body }), env, { waitUntil() {} } as any);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });
     res.end(await r.text());
     return;
   }
-  const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
-  const request = new Request(`http://localhost:${PORT}${req.url}`, { method: req.method, headers: req.headers as any, body: chunks.length ? Buffer.concat(chunks) : undefined });
+  const request = new Request(`http://localhost:${PORT}${req.url}`, { method: req.method, headers: req.headers as any, body });
   const response = await admin.fetch(request, env, { waitUntil() {} });
   const headers: Record<string, string> = {};
   response.headers.forEach((v, k) => (headers[k] = v));

@@ -25,11 +25,12 @@ export { errorText } from "./ix.ts";
 import { pickForSkill } from "../shared/coach.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
+import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
 import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
 import {
-  certButton, cmdAsk, cmdFaq, cmdHelpMe, cmdInterview, cmdLeague, cmdProject, faqButton, handButton, handSubmit,
-  interviewButton, interviewSubmit, profileButtons, projectChoices, shareButton,
+  certButton, cmdAsk, cmdFaq, cmdHelpMe, cmdInterview, cmdLeague, faqButton, handButton, handSubmit,
+  interviewButton, interviewSubmit, profileButtons, shareButton,
 } from "./extras.ts";
 import { sendCertificates } from "../shared/share.ts";
 import { translateChallenge } from "../shared/translate.ts";
@@ -106,7 +107,8 @@ async function command(ix: Ix): Promise<Response> {
     case "ask": return cmdAsk(ix, String(o.question ?? ""));
     case "faq": return cmdFaq(ix, o.search ?? null);
     case "interview": return cmdInterview(ix, (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
-    case "project": return cmdProject(ix, sub ?? "list", o);
+    case "github": return cmdGithub(ix);
+    case "brief": return cmdBrief(ix, sub ?? "list", o);
     case "league": return cmdLeague(ix);
     case "profile": return cmdProfile(ix, o.member ?? ix.userId);
     case "leaderboard": return cmdLeaderboard(ix, o.board ?? "season");
@@ -1071,8 +1073,8 @@ async function autocomplete(ix: Ix): Promise<Response> {
     for (const r of await all<{ hr_display: string }>(ix.env, "SELECT hr_display FROM players WHERE guild_id = ? AND hr_display IS NOT NULL", ix.guild.id)) set.add(r.hr_display);
     for (const c of await activeContests(ix.env, ix.guild.id)) for (const n of Object.values(JSON.parse(c.state || "{}").names ?? {})) set.add(String(n));
     names = [...set];
-  } else if (ix.raw.data.name === "project") {
-    return json({ type: 8, data: { choices: await projectChoices(ix, cur) } });
+  } else if (ix.raw.data.name === "brief") {
+    return json({ type: 8, data: { choices: await briefChoices(ix, cur) } });
   } else if (ix.raw.data.name === "contest" || ix.raw.data.name === "teacher") {
     names = (await activeContests(ix.env, ix.guild.id)).map((c) => c.slug);
   }

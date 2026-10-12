@@ -70,7 +70,9 @@ export const hr = {
 };
 export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
-export const github = { files: {} as Record<string, string>, calls: 0 };
+export const gtrans = { calls: 0, down: false };
+export const leagueFake = { status: 200, body: null as any, calls: 0 };
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -188,6 +190,22 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const f = github.files[key];
     return f === undefined ? new Response("404: Not Found", { status: 404 }) : new Response(f, { status: 200 });
   }
+  if (url.hostname === "translate.googleapis.com") {
+    gtrans.calls++;
+    if (gtrans.down) return new Response("busy", { status: 429 });
+    const q = url.searchParams.get("q") ?? "", tl = url.searchParams.get("tl");
+    return Response.json([[[`[${tl}] ${q}`, q, null, null, 1]], null, "fr"]);
+  }
+  if (url.hostname === "other.classbot.test") {
+    leagueFake.calls++;
+    return Response.json(leagueFake.status === 200 ? leagueFake.body : { error: "This class isn't in the league (or the link was renewed)." }, { status: leagueFake.status });
+  }
+  if (url.hostname === "api.github.com" && url.pathname === "/installation/repositories") {
+    const tok = String(new Headers(init.headers || {}).get("authorization") || "").replace(/^(token|Bearer)\s+/i, "");
+    const all = github.repos[tok] ?? [];
+    const page = Number(url.searchParams.get("page") || 1), per = Number(url.searchParams.get("per_page") || 30);
+    return Response.json({ total_count: all.length, repositories: all.slice((page - 1) * per, page * per) });
+  }
   if (url.hostname.endsWith("cloudflareaccess.com")) return Response.json(access.jwks ?? { keys: [] });
   throw new Error("unexpected fetch to " + url.href);
 }) as typeof fetch;
@@ -198,6 +216,7 @@ export const ai = {
   mode: "good" as "good" | "lying" | "broken" | "badwrite",
   judgeVerdict: "accepted",
   prompts: [] as string[],
+  users: [] as string[],
 };
 
 // a real (small) problem: maximum subarray sum. The reference is O(n), the brute O(n^2).
@@ -220,6 +239,7 @@ function fakeAI() {
       const sys: string = input.messages[0].content;
       const user: string = input.messages[1]?.content ?? "";
       ai.prompts.push(sys);
+      ai.users.push(user);
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("interpreter")) {
@@ -283,6 +303,46 @@ function fakeAI() {
       }
       if (sys.includes("kind but demanding")) {
         return { response: "Your loop never considers the case where every number is negative: start from the first element instead of 0." + (sys.includes('"SKILLS:"') ? "\nSKILLS: loops, notaskill" : "") };
+      }
+      // ---- learning: briefs, evaluation grid, mise en situation, assessments
+      if (sys.includes("fast classroom game")) {
+        const qs = [
+          { kind: "output", topic: "JavaScript", prompt: "Qu'affiche ce code ?", code: "console.log(1 + 1);", answer: "2", explain: "Addition" },
+          { kind: "acronym", topic: "HTML", prompt: "Que signifie HTML ?", answer: "HyperText Markup Language" },
+          { kind: "mcq", topic: "CSS", prompt: "Quelle propriété pour la couleur du texte ?", options: ["color", "font", "text", "background"], answer: "A · color" },
+          { kind: "missing", topic: "JavaScript", prompt: "Quel mot-clé manque ?", code: "___ x = 3;", answer: "let" },
+          { kind: "truefalse", topic: "CSS", prompt: "Vrai ou faux : padding est à l'extérieur de la bordure.", answer: "Faux" },
+          { kind: "quick", topic: "HTML", prompt: "Quelle balise pour un paragraphe ?", answer: "<p>" },
+          { kind: "quick", topic: "HTML", prompt: "Quelle balise pour un paragraphe ?", answer: "<p>" },
+          { kind: "quick", topic: "", prompt: "", answer: "" },
+        ];
+        return { response: JSON.stringify({ questions: qs }) };
+      }
+      if (sys.includes("Tu proposes des idées de projets")) {
+        return { response: JSON.stringify({ ideas: [1, 2, 3, 4, 5].map((i) => ({ title: `Idée ${i}`, client: `Client ${i} (Safi)`, pitch: "Un site vitrine pour présenter les services et prendre contact.", why: "Fait pratiquer le HTML sémantique.", difficulty: "moyen" })) }) };
+      }
+      if (user.includes("Garde la cohérence")) return { response: JSON.stringify({ summary: "Résumé réécrit par l’IA." }) };
+      if (sys.includes("Tu rédiges des briefs")) {
+        return { response: JSON.stringify({ title: "Riad Essaouira : site vitrine", summary: "Le site d’un riad.", tags: ["HTML", "CSS"], context: "Un riad veut un site.",
+          groups: [{ emoji: "👤", title: "En tant que visiteur", stories: ["En tant que visiteur, je vais voir les chambres, afin de choisir.", "En tant que visiteur, je vais remplir le formulaire de contact, afin de réserver."] },
+            ...(user.includes("ATTENTION") ? [] : [{ emoji: "🗄️", title: "En tant que concepteur de base de données", stories: ["En tant que concepteur de base de données, je vais rédiger le schéma de la base de données, afin de préparer le back-end."] }])],
+          bonus: ["Animation CSS"], evaluation: { minutes: 20, parts: [{ minutes: 5, label: "Démonstration" }] }, deliverables: ["Dépôt GitHub"], criteria: ["Responsive", "W3C", "Sémantique"],
+          situation: { title: "Intégrateur", need: "Un site en ligne" }, competencies: ["C3N1", "T1N1"], resources: [], internal: { learning: ["HTML"], questions: ["Combien de pages ?"] } }) };
+      }
+      if (sys.includes("Pour chaque exigence numérotée")) return { response: JSON.stringify({ contexte: "Un site vitrine.", technologies: ["HTML", "CSS"], verif: { "1": "pages", "2": "form" } }) };
+      if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
+      if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
+      if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {
+        const ids = [...user.matchAll(/### Question (\w+)/g)].map((m) => m[1]);
+        return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
+      }
+      if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        return { response: JSON.stringify({ questions: [
+          { type: "mcq", prompt: "Quelle propriété aligne sur l’axe principal ?", choices: ["align-items", "justify-content", "gap", "order"], answer: [1], points: 1, skills: ["css"], comp: "C3N1" },
+          { type: "code", prompt: "Écris une media query pour les écrans < 768px.", lang: "css", expected: "@media (max-width: 767px) {}", points: 2, skills: ["css"], comp: "C3N1" },
+          { type: "explain", prompt: "Explique margin et padding.", expected: "dehors / dedans", points: 2, skills: ["css"] },
+          ...(user.includes("sur HTML, CSS") ? [{ type: "mcq", prompt: "Quelle classe Tailwind centre le texte ?", choices: ["text-center", "center", "mx-auto", "align"], answer: [0], points: 1 },
+            { type: "code", prompt: "Écris une carte en HTML avec un titre et un paragraphe.", lang: "html", starter: "<article class=\"card\"><h2>Titre</h2><p>Texte de la carte</p></article>", expected: "<article class=\"card\"><h2>Titre</h2><p>Texte de la carte</p></article>", points: 2 }] : [])] }) };
       }
       const kindMatch = sys.match(/kind "(\w+)"/);
       const kind = kindMatch?.[1] ?? "output";

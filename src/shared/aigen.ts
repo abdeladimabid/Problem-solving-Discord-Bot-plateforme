@@ -11,7 +11,6 @@ import { bankExamples, guildLangs, pickGuildLang, saveGeneratedQuick, saveGenera
 import { SKILLS, guessSkills, setSkills, skillsOf } from "./skills.ts";
 import { LANGS, RunnerUnavailable, runOnce } from "./runner.ts";
 import type { CodeLang } from "./runner.ts";
-import { testsText } from "./projects.ts";
 import { lessonLinks } from "./lessons.ts";
 import { runSqlCases } from "./sqlrx.ts";
 import { sqlSkills } from "./skills.ts";
@@ -106,41 +105,6 @@ export async function bankCoverage(env: Env, g: GuildRow): Promise<Record<string
   return out;
 }
 
-// ---------------------------------------------------------------- project
-/** A project idea: statement + tests. Expected outputs come from running the AI's Python reference. */
-export async function generateProject(env: Env, g: GuildRow, o: { idea?: string; difficulty?: Difficulty; lang?: string }) {
-  if (!(await aiBudgetOk(env, 3))) throw new GenError("The daily AI budget is used up. Try again tomorrow.");
-  await aiBudgetUse(env, 3);
-  const difficulty = DIFFS.includes(o.difficulty as Difficulty) ? o.difficulty : "medium";
-  const language = g.lang === "fr" ? "French" : "English";
-  const raw = await chat(env, [
-    { role: "system", content: `You design small programming projects for students (${difficulty} level). The student writes ONE program in ${langLabel(o.lang || guildLangs(g)[0])} that reads the input on stdin and prints the answer. Write all text in ${language}.
-Answer ONLY with JSON:
-{"title": "short title",
- "description": "what the program must do, then **Input** and **Output** sections with the exact format, then one example. Under 900 characters.",
- "reference": "a correct Python 3 program that reads stdin and prints the answer",
- "inputs": ["6 to 10 complete stdin inputs, each ending with a newline: the two examples first, then edge cases (smallest input, duplicates, negatives, large values)"]}` },
-    { role: "user", content: o.idea?.trim() ? `Project idea from the teacher: ${o.idea.trim().slice(0, 500)}` : "Invent a useful, realistic mini-project (grades, inventory, text statistics, bank account, timetable…)." },
-  ], { maxTokens: 2500, temperature: 0.5, timeoutMs: 90000 }).catch(() => "");
-  let j: any = null;
-  try { j = extractJson(raw); } catch { j = null; }
-  if (!j?.title || !j?.description || !j?.reference || !Array.isArray(j.inputs) || j.inputs.length < 2) throw new GenError("The AI couldn't design a project right now. Try again in a minute.");
-  const tests: { input: string; output: string }[] = [];
-  for (const inp of j.inputs.slice(0, 10)) {
-    const input = String(inp).replace(/\r/g, "").replace(/\n*$/, "\n");
-    let r: { ok: boolean; out: string; err: string };
-    try {
-      r = await runOnce(env, "python", String(j.reference), input);
-    } catch (e) {
-      if (e instanceof RunnerUnavailable) throw new GenError("The code runner is unreachable, so the tests can't be computed. Try again later.");
-      throw e;
-    }
-    if (!r.ok || !r.out.trim()) continue;   // skip inputs the reference can't handle
-    tests.push({ input, output: r.out });
-  }
-  if (tests.length < 2) throw new GenError("The AI's reference solution didn't run correctly on its own tests. Try again.");
-  return { title: String(j.title).slice(0, 100), description: String(j.description).slice(0, 3000), testsText: testsText(tests), tests: tests.length, reference: String(j.reference) };
-}
 
 // -------------------------------------------------------------------- SQL
 const SQL_FOCUS: Record<string, string> = {

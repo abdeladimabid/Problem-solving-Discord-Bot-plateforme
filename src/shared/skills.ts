@@ -30,6 +30,16 @@ export const SKILLS: SkillDef[] = [
   { key: "regex", en: "Regular expressions", fr: "Expressions régulières", emoji: "🔎" },
   { key: "git", en: "Git", fr: "Git", emoji: "🌿" },
   { key: "web", en: "Web development", fr: "Développement web", emoji: "🌐" },
+  // Web development (DWWM): proven by the briefs (GitHub checks) and assessments
+  { key: "html", en: "HTML & accessibility", fr: "HTML et accessibilité", emoji: "🧾" },
+  { key: "css", en: "CSS & responsive design", fr: "CSS et responsive", emoji: "🎨" },
+  { key: "dom", en: "DOM & events", fr: "DOM et événements", emoji: "🖱️" },
+  { key: "php", en: "PHP", fr: "PHP", emoji: "🐘" },
+  { key: "mvc", en: "MVC architecture", fr: "Architecture MVC", emoji: "🏛️" },
+  { key: "security", en: "Web security", fr: "Sécurité web", emoji: "🛡️" },
+  { key: "laravel", en: "Laravel", fr: "Laravel", emoji: "🟥" },
+  { key: "api", en: "REST APIs", fr: "API REST", emoji: "🔌" },
+  { key: "testing", en: "Tests", fr: "Tests", emoji: "🧪" },
   // SQL track
   { key: "sql_select", en: "SQL: SELECT basics", fr: "SQL : bases de SELECT", emoji: "📋" },
   { key: "sql_filter", en: "SQL: filtering with WHERE", fr: "SQL : filtrer avec WHERE", emoji: "🔍" },
@@ -202,7 +212,7 @@ export async function studentAttempts(env: Env, guildId: string, discordId: stri
   // what their code showed, submission by submission (also while the challenge is still open)
   const ev = await all<AttemptLite>(env,
     `SELECT CASE WHEN e.ok = 1 THEN 'solved' ELSE 'failed' END AS status, 0 AS used_hint, 1 AS tries, NULL AS result, e.created_at AS finished_at,
-            0 AS challenge_id, 'evidence' AS kind, COALESCE(c.difficulty, 'easy') AS difficulty, e.skill AS skills, e.weight
+            0 AS challenge_id, 'evidence' AS kind, COALESCE(e.difficulty, c.difficulty, 'easy') AS difficulty, e.skill AS skills, e.weight
        FROM skill_evidence e LEFT JOIN attempts a ON a.id = e.attempt_id LEFT JOIN challenges c ON c.id = a.challenge_id
       WHERE e.guild_id = ? AND e.discord_id = ? ORDER BY e.id DESC LIMIT 300`, guildId, discordId).catch(() => [] as AttemptLite[]);
   return [...attempts, ...ev];

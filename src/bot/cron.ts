@@ -17,8 +17,9 @@ import { sendTeacherSummaries } from "../shared/insight.ts";
 import { sweepEvents } from "../shared/events.ts";
 import { expireShop } from "../shared/shop.ts";
 import { sendMorningPlans } from "./coach.ts";
-import { checkProjects } from "../shared/projects.ts";
-import { announceLeague } from "../shared/league.ts";
+import { githubCron } from "../shared/github.ts";
+import { assessCron } from "../shared/assess.ts";
+import { announceLeague, refreshRemotes } from "../shared/league.ts";
 import { arenaChannel } from "../shared/arena.ts";
 import { COMMANDS, commandsVersion } from "../shared/commands.ts";
 import { dapi } from "../shared/discord.ts";
@@ -51,7 +52,9 @@ export async function runCron(env: Env) {
   await safe("teacher summary", () => sendTeacherSummaries(env));
   await safe("events", () => sweepEvents(env));
   await safe("shop", () => expireShop(env));
-  if (!generated) await safe("projects", () => checkProjects(env, 3));
+  await safe("github", () => githubCron(env));
+  await safe("assessments", () => assessCron(env));
+  if (new Date().getUTCMinutes() % 30 === 0) await safe("league links", () => refreshRemotes(env));
   await safe("league", () => announceLeague(env));
 }
 

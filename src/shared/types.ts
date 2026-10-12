@@ -42,6 +42,16 @@ export interface Env {
   LLM_BASE_URL?: string;    // optional OpenAI-compatible AI (Ollama via a tunnel, Groq, OpenRouter…)
   LLM_MODEL?: string;
   LLM_API_KEY?: string;
+  GROQ_API_KEY?: string;    // optional Groq key (secret): long documents (briefs, reviews, assessments) go there first
+  GROQ_MODEL?: string;      // default openai/gpt-oss-120b
+  // GitHub App of the class (students link their account with /github; the App sends their activity)
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_SLUG?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+  GITHUB_WEBHOOK_SECRET?: string;
+  GITHUB_PRIVATE_KEY?: string;
+  WATCHER_KV?: any;         // optional: the old GitHub Watcher's KV namespace, for the one-time import
 }
 
 export type Lang = "en" | "fr";
@@ -62,6 +72,8 @@ export interface GuildRow {
   track?: string | null;
   notify?: string | null;    // JSON: which teacher DMs are on
   shop?: string | null;      // JSON: shop prices, items on/off, own rewards
+  program?: string | null;   // programme the class follows ("builtin:dwwm-2026" or "db:<id>")
+  github?: string | null;    // JSON: GitHub settings (activity channel/forum, reports, hidden repos…)
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;
@@ -108,6 +120,11 @@ export interface PlayerRow {
   color_until?: number | null;
   cosmetics?: string | null;
   boosts?: string | null;
+  github_id?: string | null;
+  github_login?: string | null;
+  gh_inst?: string | null;
+  gh_linked_at?: number | null;
+  gh_thread?: string | null;
 }
 
 export interface ChallengeRow {

@@ -16,7 +16,7 @@ import { createSession, endSession, sessionResults } from "../shared/sessions.ts
 import { ROLE_DEFS, autoRolesOf, setAutoRoles, syncAutoRoles, wantedHolders } from "../shared/roles.ts";
 import { SKILLS, setSkills, skillName, studentProfile } from "../shared/skills.ts";
 import { classLangs, defaultLessons, defaultSteps, pathCfg, pathCustom, pathProgress, savePath } from "../shared/path.ts";
-import { GenError, bankCoverage, challengeForSkill, generateProject, writeLesson } from "../shared/aigen.ts";
+import { GenError, bankCoverage, challengeForSkill, writeLesson } from "../shared/aigen.ts";
 import type { GenKind } from "../shared/aigen.ts";
 import { leagueOf as leagueCfgOf } from "../shared/league.ts";
 import { TRACKS, setTrack, skillFitsTrack, trackOf } from "../shared/tracks.ts";
@@ -32,13 +32,18 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { ProjectError, gradeRepo, projectDetail, projectList, saveProject } from "../shared/projects.ts";
-import type { ProjectRow, RepoRow } from "../shared/projects.ts";
-import { compareClasses, leagueOf, leagueTable, setLeague } from "../shared/league.ts";
+import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
+import { qrSvg } from "../shared/qr.ts";
+import { SquadError, createSquadSet, deleteSquadSet, pendingBuddies, squadSets, updateSquadSet } from "../shared/squads.ts";
+import { LeagueError, addRemote, compareClasses, leagueLink, leagueOf, leagueTable, refreshRemotes, remoteRows, removeRemote, setLeague, weekStart } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
 import { standings } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
+import { learningApi } from "./learnapi.ts";
+import { TECHS, programOf } from "../shared/program.ts";
+import { activityOf } from "../shared/github.ts";
+import { competencyMap, studentBriefs } from "../shared/learning.ts";
 
 class HttpError extends Error {
   status: number;
@@ -73,6 +78,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/discord") return ok(await discordInfo(env, await guild()));
     if (path === "/export.csv") return exportCsv(env, await guild());
     if (path === "/diagnostics") return ok(await diagnostics(env, await guild()));
+    // programmes, briefs, debriefs, GitHub, assessments
+    const learn = await learningApi(env, ctx, path, method, body, url, guild);
+    if (learn) return learn;
 
     // -------------------------------------------------------------- daily
     if (path === "/daily" && method === "GET") return ok(await dailyOverview(env, await guild()));
@@ -365,6 +373,58 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
 
     // -------------------------------------------------------------- teams
+    // -------------------------------------------------------------- 🧩 squads by sprint
+    if (path === "/squads" || path.startsWith("/squads/")) {
+      const g = await guild();
+      const sview = async () => ({ sets: await squadSets(env, g), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).map((x) => ({ id: x.id, name: x.name || x.id })) });
+      try {
+        if (path === "/squads" && method === "GET") return ok(await sview());
+        if (path === "/squads" && method === "POST") { const id = await createSquadSet(env, g, body); return ok({ id, ...(await sview()) }); }
+        const sm = path.match(/^\/squads\/(\d+)$/);
+        if (sm && method === "PUT") { await updateSquadSet(env, g, Number(sm[1]), body); return ok(await sview()); }
+        if (sm && method === "DELETE") { await deleteSquadSet(env, g, Number(sm[1])); return ok(await sview()); }
+      } catch (e) { if (e instanceof SquadError) throw new HttpError(400, e.message); throw e; }
+    }
+    // -------------------------------------------------------------- ⚔️ squad battles
+    if (path === "/battles" || path.startsWith("/battles/")) {
+      const g = await guild();
+      try {
+        const bview = async (id: number) => {
+          const b = await getBattle(env, id, g.id);
+          if (!b) throw new HttpError(404, "This battle doesn't exist anymore.");
+          await liveBattle(env, b);
+          return { id: b.id, title: b.title, teams: b.teams, settings: b.settings, questions: b.questions, status: b.status, pin: b.judge_pin, judgeTaken: !!b.judge_key,
+            tv: tvUrl(env, b), judge: judgeUrl(env, b), qr: qrSvg(judgeUrl(env, b), { dark: "#0b1020" }), live: tvView(b), log: b.state.log, created_at: b.created_at };
+        };
+        if (path === "/battles" && method === "GET") {
+          const p = await programOf(env, g);
+          // squads change from one brief (sprint) to the next: the latest briefs first
+          const sq = await all<{ id: number; title: string; week: number | null; squads: string | null }>(env, "SELECT id, title, week, squads FROM briefs WHERE guild_id = ? AND squads IS NOT NULL AND length(squads) > 2 ORDER BY COALESCE(start_at, created_at) DESC, id DESC LIMIT 12", g.id);
+          const squads = sq.map((r) => {
+            let list: any[] = [];
+            try { list = JSON.parse(r.squads || "[]"); } catch { list = []; }
+            return { brief: r.id, from: r.title, week: r.week, squads: list.map((x) => ({ name: String(x.name || "Squad"), members: (x.members || []).map(String) })).filter((x) => x.members.length) };
+          }).filter((x) => x.squads.length);
+          for (const set of (await squadSets(env, g)).reverse()) if (set.squads.length) squads.unshift({ brief: 0, from: `${set.name}${set.active ? " (current)" : ""}`, week: null, squads: set.squads.map((x) => ({ name: x.name, members: x.members })) });
+          const students = await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
+          return ok({ items: await listBattles(env, g), teams: await teams(env, g), squads, students: students.map((x) => ({ id: x.id, name: x.name || x.id })), kinds: QKINDS, topics: [...new Set([...BANK_TOPICS, ...TECHS.filter((t) => !t.tool).map((t) => t.name)])], lang: g.lang, program: p.name });
+        }
+        if (path === "/battles/generate" && method === "POST") {
+          const set = cleanSettings(body, g.lang);
+          const avoid = body.battle ? (await getBattle(env, Number(body.battle), g.id))?.questions ?? [] : [];
+          return ok(await generateBattleQuestions(env, { topics: set.topics, kinds: set.kinds, count: Number(body.count) || 30, level: set.level, lang: set.lang, avoid }));
+        }
+        if (path === "/battles" && method === "POST") return ok(await bview(await createBattle(env, g, body)));
+        const bm = path.match(/^\/battles\/(\d+)(?:\/(judge-reset))?$/);
+        if (bm) {
+          const id = Number(bm[1]);
+          if (!bm[2] && method === "GET") return ok(await bview(id));
+          if (!bm[2] && method === "PUT") { await updateBattle(env, g, id, body); return ok(await bview(id)); }
+          if (!bm[2] && method === "DELETE") { await run(env, "DELETE FROM battles WHERE id = ? AND guild_id = ?", id, g.id); return ok({ ok: true }); }
+          if (bm[2] === "judge-reset" && method === "POST") { await run(env, "UPDATE battles SET judge_key = NULL, judge_seen = NULL WHERE id = ? AND guild_id = ?", id, g.id); return ok(await bview(id)); }
+        }
+      } catch (e) { if (e instanceof BattleError) throw new HttpError(400, e.message); throw e; }
+    }
     if (path === "/teams" && method === "GET") return ok(await teams(env, await guild()));
     if (path === "/teams" && method === "POST") {
       const g = await guild();
@@ -483,7 +543,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const h = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id);
       const f = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id);
       const sh = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND status = 'pending'", g.id);
-      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0 });
+      // students stopped during an assessment (they left full screen) and waiting to be let back in
+      const lk = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+        WHERE t.guild_id = ? AND t.status = 'locked' AND t.resume_ok = 0 AND a.status = 'open'`, g.id);
+      // work handed in for a brief whose deadline passed, not debriefed yet
+      const db = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM brief_handins h JOIN briefs b ON b.id = h.brief_id
+        WHERE h.guild_id = ? AND b.status = 'assigned' AND b.due_at < ? AND NOT EXISTS (SELECT 1 FROM brief_reviews r WHERE r.brief_id = h.brief_id AND r.who = h.who AND r.status = 'final')`, g.id, now());
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0 });
     }
     // -------------------------------------------------- ✨ AI generation
     if (path === "/path/lesson-ai" && method === "POST") return ok(await writeLesson(env, await guild(), String(body.skill ?? ""), String(body.hint ?? "")));
@@ -494,7 +560,6 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const c = await challengeForSkill(env, g, { skill: body.skill || null, difficulty: body.difficulty, kind, topic: body.topic || null, codeLang: body.code_lang || null });
       return ok({ challenge: c, coverage: await bankCoverage(env, g) });
     }
-    if (path === "/projects/ai" && method === "POST") return ok(await generateProject(env, await guild(), { idea: body.idea, difficulty: body.difficulty, lang: body.lang }));
     if (path === "/overview/live" && method === "GET") return ok(await overviewLive(env, await guild()));
 
     // ------------------------------------------------------ ✋ help queue
@@ -522,36 +587,23 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       return ok({ items: await faqList(env, g) });
     }
 
-    // ------------------------------------------------------ 🐙 projects
-    if (path === "/projects" && method === "GET") return ok({ items: await projectList(env, await guild()), hook: `${(env.PUBLIC_URL || "").replace(/\/$/, "")}/gh/hook` });
-    if (path === "/projects" && method === "POST") { const g = await guild(); const p = await saveProject(env, g, { ...body, id: undefined }); return ok(await projectDetail(env, g, p.id)); }
-    hm = path.match(/^\/projects\/(\d+)$/);
-    if (hm && method === "GET") { const d = await projectDetail(env, await guild(), Number(hm[1])); if (!d) throw new HttpError(404, "unknown project"); return ok(d); }
-    if (hm && method === "PUT") { const g = await guild(); await saveProject(env, g, { ...body, id: Number(hm[1]) }); return ok(await projectDetail(env, g, Number(hm[1]))); }
-    if (hm && method === "DELETE") {
-      const g = await guild();
-      await run(env, "DELETE FROM project_repos WHERE project_id = ? AND guild_id = ?", Number(hm[1]), g.id);
-      await run(env, "DELETE FROM projects WHERE id = ? AND guild_id = ?", Number(hm[1]), g.id);
-      return ok({ items: await projectList(env, g) });
-    }
-    hm = path.match(/^\/projects\/(\d+)\/check$/);
-    if (hm && method === "POST") {
-      // grade one student now (or flag everyone for the next cron runs)
-      const g = await guild();
-      const p = await one<ProjectRow>(env, "SELECT * FROM projects WHERE id = ? AND guild_id = ?", Number(hm[1]), g.id);
-      if (!p) throw new HttpError(404, "unknown project");
-      if (body.discord_id) {
-        const pr = await one<RepoRow>(env, "SELECT * FROM project_repos WHERE project_id = ? AND discord_id = ?", p.id, String(body.discord_id));
-        if (!pr) throw new HttpError(404, "this student has no repository linked");
-        await gradeRepo(env, g, p, pr, true);
-      } else await run(env, "UPDATE project_repos SET due_check = 1 WHERE project_id = ?", p.id);
-      return ok(await projectDetail(env, g, p.id));
-    }
-
     // ------------------------------------------- 🏆 league & all classes
     if (path === "/compare" && method === "GET") return ok(await compareClasses(env));
-    if (path === "/league" && method === "GET") { const g = await guild(); return ok({ cfg: leagueOf(g), table: await leagueTable(env) }); }
-    if (path === "/league" && method === "PUT") { const g = await guild(); const cfg = await setLeague(env, g, body); return ok({ cfg, table: await leagueTable(env) }); }
+    if (path.startsWith("/league")) {
+      const g = await guild();
+      const view = async () => ({ cfg: leagueOf(g), link: leagueLink(env, g), remotes: await remoteRows(env, g), table: await leagueTable(env, undefined, g), last: await leagueTable(env, weekStart(now()) - 7 * 86400, g) });
+      try {
+        if (path === "/league" && method === "GET") {
+          if (leagueOf(g).on && !leagueOf(g).token) await setLeague(env, g, {});   // joined before league links existed
+          await refreshRemotes(env, g, 1800);
+          return ok(await view());
+        }
+        if (path === "/league" && method === "PUT") { await setLeague(env, g, body); return ok(await view()); }
+        if (path === "/league/remotes" && method === "POST") { await addRemote(env, g, String(body.url || ""), body.label ? String(body.label) : undefined); return ok(await view()); }
+        if (path === "/league/remotes" && method === "DELETE") { await removeRemote(env, g, String(body.url || url.searchParams.get("url") || "")); return ok(await view()); }
+        if (path === "/league/refresh" && method === "POST") { await refreshRemotes(env, g, 0); return ok(await view()); }
+      } catch (e) { if (e instanceof LeagueError) throw new HttpError(400, e.message); throw e; }
+    }
 
     // ----------------------------------------------------- 🎓 certificates
     if (path === "/certificates" && method === "GET") {
@@ -581,7 +633,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof HandError || e instanceof FaqError || e instanceof ProjectError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof HandError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });
@@ -611,6 +663,7 @@ async function discordInfo(env: Env, g: GuildRow) {
   ]);
   return {
     channels: channels.filter((c) => c.type === 0 || c.type === 5).sort((a, b) => a.position - b.position).map((c) => ({ id: c.id, name: c.name })),
+    forums: channels.filter((c) => c.type === 15).sort((a, b) => a.position - b.position).map((c) => ({ id: c.id, name: c.name })),
     roles: roles.filter((r) => r.name !== "@everyone" && !r.managed).sort((a, b) => b.position - a.position).map((r) => ({ id: r.id, name: r.name, color: r.color })),
   };
 }
@@ -690,9 +743,21 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
     path: { done: path.steps.filter((x) => x.done).length, total: path.steps.length, current: path.current >= 0 ? path.steps[path.current] : null },
     plan: { streak: (s.player as any)?.plan_streak ?? 0, best: (s.player as any)?.plan_best ?? 0, remind: !!(s.player as any)?.plan_dm },
   };
+  // the learning record beyond challenges: GitHub, competencies, briefs and their debriefs, assessments
+  const program = await programOf(env, g);
+  const actAll = (s.player as any)?.github_id ? await activityOf(env, g, 14) : null;
+  const act = actAll?.students.find((x) => x.discord_id === did) ?? null;
+  const assessments = await all(env,
+    `SELECT a.id, a.title, t.status, t.score, t.submitted_at, t.summary FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+      WHERE t.guild_id = ? AND t.discord_id = ? ORDER BY t.id DESC LIMIT 20`, g.id, did);
+  const learning = {
+    github: { login: (s.player as any)?.github_login ?? null, linkedAt: (s.player as any)?.gh_linked_at ?? null, activity: act, days: actAll?.days ?? [] },
+    competencies: await competencyMap(env, g, did, program), levels: program.levels, program: program.name,
+    briefs: await studentBriefs(env, g, did), assessments,
+  };
   return {
     ...s, level: { ...s.level, title: t("en", titleKey(s.level.level)) },
-    weeks, byReason, attempts, matrix, contestList: contests, assignments: asg, duelList: duels, ledger, team, coach,
+    weeks, byReason, attempts, matrix, contestList: contests, assignments: asg, duelList: duels, ledger, team, coach, learning,
   };
 }
 
@@ -1329,10 +1394,16 @@ async function overviewLive(env: Env, g: GuildRow) {
   const bosses = await all<{ id: number; name: string; hp: number; deadline: number; d: number }>(env,
     "SELECT b.id, b.name, b.hp, b.deadline, COALESCE((SELECT SUM(damage) FROM boss_hits h WHERE h.boss_id = b.id), 0) AS d FROM bosses b WHERE b.guild_id = ? AND b.status = 'active'", g.id);
   const bounties = await n("SELECT COUNT(*) AS n FROM bounties WHERE guild_id = ? AND status = 'open'", g.id);
-  const projects = await one<{ open: number; linked: number; complete: number }>(env,
-    `SELECT COUNT(DISTINCT p.id) AS open, COUNT(r.discord_id) AS linked, COALESCE(SUM(r.total > 0 AND r.best = r.total), 0) AS complete
-       FROM projects p LEFT JOIN project_repos r ON r.project_id = p.id WHERE p.guild_id = ? AND p.status = 'open'`, g.id);
-  const nextDue = await one<{ title: string; due_at: number }>(env, "SELECT title, due_at FROM projects WHERE guild_id = ? AND status = 'open' AND due_at > ? ORDER BY due_at LIMIT 1", g.id, t0);
+  // briefs in progress (published, deadline not passed long ago), what was handed in, what waits for its debrief
+  const briefs = await one<{ open: number; handed: number }>(env,
+    `SELECT COUNT(*) AS open, COALESCE(SUM((SELECT COUNT(*) FROM brief_handins h WHERE h.brief_id = b.id)), 0) AS handed
+       FROM briefs b WHERE b.guild_id = ? AND b.status = 'assigned' AND (b.due_at IS NULL OR b.due_at > ?)`, g.id, t0 - 7 * 86400);
+  const nextDue = await one<{ title: string; due_at: number }>(env, "SELECT title, due_at FROM briefs WHERE guild_id = ? AND status = 'assigned' AND due_at > ? ORDER BY due_at LIMIT 1", g.id, t0);
+  const toDebrief = await n(`SELECT COUNT(*) AS n FROM brief_handins h JOIN briefs b ON b.id = h.brief_id WHERE h.guild_id = ? AND b.status = 'assigned' AND b.due_at < ?
+    AND NOT EXISTS (SELECT 1 FROM brief_reviews r WHERE r.brief_id = h.brief_id AND r.who = h.who AND r.status = 'final')`, g.id, t0);
+  const assess = await one<{ open: number; active: number; locked: number }>(env,
+    `SELECT COUNT(DISTINCT a.id) AS open, COALESCE(SUM(t.status = 'active'), 0) AS active, COALESCE(SUM(t.status = 'locked' AND t.resume_ok = 0), 0) AS locked
+       FROM assessments a LEFT JOIN assessment_takers t ON t.assessment_id = a.id WHERE a.guild_id = ? AND a.status = 'open'`, g.id);
   const interviews = await one<{ n: number; avg: number | null }>(env,
     "SELECT COUNT(*) AS n, AVG(json_extract(scores, '$.overall')) AS avg FROM interviews WHERE guild_id = ? AND created_at >= ?", g.id, week);
   const plans = await one<{ made: number; done: number; people: number }>(env,
@@ -1342,14 +1413,14 @@ async function overviewLive(env: Env, g: GuildRow) {
   const lg = leagueCfgOf(g);
   let league: { rank: number; total: number; score: number } | null = null;
   if (lg.on) {
-    const table = await leagueTable(env);
+    const table = await leagueTable(env, undefined, g);
     const i = table.findIndex((r) => r.guild_id === g.id);
     if (i >= 0) league = { rank: i + 1, total: table.length, score: table[i].score };
   }
   return {
     hands, questions, created, sessions,
     events: { quiz, bosses: bosses.map((b) => ({ ...b, left: Math.max(0, b.hp - b.d) })), bounties },
-    projects: { ...(projects ?? { open: 0, linked: 0, complete: 0 }), nextDue },
+    briefs: { open: briefs?.open ?? 0, handed: briefs?.handed ?? 0, nextDue, toDebrief }, assess: { open: assess?.open ?? 0, active: assess?.active ?? 0, locked: assess?.locked ?? 0 },
     interviews: { n: interviews?.n ?? 0, avg: interviews?.avg == null ? null : Math.round(interviews.avg * 10) / 10 },
     plans: { made: plans?.made ?? 0, done: plans?.done ?? 0, people: plans?.people ?? 0 },
     helped, league: lg.on ? { name: lg.name, ...(league ?? { rank: null, total: 0, score: 0 }) } : null,
