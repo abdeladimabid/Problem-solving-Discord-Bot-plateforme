@@ -260,6 +260,16 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
     const sender = p.sender && String(p.sender.id) !== String(owner.github_id)
       ? await one<PlayerRow>(env, "SELECT * FROM players WHERE guild_id = ? AND github_id = ?", g.id, String(p.sender.id)) : owner;
     const analysis = pushCommits.length ? Object.fromEntries(pushCommits.map((c: any) => [c.id, classifyCommit(c, sizes[c.id], { TINY_LINES: cfg.tiny, HUGE_LINES: cfg.huge })])) : null;
+    // only the pusher's own recent commits count for them: a copied project (starter, a classmate's repo, an old project)
+    // brings old commits or commits written by other people
+    if (analysis) {
+      const login = String(p.sender?.login || "").toLowerCase();
+      for (const c of pushCommits) {
+        const a: any = analysis[c.id], who = String(c.author?.username || "").toLowerCase(), t = Date.parse(c.timestamp || "");
+        if (who && login && who !== login) a.notMine = true;
+        if (t && Date.now() - t > 14 * 86400000) a.old = true;
+      }
+    }
     const embed = formatWebhook(event, p, sender?.discord_id ?? null, analysis, sender?.name ?? null);
     if (!embed) continue;
     if (sender) {

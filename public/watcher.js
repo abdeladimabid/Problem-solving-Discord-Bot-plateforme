@@ -128,6 +128,7 @@ async function viewWatch() {
             const on = st.filter((s) => s.push === "on").length, late = st.filter((s) => s.push === "late").length, n = st.length || 1;
             const passed = b.due_at <= nowS;
             return `<div style="margin:10px 0"><div class="panel-head" style="margin:0"><a href="#/brief/${b.id}"><b>${esc(b.title)}</b></a><span class="small muted">${dueIn(b.due_at)}</span></div>
+              <p class="toolbar" style="margin:4px 0"><button class="btn small" data-wann="${b.id}">📣 Announce</button><button class="btn small" data-wstat="${b.id}">Post status</button></p>
               ${meter(Math.round((100 * (on + late)) / n), "pushed")}
               <span class="small muted">${passed ? `${on} on time, ${late} late, ${st.length - on - late} nothing` : `${on + late} of ${st.length} pushed`}</span></div>`;
           }).join("") : `<p class="muted small">No brief in progress.</p>`}
@@ -135,9 +136,20 @@ async function viewWatch() {
       </div>
     </div>`;
   wireSeg(view, "wreg", (v) => { W_STATE.regSort = v; viewWatch(); });
+  wireBriefButtons(view);
   $$("[data-ws]", view).forEach((el) => el.onclick = () => openWatchStudent(D, el.dataset.ws));
   const all = $("[data-attn]", view);
   if (all) all.onclick = () => { W_STATE.filter = "attention"; };
+}
+
+// the brief's announcement (in French) and status, posted in Discord
+function wireBriefButtons(root) {
+  $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog("Announce this brief in Discord?", "In French: dates, steps, squads and how to hand in.", "Announce",
+    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); }));
+  $$("[data-wstat]", root).forEach((b) => b.onclick = () => busy(b, async () => {
+    const r = await api(`/briefs/${b.dataset.wstat}/watcher/status`, { method: "POST", body: {} });
+    toast(`Status posted: ${r.on + r.late} pushed, ${r.none} not yet`);
+  }));
 }
 
 // ================================================================= Students: activity, filters, the brief filter
@@ -183,6 +195,7 @@ async function viewWatchStudents() {
         <div class="w-chips" id="w-chips"></div>
         <select id="w-sort">${[["active", "Most active"], ["least", "Least active"], ["recent", "Last active"], ["lines", "Most lines"], ["name", "Name"]].map(([v, l]) => `<option value="${v}" ${W_STATE.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="toolbar" style="margin:0"><b class="small">Brief</b><select id="w-brief"><option value="">All briefs</option>${D.briefs.map((b) => `<option value="${b.id}" ${String(b.id) === String(W_STATE.brief) ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select>
+        ${BD ? `<button class="btn small" data-wann="${BD.brief.id}">📣 Announce</button><button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}
         ${BD ? `<select id="w-bstat">${BSTAT.map(([v, l, f]) => `<option value="${v}" ${v === W_STATE.bstat ? "selected" : ""}>${esc(l)} (${D.students.filter((s) => f(briefOf(s))).length})</option>`).join("")}</select>` : ""}</div>
     </section>
     <section class="panel"><div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${BD ? "<th>Brief</th>" : ""}<th class="num">Score</th>${BD ? "" : `<th class="num">Trend</th>`}<th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th>Active days</th><th>Last active</th><th>Warnings</th></tr></thead>
@@ -210,6 +223,7 @@ async function viewWatchStudents() {
   $("#w-sort").onchange = (e) => { W_STATE.sort = e.target.value; draw(); };
   $("#w-brief").onchange = (e) => { W_STATE.brief = e.target.value; W_STATE.bstat = "all"; viewWatchStudents(); };
   if ($("#w-bstat")) $("#w-bstat").onchange = (e) => { W_STATE.bstat = e.target.value; draw(); };
+  wireBriefButtons(view);
 }
 
 // ================================================================= one student's panel
