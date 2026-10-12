@@ -190,6 +190,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const f = github.files[key];
     return f === undefined ? new Response("404: Not Found", { status: 404 }) : new Response(f, { status: 200 });
   }
+  if (url.hostname === "api.groq.com") {
+    const auth = new Headers(init.headers || {}).get("authorization") || "";
+    if (!auth.includes("gsk_good")) return new Response(JSON.stringify({ error: { message: "Invalid API Key" } }), { status: 401 });
+    return Response.json({ choices: [{ message: { content: "ok" } }] });
+  }
   if (url.hostname === "translate.googleapis.com") {
     gtrans.calls++;
     if (gtrans.down) return new Response("busy", { status: 429 });

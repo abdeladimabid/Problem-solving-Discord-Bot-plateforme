@@ -7,6 +7,7 @@ import type { Ctx, Env } from "../shared/types.ts";
 import { checkAccess } from "./access.ts";
 import { handleApi } from "./api.ts";
 import { handleAuthRoutes, hasSession } from "./password.ts";
+import { applyAppSettings } from "../shared/appsettings.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: Ctx): Promise<Response> {
@@ -27,7 +28,7 @@ export default {
       if (a instanceof Response) return a;
       auth = a;
     }
-    if (url.pathname.startsWith("/api/")) return handleApi(request, env, ctx, auth);
+    if (url.pathname.startsWith("/api/")) { await applyAppSettings(env); return handleApi(request, env, ctx, auth); }
     if (!env.ASSETS) return new Response("assets binding missing", { status: 500 });
     // the dashboard's own files: always check for a newer version, so an update shows up without Ctrl+F5
     const res = await env.ASSETS.fetch(request);

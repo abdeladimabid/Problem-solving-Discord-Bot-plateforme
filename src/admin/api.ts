@@ -34,6 +34,7 @@ import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
+import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appsettings.ts";
 import { SquadError, createSquadSet, deleteSquadSet, pendingBuddies, squadSets, updateSquadSet } from "../shared/squads.ts";
 import { LeagueError, addRemote, compareClasses, leagueLink, leagueOf, leagueTable, refreshRemotes, remoteRows, removeRemote, setLeague, weekStart } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
@@ -373,6 +374,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
 
     // -------------------------------------------------------------- teams
+    // -------------------------------------------------------------- 🤖 AI (Groq key), for all the classes of this ClassBot
+    if (path === "/settings/ai") {
+      try {
+        if (method === "GET") return ok(await aiSettingsView(env));
+        if (method === "PUT") return ok(await saveAiSettings(env, body));
+      } catch (e) { if (e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
+    }
     // -------------------------------------------------------------- 🧩 squads by sprint
     if (path === "/squads" || path.startsWith("/squads/")) {
       const g = await guild();
