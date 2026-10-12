@@ -1172,3 +1172,8 @@ ol.league li.me b { color: var(--blue); }
 .sqb-squad header input { width: 0; }
 .sqb-bd { font-size: 13px; filter: grayscale(.2); padding: 0 2px; border-radius: 6px; background: var(--warn-bg); }
 .sqb-bd.ok { background: var(--up-bg); }
+
+/* Settings → AI */
+.ai-status { display: flex; gap: 14px; align-items: center; justify-content: space-between; border-left: 4px solid var(--up); }
+.ai-status.warn { border-left-color: var(--warn); }
+.ai-steps { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }

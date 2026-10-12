@@ -2827,6 +2827,31 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   check(q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).github_login === "bob-gh", "…students linked");
 }
 
+section("🤖 Settings → AI: each teacher sets their own Groq key from the dashboard");
+{
+  const a0 = await api("GET", `/api/settings/ai?g=${G}`);
+  check(a0.status === 200 && a0.data.source === "none" && a0.data.models.length >= 2, "no key yet: Cloudflare's AI answers");
+  check((await api("PUT", `/api/settings/ai?g=${G}`, { key: "not-a-key" })).status === 400, "a key that isn't a Groq key is refused");
+  const bad = await api("PUT", `/api/settings/ai?g=${G}`, { key: "gsk_bad" + "x".repeat(40) });
+  check(bad.status === 400 && /refused/i.test(bad.data.error), "a key Groq refuses is not saved (tested first)");
+  const good = "gsk_good" + "A".repeat(40);
+  const sv = await api("PUT", `/api/settings/ai?g=${G}`, { key: good, model: "llama-3.3-70b-versatile" });
+  check(sv.status === 200 && sv.data.source === "settings" && sv.data.model === "llama-3.3-70b-versatile" && !JSON.stringify(sv.data).includes(good) && sv.data.masked.endsWith("AAAA"), "the key is saved after Groq accepts it, and never sent back (only masked)");
+  check(env.GROQ_API_KEY === good && env.GROQ_MODEL === "llama-3.3-70b-versatile", "…and used by the AI right away");
+  const cl = await api("PUT", `/api/settings/ai?g=${G}`, { clear: true, model: "" });
+  check(cl.data.source === "none" && !env.GROQ_API_KEY, "remove the key: back to Cloudflare's AI (or the secret)");
+}
+
+section("GitHub: a student who connects the same account again isn't announced twice");
+{
+  const { linkGithub } = await import("../src/shared/github.ts");
+  const n0 = discordCalls.length;
+  await linkGithub(env, G, U.bob.id, { id: "77001", login: "bobby-gh", inst: "5501" });
+  await linkGithub(env, G, U.bob.id, { id: "77001", login: "bobby-gh", inst: "5501" });
+  const posts = discordCalls.slice(n0).filter((c) => c.method === "POST" && JSON.stringify(c.body ?? {}).includes("bobby-gh"));
+  check(posts.length === 1, `one message for a new link (${posts.length})`);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
