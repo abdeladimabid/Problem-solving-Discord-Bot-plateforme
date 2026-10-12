@@ -13,6 +13,7 @@ import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
+import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
@@ -29,12 +30,12 @@ const bad = (msg: string) => { throw new ApiError(400, msg); };
 const techList = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\n]+/)).map((x) => String(x).trim().slice(0, 40)).filter(Boolean))].slice(0, 20);
 
 export async function learningApi(env: Env, ctx: Ctx, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
-  if (!/^\/(programs?|briefs|github|assessments|competencies)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
+  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
   try {
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
     if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -307,6 +308,21 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     // steps: the bot proposes from the repo at the step's date, the teacher decides
     if (act === "stepcheck" && method === "POST") { const prop = await proposeStep(env, g, b, who, Number(body.n)); return ok({ prop, ...(await reviewView(env, g, id, who)) }); }
     if (act === "step" && method === "POST") { await saveStep(env, g, b, who, Number(body.n), String(body.final || ""), String(body.note || "")); return ok(await reviewView(env, g, id, who)); }
+  }
+
+  // ------------------------------------------------------------ sprints (the sprint review for the administration's report)
+  if (path === "/sprints" && method === "GET") return ok(await sprintsOverview(env, await guild()));
+  if ((m = path.match(/^\/sprints\/(\d+)(?:\/(levels|decide|comment))?$/))) {
+    const g = await guild();
+    const n = Number(m[1]), act = m[2];
+    if (!act && method === "GET") return ok(await sprintView(env, g, n));
+    if (act === "levels" && method === "POST") { const r = await proposeLevels(env, g, n); return ok({ ...r, ...(await sprintView(env, g, n)) }); }
+    if (act === "decide" && method === "POST") {
+      await saveDecision(env, g, n, String(body.discord_id || ""), { level: body.level, decision: body.decision, note: body.note });
+      return ok({ ok: true });
+    }
+    if (act === "comment" && method === "POST") return ok(await sprintComment(env, g, n));
+    if (act === "comment" && method === "PUT") return ok(await saveSprintComment(env, g, n, String(body.text ?? "")));
   }
 
   // ------------------------------------------------------------ competencies (class view)
