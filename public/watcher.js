@@ -475,7 +475,8 @@ async function quickBrief() {
     <div id="qb-pre" class="small"></div>
     <div class="field-row"><div><label for="qb-c">Competencies</label><input type="text" id="qb-c" placeholder="C1N1, C3N1, CT1N1…"></div>
       <div><label for="qb-r">Repo name contains</label><input type="text" id="qb-r" maxlength="100" placeholder="optional"></div></div>
-    <label class="check"><input type="checkbox" id="qb-a" checked> Announce it in Discord</label>`,
+    <label class="check"><input type="checkbox" id="qb-a" checked> Announce it in Discord</label>
+    <p class="small muted" id="qb-st" style="margin:8px 0 0"></p>`,
     [{ label: "Add brief", primary: true, action: async () => {
       const name = $("#qb-name").value.trim(), start = $("#qb-s").value, due = $("#qb-d").value, kind = segVal(dlg, "qbk");
       if (!name && !src) throw new Error("Give the brief a name.");
@@ -483,16 +484,27 @@ async function quickBrief() {
       if (start && start > due) throw new Error("The start date must be before the due date.");
       const sq = squads.filter((s) => s.members.length);
       if (kind === "squad" && !sq.length) throw new Error("Load the squads first.");
-      const extra = $("#qb-c").value.replace(/\s+(?=N\d)/gi, "").split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
+      const comps = $("#qb-c").value.replace(/\s+(?=N\d)/gi, "").split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
+      const say = (t) => { $("#qb-st").textContent = t; };
+      say("⏳ Adding the brief…");
       let B = src ? await api("/briefs/import", { method: "POST", body: { ...src, start, due, mode: kind === "squad" ? "squad" : "individuel" } })
         : await api("/briefs", { method: "POST", body: { title: name } });
       const id = B.brief.id, d0 = B.brief.data;
-      await api(`/briefs/${id}`, { method: "PUT", body: { data: { ...d0, title: name || d0.title, competencies: [...new Set([...(d0.competencies || []), ...extra])] },
+      await api(`/briefs/${id}`, { method: "PUT", body: { data: { ...d0, title: name || d0.title, competencies: comps.length ? [...new Set(comps)] : d0.competencies || [] },
         kind, squads: kind === "squad" ? sq : [], repo_hint: $("#qb-r").value.trim() } });
-      await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("#qb-t").value, sprint: $(".w-sp", dlg) ? $(".w-sp", dlg).value : "", announce: false } });
-      let msg = "Brief added";
-      if ($("#qb-a").checked) msg = await api(`/briefs/${id}/watcher/announce`, { method: "POST", body: {} }).then(() => "Brief added and announced", (e) => `Brief added, not announced: ${e.message}`);
-      dlg.close(); toast(msg); location.hash = `#/brief/${id}`;
+      if (src) say("⏳ Making the evaluation grid (up to 1 min)…");
+      B = await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("#qb-t").value, sprint: $(".w-sp", dlg) ? $(".w-sp", dlg).value : "", announce: false } });
+      // the steps: from the page ("Partie N, fin du jour N"), else proposed by the AI
+      if (src && !B.steps.length) { say("⏳ Proposing the steps…"); B = await api(`/briefs/${id}/steps`, { method: "POST", body: {} }).catch(() => B); }
+      const msg = ["Added " + B.brief.data.title + "."];
+      const pushed = B.students.filter((s) => s.push).length;
+      msg.push(start > today ? `Pushes count from ${dayLabelOf(start)}.` : `${pushed} pushed since ${dayLabelOf(start || today)}.`);
+      if (src) msg.push(B.grid ? `Grid: ${B.grid.items.length} lines${B.steps.length ? `, ${B.steps.length} steps` : ""}.` : "No grid: make it in the card.");
+      if ($("#qb-a").checked) { say("⏳ Announcing in Discord…"); msg.push(await api(`/briefs/${id}/watcher/announce`, { method: "POST", body: {} }).then(() => "Announced.", (e) => `Not announced: ${e.message}`)); }
+      dlg.close(); toast(msg.join(" "));
+      // its card in Briefs → Follow-up, open
+      wfOpen(id, null, true);
+      if (location.hash === "#/briefs/follow") viewBriefs("follow"); else location.hash = "#/briefs/follow";
     } }]);
   dlg.classList.add("wide");
   wSprintField(dlg, null, "#qb-d");
@@ -527,7 +539,9 @@ async function quickBrief() {
       const r = await api("/briefs/import", { method: "POST", body: { ...s, preview: true } });
       src = s;
       if (!$("#qb-name").value.trim()) $("#qb-name").value = r.data.title || "";
-      pre.innerHTML = `✓ ${(r.data.groups || []).reduce((n, g) => n + (g.stories || []).length, 0)} user stories · ${(r.data.competencies || []).map((c) => compChip(c)).join(" ") || `<span class="muted">no competency found</span>`}`;
+      if ((r.data.competencies || []).length) $("#qb-c").value = r.data.competencies.map((c) => cText(c).replace(/\s+/g, "")).join(", ");
+      const us = (r.data.groups || []).reduce((n, g) => n + (g.stories || []).length, 0);
+      pre.innerHTML = `✓ ${esc(r.data.title || f.name)} · ${us ? `${us} user stories` : `${s.text.length.toLocaleString("en")} characters`}${(r.data.competencies || []).length ? "" : ` · <span class="muted">no competency level found: write them below</span>`}`;
     } catch (e) { src = null; pre.innerHTML = `<span style="color:var(--down)">${esc(e.message)}</span>`; }
   };
   $("#qb-file", dlg).onchange = () => readFile($("#qb-file", dlg).files[0]);
