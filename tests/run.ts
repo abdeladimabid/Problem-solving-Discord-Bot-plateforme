@@ -14,6 +14,7 @@ import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
 import { finish } from "../src/shared/challenges.ts";
 import { getGuild } from "../src/shared/db.ts";
+import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -2825,6 +2826,72 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   const imp = await api("POST", "/api/github/import", { g: G, data });
   check(imp.status === 200 && imp.data.students === 1 && imp.data.briefs === 1 && imp.data.handins === 1, "Watcher import from its data (read in the dashboard through the Cloudflare API)");
   check(q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).github_login === "bob-gh", "…students linked");
+}
+
+section("brief steps: found in the brief, dated in working days, proposed from the repo at the date, the teacher decides, Suivi du projet in the comment");
+{
+  // found in the brief text, dated from the brief's first day (Saturday and Sunday skipped), at the due time
+  const raw = stepsFallback("Contexte\nPartie 1, fin du jour 1 : maquette et backlog.\nÉtape 2 - jour 3 : pages HTML\nrien ici");
+  check(raw.length === 2 && raw[0].nom === "Partie 1" && raw[1].jour === 3 && raw[0].attendu === "maquette et backlog", "\"Partie N, fin du jour N\" lines found without AI");
+  const fri = Date.parse("2026-10-09T09:00:00Z") / 1000, due = Date.parse("2026-10-15T23:59:00Z") / 1000;
+  check(new Date(dayDate(fri, due, 2) * 1000).toISOString() === "2026-10-12T23:59:00.000Z", "day 2 of a brief that starts on a Friday is the Monday, at the due time");
+  const st = stepsFrom(raw, fri, due);
+  check(st.length === 2 && st[0].day === 1 && st[1].n === 2, "dated steps");
+  const txt = stepsToText(st);
+  check(txt.split("\n")[0] === "Partie 1 | 2026-10-09 23:59 | maquette et backlog", "steps as text for the teacher");
+  check(parseSteps(txt).map((s) => s.due).join() === st.map((s) => s.due).join(), "…and read back the same");
+  check(parseSteps("Fin | 2026-10-09 | tout\nbad line").length === 1 && parseSteps("Fin | 2026-10-09 | tout")[0].day === null, "the teacher's lines (a wrong line is skipped)");
+  check(stepRhythm(st, ["2026-10-09T10:00:00Z", "2026-10-13T10:00:00Z", "2026-10-20T10:00:00Z", "junk"]).join() === "1,1,1", "commits per step period");
+
+  // a published brief: its steps come from its text, the teacher can change them, ✨ the AI finds them in another brief
+  const today = clock.now(), dayIso = (d: number) => new Date((today + d * 86400) * 1000).toISOString().slice(0, 10);
+  const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Site en étapes", summary: "Un site", context: "Partie 1, fin du jour 1 : maquette du site.\nPartie 2, fin du jour 3 : pages HTML.\nPartie 3, fin du jour 40 : déploiement.", competencies: ["C3N1"] } });
+  const sid = mk.data.brief.id;
+  check(mk.status === 200 && !mk.data.steps.length, "a draft has no steps yet");
+  const pub = await api("POST", `/api/briefs/${sid}/assign`, { g: G, start: dayIso(-10), due: dayIso(40) });
+  check(pub.status === 200 && pub.data.steps.length === 3 && pub.data.steps[0].name === "Partie 1" && /^Partie 1 \| /.test(pub.data.stepsText), "publishing finds the steps of the brief");
+  const ed = await api("PUT", `/api/briefs/${sid}/steps`, { g: G, text: pub.data.stepsText.replace("pages HTML", "pages HTML et CSS") });
+  check(ed.status === 200 && ed.data.steps[1].expected === "pages HTML et CSS", "the teacher changes a step");
+  check((await api("PUT", `/api/briefs/${sid}/steps`, { g: G, text: "no date here" })).status === 400, "a text without any step is refused");
+  const mk2 = await api("POST", "/api/briefs", { g: G, data: { title: "Autre", context: "Le projet se fait en trois temps : d'abord la maquette, puis les pages." } });
+  const ai2 = await api("POST", `/api/briefs/${mk2.data.brief.id}/steps`, { g: G });
+  check(ai2.status === 200 && ai2.data.steps.length === 2 && ai2.data.steps[1].name === "Pages", "✨ the AI finds steps that are not written \"Partie N\"");
+
+  // propose from the repo at the step's date, then the teacher's choice
+  const was = { key: env.GITHUB_PRIVATE_KEY, id: env.GITHUB_APP_ID };
+  env.GITHUB_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----"; env.GITHUB_APP_ID = "1";
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", clock.now() + 3000);
+  const who = `u:${U.carol.id}`;
+  await api("POST", `/api/briefs/${sid}/handin`, { g: G, who, repo: "carol/etapes" });
+  const s1 = ed.data.steps[0], s2 = ed.data.steps[1];
+  const at = (t: number) => new Date(t * 1000).toISOString();
+  const cm = (sha: string, t: number) => ({ sha: sha.repeat(40), commit: { message: "feat: " + sha, author: { date: at(t) } } });
+  github.commits["carol/etapes"] = [cm("d", s2.due + 3600), cm("c", s2.due + 1800), cm("b", s1.due - 3600)];
+  github.trees["carol/etapes@" + "b".repeat(40)] = ["maquette.png"];
+  github.trees["carol/etapes@HEAD"] = ["maquette.png", "index.html", "pages/contact.html"];
+  const p1 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 1 });
+  check(p1.status === 200 && p1.data.prop.statut === "a_temps" && p1.data.prop.before === 1 && p1.data.prop.after === 2 && p1.data.prop.files === 1 && p1.data.prop.added === 2, "step 1: proposed from the repo as it was at its date");
+  check(ai.users.some((u) => u.includes("ATTENDU : maquette du site") && u.includes("FICHIERS À LA DATE (1) :\nmaquette.png")), "the AI gets what was expected and the files at the date");
+  const p3 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 3 });
+  check(p3.data.prop.statut === "a_venir", "a step not due yet is not read");
+  await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 1, final: "a_temps" });
+  const sv = await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 2, final: "en_retard", note: "Les pages sont arrivées en retard." });
+  check(sv.status === 200 && sv.data.stepRecs[1].final === "a_temps" && sv.data.stepRecs[1].prop.statut === "a_temps" && sv.data.stepRecs[2].final === "en_retard", "the teacher's choice is saved with the proposal");
+  check((await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 9, final: "a_temps" })).status === 400, "unknown step refused");
+  check((await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who: `u:${U.bob.id}`, n: 1 })).status === 400, "no repo yet: a clear message");
+
+  // the comment of the debrief: Suivi du projet (results, note, work done at the end) and the advice
+  const rec = { at: Date.now(), first: "Carol", model: "test", brief: "Site en étapes", repos: ["carol/etapes"], count: 6, files: true, skills: ["C3"],
+    checks: [{ id: "pages", label: "Site multipage", ok: true, detail: "3 pages" }], rhythm: [1, 0, 5, 0],
+    result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
+  const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
+  check(/-Suivi du projet :\nPartie 1 : validée à temps\.\nPartie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note");
+  check(fb.includes("La majorité de ton travail (83 % des commits) a été faite pendant la dernière étape") && fb.includes("terminer chaque partie à la date prévue"), "…work done at the end, and the advice");
+  check(!/Partie 3 :/.test(fb), "a step not decided is not written");
+  const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
+  check(rv.data.steps.length === 3 && rv.data.stepRecs[2].note === "Les pages sont arrivées en retard.", "the debrief page gets the steps and the results");
+  env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
 }
 
 section("i18n: every key exists in English and French");

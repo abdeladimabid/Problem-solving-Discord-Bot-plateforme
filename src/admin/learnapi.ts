@@ -17,6 +17,7 @@ import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewards
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
+import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
 import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
 
@@ -32,7 +33,7 @@ export async function learningApi(env: Env, ctx: Ctx, path: string, method: stri
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
     if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -195,6 +196,17 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(grid), id);
     return ok(await briefView(env, g, id));
   }
+  if ((m = path.match(/^\/briefs\/(\d+)\/steps$/)) && (method === "PUT" || method === "POST")) {
+    const g = await guild();
+    const id = Number(m[1]);
+    const cur = await getBrief(env, g, id);
+    if (!cur) throw new ApiError(404, "This brief doesn't exist anymore.");
+    const start = cur.start_at ?? now(), due = cur.due_at ?? start + 5 * 86400;
+    const steps = method === "PUT" ? parseSteps(String(body.text || "").slice(0, 6000)) : await makeSteps(env, simplonText(cur.data, await programOf(env, g)), start, due);
+    if (method === "PUT" && String(body.text || "").trim() && !steps.length) bad("One step per line: name | YYYY-MM-DD HH:MM | what is expected.");
+    await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", steps.length ? JSON.stringify(steps) : null, id);
+    return ok(await briefView(env, g, id));
+  }
   if ((m = path.match(/^\/briefs\/(\d+)\/assign$/)) && method === "POST") {
     // publish: dates, grid, and the announcement in Discord
     const g = await guild();
@@ -205,6 +217,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data.modalities.due)) bad("Choose the due date first.");
     await saveBrief(env, g, id, { data, internal: cur.internal, status: "assigned" });
     if (!(cur as any).grid) await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(await makeGrid(env, data)), id);
+    {
+      const nb = (await getBrief(env, g, id))!;
+      const start = nb.start_at ?? now(), due = nb.due_at ?? start + 5 * 86400;
+      const had = stepsOf((nb as any).steps);
+      const steps = had.length ? redate(had, start, due) : stepsFrom(stepsFallback(simplonText(nb.data, await programOf(env, g))), start, due);
+      if (steps.length) await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", JSON.stringify(steps), id);
+    }
     if (body.announce) {
       const p = await programOf(env, g);
       const ch = githubCfg(g).channel || g.announce_channel || g.daily_channel;
@@ -235,7 +254,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -284,6 +303,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, ...(await reviewView(env, g, id, who)) });
     }
     if (act === "reopen") { await reopenReview(env, g, id, who); return ok(await reviewView(env, g, id, who)); }
+    // steps: the bot proposes from the repo at the step's date, the teacher decides
+    if (act === "stepcheck" && method === "POST") { const prop = await proposeStep(env, g, b, who, Number(body.n)); return ok({ prop, ...(await reviewView(env, g, id, who)) }); }
+    if (act === "step" && method === "POST") { await saveStep(env, g, b, who, Number(body.n), String(body.final || ""), String(body.note || "")); return ok(await reviewView(env, g, id, who)); }
   }
 
   // ------------------------------------------------------------ competencies (class view)
@@ -494,7 +516,8 @@ async function briefView(env: Env, g: GuildRow, id: number) {
     return { status: r.status, final_at: r.final_at, sent_at: r.sent_at, pct, ok, ko };
   };
   return {
-    brief: { ...b, grid: undefined, squads: undefined }, grid, gridText: grid ? gridToText(grid) : "", squads, kind: row.kind === "squad" ? "squad" : "solo", repo_hint: row.repo_hint ?? "",
+    brief: { ...b, grid: undefined, squads: undefined, steps: undefined }, grid, gridText: grid ? gridToText(grid) : "", squads, kind: row.kind === "squad" ? "squad" : "solo", repo_hint: row.repo_hint ?? "",
+    steps: stepsOf(row.steps), stepsText: stepsToText(stepsOf(row.steps)),
     fields: simplonFields(b.data, p), text: simplonText(b.data, p), checks: briefChecks(b.data, w), week: w,
     referential: p.referential.map((c) => ({ ...c, label: compLabel(c.code) })), levels: p.levels,
     students: students.map((s) => ({ ...s, push: push.get(s.discord_id) ?? null, handin: handins.find((h) => h.who === `u:${s.discord_id}`) ?? null, review: reviewOf(`u:${s.discord_id}`), squad: squadOf(squads, s.discord_id)?.id ?? null })),
@@ -504,10 +527,12 @@ async function briefView(env: Env, g: GuildRow, id: number) {
 }
 
 async function reviewView(env: Env, g: GuildRow, briefId: number, who: string) {
+  const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
+  const stepRes = steps.length ? await stepRecs(env, briefId, who) : {};
   const r = await getReview(env, briefId, who);
-  if (!r) return { review: null, status: null };
+  if (!r) return { review: null, status: null, steps, stepRecs: stepRes };
   const states = statesOf(r.rec);
-  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at };
+  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at, steps, stepRecs: stepRes };
 }
 
 async function assessView(env: Env, g: GuildRow, id: number) {

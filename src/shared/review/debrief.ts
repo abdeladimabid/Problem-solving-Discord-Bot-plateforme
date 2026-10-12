@@ -21,6 +21,8 @@ import {
 } from "./engine.ts";
 import { githubGet, githubText, installationToken, repoSnapshot, squadContribution } from "./gh.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
+import type { Step } from "./steps.ts";
+import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
 
 const AI_DIFF_BUDGET = 12000, AI_DIFF_BUDGET_WITH_BRIEF = 5000, AI_FILES_BUDGET = 9000;
 
@@ -100,7 +102,7 @@ export { gridToText, parseGrid };
 // ------------------------------------------------------------- the brief
 export interface BriefCtx {
   id: number; title: string; text: string; skills: string[]; grid: Grid | null; start: number; due: number; repoHint: string;
-  kind: "solo" | "squad"; squads: Squad[]; data: BriefData; program: Program | null;
+  kind: "solo" | "squad"; squads: Squad[]; data: BriefData; program: Program | null; steps: Step[];
 }
 export interface Squad { id: string; name: string; members: string[]; sm: string }
 
@@ -374,6 +376,14 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     }
     rec.members = prev?.rec?.members ?? {};
   }
+  // Steps of the brief: when the work was done (commits per step), and the teacher's result for each step
+  if (b.steps.length) {
+    const inRepo = listed.filter((c) => c.repo === snap.repo);
+    rec.rhythm = stepRhythm(b.steps, inRepo.map((c) => c.date));
+    rec.stepNames = b.steps.map((s) => s.name);
+    for (const m of rec.contrib || []) m.perStep = stepRhythm(b.steps, inRepo.filter((c) => String(c.author || "").toLowerCase() === String(m.login || "").toLowerCase()).map((c) => c.date));
+    rec.suivi = await suiviFor(env, b.id, who, b.steps, rec.rhythm);
+  }
   result.feedback = buildComment(first, rec, undefined);
   if (squad) result.feedback = await groupComment(env, result.feedback, squad.name);
   await putReview(env, g, b.id, who, rec, "draft");
@@ -412,6 +422,8 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
     rec.challenge.note = oneLine(raw.mes.note, 500);
   }
   rec.final = final;
+  const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
+  rec.suivi = steps.length ? await suiviFor(env, briefId, who, steps, rec.rhythm ?? null) : null;
   rec.result.feedback = buildComment(rec.first || "", rec, final);
   if (rec.squad) rec.result.feedback = await groupComment(env, rec.result.feedback, rec.squad.name);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
@@ -538,6 +550,6 @@ export async function loadBriefCtx(env: Env, g: GuildRow, id: number): Promise<B
   return {
     id: r.id, title: r.title, text: simplonText(data, program ?? undefined), skills: String(r.competencies || "").split(",").filter((c: string) => /^[CT]\d{1,2}N\d$/.test(c)),
     grid, start: r.start_at ?? r.created_at, due: r.due_at ?? now() + 7 * 86400, repoHint: r.repo_hint || "", kind: r.kind === "squad" ? "squad" : "solo",
-    squads: cleanSquads(r.squads || "[]"), data, program,
+    squads: cleanSquads(r.squads || "[]"), data, program, steps: stepsOf(r.steps),
   };
 }
