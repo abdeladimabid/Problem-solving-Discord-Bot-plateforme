@@ -3,7 +3,7 @@
 //     their scrum master, how to hand in (each student, or only the scrum master) and the expected repo name
 //   • the status: who pushed on time, late, or nothing (with mentions)
 import type { Env, GuildRow } from "./types.ts";
-import { all, one } from "./db.ts";
+import { all, now, one, run } from "./db.ts";
 import { send } from "./discord.ts";
 import { githubCfg, pushStatus } from "./github.ts";
 import { stepsOf } from "./review/steps.ts";
@@ -36,6 +36,7 @@ export async function announceFr(env: Env, g: GuildRow, id: number) {
     : "📥 **Chacun dépose son propre repo** avec `/brief submit`, dès qu’il est créé.");
   if (repo) lines.push(`Nom du repo : **${repo}**`);
   await send(env, ch, { embeds: [{ color: 0x2563eb, title: `📌 Nouveau brief : ${b.title}`.slice(0, 256), description: lines.join("\n").slice(0, 4000) }] });
+  await run(env, "UPDATE briefs SET announced_at = ? WHERE id = ?", now(), b.id);
   return { channel: ch };
 }
 

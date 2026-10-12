@@ -2975,6 +2975,33 @@ section("watcher: the brief announced in French and its status posted in Discord
   run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
 }
 
+section("briefs: the sprint chosen by the teacher (or none, e.g. a cross defense), the due time, \"announced\" kept");
+{
+  const O = (await api("GET", `/api/sprints?g=${G}`)).data.sprints;
+  const [s0, s1] = O;
+  const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Soutenance croisée", context: "Présenter le projet." } });
+  const id = mk.data.brief.id;
+  const inSprint = async (n: number) => (await api("GET", `/api/sprints/${n}?g=${G}`)).data.briefs.some((b: any) => b.id === id);
+  let r = await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, time: "17:30", sprint: "none" });
+  check(r.status === 200 && r.data.brief.due_at === Date.parse(s0.end + "T17:30:00Z") / 1000, "the due time chosen (UTC)");
+  check(q1("SELECT sprint FROM briefs WHERE id = ?", id).sprint === 0 && !(await inSprint(s0.n)), "not in a sprint, though its due date is in one");
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, sprint: String(s1.n) });
+  check(await inSprint(s1.n) && !(await inSprint(s0.n)), "…in the sprint chosen");
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, sprint: "" });
+  check(await inSprint(s0.n), "…else by its due date");
+  const B = (await api("GET", `/api/briefs/${id}?g=${G}`)).data;
+  await api("PUT", `/api/briefs/${id}`, { g: G, data: B.brief.data });
+  check(q1("SELECT due_at FROM briefs WHERE id = ?", id).due_at === Date.parse(s0.end + "T17:30:00Z") / 1000, "saving the brief keeps its due time");
+  check(q1("SELECT announced_at FROM briefs WHERE id = ?", id).announced_at == null, "not announced yet");
+  await api("POST", `/api/briefs/${id}/watcher/announce`, { g: G });
+  const L = (await api("GET", `/api/briefs?g=${G}`)).data.items.find((b: any) => b.id === id);
+  check(!!L.announced_at && L.sprint === null, "announced: the list says so (the dashboard shows \"Announce again\")");
+  run1("UPDATE briefs SET announced_at = NULL WHERE id = ?", id);
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, announce: true });
+  check(!!q1("SELECT announced_at FROM briefs WHERE id = ?", id).announced_at, "…also when announced on publishing");
+  run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
 section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
 {
   const was = env.PUBLIC_URL;
