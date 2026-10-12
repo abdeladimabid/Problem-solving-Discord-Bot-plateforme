@@ -54,7 +54,7 @@ export function cleanComps(v: unknown): string[] {
 
 export function cleanBrief(b: any): BriefData {
   const groups: StoryGroup[] = (Array.isArray(b?.groups) ? b.groups : []).slice(0, 6).map((g: any) => ({
-    title: s(g?.title, 80) || "En tant que développeur", emoji: s(g?.emoji, 8), stories: list(g?.stories, 20, 600),
+    title: s(g?.title, 80) || "En tant que développeur", emoji: s(g?.emoji, 8), stories: list(g?.stories, 120, 600),
   })).filter((g: StoryGroup) => g.stories.length);
   const parts = (Array.isArray(b?.evaluation?.parts) ? b.evaluation.parts : []).slice(0, 8)
     .map((p: any) => ({ minutes: int(p?.minutes, 5, 1, 120), label: s(p?.label, 120) })).filter((p: { label: string }) => p.label);

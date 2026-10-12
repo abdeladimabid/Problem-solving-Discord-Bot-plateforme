@@ -150,6 +150,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (/^\d{4}-\d{2}-\d{2}$/.test(String(body.due || ""))) md.due = String(body.due);
     const w = body.week ? p.weeks.find((x) => x.n === Number(body.week)) ?? null : null;
     const id = await saveBrief(env, g, null, { data, program: p.id, week: w?.n ?? null, source: "import" });
+    // the steps written in the page ("Etape 1, fin du jour 1 : …"), dated from the brief's days (publishing dates them again)
+    const fb = stepsFallback(text);
+    if (fb.length) {
+      const nb = (await getBrief(env, g, id))!;
+      const start = nb.start_at ?? now(), steps = stepsFrom(fb, start, nb.due_at ?? start + 5 * 86400);
+      if (steps.length) await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", JSON.stringify(steps), id);
+    }
     return ok(await briefView(env, g, id));
   }
   if (path === "/briefs" && method === "POST") {

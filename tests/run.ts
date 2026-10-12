@@ -3002,6 +3002,18 @@ section("briefs: the sprint chosen by the teacher (or none, e.g. a cross defense
   run1("DELETE FROM briefs WHERE id = ?", id);
 }
 
+section("briefs: an imported page is kept whole (many user stories) and its steps are read from it");
+{
+  const lines = Array.from({ length: 34 }, (_, i) => `Afficher l'élément ${i + 1} de la page.`);
+  const text = ["Contexte du projet", "Un site pour une animalerie.", "En tant que visiteur, je vais voir le catalogue.", ...lines,
+    "Valider les 2 étapes du projet", "Etape 1, fin du jour 1 : maquette analysée.", "Etape 2, fin du jour 3 : pages intégrées.", "Modalités pédagogiques", "Travail collectif (Squad) sur 5 jours."].join("\n");
+  const r = await api("POST", "/api/briefs/import", { g: G, text, title: "PetNest", comps: [], start: "2026-10-12", due: "2026-10-16" });
+  const stories = r.data.brief.data.groups.reduce((n: number, g: any) => n + g.stories.length, 0);
+  check(r.status === 200 && stories >= 35 && r.data.text.includes("élément 34"), "every user story kept (more than 20)");
+  check(r.data.steps.length === 2 && new Date(r.data.steps[1].due * 1000).toISOString().slice(0, 10) === "2026-10-14" && r.data.steps[0].expected.startsWith("maquette"), "the steps written in the page, dated from the brief's days");
+  run1("DELETE FROM briefs WHERE id = ?", r.data.brief.id);
+}
+
 section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
 {
   const was = env.PUBLIC_URL;
