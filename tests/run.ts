@@ -3005,9 +3005,9 @@ section("briefs: the sprint chosen by the teacher (or none, e.g. a cross defense
 section("briefs: an imported page is kept whole (many user stories) and its steps are read from it");
 {
   const lines = Array.from({ length: 34 }, (_, i) => `Afficher l'élément ${i + 1} de la page.`);
-  const text = ["Contexte du projet", "Un site pour une animalerie.", "En tant que visiteur, je vais voir le catalogue.", ...lines,
-    "Valider les 2 étapes du projet", "Etape 1, fin du jour 1 : maquette analysée.", "Etape 2, fin du jour 3 : pages intégrées.", "Modalités pédagogiques", "Travail collectif (Squad) sur 5 jours."].join("\n");
-  const r = await api("POST", "/api/briefs/import", { g: G, text, title: "PetNest", comps: [], start: "2026-10-12", due: "2026-10-16" });
+  const text = ["Contexte du projet", "Un site vitrine.", "En tant que visiteur, je vais voir le catalogue.", ...lines,
+    "Valider les 2 étapes du projet", "Etape 1, fin du jour 1 : maquette prête.", "Etape 2, fin du jour 3 : pages faites.", "Modalités pédagogiques", "Travail collectif (Squad) sur 5 jours."].join("\n");
+  const r = await api("POST", "/api/briefs/import", { g: G, text, title: "Site test", comps: [], start: "2026-10-12", due: "2026-10-16" });
   const stories = r.data.brief.data.groups.reduce((n: number, g: any) => n + g.stories.length, 0);
   check(r.status === 200 && stories >= 35 && r.data.text.includes("élément 34"), "every user story kept (more than 20)");
   check(r.data.steps.length === 2 && new Date(r.data.steps[1].due * 1000).toISOString().slice(0, 10) === "2026-10-14" && r.data.steps[0].expected.startsWith("maquette"), "the steps written in the page, dated from the brief's days");
@@ -3039,6 +3039,31 @@ section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
   check((await api("POST", "/api/github/manifest", { g: G })).status === 400, "no bot address yet: refused");
   env.PUBLIC_URL = was;
   await api("DELETE", `/api/github/app?g=${G}`);
+}
+
+section("🤖 Settings → AI: each teacher sets their own Groq key from the dashboard");
+{
+  const a0 = await api("GET", `/api/settings/ai?g=${G}`);
+  check(a0.status === 200 && a0.data.source === "none" && a0.data.models.length >= 2, "no key yet: Cloudflare's AI answers");
+  check((await api("PUT", `/api/settings/ai?g=${G}`, { key: "not-a-key" })).status === 400, "a key that isn't a Groq key is refused");
+  const bad = await api("PUT", `/api/settings/ai?g=${G}`, { key: "gsk_bad" + "x".repeat(40) });
+  check(bad.status === 400 && /refused/i.test(bad.data.error), "a key Groq refuses is not saved (tested first)");
+  const good = "gsk_good" + "A".repeat(40);
+  const sv = await api("PUT", `/api/settings/ai?g=${G}`, { key: good, model: "llama-3.3-70b-versatile" });
+  check(sv.status === 200 && sv.data.source === "settings" && sv.data.model === "llama-3.3-70b-versatile" && !JSON.stringify(sv.data).includes(good) && sv.data.masked.endsWith("AAAA"), "the key is saved after Groq accepts it, and never sent back (only masked)");
+  check(env.GROQ_API_KEY === good && env.GROQ_MODEL === "llama-3.3-70b-versatile", "…and used by the AI right away");
+  const cl = await api("PUT", `/api/settings/ai?g=${G}`, { clear: true, model: "" });
+  check(cl.data.source === "none" && !env.GROQ_API_KEY, "remove the key: back to Cloudflare's AI (or the secret)");
+}
+
+section("GitHub: a student who connects the same account again isn't announced twice");
+{
+  const { linkGithub } = await import("../src/shared/github.ts");
+  const n0 = discordCalls.length;
+  await linkGithub(env, G, U.bob.id, { id: "77001", login: "bobby-gh", inst: "5501" });
+  await linkGithub(env, G, U.bob.id, { id: "77001", login: "bobby-gh", inst: "5501" });
+  const posts = discordCalls.slice(n0).filter((c) => c.method === "POST" && JSON.stringify(c.body ?? {}).includes("bobby-gh"));
+  check(posts.length === 1, `one message for a new link (${posts.length})`);
 }
 
 section("i18n: every key exists in English and French");
