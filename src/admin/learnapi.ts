@@ -12,6 +12,7 @@ import type { Section } from "../shared/briefs.ts";
 import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, parseGrid, saveCommentText, saveMembers, saveStates, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
+import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
@@ -352,6 +353,20 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const g = await guild();
     try { await saveGhApp(env, g.id, body); } catch (e) { bad((e as Error).message); }
     return ok({ ok: true });
+  }
+  // "Create the GitHub App for me": the dashboard posts the manifest to GitHub, which comes back here with a code
+  if (path === "/github/manifest" && method === "POST") {
+    try { return ok(await githubManifest(env, await guild(), url.origin)); } catch (e) { if (e instanceof ManifestError) bad(e.message); throw e; }
+  }
+  if (path === "/github/manifest/done" && method === "GET") {
+    const back = (q: string) => new Response(null, { status: 303, headers: { location: `/?${q}#/settings/github` } });
+    try {
+      const r = await finishManifest(env, String(url.searchParams.get("state") || ""), String(url.searchParams.get("code") || ""));
+      return back(`gh=created&slug=${encodeURIComponent(r.slug)}`);
+    } catch (e) {
+      if (e instanceof ManifestError) return back(`gh=failed&why=${encodeURIComponent(e.message)}`);
+      throw e;
+    }
   }
   if (path === "/github/app" && method === "DELETE") {
     const g = await guild();

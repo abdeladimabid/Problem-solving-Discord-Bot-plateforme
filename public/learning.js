@@ -1455,6 +1455,13 @@ async function viewGithub() {
 /** Settings → GitHub & Watcher: the class's GitHub App (or the school's), reports, rewards, import from GitHub Watcher. */
 async function githubSettings(root) {
   const [G] = await Promise.all([api("/github"), loadDiscord()]);
+  // back from GitHub after "Create the GitHub App for me"
+  const back = new URLSearchParams(location.search);
+  if (back.get("gh")) {
+    if (back.get("gh") === "created") toast(`GitHub App created${back.get("slug") ? `: ${back.get("slug")}` : ""}. Install it on your repos to test it.`);
+    else toast(back.get("why") || "GitHub didn't create the App.", true);
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
   const c = G.cfg, su = G.setup;
   const ready = su.app && su.oauth && su.webhook && su.key;
   const chOpt = (sel, list) => `<option value="">—</option>` + (list || []).map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}># ${esc(x.name)}</option>`).join("");
@@ -1466,7 +1473,8 @@ async function githubSettings(root) {
       <p class="small">${su.own ? "This class uses <b>its own GitHub App</b> (saved here)." : su.shared ? "This class uses <b>the school's GitHub App</b> (set when ClassBot was installed): nothing to do. Use your own only if you want this class separate." : "No GitHub App yet. Create one (free) and fill in its details below."}</p>
       <ul class="bchecks">${item(su.app, "App slug")}${item(su.key, "Private key (to read the repos)")}${item(su.oauth, "Client ID and secret (students sign in)")}${item(su.webhook, "Webhook secret (pushes arrive)")}${item(!!su.ai, `AI for the debriefs${su.ai ? ` (${su.ai === "groq" ? "Groq" : "Workers AI"})` : ""}`)}</ul>
       <div id="gh-own" ${su.own || !su.shared ? "" : "hidden"}>
-        <details class="howto" ${ready ? "" : "open"}><summary><b>How to create the GitHub App</b> (5 minutes)</summary>
+        ${ready ? "" : `<p><button class="btn primary" id="ga-auto">✨ Create the GitHub App for me</button> <span class="muted small">2 clicks on GitHub</span></p>`}
+        <details class="howto"><summary><b>Or create it by hand</b></summary>
           <ol class="small">
             <li>On GitHub: your picture → <b>Settings → Developer settings → GitHub Apps → New GitHub App</b> (or edit your Watcher's App).</li>
             <li>Paste the three URLs below. Tick <b>Redirect on update</b> under Setup URL. Leave <i>Request user authorization during installation</i> unticked.</li>
@@ -1526,6 +1534,15 @@ async function githubSettings(root) {
     </div>`;
   $$("[data-copy]", root).forEach((b) => b.onclick = () => copyText(b.dataset.copy, "Copied"));
   if ($("#ga-mine")) $("#ga-mine").onclick = (e) => { $("#gh-own").hidden = false; e.currentTarget.remove(); };
+  // GitHub's app manifest: a form posted to GitHub, which creates the App and comes back with its credentials
+  if ($("#ga-auto")) $("#ga-auto").onclick = (e) => busy(e.currentTarget, async () => {
+    const m = await api("/github/manifest", { method: "POST", body: {} });
+    const f = document.createElement("form");
+    f.method = "post"; f.action = m.action;
+    const i = document.createElement("input");
+    i.type = "hidden"; i.name = "manifest"; i.value = JSON.stringify(m.manifest);
+    f.append(i); document.body.append(f); f.submit();
+  });
   const reload = () => githubSettings(root);
   $("#ga-save").onclick = (e) => busy(e.currentTarget, async () => {
     await api("/github/app", { method: "PUT", body: { appId: $("#ga-id").value, slug: $("#ga-slug").value, clientId: $("#ga-cid").value, clientSecret: $("#ga-cs").value, webhookSecret: $("#ga-ws").value, privateKey: $("#ga-pk").value } });

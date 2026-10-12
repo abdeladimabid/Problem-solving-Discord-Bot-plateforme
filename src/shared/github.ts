@@ -68,6 +68,43 @@ export async function saveGhApp(env: Env, guildId: string, b: Record<string, unk
   return ghAppOf(env, guildId);
 }
 export const githubReady = (a: GhApp) => !!(a.clientId && a.clientSecret && a.slug);
+
+// ------------------------------------------------ "Create the GitHub App for me" (GitHub's app manifest)
+// The teacher clicks once on GitHub ("Create GitHub App"): the URLs, permissions and events are already filled in,
+// and GitHub sends back the App ID, slug, Client ID, secrets and private key, saved as the class's own App.
+export class ManifestError extends Error {}
+const MANIFEST_TTL = 3600;
+/** What the dashboard posts to GitHub: the form's address (with a one-time state) and the manifest. */
+export async function githubManifest(env: Env, g: GuildRow, dashOrigin: string) {
+  if (!env.PUBLIC_URL) throw new ManifestError("The bot's address (PUBLIC_URL) isn't set: run npm run setup first.");
+  const state = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await run(env, "DELETE FROM gh_manifest_states WHERE exp < ?", now());
+  await run(env, "INSERT INTO gh_manifest_states (state, guild_id, exp) VALUES (?, ?, ?)", state, g.id, now() + MANIFEST_TTL);
+  const urls = githubUrls(env, { own: true, guildId: g.id } as GhApp);
+  const name = `ClassBot ${String(g.name || g.id)}`.replace(/[^\w .-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 34);
+  const manifest = {
+    name, url: (env.PUBLIC_URL || "").replace(/\/$/, ""), description: "Follows the students' GitHub work for ClassBot (briefs, debriefs, reports).",
+    hook_attributes: { url: urls.webhook, active: true },
+    redirect_url: `${dashOrigin.replace(/\/$/, "")}/api/github/manifest/done`,
+    callback_urls: [urls.callback], setup_url: urls.setup, setup_on_update: true, request_oauth_on_install: false,
+    public: true, // the students install it on their own accounts
+    default_permissions: { contents: "read", metadata: "read", pull_requests: "read", issues: "read" },
+    default_events: ["push", "pull_request", "pull_request_review", "issues", "create"],
+  };
+  return { action: `${GH_WEB}/settings/apps/new?state=${state}`, manifest };
+}
+/** GitHub came back with a code: turn it into the App's credentials and save them for the class that asked. */
+export async function finishManifest(env: Env, state: string, code: string) {
+  const st = /^[a-f0-9]{32}$/.test(state) ? await one<{ guild_id: string; exp: number }>(env, "SELECT guild_id, exp FROM gh_manifest_states WHERE state = ?", state) : null;
+  if (!st || st.exp < now()) throw new ManifestError("This link has expired: click “Create the GitHub App for me” again.");
+  await run(env, "DELETE FROM gh_manifest_states WHERE state = ?", state);
+  if (!/^[\w-]{1,100}$/.test(code)) throw new ManifestError("GitHub didn't send the code back.");
+  const res = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, { method: "POST", headers: { Accept: "application/vnd.github+json", "User-Agent": "classbot", "X-GitHub-Api-Version": "2022-11-28" } });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok || !j?.id || !j?.pem) throw new ManifestError(`GitHub didn't create the App (${res.status} ${String(j?.message || "").slice(0, 120)}).`);
+  await saveGhApp(env, st.guild_id, { appId: String(j.id), slug: String(j.slug || ""), clientId: String(j.client_id || ""), clientSecret: String(j.client_secret || ""), webhookSecret: String(j.webhook_secret || ""), privateKey: String(j.pem) });
+  return { guildId: st.guild_id, slug: String(j.slug || "") };
+}
 export const githubCanRead = (a: GhApp) => !!(a.privateKey && (a.appId || a.clientId));
 /** The three URLs to paste in the App: a class's own App has its own webhook (its own secret). */
 export function githubUrls(env: Env, a: GhApp) {
