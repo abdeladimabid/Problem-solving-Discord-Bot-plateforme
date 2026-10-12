@@ -107,9 +107,18 @@ const W_SORTS = {
 // Everything the GitHub page had (figures, reports, students not linked yet, how students use it, unlink) and Watcher's:
 // who needs attention and why, briefs in progress (announce, status), the students' table with filters and a brief filter,
 // and each student's panel.
+// what is still to set up (nothing when all is done)
+function wSetupHtml(ready, G, P) {
+  const todo = [
+    !ready && `<a href="#/settings/github">GitHub App</a>`,
+    P && !wSprintsOf(P).length && `<a href="#/settings/programme">Programme &amp; sprints</a>`,
+    G.students && !G.linked && `Students link GitHub: <code>/github</code>`,
+  ].filter(Boolean);
+  return todo.length ? `<div class="notice warn"><b>To set up:</b> ${todo.join(" · ")}</div>` : "";
+}
 const W_FILTERS = [["all", "All", () => true], ["active", "Active this week", (s) => s.week.active > 0], ["idle", "Idle", (s, D) => s.idle >= D.inactive], ["attention", "Need attention", (s) => s.reasons.length > 0]];
 async function viewGithubAll() {
-  const [D] = await Promise.all([watchData(), loadStudents()]);
+  const [D, , P] = await Promise.all([watchData(), loadStudents(), wProgram().catch(() => null)]);
   const G = D.G, su = G.setup, c = G.cfg;
   const ready = su.app && su.oauth && su.webhook && su.key;
   const linkedIds = new Set(D.students.map((s) => s.discord_id));
@@ -159,7 +168,7 @@ async function viewGithubAll() {
     <div class="page-head"><div><h1>GitHub</h1></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="gh-d">Send today's report</button><button class="btn" id="gh-w">Weekly report</button><a class="btn" href="#/settings/github">${icon("gear")} Settings</a></div></div>
     <div class="stack">
-    ${ready ? "" : `<div class="notice warn">GitHub isn't set up. <a href="#/settings/github">Set it up</a></div>`}
+    ${wSetupHtml(ready, G, P)}
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">🔗</span><div><b>${G.linked}/${G.students}</b><span>students linked</span>${meter(pctLinked)}</div></div>
       <div class="figure"><span class="ico">✍️</span><div><b>${worked}</b><span>worked today</span></div></div>
@@ -499,7 +508,7 @@ async function quickBrief() {
       dlg.close(); toast(msg.join(" "));
       // its card in Briefs → Follow-up, open
       wfOpen(id, null, true);
-      if (location.hash === "#/briefs/follow") viewBriefs("follow"); else location.hash = "#/briefs/follow";
+      if (location.hash === "#/briefs/follow") routes.briefs("follow"); else location.hash = "#/briefs/follow";
     } }]);
   dlg.classList.add("wide");
   wSprintField(dlg, null, "#qb-d");
@@ -740,5 +749,68 @@ async function wfCard(box, item, ctx, B = null) {
     async () => { await api(`/briefs/${id}`, { method: "DELETE" }); box.remove(); toast("Deleted"); }, true);
 }
 
+// ================================================================= Simple mode (like GitHub Watcher), a switch under the menu, kept in this browser:
+// a short menu (GitHub, Briefs, Sprints, Competencies, Teams & squads, Settings), GitHub as the home page, Briefs opens on
+// the cards with one "+ New brief" (the AI, import and blank briefs under "More"), shorter debrief texts. Off = nothing changes.
+const wSimple = () => { try { return localStorage.getItem("cb-simple") === "1"; } catch { return false; } };
+const W_KEEP = ["#/github", "#/briefs", "#/sprints", "#/competencies", "#/teams", "#/settings"];
+function wApplySimple() {
+  const on = wSimple();
+  document.body.classList.toggle("cb-simple", on);
+  $$("#nav a").forEach((a) => a.classList.toggle("cb-keep", W_KEEP.includes(a.getAttribute("href"))));
+  if ($("#cb-simple-t")) $("#cb-simple-t").checked = on;
+}
+(() => {
+  const st = document.createElement("style");
+  st.textContent = `
+.cb-simple #nav a:not(.cb-keep), .cb-simple #nav .nav-label { display: none; }
+.cb-simple #nav a[href="#/github"] { order: -6; } .cb-simple #nav a[href="#/briefs"] { order: -5; } .cb-simple #nav a[href="#/sprints"] { order: -4; }
+.cb-simple #nav a[href="#/competencies"] { order: -3; } .cb-simple #nav a[href="#/teams"] { order: -2; } .cb-simple #nav a[href="#/settings"] { order: -1; }
+.cb-simple-sw { display: flex; gap: 8px; align-items: center; padding: 8px 10px; margin-top: 8px; color: var(--ink-soft); font-size: 13px; cursor: pointer; border-top: 1px solid var(--line); }
+.cb-more { position: relative; display: inline-block; } .cb-more > summary { list-style: none; } .cb-more > summary::-webkit-details-marker { display: none; }
+.cb-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 4px; min-width: 190px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 6px; box-shadow: var(--shadow-m); }
+.cb-more-menu .btn { width: 100%; justify-content: flex-start; }
+.cb-simple #db-body .empty-state p.muted, .cb-simple #db-cst, .cb-simple .db-side > section:last-child > p.small.muted { display: none; }`;
+  document.head.append(st);
+  const nav = $("#nav");
+  if (!nav) return;
+  const sw = document.createElement("label");
+  sw.className = "cb-simple-sw";
+  sw.innerHTML = `<input type="checkbox" id="cb-simple-t"> Simple mode`;
+  nav.after(sw);
+  $("#cb-simple-t").onchange = (e) => {
+    try { localStorage.setItem("cb-simple", e.target.checked ? "1" : "0"); } catch { /* this visit only */ }
+    wApplySimple();
+    if (e.target.checked && ![...W_KEEP, "#/brief/", "#/debrief/"].some((h) => location.hash.startsWith(h))) location.hash = "#/github"; else route();
+  };
+  wApplySimple();
+})();
+
+// Briefs in simple mode: the cards first, one "+ New brief", the other ways under "More"
+const wBriefsFull = routes.briefs;
+async function wBriefs(tab) {
+  if (!wSimple()) return wBriefsFull(tab);
+  await wBriefsFull(tab || "follow");
+  const q = $("#br-quick");
+  if (!q) return;
+  ["#br-import", "#br-blank", "#br-new"].forEach((s) => { if ($(s)) $(s).style.display = "none"; });
+  q.textContent = "+ New brief";
+  q.classList.add("primary");
+  const more = document.createElement("details");
+  more.className = "cb-more";
+  more.innerHTML = `<summary class="btn">More ▾</summary><div class="cb-more-menu"><button class="btn" data-m="#br-new">✨ Write it with AI</button>
+    <button class="btn" data-m="#br-import">📄 Import a page</button><button class="btn" data-m="#br-blank">Blank brief</button></div>`;
+  q.before(more);
+  $$("[data-m]", more).forEach((b) => b.onclick = () => { more.open = false; $(b.dataset.m).click(); });
+  $$('[data-t="plan"], [data-t="prog"]').forEach((b) => { b.style.display = "none"; });
+  const f = $('[data-t="follow"]');
+  if (f) f.parentElement.prepend(f);
+  const sub = $(".page-head .sub", view);
+  if (sub) sub.hidden = true;
+}
+
 // one GitHub page (the Watcher's view of it); old Watcher links lead there
 Object.assign(routes, { github: viewGithubAll, watch: () => { location.hash = "#/github"; }, "watch-students": () => { location.hash = "#/github"; }, sprints: viewSprints });
+// simple mode: Briefs on the cards, GitHub as the home page
+Object.assign(routes, { briefs: wBriefs, overview: () => (wSimple() ? (location.hash = "#/github") : viewOverview()) });
