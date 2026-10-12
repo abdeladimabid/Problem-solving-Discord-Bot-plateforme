@@ -47,7 +47,7 @@
 .sp-box { display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-s); } .sp-box b { font-size: 22px; }
 .panel.wf { padding: 0; } .wf > summary, .wf-sec > summary { list-style: none; cursor: pointer; }
 .wf > summary::-webkit-details-marker, .wf-sec > summary::-webkit-details-marker { display: none; }
-.wf > summary { padding: 16px 20px; } .wf-body { padding: 0 20px 16px; } [data-wf] + [data-wf] { margin-top: 12px; }
+.wf > summary { padding: 16px 20px; } .wf-body { padding: 0 20px 16px; } [data-wfc] + [data-wfc] { margin-top: 12px; }
 .wf-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; } .wf-head h3, .wf-top > h3 { margin: 0; font-size: 16px; }
 .wf > summary h3::before, .wf-sec > summary b::before { content: "▸"; display: inline-block; width: 16px; color: var(--ink-faint); transition: transform .15s; }
 .wf[open] > summary h3::before, .wf-sec[open] > summary b::before { transform: rotate(90deg); }
@@ -156,10 +156,10 @@ async function viewGithubAll() {
     }).filter((s) => f(s, D) && (!q || `${s.display} ${s.login}`.toLowerCase().includes(q)) && (!bf || bf(briefOf(s)))).sort(W_SORTS[W_STATE.sort] || W_SORTS.active);
   };
   view.innerHTML = `
-    <div class="page-head"><div><h1>GitHub</h1><p class="sub">What each student pushes, every day. It feeds the reports, the brief reminders and the debriefs.</p></div>
+    <div class="page-head"><div><h1>GitHub</h1></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="gh-d">Send today's report</button><button class="btn" id="gh-w">Weekly report</button><a class="btn" href="#/settings/github">${icon("gear")} Settings</a></div></div>
     <div class="stack">
-    ${ready ? "" : `<div class="notice warn"><b>GitHub isn't set up for this class yet.</b> Students can't link their account until the class has a GitHub App. <a href="#/settings/github">Set it up in Settings → GitHub &amp; Watcher</a>.</div>`}
+    ${ready ? "" : `<div class="notice warn">GitHub isn't set up. <a href="#/settings/github">Set it up</a></div>`}
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">🔗</span><div><b>${G.linked}/${G.students}</b><span>students linked</span>${meter(pctLinked)}</div></div>
       <div class="figure"><span class="ico">✍️</span><div><b>${worked}</b><span>worked today</span></div></div>
@@ -167,7 +167,7 @@ async function viewGithubAll() {
       <div class="figure"><span class="ico">📦</span><div><b>${total14}</b><span>commits in 14 days</span></div></div>
       <div class="figure ${idle.length ? "cs-attn" : ""}"><span class="ico">💤</span><div><b>${idle.length}</b><span>idle ${D.inactive}+ working days</span></div></div>
     </div>
-    ${G.linked <= 1 && G.students > 3 && su.app ? `<div class="notice">Your students linked GitHub in <b>GitHub Watcher</b>? Bring them here at once: <a href="#/settings/github">Settings → GitHub &amp; Watcher → Import</a>. Otherwise they each type <code>/github</code> in Discord.</div>` : ""}
+    ${G.linked <= 1 && G.students > 3 && su.app ? `<div class="notice">Students already in GitHub Watcher? <a href="#/settings/github">Import them</a></div>` : ""}
     <div class="grid cols-2-even">
       <section class="panel"><h2>Need your attention ${attention.length ? `<span class="muted">${attention.length}</span>` : ""}</h2>
         ${attention.length ? `<ul class="w-att">${attention.slice(0, 8).map((s) => `<li class="w-row" data-ws="${esc(s.discord_id)}" title="${esc(s.reasons.map((r) => r[0]).join("\n"))}"><span>${esc(s.display)}</span><span class="small muted">${esc(s.reasons.map((r) => r[1]).join(" · "))}</span></li>`).join("")}</ul>
@@ -195,16 +195,11 @@ async function viewGithubAll() {
           ${wAnnBtn(BD.brief)}<button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}</div>
       <div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${BD ? "<th>Brief</th>" : ""}<th>${BD ? "Days of the brief" : "Last 14 days"}</th><th class="num">Score</th>${BD ? "" : `<th class="num">Trend</th>`}<th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th>Last push</th><th>Warnings</th></tr></thead>
         <tbody id="w-rows"></tbody></table></div>
-      ${D.students.length ? "" : `<div class="empty-state"><div style="font-size:40px">🐙</div><p class="muted">Nobody linked yet: students type <code>/github</code> in Discord.</p></div>`}
+      ${D.students.length ? "" : `<div class="empty-state"><div style="font-size:40px">🐙</div><p class="muted">Nobody linked yet (<code>/github</code>).</p></div>`}
     </section>
-    ${notLinked.length ? `<section class="panel"><div class="panel-head"><h2>Not linked yet <span class="muted">${notLinked.length}</span></h2><span class="small muted">they type <code>/github</code> in Discord</span></div>
+    ${notLinked.length ? `<section class="panel"><div class="panel-head"><h2>Not linked yet <span class="muted">${notLinked.length}</span></h2><span class="small muted"><code>/github</code></span></div>
       <div class="people">${notLinked.map((s) => `<a href="#/student/${s.discord_id}" class="person">${avatar(s.name, s.discord_id)} ${esc(s.name || s.discord_id)}</a>`).join("")}</div></section>` : ""}
-    <section class="panel"><h2>How students use it</h2>
-      <div class="how-steps">
-        <div><span class="xl-n">1</span><b><code>/github</code></b><p class="small muted">Link their GitHub account, once. They install the class's GitHub App on their repositories.</p></div>
-        <div><span class="xl-n">2</span><b>They push</b><p class="small muted">Every push, pull request and review is counted, and posted in their forum post if you chose a forum.</p></div>
-        <div><span class="xl-n">3</span><b><code>/brief submit</code></b><p class="small muted">Hand in the repo (and the planning board) of a brief. You debrief it from the brief's page.</p></div>
-      </div></section>
+    <p class="small muted">Students: <code>/github</code> to link · push · <code>/brief submit</code> to hand in.</p>
     </div>`;
   const draw = () => {
     $("#w-chips").innerHTML = W_FILTERS.map(([v, l, f]) => `<button type="button" class="w-chip" data-wf="${v}" aria-pressed="${W_STATE.filter === v}">${l}<small>${D.students.filter((s) => f(s, D)).length}</small></button>`).join("");
@@ -576,9 +571,9 @@ async function wFollow(root) {
     $("#wf-new", root).onclick = () => quickBrief();
     return;
   }
-  const slot = (b) => `<div data-wf="${b.id}"><details class="panel wf"><summary class="wf-top"><h3>${esc(b.title)}</h3></summary></details></div>`;
+  const slot = (b) => `<div data-wfc="${b.id}"><details class="panel wf"><summary class="wf-top"><h3>${esc(b.title)}</h3></summary></details></div>`;
   root.innerHTML = soon.map(slot).join("") + (ended.length ? `<h2 class="wf-h">Ended</h2>` + ended.map(slot).join("") : "");
-  for (const b of [...soon, ...ended]) wfCard($(`[data-wf="${b.id}"]`, root), b, ctx);
+  for (const b of [...soon, ...ended]) wfCard($(`[data-wfc="${b.id}"]`, root), b, ctx);
 }
 
 // one card; the details of a brief ended over 30 days ago load when it is opened
@@ -608,7 +603,7 @@ async function wfCard(box, item, ctx, B = null) {
   const handins = !B ? "" : sq ? (B.squadRows.length ? `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Squad</th><th>Handed in</th><th>Debrief</th><th></th></tr></thead><tbody>${B.squadRows.map((q) => `<tr>
         <td><b>${esc(q.name)}</b><div class="small">${q.members.map((m) => `${esc(nameOf(m))}${m === q.sm ? " <span class='tag'>SM</span>" : ""}`).join(", ")}</div></td>
         <td>${handinCell(q.handin)}</td><td>${reviewCell(q.review)}</td><td class="nowrap">${repoBtn(`s:${q.id}`, q.handin)}</td></tr>`).join("")}</tbody></table></div>`
-      : `<p class="muted small">No squads yet: make them in “Type &amp; squads”.</p>`)
+      : `<p class="muted small">No squads yet.</p>`)
     : `<div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th><th>Handed in</th><th>Debrief</th><th></th></tr></thead><tbody>${st.map((s) => `<tr>
         <td><a href="#/student/${esc(s.discord_id)}">${esc(s.name || s.discord_id)}</a></td><td>${handinCell(s.handin)}</td><td>${reviewCell(s.review)}</td><td class="nowrap">${repoBtn(`u:${s.discord_id}`, s.handin)}</td></tr>`).join("")}</tbody></table></div>`;
   const gridN = B && B.grid ? B.grid.items.length : 0;
@@ -622,17 +617,15 @@ async function wfCard(box, item, ctx, B = null) {
       <div><label>Repo name contains</label><input type="text" data-wf-repo maxlength="100" value="${esc(B.repo_hint)}" placeholder="optional, e.g. fitness"></div></div>
     <label>Evaluation grid${gridN ? ` · ${gridN} lines · ${B.grid.by === "ai" ? "made by AI" : B.grid.by === "edit" ? "changed by you" : "made without AI"}` : ""}</label>
     <textarea class="mono" data-wf-gridtext rows="12" spellcheck="false" placeholder="[fonctionnalité] Créer la page Contact (vérif : form, map)">${esc(B.gridText)}</textarea>
-    <p class="muted small" style="margin:2px 0 0">One line per requirement: [type] text (vérif : check).</p>
     <label>Steps${B.steps.length ? ` · ${B.steps.length}` : ""}</label>
-    <textarea class="mono" data-wf-stepstext rows="${Math.max(3, B.steps.length + 1)}" spellcheck="false" placeholder="Partie 1 | 2026-10-14 17:00 | maquette et structure HTML">${esc(B.stepsText)}</textarea>
-    <p class="muted small" style="margin:2px 0 0">One line: name | YYYY-MM-DD HH:MM | expected.</p>
+    <textarea class="mono" data-wf-stepstext rows="${Math.max(3, B.steps.length + 1)}" spellcheck="false" placeholder="Partie 1 | 2026-10-14 17:00 | maquette">${esc(B.stepsText)}</textarea>
     <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-bsave>Save</button></p>`;
   const typeBody = !B ? "" : `${segHtml("wfk" + b.id, [["solo", "Individual"], ["squad", "Squad (collective)"]], B.kind)}
     <div data-wf-sqbox ${sq ? "" : "hidden"}><div class="toolbar" style="margin:8px 0"><select data-wf-from><option value="">Loading the class's squads…</option></select><button class="btn small" data-wf-load>Load</button></div><div data-wf-board></div></div>
     <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-sqsave>Save</button></p>`;
   const datesBody = !B ? "" : `<div class="field-row"><div><label>From</label><input type="date" data-wf-s value="${esc(md.start || wfIso(b.start_at).slice(0, 10))}"></div>
       <div><label>Due</label><input type="date" data-wf-d value="${esc(md.due || wfIso(b.due_at).slice(0, 10))}"></div><div><label>At (UTC)</label><input type="time" data-wf-t value="${esc(md.time || wfIso(b.due_at).slice(11, 16))}"></div></div>
-    ${B.steps.length ? `<p class="muted small" style="margin:4px 0 0">The steps move with the dates.</p>` : ""}<div data-wsprint></div>
+    <div data-wsprint></div>
     <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-dsave>Save</button></p>`;
   box.innerHTML = `<details class="panel wf" ${open ? "open" : ""}>
     <summary class="wf-top"><div class="wf-head"><h3>${esc(B ? b.data.title : item.title)}</h3>

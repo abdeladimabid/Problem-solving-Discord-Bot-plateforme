@@ -111,7 +111,7 @@ async function viewBriefs(tab = "list") {
   view.innerHTML = `
     <div class="page-head"><div><h1>Briefs</h1>
       <p class="sub">Projects of the class, following <b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}. Every debrief updates the competencies and skills of the student.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn" id="br-quick" title="Name, dates, sprint, squads, brief page, announcement: in one form">+ Quick brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn" id="br-quick">+ Quick brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
     ${r.ai ? "" : `<div class="notice warn" style="margin-bottom:16px"><b>No AI is set up.</b> You can still write and import briefs; generating and analyzing need the Groq key or Workers AI.</div>`}
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
