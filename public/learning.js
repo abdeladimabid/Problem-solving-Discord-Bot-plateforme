@@ -197,23 +197,21 @@ function weekInfo(P, n) {
 function briefGenerator(P, week, nowWeek, pg = {}) {
   const pick = week ?? nowWeek ?? null;
   openDialog(pg.mode === "import" ? "📄 Import a brief" : "✨ New brief", `
-    <p class="muted small" style="margin-top:12px">The AI writes the whole brief in the Simplonline format (context, user stories, modalities, evaluation, deliverables, criteria, competencies) and your product-owner notes. You edit everything after.</p>
     <label for="gb-week">Week of the planning</label><select id="gb-week">${weekOptions(P, pick)}</select>
     <div id="gb-winfo"></div>
-    <label>Technologies of the brief <span class="muted">(the brief asks for these and nothing else; pre-selected from the week)</span></label>
+    <label>Technologies</label>
     <div class="chips" id="gb-tech"></div>
-    <div class="toolbar" style="margin:6px 0 0"><input type="text" id="gb-tech-add" placeholder="Another technology (e.g. Alpine.js)" style="flex:1;max-width:320px"><button class="btn small" type="button" id="gb-tech-addb">Add</button></div>
+    <div class="toolbar" style="margin:6px 0 0"><input type="text" id="gb-tech-add" placeholder="Add a technology" style="flex:1;max-width:320px"><button class="btn small" type="button" id="gb-tech-addb">Add</button></div>
     <label>Start from</label>
     ${segHtml("gbm", [["idea", "My idea"], ["brain", "Brainstorm ideas"], ["client", "A real client"], ["similar", "🧬 Similar to a brief"], ["import", "📄 Import a page"]], pg.mode || "idea")}
-    <div data-p="idea"><label for="gb-idea">Your idea <span class="muted">(a sentence is enough; empty = the AI picks a credible fictional client)</span></label>
+    <div data-p="idea"><label for="gb-idea">Your idea <span class="muted">(optional)</span></label>
       <textarea id="gb-idea" placeholder="e.g. A booking site for a hammam in Safi, with a services page and a contact form"></textarea></div>
     <div data-p="brain" hidden><label for="gb-theme">Theme or sector <span class="muted">(optional)</span></label>
       <div class="toolbar" style="margin:0"><input type="text" id="gb-theme" placeholder="e.g. tourism in Morocco, sport, a cause" style="flex:1"><button class="btn" id="gb-brain" type="button">Find 5 ideas</button></div>
       <div id="gb-ideas" class="ideas"></div></div>
-    <div data-p="client" hidden><label for="gb-client">Notes from the meeting with the client <span class="muted">(the AI stays within them)</span></label>
+    <div data-p="client" hidden><label for="gb-client">Client meeting notes</label>
       <textarea id="gb-client" style="min-height:150px" placeholder="Who they are, what they need, pages, constraints, deadline…"></textarea></div>
     <div data-p="similar" hidden>
-      <p class="muted small" style="margin:8px 0">The AI writes a <b>new</b> brief like an existing one (last year's, a colleague's): same kind of project, size and difficulty, but another client, other names and other content. Nothing is copied word for word.</p>
       <label>Reference brief</label>
       ${segHtml("smsrc", [["file", "A page (.html)"], ["ours", "One of our briefs"], ["text", "Paste its text"]], "file")}
       <div data-sp="file" style="margin-top:8px"><label class="drop" id="sm-drop"><input type="file" id="sm-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label></div>
@@ -222,11 +220,11 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
       <div id="sm-pre"></div>
       <label style="margin-top:12px">How similar</label>
       ${segHtml("smhow", [["close", "Same project, another client"], ["twist", "Same skills, another subject"], ["loose", "Just the level and format"]], "close")}
-      <p class="muted small" id="sm-howtxt" style="margin:6px 0 0"></p>
-      <label for="sm-idea">New subject or client <span class="muted">(optional: empty = the AI picks one)</span></label>
+      <p class="muted small" id="sm-howtxt" style="margin:6px 0 0" hidden></p>
+      <label for="sm-idea">New subject or client <span class="muted">(optional)</span></label>
       <input type="text" id="sm-idea" style="width:100%" placeholder="e.g. A climbing gym in Marrakech instead of the fitness club"></div>
     <div data-p="import" hidden>
-      <p class="muted small" style="margin:8px 0">Takes an existing brief as it is (no AI): a Simplonline brief page saved as .html (Ctrl+S, “Web page, HTML only”), or its text. On Simplonline, click <b>“Afficher la totalité des compétences”</b> before saving, or the hidden competencies won't be in the file.</p>
+      <p class="muted small" style="margin:8px 0">On Simplonline, click <b>“Afficher la totalité des compétences”</b> before saving the page.</p>
       <label class="drop" id="gb-drop"><input type="file" id="gb-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label>
       <details class="small" style="margin-top:8px"><summary>…or paste its text</summary><textarea id="gb-itext" style="min-height:140px;margin-top:6px" placeholder="Paste the brief here"></textarea>
         <button class="btn small" type="button" id="gb-iread" style="margin-top:6px">Read the text</button></details>
@@ -300,8 +298,7 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
           <span><b>${(d.deliverables || []).length}</b> deliverables</span><span><b>${(d.criteria || []).length}</b> criteria</span><span><b>${(d.evaluation?.parts || []).length}</b> evaluation steps</span></div>
         <div class="small" style="margin-top:8px">Competencies: ${(d.competencies || []).map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}</div>
         ${r.hidden ? `<p class="small" style="color:var(--warn);margin:6px 0 0">⚠️ The page says ${r.hidden + d.competencies.length} competencies but only ${d.competencies.length} are in the file: on Simplonline click “Afficher la totalité des compétences”, save again, or add them after import.</p>` : ""}
-        ${r.detected?.length ? `<p class="muted small" style="margin:6px 0 0">Technologies found in the page are selected above: adjust them if needed.</p>` : ""}
-        <p class="muted small" style="margin:6px 0 0">The week, days, work mode and dates below replace the page's ones.</p></div>`;
+        </div>`;
     } catch (e) { imp = null; box.innerHTML = `<p class="small" style="color:var(--down)">${esc(e.message)}</p>`; }
   };
   const readFile = async (f) => {
@@ -327,8 +324,8 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
   wireSeg(dlg, "smsrc", (v) => { $$("[data-sp]", dlg).forEach((p) => (p.hidden = p.dataset.sp !== v)); if (v === "ours") loadOurs(); });
   const simShow = (title, comps, tags, extra = "") => {
     $("#sm-pre").innerHTML = `<div class="imp-card"><div class="imp-head">🧬 <b>${esc(title || "Reference brief")}</b></div>
-      <div class="small" style="margin-top:6px">Competencies: ${comps.map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}${$("#gb-week").value ? ` <span class="muted">(the week's competencies are used; choose “No week” to keep these)</span>` : ""}</div>
-      ${tags.length ? `<p class="muted small" style="margin:6px 0 0">Its technologies are selected above: change them to move the brief to another stack.</p>` : ""}${extra}</div>`;
+      <div class="small" style="margin-top:6px">Competencies: ${comps.map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}${$("#gb-week").value ? ` <span class="muted">(the week's are used)</span>` : ""}</div>
+      ${extra}</div>`;
     if (tags.length) drawTech(tags);
   };
   const simFromText = async (src) => {
@@ -578,11 +575,9 @@ function rewriteDialog(sec) {
 function assignBriefDialog() {
   const b = BR.B.brief, d = b.data;
   openDialog(b.status === "assigned" ? "Dates and announcement" : "Publish to the class", `
-    <p class="muted small" style="margin-top:12px">Students see it in <code>/brief</code> and hand in their repo with <code>/brief submit</code>. Reminders go 3 days and 1 day before the deadline; the bot follows their pushes on GitHub.</p>
     <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
     <div data-wsprint></div>
-    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (the GitHub report channel, else the announcements channel)</label>
-    ${BR.B.grid ? "" : `<p class="muted small">The evaluation grid is written now from the brief (you can edit it after).</p>`}`,
+    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord</label>`,
     [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();

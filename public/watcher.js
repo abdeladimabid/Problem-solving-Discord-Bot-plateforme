@@ -440,7 +440,7 @@ async function wSprintField(root, cur, dueSel, week = null) {
   const sps = P ? wSprintsOf(P) : [];
   if (!sps.length) { box.innerHTML = ""; return; }
   box.innerHTML = `<label>Sprint</label><select class="w-sp" aria-label="Sprint"><option value=""></option>
-    <option value="none" ${cur === 0 ? "selected" : ""}>Not in a sprint (e.g. cross defense)</option>
+    <option value="none" ${cur === 0 ? "selected" : ""}>No sprint</option>
     ${sps.map((s) => `<option value="${s.n}" ${cur === s.n ? "selected" : ""} title="${esc(s.full)}">${esc(s.title)} · ${wShort(s.start)} → ${wShort(s.end)}</option>`).join("")}</select>`;
   const auto = () => {
     const wk = week ? P.weeks.find((w) => w.n === week) : null;
@@ -462,11 +462,11 @@ async function quickBrief() {
     <div class="field-row"><div><label for="qb-s">From</label><input type="date" id="qb-s" value="${today}"></div>
       <div><label for="qb-d">Due</label><input type="date" id="qb-d"></div><div><label for="qb-t">At (UTC)</label><input type="time" id="qb-t" value="23:59"></div></div>
     <div data-wsprint></div>
-    <label>Type of brief</label>${segHtml("qbk", [["solo", "Individual"], ["squad", "Squad (collective)"]], "solo")}
+    <label>Type of brief</label>${segHtml("qbk", [["solo", "Individual"], ["squad", "Squad"]], "solo")}
     <div id="qb-sq" hidden><div class="toolbar" style="margin:8px 0"><select id="qb-from"><option value="">Loading the class's squads…</option></select><button class="btn small" type="button" id="qb-load">Load</button></div>
       <div id="qb-board"></div></div>
     <label>Brief page <span class="muted">(optional)</span></label>
-    <label class="drop" id="qb-drop"><input type="file" id="qb-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label>
+    <label class="drop" id="qb-drop"><input type="file" id="qb-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose or drop the .html</b></span></label>
     <div id="qb-pre" class="small"></div>
     <div class="field-row"><div><label for="qb-c">Competencies</label><input type="text" id="qb-c" placeholder="C1N1, C3N1, CT1N1…"></div>
       <div><label for="qb-r">Repo name contains</label><input type="text" id="qb-r" maxlength="100" placeholder="optional"></div></div>
@@ -622,7 +622,7 @@ async function wfCard(box, item, ctx, B = null) {
     <label>Steps${B.steps.length ? ` · ${B.steps.length}` : ""}</label>
     <textarea class="mono" data-wf-stepstext rows="${Math.max(3, B.steps.length + 1)}" spellcheck="false" placeholder="Partie 1 | 2026-10-14 17:00 | maquette">${esc(B.stepsText)}</textarea>
     <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-bsave>Save</button></p>`;
-  const typeBody = !B ? "" : `${segHtml("wfk" + b.id, [["solo", "Individual"], ["squad", "Squad (collective)"]], B.kind)}
+  const typeBody = !B ? "" : `${segHtml("wfk" + b.id, [["solo", "Individual"], ["squad", "Squad"]], B.kind)}
     <div data-wf-sqbox ${sq ? "" : "hidden"}><div class="toolbar" style="margin:8px 0"><select data-wf-from><option value="">Loading the class's squads…</option></select><button class="btn small" data-wf-load>Load</button></div><div data-wf-board></div></div>
     <p class="toolbar" style="margin:10px 0 0"><button class="btn primary small" data-wf-sqsave>Save</button></p>`;
   const datesBody = !B ? "" : `<div class="field-row"><div><label>From</label><input type="date" data-wf-s value="${esc(md.start || wfIso(b.start_at).slice(0, 10))}"></div>
