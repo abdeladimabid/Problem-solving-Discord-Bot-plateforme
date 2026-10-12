@@ -1,7 +1,7 @@
-/* ClassBot dashboard: the Watcher part (from GitHub Watcher), its own pages next to the others:
-   Overview (class register, who needs attention, briefs in progress), Students (activity, filters, a brief filter,
-   each student's panel) and Sprints (the sprint review). It reads what the other pages already use (/github,
-   /github/activity, /briefs) plus /sprints, and changes nothing else. Loaded after learning.js (it uses its helpers). */
+/* ClassBot dashboard: the Watcher part (from GitHub Watcher). The GitHub page (activity, who needs attention, briefs in
+   progress, the students' table with filters and a brief filter, each student's panel) and Sprints (the sprint review).
+   It reads what the other pages already use (/github, /github/activity, /briefs) plus /sprints. Loaded after learning.js
+   (it uses its helpers). */
 "use strict";
 
 (() => {
@@ -17,6 +17,7 @@
 .w-cell { display: inline-block; width: 16px; height: 16px; border-radius: 4px; background: var(--line); vertical-align: middle; }
 .w-cell.l1 { background: color-mix(in srgb, var(--blue) 25%, var(--surface)); } .w-cell.l2 { background: color-mix(in srgb, var(--blue) 50%, var(--surface)); }
 .w-cell.l3 { background: color-mix(in srgb, var(--blue) 75%, var(--surface)); } .w-cell.l4 { background: var(--blue); }
+.w-cell.l0 { background: var(--line); }
 .w-cell.hollow { background: transparent; border: 2px solid var(--ink-faint); } .w-cell.we { opacity: .45; }
 .w-bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--blue); vertical-align: middle; }
 .w-att li { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); list-style: none; }
@@ -86,92 +87,43 @@ const W_SORTS = {
   name: (a, b) => a.display.localeCompare(b.display),
 };
 
-// ================================================================= Overview: the class at a glance
-async function viewWatch() {
-  const D = await watchData();
-  const total = D.students.length, today = D.N - 1;
+// ================================================================= GitHub: one page for the class's GitHub activity
+// Everything the GitHub page had (figures, reports, students not linked yet, how students use it, unlink) and Watcher's:
+// who needs attention and why, briefs in progress (announce, status), the students' table with filters and a brief filter,
+// and each student's panel.
+const W_FILTERS = [["all", "All", () => true], ["active", "Active this week", (s) => s.week.active > 0], ["idle", "Idle", (s, D) => s.idle >= D.inactive], ["attention", "Need attention", (s) => s.reasons.length > 0]];
+async function viewGithubAll() {
+  const [D] = await Promise.all([watchData(), loadStudents()]);
+  const G = D.G, su = G.setup, c = G.cfg;
+  const ready = su.app && su.oauth && su.webhook && su.key;
+  const linkedIds = new Set(D.students.map((s) => s.discord_id));
+  const notLinked = (S.students || []).filter((s) => !linkedIds.has(s.discord_id));
+  const pctLinked = G.students ? Math.round((100 * G.linked) / G.students) : 0;
+  const today = D.N - 1;
   const worked = D.students.filter((s) => s.day[today]?.any).length;
-  const active7 = D.students.filter((s) => s.week.active > 0).length;
-  const c7 = D.students.reduce((n, s) => n + s.week.real, 0), cPrev = D.students.reduce((n, s) => n + s.prev.real, 0);
-  const pct = cPrev ? Math.round(((c7 - cPrev) / cPrev) * 100) : null;
+  const activeWeek = D.students.filter((s) => s.week.active > 0).length;
+  const total14 = D.students.reduce((n, s) => n + s.all.real, 0);
+  const idle = D.students.filter((s) => s.idle >= D.inactive);
   const attention = D.students.filter((s) => s.reasons.length).sort((a, b) => b.reasons.length - a.reasons.length || b.idle - a.idle);
   const nowS = Date.now() / 1000;
   const live = D.briefs.filter((b) => b.due_at && b.due_at > nowS - 3 * 86400).slice(0, 4);
-  const details = await Promise.all(live.map((b) => api(`/briefs/${b.id}`).catch(() => null)));
-  const sorts = { active: W_SORTS.active, least: W_SORTS.least, name: W_SORTS.name };
-  const list = D.students.slice().sort(sorts[W_STATE.regSort] || sorts.active);
-  const maxScore = Math.max(1, ...D.students.map((s) => s.week.score));
-  view.innerHTML = `
-    <div class="page-head"><div><h1>Watcher</h1><p class="sub">GitHub activity of the class, last 14 days.</p></div></div>
-    <div class="w-figs">
-      <div class="w-fig"><b>${worked}</b><span>worked today · of ${total}</span></div>
-      <div class="w-fig"><b>${active7}</b><span>active in the last 7 days</span></div>
-      <div class="w-fig"><b>${c7}</b><span>commits in 7 days${pct == null ? "" : ` · ${pct >= 0 ? "+" : ""}${pct}% vs the week before`}</span></div>
-      <div class="w-fig ${attention.length ? "alert" : ""}"><b>${attention.length}</b><span>need your attention</span></div>
-    </div>
-    <div class="w-cols">
-      <section class="panel"><div class="panel-head"><h2>Class register</h2>${segHtml("wreg", [["active", "Most active"], ["least", "Least active"], ["name", "A–Z"]], W_STATE.regSort)}</div>
-        ${total ? `<div class="table-wrap"><table class="w-reg"><thead><tr><th></th>${D.A.days.map((d) => `<th class="ctr small muted">${esc(new Date(d + "T12:00:00Z").toLocaleDateString(undefined, { weekday: "narrow" }))}<br>${Number(d.slice(8))}</th>`).join("")}<th>Score 7 d</th></tr></thead>
-          <tbody>${list.map((s) => `<tr class="w-row" data-ws="${esc(s.discord_id)}"><td class="w-name">${s.reasons.length ? "🔴 " : ""}${esc(s.display)}</td>
-            ${s.day.map((x, i) => `<td class="ctr">${wCell(x, D.A.days[i])}</td>`).join("")}
-            <td><b>${s.week.score}</b> <span class="w-bar" style="width:${Math.round((60 * s.week.score) / maxScore)}px"></span></td></tr>`).join("")}</tbody></table></div>`
-          : `<p class="empty">Nobody linked GitHub yet: students type <code>/github</code> in Discord.</p>`}
-      </section>
-      <div class="stack">
-        <section class="panel"><h2>Need your attention ${attention.length ? `<span class="muted">${attention.length}</span>` : ""}</h2>
-          ${attention.length ? `<ul class="w-att">${attention.slice(0, 8).map((s) => `<li class="w-row" data-ws="${esc(s.discord_id)}" title="${esc(s.reasons.map((r) => r[0]).join("\n"))}"><span>${esc(s.display)}</span><span class="small muted">${esc(s.reasons.map((r) => r[1]).join(" · "))}</span></li>`).join("")}</ul>
-            ${attention.length > 8 ? `<p><a href="#/watch-students" data-attn>Show all ${attention.length}</a></p>` : ""}` : `<p class="muted small">Nobody right now.</p>`}
-        </section>
-        <section class="panel"><div class="panel-head"><h2>Briefs</h2><a class="small" href="#/briefs">Manage</a></div>
-          ${live.length ? live.map((b, i) => {
-            const B = details[i], st = B ? B.students : [];
-            const on = st.filter((s) => s.push === "on").length, late = st.filter((s) => s.push === "late").length, n = st.length || 1;
-            const passed = b.due_at <= nowS;
-            return `<div style="margin:10px 0"><div class="panel-head" style="margin:0"><a href="#/brief/${b.id}"><b>${esc(b.title)}</b></a><span class="small muted">${dueIn(b.due_at)}</span></div>
-              <p class="toolbar" style="margin:4px 0"><button class="btn small" data-wann="${b.id}">📣 Announce</button><button class="btn small" data-wstat="${b.id}">Post status</button></p>
-              ${meter(Math.round((100 * (on + late)) / n), "pushed")}
-              <span class="small muted">${passed ? `${on} on time, ${late} late, ${st.length - on - late} nothing` : `${on + late} of ${st.length} pushed`}</span></div>`;
-          }).join("") : `<p class="muted small">No brief in progress.</p>`}
-        </section>
-      </div>
-    </div>`;
-  wireSeg(view, "wreg", (v) => { W_STATE.regSort = v; viewWatch(); });
-  wireBriefButtons(view);
-  $$("[data-ws]", view).forEach((el) => el.onclick = () => openWatchStudent(D, el.dataset.ws));
-  const all = $("[data-attn]", view);
-  if (all) all.onclick = () => { W_STATE.filter = "attention"; };
-}
-
-// the brief's announcement (in French) and status, posted in Discord
-function wireBriefButtons(root) {
-  $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog("Announce this brief in Discord?", "In French: dates, steps, squads and how to hand in.", "Announce",
-    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); }));
-  $$("[data-wstat]", root).forEach((b) => b.onclick = () => busy(b, async () => {
-    const r = await api(`/briefs/${b.dataset.wstat}/watcher/status`, { method: "POST", body: {} });
-    toast(`Status posted: ${r.on + r.late} pushed, ${r.none} not yet`);
-  }));
-}
-
-// ================================================================= Students: activity, filters, the brief filter
-const W_FILTERS = [["all", "All", () => true], ["active", "Active this week", (s) => s.week.active > 0], ["idle", "Idle", (s, D) => s.idle >= D.inactive], ["attention", "Need attention", (s) => s.reasons.length > 0]];
-async function viewWatchStudents() {
-  const D = await watchData();
   if (W_STATE.brief && !D.briefs.some((b) => String(b.id) === String(W_STATE.brief))) W_STATE.brief = "";
-  const BD = W_STATE.brief ? await api(`/briefs/${W_STATE.brief}`).catch(() => null) : null;
+  const [details, BD] = await Promise.all([Promise.all(live.map((b) => api(`/briefs/${b.id}`).catch(() => null))), W_STATE.brief ? api(`/briefs/${W_STATE.brief}`).catch(() => null) : null]);
   // a brief chosen: the numbers cover its days (inside the 14 days), and its hand-ins / pushes / squads
   let win = null;
   if (BD) {
-    const b = BD.brief, start = new Date((b.start_at || b.created_at) * 1000).toISOString().slice(0, 10), end = new Date((b.due_at || Date.now() / 1000) * 1000).toISOString().slice(0, 10);
+    const b = BD.brief, start = new Date((b.start_at || b.created_at) * 1000).toISOString().slice(0, 10), end = new Date((b.due_at || nowS) * 1000).toISOString().slice(0, 10);
     let from = D.A.days.findIndex((d) => d >= start); if (from < 0) from = D.N;
     let to = D.A.days.findIndex((d) => d > end); if (to < 0) to = D.N;
     win = { from, to: Math.max(from, to) };
   }
+  const notStarted = win && win.to <= win.from;
   const briefOf = (s) => {
     const x = BD.students.find((y) => y.discord_id === s.discord_id) || {};
     const sq = BD.kind === "squad" ? BD.squadRows.find((q) => q.members.map(String).includes(s.discord_id)) || null : null;
-    return { sq, handin: sq ? sq.handin : x.handin, push: x.push || "none", review: sq ? sq.review : x.review, who: sq ? `s:${sq.id}` : `u:${s.discord_id}` };
+    return { sq, handin: sq ? sq.handin : x.handin, push: x.push || "none", review: sq ? sq.review : x.review };
   };
-  const passed = BD && BD.brief.due_at && BD.brief.due_at <= Date.now() / 1000;
+  const passed = BD && BD.brief.due_at && BD.brief.due_at <= nowS;
   const BSTAT = BD ? [["all", "Everyone", () => true], ["in", "Handed in", (b) => !!b.handin], ["out", "Not handed in", (b) => !b.handin],
     ["nopush", passed ? "Nothing pushed" : "Not pushed yet", (b) => b.push === "none"], ["late", "Late", (b) => b.push === "late"],
     ...(BD.kind === "squad" ? BD.squadRows.map((q) => ["sq:" + q.id, "Squad: " + q.name, (b) => b.sq && b.sq.id === q.id]) : [])] : [];
@@ -187,19 +139,57 @@ async function viewWatchStudents() {
       return { ...s, week: t, trend: null };
     }).filter((s) => f(s, D) && (!q || `${s.display} ${s.login}`.toLowerCase().includes(q)) && (!bf || bf(briefOf(s)))).sort(W_SORTS[W_STATE.sort] || W_SORTS.active);
   };
-  const notStarted = win && win.to <= win.from;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Students</h1><p class="sub">${D.students.length} linked. ${!BD ? "Numbers cover the last 7 days." : notStarted ? `${esc(BD.brief.data.title)} has not started yet.` : `Numbers cover ${esc(BD.brief.data.title)} since ${fmtDate(BD.brief.start_at || BD.brief.created_at)}.`}</p></div></div>
-    <section class="panel">
-      <div class="toolbar" style="margin:0 0 10px"><input type="search" id="w-q" placeholder="Search by name" value="${esc(W_STATE.q)}" style="max-width:240px">
+    <div class="page-head"><div><h1>GitHub</h1><p class="sub">What each student pushes, every day. It feeds the reports, the brief reminders and the debriefs.</p></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="gh-d">Send today's report</button><button class="btn" id="gh-w">Weekly report</button><a class="btn" href="#/settings/github">${icon("gear")} Settings</a></div></div>
+    <div class="stack">
+    ${ready ? "" : `<div class="notice warn"><b>GitHub isn't set up for this class yet.</b> Students can't link their account until the class has a GitHub App. <a href="#/settings/github">Set it up in Settings → GitHub &amp; Watcher</a>.</div>`}
+    <div class="figures cs-figs">
+      <div class="figure"><span class="ico">🔗</span><div><b>${G.linked}/${G.students}</b><span>students linked</span>${meter(pctLinked)}</div></div>
+      <div class="figure"><span class="ico">✍️</span><div><b>${worked}</b><span>worked today</span></div></div>
+      <div class="figure"><span class="ico">🟢</span><div><b>${activeWeek}</b><span>pushed in the last 7 days</span></div></div>
+      <div class="figure"><span class="ico">📦</span><div><b>${total14}</b><span>commits in 14 days</span></div></div>
+      <div class="figure ${idle.length ? "cs-attn" : ""}"><span class="ico">💤</span><div><b>${idle.length}</b><span>idle ${D.inactive}+ working days</span></div></div>
+    </div>
+    ${G.linked <= 1 && G.students > 3 && su.app ? `<div class="notice">Your students linked GitHub in <b>GitHub Watcher</b>? Bring them here at once: <a href="#/settings/github">Settings → GitHub &amp; Watcher → Import</a>. Otherwise they each type <code>/github</code> in Discord.</div>` : ""}
+    <div class="grid cols-2-even">
+      <section class="panel"><h2>Need your attention ${attention.length ? `<span class="muted">${attention.length}</span>` : ""}</h2>
+        ${attention.length ? `<ul class="w-att">${attention.slice(0, 8).map((s) => `<li class="w-row" data-ws="${esc(s.discord_id)}" title="${esc(s.reasons.map((r) => r[0]).join("\n"))}"><span>${esc(s.display)}</span><span class="small muted">${esc(s.reasons.map((r) => r[1]).join(" · "))}</span></li>`).join("")}</ul>
+          ${attention.length > 8 ? `<p><button class="btn small" id="w-allattn">Show all ${attention.length}</button></p>` : ""}` : `<p class="muted small">Nobody right now.</p>`}
+      </section>
+      <section class="panel"><div class="panel-head"><h2>Briefs in progress</h2><a class="small" href="#/briefs">Manage</a></div>
+        ${live.length ? live.map((b, i) => {
+          const B = details[i], st = B ? B.students : [];
+          const on = st.filter((s) => s.push === "on").length, late = st.filter((s) => s.push === "late").length, n = st.length || 1;
+          const done = b.due_at <= nowS;
+          return `<div style="margin:10px 0"><div class="panel-head" style="margin:0"><a href="#/brief/${b.id}"><b>${esc(b.title)}</b></a><span class="small muted">${dueIn(b.due_at)}</span></div>
+            ${meter(Math.round((100 * (on + late)) / n), "pushed")}
+            <div class="panel-head" style="margin:4px 0 0"><span class="small muted">${done ? `${on} on time, ${late} late, ${st.length - on - late} nothing` : `${on + late} of ${st.length} pushed`}</span>
+              <span class="toolbar" style="margin:0"><button class="btn small" data-wann="${b.id}">📣 Announce</button><button class="btn small" data-wstat="${b.id}">Post status</button></span></div></div>`;
+        }).join("") : `<p class="muted small">No brief in progress.</p>`}
+      </section>
+    </div>
+    <section class="panel"><div class="panel-head"><h2>Students · ${!BD ? "last 7 days" : notStarted ? `${esc(BD.brief.data.title)} has not started yet` : `${esc(BD.brief.data.title)} since ${fmtDate(BD.brief.start_at || BD.brief.created_at)}`}</h2>
+        <span class="heat-legend small muted">less <i class="w-cell l0"></i><i class="w-cell l1"></i><i class="w-cell l2"></i><i class="w-cell l3"></i><i class="w-cell l4"></i> more · <i class="w-cell hollow"></i> only tiny or huge commits</span></div>
+      <div class="toolbar" style="margin:0 0 8px"><input type="search" id="w-q" placeholder="Search by name" value="${esc(W_STATE.q)}" style="max-width:220px">
         <div class="w-chips" id="w-chips"></div>
         <select id="w-sort">${[["active", "Most active"], ["least", "Least active"], ["recent", "Last active"], ["lines", "Most lines"], ["name", "Name"]].map(([v, l]) => `<option value="${v}" ${W_STATE.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-      <div class="toolbar" style="margin:0"><b class="small">Brief</b><select id="w-brief"><option value="">All briefs</option>${D.briefs.map((b) => `<option value="${b.id}" ${String(b.id) === String(W_STATE.brief) ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select>
-        ${BD ? `<button class="btn small" data-wann="${BD.brief.id}">📣 Announce</button><button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}
-        ${BD ? `<select id="w-bstat">${BSTAT.map(([v, l, f]) => `<option value="${v}" ${v === W_STATE.bstat ? "selected" : ""}>${esc(l)} (${D.students.filter((s) => f(briefOf(s))).length})</option>`).join("")}</select>` : ""}</div>
+      <div class="toolbar" style="margin:0 0 10px"><b class="small">Brief</b><select id="w-brief"><option value="">All briefs</option>${D.briefs.map((b) => `<option value="${b.id}" ${String(b.id) === String(W_STATE.brief) ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select>
+        ${BD ? `<select id="w-bstat">${BSTAT.map(([v, l, f]) => `<option value="${v}" ${v === W_STATE.bstat ? "selected" : ""}>${esc(l)} (${D.students.filter((s) => f(briefOf(s))).length})</option>`).join("")}</select>
+          <button class="btn small" data-wann="${BD.brief.id}">📣 Announce</button><button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}</div>
+      <div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${BD ? "<th>Brief</th>" : ""}<th>${BD ? "Days of the brief" : "Last 14 days"}</th><th class="num">Score</th>${BD ? "" : `<th class="num">Trend</th>`}<th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th>Last push</th><th>Warnings</th></tr></thead>
+        <tbody id="w-rows"></tbody></table></div>
+      ${D.students.length ? "" : `<div class="empty-state"><div style="font-size:40px">🐙</div><p class="muted">Nobody linked yet: students type <code>/github</code> in Discord.</p></div>`}
     </section>
-    <section class="panel"><div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${BD ? "<th>Brief</th>" : ""}<th class="num">Score</th>${BD ? "" : `<th class="num">Trend</th>`}<th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th>Active days</th><th>Last active</th><th>Warnings</th></tr></thead>
-      <tbody id="w-rows"></tbody></table></div></section>`;
+    ${notLinked.length ? `<section class="panel"><div class="panel-head"><h2>Not linked yet <span class="muted">${notLinked.length}</span></h2><span class="small muted">they type <code>/github</code> in Discord</span></div>
+      <div class="people">${notLinked.map((s) => `<a href="#/student/${s.discord_id}" class="person">${avatar(s.name, s.discord_id)} ${esc(s.name || s.discord_id)}</a>`).join("")}</div></section>` : ""}
+    <section class="panel"><h2>How students use it</h2>
+      <div class="how-steps">
+        <div><span class="xl-n">1</span><b><code>/github</code></b><p class="small muted">Link their GitHub account, once. They install the class's GitHub App on their repositories.</p></div>
+        <div><span class="xl-n">2</span><b>They push</b><p class="small muted">Every push, pull request and review is counted, and posted in their forum post if you chose a forum.</p></div>
+        <div><span class="xl-n">3</span><b><code>/brief submit</code></b><p class="small muted">Hand in the repo (and the planning board) of a brief. You debrief it from the brief's page.</p></div>
+      </div></section>
+    </div>`;
   const draw = () => {
     $("#w-chips").innerHTML = W_FILTERS.map(([v, l, f]) => `<button type="button" class="w-chip" data-wf="${v}" aria-pressed="${W_STATE.filter === v}">${l}<small>${D.students.filter((s) => f(s, D)).length}</small></button>`).join("");
     $$("[data-wf]").forEach((b) => b.onclick = () => { W_STATE.filter = b.dataset.wf; draw(); });
@@ -208,22 +198,37 @@ async function viewWatchStudents() {
       const b = BD ? briefOf(s) : null;
       const pushTxt = b ? (b.push === "on" ? (passed ? "On time" : "Pushed") : b.push === "late" ? "Late" : passed ? "Nothing pushed" : "Not yet") : "";
       const warn = [s.week.tiny ? `<span class="lvl bad">${s.week.tiny} tiny</span>` : "", s.week.huge ? `<span class="lvl bad">${s.week.huge} huge</span>` : "", s.week.vague ? `<span class="lvl bad">${s.week.vague} unclear</span>` : ""].filter(Boolean).join(" ");
-      const strip = (win ? s.day.slice(win.from, win.to) : s.day.slice(D.W0)).map((x, i) => wCell(x, D.A.days[(win ? win.from : D.W0) + i])).join("");
+      const from = win ? win.from : 0, to = win ? win.to : D.N;
+      const strip = s.day.slice(from, to).map((x, i) => wCell(x, D.A.days[from + i])).join("");
       return `<tr class="w-row" data-ws="${esc(s.discord_id)}"><td>${s.reasons.length ? "🔴 " : ""}${avatar(s.display, s.discord_id)} <b>${esc(s.display)}</b> <span class="small muted">@${esc(s.login || "")}</span></td>
         ${b ? `<td><div class="w-brief-cell">${b.sq ? `<b>${esc(b.sq.name)}${b.sq.sm === s.discord_id ? " · SM" : ""}</b>` : ""}<span>${b.handin ? "✔ " + esc(String(b.handin.repo).split("/").pop()) : `<span class="muted">Not handed in</span>`}</span><span class="lvl ${b.push === "on" ? "ok" : b.push === "late" ? "warn" : "bad"}">${pushTxt}</span></div></td>` : ""}
+        <td>${notStarted ? `<span class="muted small">Not started</span>` : `<span class="w-strip">${strip}</span> <span class="small muted">${win ? s.week.active : s.all.active}/${to - from}</span>`}</td>
         <td class="num"><b>${notStarted ? "–" : s.week.score}</b></td>${BD ? "" : `<td class="num">${wTrend(s.trend)}</td>`}
         <td class="num">${notStarted ? "–" : s.week.real}</td><td class="num">${notStarted ? "–" : s.week.lines}</td><td class="num">${notStarted ? "–" : s.week.prs}</td>
-        <td>${notStarted ? `<span class="muted small">Not started</span>` : `<span class="w-strip">${strip}</span> <span class="small muted">${s.week.active}/${win ? win.to - win.from : 7}</span>`}</td>
-        <td class="small muted">${wLast(s)}</td><td>${warn}</td></tr>`;
+        <td class="small">${s.idle >= D.inactive ? `<span class="lvl bad">${s.idle} days idle</span>` : `<span class="muted">${wLast(s)}</span>`}</td><td>${warn}</td></tr>`;
     }).join("") : `<tr><td colspan="10" class="empty">No students match.</td></tr>`;
     $$("[data-ws]", $("#w-rows")).forEach((tr) => tr.onclick = () => openWatchStudent(D, tr.dataset.ws));
   };
-  draw();
+  if (D.students.length) draw(); else $("#w-rows").closest(".table-wrap").remove();
   $("#w-q").oninput = (e) => { W_STATE.q = e.target.value; draw(); };
   $("#w-sort").onchange = (e) => { W_STATE.sort = e.target.value; draw(); };
-  $("#w-brief").onchange = (e) => { W_STATE.brief = e.target.value; W_STATE.bstat = "all"; viewWatchStudents(); };
+  $("#w-brief").onchange = (e) => { W_STATE.brief = e.target.value; W_STATE.bstat = "all"; viewGithubAll(); };
   if ($("#w-bstat")) $("#w-bstat").onchange = (e) => { W_STATE.bstat = e.target.value; draw(); };
+  if ($("#w-allattn")) $("#w-allattn").onclick = () => { W_STATE.filter = "attention"; draw(); $("#w-rows").scrollIntoView({ block: "start" }); };
+  $$(".w-att [data-ws]").forEach((el) => el.onclick = () => openWatchStudent(D, el.dataset.ws));
   wireBriefButtons(view);
+  $("#gh-d").onclick = (e) => busy(e.currentTarget, async () => { await api("/github/report", { method: "POST", body: { kind: "daily" } }); toast("Report sent"); });
+  $("#gh-w").onclick = (e) => busy(e.currentTarget, async () => { await api("/github/report", { method: "POST", body: { kind: "weekly" } }); toast("Report sent"); });
+}
+
+// the brief's announcement (in French) and status, posted in Discord
+function wireBriefButtons(root) {
+  $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog("Announce this brief in Discord?", "In French: dates, steps, squads and how to hand in.", "Announce",
+    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); }));
+  $$("[data-wstat]", root).forEach((b) => b.onclick = () => busy(b, async () => {
+    const r = await api(`/briefs/${b.dataset.wstat}/watcher/status`, { method: "POST", body: {} });
+    toast(`Status posted: ${r.on + r.late} pushed, ${r.none} not yet`);
+  }));
 }
 
 // ================================================================= one student's panel
@@ -266,7 +271,7 @@ async function openWatchStudent(D, id) {
   panel.innerHTML = `
     <div class="panel-head"><div><h2 style="margin:0">${avatar(s.display, s.discord_id)} ${esc(s.display)}</h2>
       <p class="small muted" style="margin:4px 0 0"><a href="https://github.com/${esc(s.login || "")}" target="_blank" rel="noopener">@${esc(s.login || "")}</a> · last activity ${wLast(s)} · <a href="#/student/${esc(id)}">full student page</a></p></div>
-      <button class="btn small" id="w-close" aria-label="Close">✕</button></div>
+      <span class="toolbar" style="margin:0"><button class="btn small" id="w-unlink">Unlink</button><button class="btn small" id="w-close" aria-label="Close">✕</button></span></div>
     ${s.reasons.length ? `<div class="notice warn"><b>Needs your attention</b><ul class="small" style="margin:6px 0 0">${s.reasons.map((r) => `<li>${esc(r[0])}</li>`).join("")}</ul></div>` : ""}
     <div class="w-mini"><div><b>${s.all.score}</b><span>Score</span></div><div><b>${s.all.real}</b><span>Commits</span></div><div><b>${s.all.lines}</b><span>Lines</span></div><div><b>${s.all.active}/${D.N}</b><span>Active days</span></div></div>
     ${barChart(labels, [{ name: "Score", values: s.day.map((x) => x.score), color: "var(--blue)" }, { name: "Not scored (tiny / huge)", values: s.day.map((x) => x.tiny + x.huge), color: "var(--line-strong)" }], { height: 170, every: 2 })}
@@ -276,6 +281,8 @@ async function openWatchStudent(D, id) {
     <details><summary><b>Day by day</b></summary><div class="table-wrap"><table class="grid-table"><thead><tr><th>Day</th><th class="num">Score</th><th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th class="num">Other</th><th class="num">Tiny</th><th class="num">Huge</th><th class="num">Unclear</th></tr></thead>
       <tbody>${s.day.map((x, i) => `<tr><td>${esc(D.A.days[i])}</td><td class="num"><b>${x.score}</b></td><td class="num">${x.real}</td><td class="num">${x.lines}</td><td class="num">${x.prs}</td><td class="num">${x.other}</td><td class="num">${x.tiny || ""}</td><td class="num">${x.huge || ""}</td><td class="num">${x.vague || ""}</td></tr>`).reverse().join("")}</tbody></table></div></details>`;
   $("#w-close", panel).onclick = () => { box.hidden = true; };
+  $("#w-unlink", panel).onclick = () => confirmDialog("Unlink this GitHub account?", "The student can link again with /github. Past activity stays.", "Unlink",
+    async () => { await api("/github/unlink", { method: "POST", body: { discord_id: id } }); box.hidden = true; viewGithubAll(); }, true);
 }
 
 // =========================================================== sprints (the sprint review)
@@ -399,4 +406,5 @@ function sprintYear(O) {
 }
 
 
-Object.assign(routes, { watch: viewWatch, "watch-students": viewWatchStudents, sprints: viewSprints });
+// one GitHub page (the Watcher's view of it); old Watcher links lead there
+Object.assign(routes, { github: viewGithubAll, watch: () => { location.hash = "#/github"; }, "watch-students": () => { location.hash = "#/github"; }, sprints: viewSprints });
