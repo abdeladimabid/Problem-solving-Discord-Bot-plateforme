@@ -1186,6 +1186,40 @@ async function viewTeams() {
 }
 
 // ========================================================== settings
+/** Settings → AI: the Groq key of this ClassBot (for all its classes). The key is never shown again. */
+async function aiSettings(root) {
+  const d = await api("/settings/ai");
+  const SRC = {
+    settings: ["ok", "✅ Groq is on", `Key saved here (${esc(d.masked)}). Every class of this ClassBot uses it.`],
+    secret: ["ok", "✅ Groq is on", `Key from the Cloudflare secret GROQ_API_KEY (${esc(d.masked)}). Save a key here to replace it without the command line.`],
+    none: ["warn", "⚠️ No Groq key", d.hasWorkersAi ? "Cloudflare's AI answers for now (slower, simpler texts). Add your free Groq key below." : "No AI is set up: add your free Groq key below."],
+  }[d.source];
+  root.innerHTML = `
+    <div class="panel set-card ai-status ${SRC[0]}"><div><b>${SRC[1]}</b><div class="small muted">${SRC[2]}</div></div>
+      ${d.source === "settings" ? `<button class="btn small danger" id="ai-clear">Remove the key</button>` : ""}</div>
+    <div class="panel set-card">
+      <h3 style="margin-top:0">${d.source === "none" ? "Add" : "Change"} the Groq key</h3>
+      <ol class="ai-steps">
+        <li>Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a> and sign in (free, with Google or GitHub).</li>
+        <li>Click <b>Create API Key</b>, give it a name (e.g. “ClassBot”) and copy it: it starts with <code>gsk_</code>.</li>
+        <li>Paste it here and click <b>Save and test</b>. ClassBot checks it with Groq before saving.</li>
+      </ol>
+      <label for="ai-key">Groq API key</label>
+      <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="gsk_…" style="width:100%;max-width:520px;font-family:var(--mono, monospace)">
+      <label for="ai-model">Model <span class="muted">(the first one is the best; ClassBot falls back to the others when it's busy)</span></label>
+      <select id="ai-model" style="max-width:520px"><option value="">Automatic (${esc(d.models[0])} first)</option>${d.models.map((m) => `<option value="${esc(m)}" ${m === d.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
+      <p class="small muted">🔒 The key is stored in your ClassBot's database and never shown again. It's for all the classes of this ClassBot. Don't paste it in Discord or in a chat; if it leaks, delete it on console.groq.com and make a new one.</p>
+      <div class="set-foot"><button class="btn primary" id="ai-save">Save and test</button></div>
+    </div>`;
+  $("#ai-save", root).onclick = (e) => busy(e.currentTarget, async () => {
+    const key = $("#ai-key", root).value.trim();
+    await api("/settings/ai", { method: "PUT", body: { ...(key ? { key } : {}), model: $("#ai-model", root).value } });
+    toast(key ? "Groq key saved: it works ✅" : "Saved");
+    aiSettings(root);
+  });
+  if ($("#ai-clear", root)) $("#ai-clear", root).onclick = () => confirmDialog("Remove the Groq key?", "ClassBot goes back to the Cloudflare secret if there is one, else to Cloudflare's AI.", "Remove", async () => { await api("/settings/ai", { method: "PUT", body: { clear: true } }); aiSettings(root); }, true);
+}
+
 async function viewSettings(arg) {
   const [g] = await Promise.all([api("/settings"), loadDiscord()]);
   S.guild = g;
@@ -1198,6 +1232,7 @@ async function viewSettings(arg) {
     ["general", "⚙️", "General", "Language, track, channels"],
     ["programme", "🎓", "Programme", "Planning & competencies"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
+    ["ai", "🤖", "AI (Groq)", "Your API key"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1335,6 +1370,11 @@ async function viewSettings(arg) {
       <div class="set-foot"><button class="btn primary" id="season">Start new season</button></div>
     </section>
 
+    <section class="set-sec" data-sec="ai" hidden>
+      ${head("AI (Groq)", "Briefs, debriefs, assessments, squad battles and the coach use AI. With your own free Groq key it's faster and writes better long documents. Without one, Cloudflare's AI answers (slower, simpler).")}
+      <div id="set-ai"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="diag" hidden>
       ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
       <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
@@ -1349,6 +1389,7 @@ async function viewSettings(arg) {
       loaded.add(k);
       if (k === "programme" && typeof programmeSettings === "function") programmeSettings($("#set-programme"));
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
+      if (k === "ai") aiSettings($("#set-ai"));
     }
   };
   $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });

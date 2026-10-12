@@ -18,6 +18,7 @@ import { certPage, profilePage } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
 import { leagueFeed } from "../shared/league.ts";
 import { handleBattle } from "./battle.ts";
+import { applyAppSettings } from "../shared/appsettings.ts";
 import { githubPages, githubWebhook } from "../shared/github.ts";
 
 /** A quick challenge's code as a PNG (Discord shows it instead of copyable text). Cached at the edge. */
@@ -35,6 +36,7 @@ async function codeImage(request: Request, env: Env, ctx: Ctx, id: number): Prom
 
 export default {
   async fetch(request: Request, env: Env, ctx: Ctx): Promise<Response> {
+    await applyAppSettings(env);   // the AI key set in the dashboard (Settings → AI)
     const url = new URL(request.url);
     if (url.pathname === "/interactions" && request.method === "POST") {
       const body = await verifyDiscord(request, env.DISCORD_PUBLIC_KEY);
@@ -72,6 +74,6 @@ export default {
   },
 
   async scheduled(_controller: unknown, env: Env, ctx: Ctx) {
-    ctx.waitUntil(runCron(env));
+    ctx.waitUntil(applyAppSettings(env).then(() => runCron(env)));
   },
 };

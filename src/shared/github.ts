@@ -202,9 +202,11 @@ export async function linkGithub(env: Env, guildId: string, discordId: string, g
     if ((other.appId || other.clientId) === (app.appId || app.clientId)) same.push(r.guild_id);
   }
   if (!same.includes(guildId)) same.push(guildId);
+  const before = await one<{ github_id: string | null }>(env, "SELECT github_id FROM players WHERE guild_id = ? AND discord_id = ?", guildId, discordId);
   await run(env, `UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_linked_at = COALESCE(gh_linked_at, ?) WHERE discord_id = ? AND guild_id IN (${same.map(() => "?").join(",")})`,
     gh.id, gh.login, gh.inst, now(), discordId, ...same);
-  const g = await getGuild(env, guildId);
+  // connecting the same account again (a new /github) is not news: one message per new link
+  const g = before?.github_id === gh.id ? null : await getGuild(env, guildId);
   if (g) {
     const ch = reportChannel(g, githubCfg(g));
     if (ch) await send(env, ch, { content: t(g.lang, "gh.connected", { user: `<@${discordId}>`, login: gh.login, url: `${GH_WEB}/${gh.login}` }) }).catch(() => {});
