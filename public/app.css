@@ -669,6 +669,19 @@ ol.league li.me b { color: var(--blue); }
 .db-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 4px; border-bottom: 1px solid var(--line); }
 .db-row:last-child { border-bottom: 0; }
 .db-step { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.sp-table td, .sp-table th { white-space: nowrap; }
+.sp-table td:first-child, .sp-table th:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+.sp-decs { display: flex; align-items: center; gap: 4px; }
+.sp-decs input { width: 140px; }
+.sp-dec { width: 30px; height: 30px; border-radius: 999px; border: 1.5px solid var(--line-strong); background: transparent; color: var(--ink-soft); cursor: pointer; font: inherit; padding: 0; }
+.sp-dec.ok.prop { border: 1.5px dashed var(--up); color: var(--up); }
+.sp-dec.ko.prop { border: 1.5px dashed var(--down); color: var(--down); }
+.sp-dec.ok.on { background: var(--up); border-color: var(--up); color: #fff; }
+.sp-dec.ko.on { background: var(--down); border-color: var(--down); color: #fff; }
+.sp-dec.note { opacity: .5; } .sp-dec.note.has { opacity: 1; border-color: var(--blue); }
+.sp-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.sp-box { display: flex; flex-direction: column; gap: 2px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.sp-box b { font-size: 22px; }
 .db-step:last-child { border-bottom: 0; }
 .db-row .switch { margin-top: 2px; }
 .db-row.info { opacity: .85; }

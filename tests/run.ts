@@ -2894,6 +2894,53 @@ section("brief steps: found in the brief, dated in working days, proposed from t
   env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
 }
 
+section("sprints: competencies reached in the sprint's briefs, levels for the report (AI for the class, no names), decision, sprint comment");
+{
+  const O = await api("GET", `/api/sprints?g=${G}`);
+  check(O.status === 200 && O.data.sprints.length >= 2 && O.data.sprints.every((s: any) => s.start && s.end && s.codes.length), "the programme's sprints, with their dates and competencies");
+  const sp = O.data.sprints[0];
+  const P = (await api("GET", `/api/programs?g=${G}`)).data.current;
+  const wk = P.weeks.find((w: any) => w.sprint === sp.n).n;
+  const code = sp.codes.find((c: string) => c.startsWith("C")), soft = sp.codes.find((c: string) => c.startsWith("T"));
+  const [cc, cl] = [code.slice(0, -2), Number(code.slice(-1))];
+  // a brief of the sprint, debriefed: Alice reached the level asked, Bob only a lower one, Carol failed
+  const mk = await api("POST", "/api/briefs", { g: G, week: wk, data: { title: "Brief du sprint", context: "Un site.", competencies: [code] } });
+  const bid = mk.data.brief.id;
+  run1("UPDATE briefs SET status = 'assigned', week = ? WHERE id = ?", wk, bid);
+  const res = (uid: string, c: string, level: number, ok: number) => run1("INSERT INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, ?, ?, ?, 'brief', ?, 'x', ?)", G, uid, c, level, ok, bid, clock.now());
+  res(U.alice.id, cc, cl, 1); if (soft) res(U.alice.id, soft.slice(0, -2), Number(soft.slice(-1)), 1);
+  res(U.bob.id, cc, Math.max(1, cl - 1), 1); if (cl === 1) run1("UPDATE competency_results SET level = 0 WHERE discord_id = ? AND ref = ?", U.bob.id, bid);
+  res(U.carol.id, cc, cl, 0);
+  const rec = { first: "Alice", result: { exigences: [{ type: "story", texte: "A", statut: "fait" }, { type: "story", texte: "B", statut: "absent" }], competences: [] }, checks: [] };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bid, G, `u:${U.alice.id}`, JSON.stringify(rec), clock.now());
+  let V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  const row = (id: string) => V.data.rows.find((r: any) => r.discord_id === id);
+  check(V.status === 200 && V.data.briefs.some((b: any) => b.id === bid), "the brief belongs to the sprint of its week");
+  check(row(U.alice.id).cells[code].r === "ok" && row(U.bob.id).cells[code].r === "low" && row(U.carol.id).cells[code].r === "ko", "✓ at the level asked, lower level, ✗");
+  check(row(U.alice.id).pct === 50 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", "grid % of the finalized debrief, briefs evaluated, proposal");
+  // levels: one AI call for the class, without the names
+  const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });
+  check(lv.status === 200 && lv.data.by === "ai" && lv.data.rows.some((r: any) => r.plevel === "excellent" && r.why === "Tout est validé."), "levels proposed by the AI for the class");
+  check(lv.data.rows.filter((r: any) => r.plevel).length === 3 && lv.data.rows.every((r: any) => !r.plevel || ["excellent", "bon", "moyen", "faible", "critique"].includes(r.plevel)), "…an unknown AI level is replaced by the computed one");
+  check(!/Alice|Bob|Carol/.test(ai.users[ai.users.length - 1]), "no names sent to the AI");
+  // the teacher decides
+  await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.carol.id, level: "faible", decision: "non_valide", note: "C3 à revoir" });
+  await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.bob.id, level: "nope" });
+  V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  check(row(U.carol.id).level === "faible" && row(U.carol.id).decision === "non_valide" && row(U.carol.id).note === "C3 à revoir" && row(U.carol.id).plevel, "level, decision and note saved (the proposal is kept)");
+  check(row(U.bob.id).level === "", "an unknown level is not saved");
+  check((await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: "999", level: "bon" })).status === 400, "unknown student refused");
+  // the sprint comment
+  const cm = await api("POST", `/api/sprints/${sp.n}/comment`, { g: G });
+  check(cm.status === 200 && /^Les objectifs technologiques/.test(cm.data.comment) && ai.users[ai.users.length - 1].includes("Brief du sprint") && !/Alice|Bob|Carol/.test(ai.users[ai.users.length - 1]), "the sprint comment written from the briefs and the levels (no names)");
+  await api("PUT", `/api/sprints/${sp.n}/comment`, { g: G, text: "Mon texte.\r\n\r\nFin." });
+  check((await api("GET", `/api/sprints/${sp.n}?g=${G}`)).data.comment === "Mon texte.\n\nFin.", "the teacher's text is saved");
+  const Y = await api("GET", `/api/sprints?g=${G}`);
+  check(Y.data.year.find((y: any) => y.discord_id === U.carol.id).per[0].v === "non_valide" && Y.data.year.find((y: any) => y.discord_id === U.carol.id).per[0].final, "the year: the decision per sprint");
+  check((await api("GET", `/api/sprints/999?g=${G}`)).status === 400, "unknown sprint refused");
+  run1("DELETE FROM competency_results WHERE ref = ? AND source = 'brief'", bid);
+}
+
 section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
 {
   const was = env.PUBLIC_URL;
