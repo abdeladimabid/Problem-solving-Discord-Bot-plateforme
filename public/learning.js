@@ -111,7 +111,7 @@ async function viewBriefs(tab = "list") {
   view.innerHTML = `
     <div class="page-head"><div><h1>Briefs</h1>
       <p class="sub">Projects of the class, following <b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}. Every debrief updates the competencies and skills of the student.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn" id="br-quick" title="Name, dates, sprint, squads, brief page, announcement: in one form">+ Quick brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
     ${r.ai ? "" : `<div class="notice warn" style="margin-bottom:16px"><b>No AI is set up.</b> You can still write and import briefs; generating and analyzing need the Groq key or Workers AI.</div>`}
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
@@ -141,6 +141,7 @@ async function viewBriefs(tab = "list") {
   show(tab);
   $("#br-new").onclick = () => briefGenerator(P, null, pg.now, pg);
   $("#br-import").onclick = () => briefGenerator(P, null, pg.now, { ...pg, mode: "import" });
+  $("#br-quick").onclick = () => quickBrief();
   $("#br-blank").onclick = (e) => busy(e.currentTarget, async () => { const b = await api("/briefs", { method: "POST", body: { title: "Nouveau brief" } }); location.hash = `#/brief/${b.brief.id}`; });
 }
 
@@ -575,13 +576,15 @@ function assignBriefDialog() {
   const b = BR.B.brief, d = b.data;
   openDialog(b.status === "assigned" ? "Dates and announcement" : "Publish to the class", `
     <p class="muted small" style="margin-top:12px">Students see it in <code>/brief</code> and hand in their repo with <code>/brief submit</code>. Reminders go 3 days and 1 day before the deadline; the bot follows their pushes on GitHub.</p>
-    <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due (23:59)</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div></div>
+    <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
+    <div data-wsprint></div>
     <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (the GitHub report channel, else the announcements channel)</label>
     ${BR.B.grid ? "" : `<p class="muted small">The evaluation grid is written now from the brief (you can edit it after).</p>`}`,
     [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
-      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, announce: $("#ab-a").checked } });
+      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($("#w-sp") ? { sprint: $("#w-sp").value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();
     } }]);
+  wSprintField(dlg, b.sprint ?? null, "#ab-d", b.week);
 }
 
 function reviewCell(rv) {

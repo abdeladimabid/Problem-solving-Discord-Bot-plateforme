@@ -18,7 +18,8 @@ export class SprintError extends Error {}
 
 export interface SprintInfo { n: number; title: string; start: string; end: string; codes: string[]; briefs: number[] }
 /** The sprints of the programme: dates from their weeks, competencies to reach (highest level asked in the weeks, then the transversal ones). */
-export function sprintsOf(p: Program, briefRows: { id: number; week: number | null; due_at: number | null; status: string }[]): SprintInfo[] {
+// a brief goes in the sprint the teacher chose (0 = none, e.g. a cross defense), else by its week, else by its due date
+export function sprintsOf(p: Program, briefRows: { id: number; week: number | null; due_at: number | null; status: string; sprint?: number | null }[]): SprintInfo[] {
   return p.sprints.map((s) => {
     const weeks = p.weeks.filter((w) => w.sprint === s.n && w.start && w.end);
     const start = weeks.map((w) => w.start).sort()[0] || "", end = weeks.map((w) => w.end).sort().pop() || "";
@@ -29,7 +30,7 @@ export function sprintsOf(p: Program, briefRows: { id: number; week: number | nu
     }
     const codes = [...best.entries()].sort(([a], [b]) => (a[0] === b[0] ? Number(a.slice(1)) - Number(b.slice(1)) : a < b ? -1 : 1)).map(([c, l]) => `${c}N${l}`);
     const inWeeks = new Set(weeks.map((w) => w.n));
-    const briefs = briefRows.filter((b) => b.status !== "draft" && (b.week != null ? inWeeks.has(b.week)
+    const briefs = briefRows.filter((b) => b.status !== "draft" && (b.sprint != null ? b.sprint === s.n : b.week != null ? inWeeks.has(b.week)
       : !!b.due_at && !!start && new Date(b.due_at * 1000).toISOString().slice(0, 10) >= start && new Date(b.due_at * 1000).toISOString().slice(0, 10) <= end)).map((b) => b.id);
     return { n: s.n, title: s.title, start, end, codes, briefs };
   }).filter((s) => s.start);
@@ -43,8 +44,8 @@ interface Row {
 /** Everything about one class, loaded once: students, briefs, results, debriefs, steps, the teacher's sprint decisions. */
 async function load(env: Env, g: GuildRow) {
   const p = await programOf(env, g);
-  const briefRows = await all<{ id: number; week: number | null; due_at: number | null; status: string; title: string; kind: string; squads: string | null; data: string }>(env,
-    "SELECT id, week, due_at, status, title, kind, squads, data FROM briefs WHERE guild_id = ?", g.id);
+  const briefRows = await all<{ id: number; week: number | null; due_at: number | null; status: string; title: string; kind: string; squads: string | null; data: string; sprint: number | null }>(env,
+    "SELECT id, week, due_at, status, title, kind, squads, data, sprint FROM briefs WHERE guild_id = ?", g.id);
   const sprints = sprintsOf(p, briefRows);
   const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
   const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,

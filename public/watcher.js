@@ -165,7 +165,7 @@ async function viewGithubAll() {
           return `<div style="margin:10px 0"><div class="panel-head" style="margin:0"><a href="#/brief/${b.id}"><b>${esc(b.title)}</b></a><span class="small muted">${dueIn(b.due_at)}</span></div>
             ${meter(Math.round((100 * (on + late)) / n), "pushed")}
             <div class="panel-head" style="margin:4px 0 0"><span class="small muted">${done ? `${on} on time, ${late} late, ${st.length - on - late} nothing` : `${on + late} of ${st.length} pushed`}</span>
-              <span class="toolbar" style="margin:0"><button class="btn small" data-wann="${b.id}">📣 Announce</button><button class="btn small" data-wstat="${b.id}">Post status</button></span></div></div>`;
+              <span class="toolbar" style="margin:0">${wAnnBtn(b)}<button class="btn small" data-wstat="${b.id}">Post status</button></span></div></div>`;
         }).join("") : `<p class="muted small">No brief in progress.</p>`}
       </section>
     </div>
@@ -176,7 +176,7 @@ async function viewGithubAll() {
         <select id="w-sort">${[["active", "Most active"], ["least", "Least active"], ["recent", "Last active"], ["lines", "Most lines"], ["name", "Name"]].map(([v, l]) => `<option value="${v}" ${W_STATE.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="toolbar" style="margin:0 0 10px"><b class="small">Brief</b><select id="w-brief"><option value="">All briefs</option>${D.briefs.map((b) => `<option value="${b.id}" ${String(b.id) === String(W_STATE.brief) ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select>
         ${BD ? `<select id="w-bstat">${BSTAT.map(([v, l, f]) => `<option value="${v}" ${v === W_STATE.bstat ? "selected" : ""}>${esc(l)} (${D.students.filter((s) => f(briefOf(s))).length})</option>`).join("")}</select>
-          <button class="btn small" data-wann="${BD.brief.id}">📣 Announce</button><button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}</div>
+          ${wAnnBtn(BD.brief)}<button class="btn small" data-wstat="${BD.brief.id}">Post status</button>` : ""}</div>
       <div class="table-wrap"><table class="grid-table"><thead><tr><th>Student</th>${BD ? "<th>Brief</th>" : ""}<th>${BD ? "Days of the brief" : "Last 14 days"}</th><th class="num">Score</th>${BD ? "" : `<th class="num">Trend</th>`}<th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th>Last push</th><th>Warnings</th></tr></thead>
         <tbody id="w-rows"></tbody></table></div>
       ${D.students.length ? "" : `<div class="empty-state"><div style="font-size:40px">🐙</div><p class="muted">Nobody linked yet: students type <code>/github</code> in Discord.</p></div>`}
@@ -222,9 +222,12 @@ async function viewGithubAll() {
 }
 
 // the brief's announcement (in French) and status, posted in Discord
+// the announce button: "again" once announced, none after the due date
+const wAnnBtn = (b) => (b.due_at && b.due_at <= Date.now() / 1000 ? ""
+  : `<button class="btn small" data-wann="${b.id}" ${b.announced_at ? `data-again="${esc(fmtAgo(b.announced_at))}"` : ""}>📣 ${b.announced_at ? "Announce again" : "Announce"}</button>`);
 function wireBriefButtons(root) {
-  $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog("Announce this brief in Discord?", "In French: dates, steps, squads and how to hand in.", "Announce",
-    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); }));
+  $$("[data-wann]", root).forEach((b) => b.onclick = () => confirmDialog(b.dataset.again ? "Announce this brief again?" : "Announce this brief in Discord?", b.dataset.again ? `It was announced ${b.dataset.again}.` : "In French: dates, steps, squads and how to hand in.", "Announce",
+    async () => { await api(`/briefs/${b.dataset.wann}/watcher/announce`, { method: "POST", body: {} }); toast("Announced in Discord"); viewGithubAll(); }));
   $$("[data-wstat]", root).forEach((b) => b.onclick = () => busy(b, async () => {
     const r = await api(`/briefs/${b.dataset.wstat}/watcher/status`, { method: "POST", body: {} });
     toast(`Status posted: ${r.on + r.late} pushed, ${r.none} not yet`);
@@ -405,6 +408,118 @@ function sprintYear(O) {
   </table></div><p class="muted small">Bold = your decision, light = proposed.</p></section>`;
 }
 
+
+// ================================================================= a brief in one form (like GitHub Watcher's "New brief")
+let W_PROG = null;
+const wProgram = async () => (W_PROG ??= (await api("/programs")).current);
+/** The sprints of the planning, with their dates (from their weeks). */
+function wSprintsOf(P) {
+  return (P.sprints || []).map((s) => {
+    const ws = (P.weeks || []).filter((w) => w.sprint === s.n && w.start && w.end);
+    return { n: s.n, title: "Sprint " + s.n, full: s.title || "", start: ws.map((w) => w.start).sort()[0] || "", end: ws.map((w) => w.end).sort().pop() || "" };
+  }).filter((s) => s.start);
+}
+const wShort = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+/** The sprint of a brief in a form: by its week or due date (the sprint is named), none (e.g. a cross defense), or one chosen.
+    `cur`: null = automatic, 0 = none, n = sprint n. Fills [data-wsprint] in root; the value is read from #w-sp. */
+async function wSprintField(root, cur, dueSel, week = null) {
+  const box = $("[data-wsprint]", root);
+  if (!box) return;
+  const P = await wProgram().catch(() => null);
+  const sps = P ? wSprintsOf(P) : [];
+  if (!sps.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<label for="w-sp">Sprint</label><select id="w-sp"><option value=""></option>
+    <option value="none" ${cur === 0 ? "selected" : ""}>Not in a sprint (e.g. cross defense)</option>
+    ${sps.map((s) => `<option value="${s.n}" ${cur === s.n ? "selected" : ""} title="${esc(s.full)}">${esc(s.title)} · ${wShort(s.start)} → ${wShort(s.end)}</option>`).join("")}</select>`;
+  const auto = () => {
+    const wk = week ? P.weeks.find((w) => w.n === week) : null;
+    const d = $(dueSel, root)?.value || "";
+    const sp = wk ? sps.find((s) => s.n === wk.sprint) : d && sps.find((s) => d >= s.start && d <= s.end);
+    $("#w-sp option[value='']", root).textContent = (wk ? "By its week" : "By its due date") + (wk || d ? ` (${sp ? sp.title : "no sprint"})` : "");
+  };
+  $(dueSel, root)?.addEventListener("input", auto);
+  auto();
+}
+
+async function quickBrief() {
+  await loadRef();
+  let src = null; // the brief page read: { text, title, comps }
+  const squads = [];
+  const today = new Date().toISOString().slice(0, 10);
+  openDialog("New brief", `
+    <label for="qb-name">Name</label><input type="text" id="qb-name" maxlength="160" placeholder="e.g. Fitness website" style="width:100%">
+    <div class="field-row"><div><label for="qb-s">From</label><input type="date" id="qb-s" value="${today}"></div>
+      <div><label for="qb-d">Due</label><input type="date" id="qb-d"></div><div><label for="qb-t">At (UTC)</label><input type="time" id="qb-t" value="23:59"></div></div>
+    <div data-wsprint></div>
+    <label>Type of brief</label>${segHtml("qbk", [["solo", "Individual"], ["squad", "Squad (collective)"]], "solo")}
+    <div id="qb-sq" hidden><div class="toolbar" style="margin:8px 0"><select id="qb-from"><option value="">Loading the class's squads…</option></select><button class="btn small" type="button" id="qb-load">Load</button></div>
+      <div id="qb-board"></div></div>
+    <label>Brief page <span class="muted">(optional)</span></label>
+    <label class="drop" id="qb-drop"><input type="file" id="qb-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label>
+    <div id="qb-pre" class="small"></div>
+    <div class="field-row"><div><label for="qb-c">Competencies</label><input type="text" id="qb-c" placeholder="C1N1, C3N1, CT1N1…"></div>
+      <div><label for="qb-r">Repo name contains</label><input type="text" id="qb-r" maxlength="100" placeholder="optional"></div></div>
+    <label class="check"><input type="checkbox" id="qb-a" checked> Announce it in Discord</label>`,
+    [{ label: "Add brief", primary: true, action: async () => {
+      const name = $("#qb-name").value.trim(), start = $("#qb-s").value, due = $("#qb-d").value, kind = segVal(dlg, "qbk");
+      if (!name && !src) throw new Error("Give the brief a name.");
+      if (!due) throw new Error("Choose the due date.");
+      if (start && start > due) throw new Error("The start date must be before the due date.");
+      const sq = squads.filter((s) => s.members.length);
+      if (kind === "squad" && !sq.length) throw new Error("Load the squads first.");
+      const extra = $("#qb-c").value.split(/[\s,;]+/).map(parseC).filter(Boolean).map((p) => p.code + (p.level ? "N" + p.level : ""));
+      let B = src ? await api("/briefs/import", { method: "POST", body: { ...src, start, due, mode: kind === "squad" ? "squad" : "individuel" } })
+        : await api("/briefs", { method: "POST", body: { title: name } });
+      const id = B.brief.id, d0 = B.brief.data;
+      await api(`/briefs/${id}`, { method: "PUT", body: { data: { ...d0, title: name || d0.title, competencies: [...new Set([...(d0.competencies || []), ...extra])] },
+        kind, squads: kind === "squad" ? sq : [], repo_hint: $("#qb-r").value.trim() } });
+      await api(`/briefs/${id}/assign`, { method: "POST", body: { start, due, time: $("#qb-t").value, sprint: $("#w-sp") ? $("#w-sp").value : "", announce: false } });
+      let msg = "Brief added";
+      if ($("#qb-a").checked) msg = await api(`/briefs/${id}/watcher/announce`, { method: "POST", body: {} }).then(() => "Brief added and announced", (e) => `Brief added, not announced: ${e.message}`);
+      dlg.close(); toast(msg); location.hash = `#/brief/${id}`;
+    } }]);
+  dlg.classList.add("wide");
+  wSprintField(dlg, null, "#qb-d");
+  // squads: loaded from the class's squads (Teams & squads), adjusted here for this brief only
+  let classSq = null;
+  wireSeg(dlg, "qbk", (v) => {
+    $("#qb-sq", dlg).hidden = v !== "squad";
+    if (v !== "squad" || classSq) return;
+    api("/squads").then((d) => {
+      classSq = d;
+      const sel = $("#qb-from", dlg);
+      sel.innerHTML = d.sets.length ? d.sets.map((x) => `<option value="${x.id}" ${x.active ? "selected" : ""}>${esc(x.name)}${x.active ? " · current" : ""} (${x.squads.length} squads)</option>`).join("") : `<option value="">No class squads yet (Teams & squads)</option>`;
+      const board = squadBoard($("#qb-board", dlg), d.students, squads, () => {});
+      $("#qb-load", dlg).onclick = () => {
+        const set = d.sets.find((x) => String(x.id) === sel.value);
+        if (!set) { dlg.close(); location.hash = "#/teams"; return; }
+        squads.splice(0, squads.length, ...set.squads.map((x) => ({ ...x, members: [...x.members] })));
+        board.redraw();
+      };
+      if (d.sets.length) $("#qb-load", dlg).click();
+    }).catch((e) => toast(e.message));
+  });
+  // the brief page (optional): its text and competencies; the name comes from it when empty
+  const readFile = async (f) => {
+    if (!f) return;
+    const pre = $("#qb-pre", dlg);
+    if (!/\.html?$/i.test(f.name) && f.type !== "text/html") { pre.innerHTML = `<span style="color:var(--down)">Choose the page saved as .html.</span>`; return; }
+    $("#qb-drop span", dlg).innerHTML = `📄 <b>${esc(f.name)}</b> · choose another`;
+    pre.innerHTML = `<span class="muted">⏳ Reading…</span>`;
+    try {
+      const s = simplonParse(await f.text(), REF.referential);
+      const r = await api("/briefs/import", { method: "POST", body: { ...s, preview: true } });
+      src = s;
+      if (!$("#qb-name").value.trim()) $("#qb-name").value = r.data.title || "";
+      pre.innerHTML = `✓ ${(r.data.groups || []).reduce((n, g) => n + (g.stories || []).length, 0)} user stories · ${(r.data.competencies || []).map((c) => compChip(c)).join(" ") || `<span class="muted">no competency found</span>`}`;
+    } catch (e) { src = null; pre.innerHTML = `<span style="color:var(--down)">${esc(e.message)}</span>`; }
+  };
+  $("#qb-file", dlg).onchange = () => readFile($("#qb-file", dlg).files[0]);
+  const drop = $("#qb-drop", dlg);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); readFile(e.dataTransfer.files[0]); };
+}
 
 // one GitHub page (the Watcher's view of it); old Watcher links lead there
 Object.assign(routes, { github: viewGithubAll, watch: () => { location.hash = "#/github"; }, "watch-students": () => { location.hash = "#/github"; }, sprints: viewSprints });

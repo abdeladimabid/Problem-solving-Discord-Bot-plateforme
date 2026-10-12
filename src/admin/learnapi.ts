@@ -223,7 +223,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!cur) throw new ApiError(404, "This brief doesn't exist anymore.");
     const data = { ...cur.data, modalities: { ...cur.data.modalities, start: String(body.start || cur.data.modalities.start || ""), due: String(body.due || cur.data.modalities.due || "") } };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data.modalities.due)) bad("Choose the due date first.");
+    if ("time" in body) { if (/^\d\d:\d\d$/.test(String(body.time))) data.modalities.time = String(body.time); else delete data.modalities.time; }
     await saveBrief(env, g, id, { data, internal: cur.internal, status: "assigned" });
+    // its sprint: "" = by its week or due date, "none" = not in a sprint (e.g. a cross defense), n = sprint n
+    if ("sprint" in body) await run(env, "UPDATE briefs SET sprint = ? WHERE id = ?", body.sprint === "none" ? 0 : Number(body.sprint) > 0 ? Number(body.sprint) : null, id);
     if (!(cur as any).grid) await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(await makeGrid(env, data)), id);
     {
       const nb = (await getBrief(env, g, id))!;
@@ -239,11 +242,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const f = simplonFields(b.data, p);
       let squads: any[] = [];
       try { squads = JSON.parse((b as any).squads || "[]"); } catch { squads = []; }
-      if (ch) await send(env, ch, { embeds: [{ color: 0x2563eb, title: t(g.lang, "brief.announce_title", { title: b.data.title }),
+      if (ch && await send(env, ch, { embeds: [{ color: 0x2563eb, title: t(g.lang, "brief.announce_title", { title: b.data.title }),
         description: [b.data.summary, b.due_at ? t(g.lang, "brief.due_line", { when: `<t:${b.due_at}:F>` }) : "",
           b.data.competencies.length ? `🎯 ${f.competencies.split("\n").map((l) => l.split(".")[0]).join(", ")}` : "",
           squads.length ? squads.map((s) => `• **${s.name}** : ${s.members.map((x: string) => `<@${x}>`).join(" ")}${s.sm ? ` (SM <@${s.sm}>)` : ""}`).join("\n") : "",
-          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }] }).catch(() => {});
+          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }] }).then(() => true, () => false)) await run(env, "UPDATE briefs SET announced_at = ? WHERE id = ?", now(), id);
     }
     return ok(await briefView(env, g, id));
   }

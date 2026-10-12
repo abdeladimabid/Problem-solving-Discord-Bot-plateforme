@@ -18,7 +18,7 @@ export interface StoryGroup { title: string; emoji: string; stories: string[] }
 export interface BriefData {
   title: string; summary: string; tags: string[];
   context: string; groups: StoryGroup[]; bonus: string[];
-  modalities: { days: number; mode: string; start: string; due: string; text: string };
+  modalities: { days: number; mode: string; start: string; due: string; text: string; time?: string };
   evaluation: { minutes: number; parts: { minutes: number; label: string }[] };
   deliverables: string[]; criteria: string[];
   situation: { title: string; need: string };
@@ -31,6 +31,7 @@ export interface BriefInternal {
 export interface BriefRow {
   id: number; guild_id: string; program: string | null; week: number | null; title: string; status: string; source: string | null;
   data: string; internal: string | null; competencies: string | null; start_at: number | null; due_at: number | null; created_at: number; updated_at: number | null;
+  sprint?: number | null; announced_at?: number | null;
 }
 export const SECTIONS = ["title", "summary", "tags", "context", "groups", "bonus", "modalities", "evaluation", "deliverables", "criteria", "situation", "competencies", "resources"] as const;
 export type Section = typeof SECTIONS[number];
@@ -67,6 +68,7 @@ export function cleanBrief(b: any): BriefData {
     modalities: {
       days: int(b?.modalities?.days, 5, 1, 30), mode: s(b?.modalities?.mode, 40) || "individuel",
       start: s(b?.modalities?.start, 10), due: s(b?.modalities?.due, 10), text: s(b?.modalities?.text, 1500),
+      ...(/^\d\d:\d\d$/.test(String(b?.modalities?.time ?? "")) ? { time: String(b.modalities.time) } : {}),
     },
     evaluation: { minutes: int(b?.evaluation?.minutes, parts.reduce((a: number, p: { minutes: number }) => a + p.minutes, 0) || 15, 5, 180), parts },
     deliverables: list(b?.deliverables, 15, 300),
@@ -405,7 +407,7 @@ export function briefChecks(b: BriefData, w: ProgramWeek | null): { ok: boolean;
 
 // --------------------------------------------------------------- storage
 export async function listBriefs(env: Env, g: Pick<GuildRow, "id">) {
-  return all<Omit<BriefRow, "data" | "internal">>(env, "SELECT id, guild_id, program, week, title, status, source, competencies, start_at, due_at, created_at, updated_at FROM briefs WHERE guild_id = ? ORDER BY COALESCE(due_at, created_at) DESC, id DESC LIMIT 200", g.id);
+  return all<Omit<BriefRow, "data" | "internal">>(env, "SELECT id, guild_id, program, week, title, status, source, competencies, start_at, due_at, created_at, updated_at, sprint, announced_at FROM briefs WHERE guild_id = ? ORDER BY COALESCE(due_at, created_at) DESC, id DESC LIMIT 200", g.id);
 }
 export async function getBrief(env: Env, g: Pick<GuildRow, "id">, id: number) {
   const r = await one<BriefRow>(env, "SELECT * FROM briefs WHERE id = ? AND guild_id = ?", id, g.id);
@@ -415,12 +417,13 @@ export async function getBrief(env: Env, g: Pick<GuildRow, "id">, id: number) {
   try { internal = cleanInternal(JSON.parse(r.internal || "{}")); } catch { internal = cleanInternal({}); }
   return { ...r, data, internal };
 }
-const toTs = (iso: string, end = false) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? Math.floor(Date.parse(iso + (end ? "T23:59:00Z" : "T09:00:00Z")) / 1000) : null);
+// the due time is 23:59 UTC unless the teacher chose one
+const toTs = (iso: string, end = false, time = "") => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? Math.floor(Date.parse(iso + (end ? "T" + (/^\d\d:\d\d$/.test(time) ? time : "23:59") + ":00Z" : "T09:00:00Z")) / 1000) : null);
 export async function saveBrief(env: Env, g: Pick<GuildRow, "id">, id: number | null, o: { data: unknown; internal?: unknown; program?: string | null; week?: number | null; status?: string; source?: string }): Promise<number> {
   const data = cleanBrief(o.data), internal = cleanInternal(o.internal ?? {});
   const status = ["draft", "assigned", "archived"].includes(o.status ?? "") ? o.status! : "draft";
   const comps = data.competencies.join(",");
-  const start = toTs(data.modalities.start), due = toTs(data.modalities.due, true);
+  const start = toTs(data.modalities.start), due = toTs(data.modalities.due, true, data.modalities.time);
   if (id) {
     const r = await run(env, "UPDATE briefs SET title = ?, data = ?, internal = ?, competencies = ?, start_at = ?, due_at = ?, status = ?, week = COALESCE(?, week), program = COALESCE(?, program), updated_at = ? WHERE id = ? AND guild_id = ?",
       data.title, JSON.stringify(data), JSON.stringify(internal), comps, start, due, status, o.week ?? null, o.program ?? null, now(), id, g.id);
