@@ -13,6 +13,7 @@ import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
+import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
@@ -35,7 +36,7 @@ export async function learningApi(env: Env, ctx: Ctx, path: string, method: stri
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
     if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError || e instanceof WatcherMsgError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -197,6 +198,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!grid.items.length) bad("The grid is empty: write one line per requirement, like “[fonctionnalité] Créer la page Contact (vérif : form, map)”.");
     await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(grid), id);
     return ok(await briefView(env, g, id));
+  }
+  // Watcher: the brief's announcement in French, and who pushed, posted in Discord when the teacher clicks
+  if ((m = path.match(/^\/briefs\/(\d+)\/watcher\/(announce|status)$/)) && method === "POST") {
+    const g = await guild();
+    return ok(m[2] === "announce" ? await announceFr(env, g, Number(m[1])) : await postStatus(env, g, Number(m[1])));
   }
   if ((m = path.match(/^\/briefs\/(\d+)\/steps$/)) && (method === "PUT" || method === "POST")) {
     const g = await guild();

@@ -2941,6 +2941,40 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   run1("DELETE FROM competency_results WHERE ref = ? AND source = 'brief'", bid);
 }
 
+section("watcher: the brief announced in French and its status posted in Discord; only the student's own recent commits count");
+{
+  const b = q1("SELECT id, title FROM briefs WHERE guild_id = ? AND status = 'assigned' AND due_at IS NOT NULL ORDER BY id DESC LIMIT 1", G);
+  run1("UPDATE briefs SET repo_hint = 'Site Été' WHERE id = ?", b.id);
+  const n0 = discordCalls.length;
+  const an = await api("POST", `/api/briefs/${b.id}/watcher/announce`, { g: G });
+  const sent = discordCalls.slice(n0).map((c) => JSON.stringify(c.body ?? {})).join("\n");
+  check(an.status === 200 && sent.includes("Nouveau brief") && sent.includes("**Rendu :** <t:") && sent.includes("/brief submit") && sent.includes("Nom du repo : **Site-Ete**"), "announcement in French: dates as Discord timestamps, how to hand in, the repo name");
+  const n1 = discordCalls.length;
+  const stt = await api("POST", `/api/briefs/${b.id}/watcher/status`, { g: G });
+  check(stt.status === 200 && typeof stt.data.none === "number" && discordCalls.slice(n1).some((c) => JSON.stringify(c.body ?? {}).includes(b.title)), "who pushed, posted in Discord");
+  check((await api("POST", "/api/briefs/999999/watcher/status", { g: G })).status === 400, "unknown brief refused");
+  // a pushed copy of a project: commits by someone else, or old ones, don't count for the pusher
+  const secret = env.GITHUB_WEBHOOK_SECRET = env.GITHUB_WEBHOOK_SECRET || "whsec_test";
+  run1("UPDATE players SET github_id = '9101', github_login = 'dora-gh', gh_inst = '9191' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  const push = async (commits: any[], id: string) => {
+    const body = JSON.stringify({ installation: { id: 9191 }, repository: { full_name: "dora-gh/copie" }, sender: { id: 9101, login: "dora-gh" }, ref: "refs/heads/main", commits, pusher: { name: "dora-gh" }, compare: "https://github.com/x" });
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = "sha256=" + Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))).toString("hex");
+    const ctx = makeCtx();
+    await bot.fetch(new Request("https://bot.example.workers.dev/github/webhook", { method: "POST", headers: { "x-github-event": "push", "x-github-delivery": id, "x-hub-signature-256": sig }, body }), env, ctx);
+    await ctx.flush();
+  };
+  const nowIso = new Date(Date.now()).toISOString();
+  const cm = (sha: string, user: string, ts: string) => ({ id: sha.repeat(40), message: "feat: " + sha, distinct: true, added: ["a.html"], modified: [], removed: [], author: { username: user, name: user }, timestamp: ts, url: "https://github.com/x" });
+  const before = q("SELECT * FROM gh_activity WHERE discord_id = ?", U.bob.id).length;
+  await push([cm("a", "someone-else", nowIso), cm("b", "dora-gh", "2024-01-10T10:00:00Z")], "copy1");
+  check(q("SELECT * FROM gh_activity WHERE discord_id = ?", U.bob.id).length === before, "a push of other people's or old commits counts nothing");
+  await push([cm("c", "dora-gh", nowIso), cm("d", "someone-else", nowIso)], "copy2");
+  const rows = q("SELECT commits FROM gh_activity WHERE discord_id = ? AND delivery = 'copy2'", U.bob.id);
+  check(rows.length === 1 && rows[0].commits === 1, "…only their own recent commit counts");
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+}
+
 section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
 {
   const was = env.PUBLIC_URL;
