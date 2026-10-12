@@ -151,20 +151,18 @@ export const COMMANDS: any[] = [
     name: "interview", description: "Mock coding interview: solve a problem and explain it to an interviewer", description_localizations: fr("Entretien technique blanc : résous un problème et explique-le"),
     options: [diff(false)],
   },
+  { name: "github", description: "Connect your GitHub: your briefs and your work count in your record", description_localizations: fr("Connecter ton GitHub : tes briefs et ton travail comptent dans ton suivi") },
   {
-    name: "project", description: "GitHub projects graded by the bot", description_localizations: fr("Projets GitHub corrigés par le bot"),
+    name: "brief", description: "Your project briefs: dates, hand-in, your debrief", description_localizations: fr("Tes briefs : dates, rendu, ton débriefing"),
     options: [
-      { type: SUB, name: "list", description: "Open projects and your score", description_localizations: fr("Projets ouverts et ton score") },
+      { type: SUB, name: "list", description: "Your briefs and your results", description_localizations: fr("Tes briefs et tes résultats") },
       {
-        type: SUB, name: "submit", description: "Link your public GitHub repository to a project", description_localizations: fr("Relier ton dépôt GitHub public à un projet"),
+        type: SUB, name: "submit", description: "Hand in your GitHub repo for a brief", description_localizations: fr("Rendre ton dépôt GitHub pour un brief"),
         options: [
           { type: STRING, name: "repo", description: "github.com/you/your-repo", description_localizations: fr("github.com/toi/ton-depot"), required: true, max_length: 200 },
-          { type: STRING, name: "project", description: "Which project (if several)", description_localizations: fr("Quel projet (s'il y en a plusieurs)"), autocomplete: true },
+          { type: STRING, name: "plan", description: "Your planning board (Trello, Jira, GitHub Project)", description_localizations: fr("Ton tableau de planification (Trello, Jira, GitHub Project)"), max_length: 300 },
+          { type: STRING, name: "brief", description: "Which brief (if several)", description_localizations: fr("Quel brief (s'il y en a plusieurs)"), autocomplete: true },
         ],
-      },
-      {
-        type: SUB, name: "check", description: "Grade your repository again now", description_localizations: fr("Corriger ton dépôt maintenant"),
-        options: [{ type: STRING, name: "project", description: "Which project (if several)", description_localizations: fr("Quel projet (s'il y en a plusieurs)"), autocomplete: true }],
       },
     ],
   },
@@ -184,7 +182,7 @@ export const COMMANDS: any[] = [
         { name: "Profile, rivals, teams", name_localizations: fr("Profil, rivaux, équipes"), value: "social" },
         { name: "Coach: plan, skills, path, shop", name_localizations: fr("Coach : plan, compétences, parcours, boutique"), value: "coach" },
         { name: "Quiz, boss battles, bounties", name_localizations: fr("Quiz, boss, primes"), value: "events" },
-        { name: "Help, interviews, projects, league", name_localizations: fr("Aide, entretiens, projets, ligue"), value: "more" },
+        { name: "Help, briefs, assessments, league", name_localizations: fr("Aide, briefs, évaluations, ligue"), value: "more" },
         { name: "Teacher tools", name_localizations: fr("Outils enseignant"), value: "teacher" },
       ],
     }],

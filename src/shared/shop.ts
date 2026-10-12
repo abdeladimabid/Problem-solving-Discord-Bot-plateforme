@@ -18,6 +18,7 @@ export interface ShopItem {
 export const SHOP: ShopItem[] = [
   { key: "freeze", price: 60, emoji: "🧊", group: "item", max: 2 },
   { key: "hint", price: 30, emoji: "🎟️", group: "item", max: 5 },
+  { key: "buddy", price: 800, emoji: "🤝", group: "item", max: 1 },   // max = how many the whole class can buy per season
   { key: "double", price: 120, emoji: "💎", group: "boost", hours: 1 },
   { key: "contract", price: 50, emoji: "🎯", group: "boost", hours: 24, reward: 150 },
   { key: "shield", price: 80, emoji: "🛡️", group: "boost", hours: 24 },
@@ -195,6 +196,13 @@ async function pay(env: Env, g: GuildRow, uid: string, price: number) {
   if (!r.meta.changes) throw new ShopError("shop.no_coins");
 }
 
+/** How many squad buddies the class bought this season (the shop has `max` per season, for the whole class). */
+export async function buddySold(env: Env, g: GuildRow): Promise<number> {
+  const r = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND item = 'buddy' AND substr(COALESCE(detail, ''), 1, ?) = ? AND COALESCE(status, '') != 'refunded'",
+    g.id, g.season.length + 1, g.season + "|");
+  return r?.n ?? 0;
+}
+
 export async function buy(env: Env, g: GuildRow, uid: string, key: string, detail = ""): Promise<{ key: string; detail?: string; item?: ShopItem; purchase?: number; until?: number }> {
   const item = shopItems(g).find((x) => x.key === key);
   if (!item) throw new ShopError("shop.unavailable");
@@ -224,6 +232,14 @@ export async function buy(env: Env, g: GuildRow, uid: string, key: string, detai
     if ((p.hint_tokens ?? 0) >= item.max!) throw new ShopError("shop.max");
     await pay(env, g, uid, item.price);
     await run(env, "UPDATE players SET hint_tokens = hint_tokens + 1 WHERE guild_id = ? AND discord_id = ?", g.id, uid);
+  } else if (item.key === "buddy") {
+    // a classmate in the same squad next sprint (the teacher sees it on the squads board): once per season
+    const mate = detail.trim();
+    if (!/^\d{1,25}$/.test(mate) || mate === uid || !(await one(env, "SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", g.id, mate))) throw new ShopError("shop.buddy_bad");
+    if ((await buddySold(env, g)) >= (item.max ?? 1)) throw new ShopError("shop.buddy_sold");
+    await pay(env, g, uid, item.price);
+    const r = await run(env, "INSERT INTO purchases (guild_id, discord_id, item, cost, detail, status, created_at) VALUES (?, ?, 'buddy', ?, ?, 'pending', ?)", g.id, uid, item.price, `${g.season}|${mate}`, t0);
+    return { key: item.key, detail: mate, item, purchase: Number(r.meta.last_row_id) };
   } else if (item.key === "title") {
     const title = clean(detail).slice(0, 24);
     if (title.length < 2) throw new ShopError("shop.bad_title");

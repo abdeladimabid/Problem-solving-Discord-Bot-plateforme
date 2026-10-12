@@ -28,7 +28,7 @@ const CODE_STYLE: Record<string, string> = {
 
 export const AI_COST = { quick: 2, write: 4, feedback: 1, judge: 2 };
 
-type Msg = { role: "system" | "user" | "assistant"; content: string };
+export type Msg = { role: "system" | "user" | "assistant"; content: string };
 
 // ------------------------------------------------------------------- calls
 function pickText(raw: any): string {
@@ -85,13 +85,40 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
+export const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+export const GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"];
+
 export function aiProviderLabel(env: Env): string {
+  if (env.GROQ_API_KEY) return `Groq · ${(env.GROQ_MODEL || GROQ_MODELS[0]).split("/").pop()} (Workers AI as backup)`;
   if (env.LLM_BASE_URL) return `${env.LLM_MODEL || "model"} @ ${env.LLM_BASE_URL.replace(/^https?:\/\//, "").split("/")[0]}`;
   return `Workers AI · ${(env.AI_MODEL || DEFAULT_MODELS[0]).replace("@cf/", "")}`;
 }
 
-/** One chat completion. Returns the raw text. Throws on failure. */
-export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number }): Promise<string> {
+/** Groq only (needs GROQ_API_KEY). Tries the models in turn; throws when none answers. */
+export async function groqChat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number; json?: boolean }): Promise<{ text: string; model: string }> {
+  if (!env.GROQ_API_KEY) throw new Error("no Groq key");
+  const models = env.GROQ_MODEL ? [env.GROQ_MODEL, ...GROQ_MODELS.filter((m) => m !== env.GROQ_MODEL)] : GROQ_MODELS;
+  let last = "Groq unavailable";
+  for (const model of models) {
+    try {
+      const body = (json: boolean) => JSON.stringify({ model, messages, max_tokens: o.maxTokens, temperature: o.temperature,
+        ...(model.startsWith("openai/gpt-oss") ? { reasoning_effort: "low" } : {}), ...(json ? { response_format: { type: "json_object" } } : {}) });
+      let res = await withTimeout(fetch(GROQ_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.GROQ_API_KEY}` }, body: body(!!o.json) }), o.timeoutMs ?? 90000);
+      if (res.status === 400 && o.json) res = await withTimeout(fetch(GROQ_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.GROQ_API_KEY}` }, body: body(false) }), o.timeoutMs ?? 90000);
+      if (res.status === 401) throw new Error("Groq refused the key (GROQ_API_KEY)");
+      if (!res.ok) { last = `Groq ${res.status} (${model})`; continue; }
+      const text = pickText(await res.json());
+      if (text.trim()) return { text, model };
+    } catch (e) {
+      last = String((e as Error)?.message ?? e);
+      if (/refused the key/.test(last)) throw e;
+    }
+  }
+  throw new Error(last);
+}
+
+/** Workers AI (or the OpenAI-compatible endpoint in LLM_BASE_URL). Throws on failure. */
+export async function workersChat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number }): Promise<{ text: string; model: string }> {
   const timeout = o.timeoutMs ?? 90000;
   if (env.LLM_BASE_URL) {
     const res = await withTimeout(fetch(env.LLM_BASE_URL.replace(/\/$/, "") + "/chat/completions", {
@@ -100,7 +127,7 @@ export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; te
       body: JSON.stringify({ model: env.LLM_MODEL, messages, max_tokens: o.maxTokens, temperature: o.temperature }),
     }), timeout);
     if (!res.ok) throw new Error(`AI provider answered ${res.status}`);
-    return pickText(await res.json());
+    return { text: pickText(await res.json()), model: env.LLM_MODEL || "llm" };
   }
   const models = env.AI_MODEL ? [env.AI_MODEL, ...DEFAULT_MODELS.filter((m) => m !== env.AI_MODEL)] : DEFAULT_MODELS;
   let last: unknown;
@@ -108,7 +135,7 @@ export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; te
     try {
       const raw = await withTimeout(env.AI.run(model, { messages, max_tokens: o.maxTokens, temperature: o.temperature }), timeout);
       const text = pickText(raw);
-      if (text.trim()) return text;
+      if (text.trim()) return { text, model: model.replace("@cf/", "cloudflare/") };
     } catch (e) {
       last = e;
     }
@@ -116,8 +143,20 @@ export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; te
   throw last instanceof Error ? last : new Error("AI unavailable");
 }
 
-async function chatJson(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number }): Promise<any> {
-  return extractJson(await chat(env, messages, o));
+/**
+ * One chat completion. Returns the raw text. Throws on failure.
+ * Groq first when a key is set (a big model, fast, good at long French documents); if it fails
+ * (limit reached, busy, timeout), Workers AI answers instead.
+ */
+export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number; json?: boolean }): Promise<string> {
+  if (env.GROQ_API_KEY) {
+    try { return (await groqChat(env, messages, o)).text; } catch (e) { console.error("groq", e); }
+  }
+  return (await workersChat(env, messages, o)).text;
+}
+
+export async function chatJson(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number }): Promise<any> {
+  return extractJson(await chat(env, messages, { ...o, json: true }));
 }
 
 // ------------------------------------------------------------- difficulty

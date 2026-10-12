@@ -45,6 +45,7 @@ export interface WorkOn {
   failedCode: Evidence[];     // write-code / SQL / HackerRank challenges on this skill they didn't solve
   codeMistakes: Evidence[];   // mistakes in this skill found in their code (any challenge)
   missedQuick: Evidence[];    // quick questions on this skill they got wrong
+  projectMistakes?: Evidence[]; // what their brief debriefs (GitHub checks, mise en situation) and assessments showed
   solved: number;
 }
 
@@ -97,6 +98,11 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
        FROM skill_evidence e JOIN attempts a ON a.id = e.attempt_id JOIN challenges c ON c.id = a.challenge_id
       WHERE e.guild_id = ? AND e.discord_id = ? AND e.ok = 0 AND e.created_at >= ? ORDER BY e.id DESC LIMIT 200`, g.id, uid, since).catch(() => []);
 
+  // briefs (debrief checks) and assessments: evidence without a challenge
+  const proj = await all<any>(env,
+    `SELECT skill, why, created_at, source FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND ok = 0 AND source IS NOT NULL AND created_at >= ? ORDER BY id DESC LIMIT 200`,
+    g.id, uid, since).catch(() => []);
+
   return pick.map((s) => {
     const onAll = failed.filter((r) => skillsOf(r).includes(s.key));
     // one line per challenge (the latest try), with how many times it was missed
@@ -119,6 +125,12 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
       codeMistakes.push({ attempt_id: e.attempt_id, challenge_id: e.challenge_id, title: e.title, kind: e.kind, difficulty: e.difficulty, when: e.created_at,
         detail: `${how}${n > 1 ? ` (${n} submissions)` : ""}${e.status === "solved" ? " · solved in the end" : ""}` });
     }
+    const projectMistakes: Evidence[] = [];
+    for (const e of proj.filter((x) => x.skill === s.key)) {
+      if (projectMistakes.length >= 5 || projectMistakes.some((x) => x.detail === e.why)) continue;
+      const [title, ...rest] = String(e.why ?? "").split(": ");
+      projectMistakes.push({ attempt_id: 0, challenge_id: 0, title, kind: String(e.source).startsWith("brief") ? "brief" : "assessment", difficulty: "", when: e.created_at, detail: rest.join(": ") || String(e.why ?? "") });
+    }
     const missedQuick: Evidence[] = on.filter((r) => !CODE.includes(r.kind)).slice(0, 5).map((r) => ({
       attempt_id: r.attempt_id, challenge_id: r.challenge_id, title: r.title, kind: r.kind, difficulty: r.difficulty, when: r.at,
       detail: (r.status === "expired" ? `${KIND[r.kind] ?? r.kind}, not answered` : `${KIND[r.kind] ?? r.kind}: answered “${short(choice(r, r.answer_given), 60)}”${r.answer ? `, right answer “${short(choice(r, r.answer), 60)}”` : ""}`) + times(r),
@@ -130,11 +142,14 @@ export async function workOn(env: Env, g: GuildRow, uid: string, max = 5): Promi
     if (seen.size) parts.push(`made mistakes in ${s.key === "basics" ? "basic syntax/variables" : "this"} in their code on ${seen.size} challenge${seen.size > 1 ? "s" : ""}`);
     const qf = on.filter((r) => !CODE.includes(r.kind)).length;
     if (qf) parts.push(`missed ${qf} quick question${qf > 1 ? "s" : ""}`);
+    const pb = new Set(projectMistakes.filter((x) => x.kind === "brief").map((x) => x.title)).size, pa = new Set(projectMistakes.filter((x) => x.kind === "assessment").map((x) => x.title)).size;
+    if (pb) parts.push(`a debrief showed it missing in ${pb} brief${pb > 1 ? "s" : ""}`);
+    if (pa) parts.push(`got it wrong in ${pa} assessment${pa > 1 ? "s" : ""}`);
     if (s.code == null && s.quick != null) parts.push("hasn't shown it in code yet (quizzes alone count for 20% at most)");
     const why = parts.length ? `${parts[0][0].toUpperCase()}${parts.join(", ").slice(1)}.` : `Few tries so far (${s.solved} solved, ${s.failed} not).`;
     const revisit = revisitFor(s.key, on, ev.filter((x) => x.skill === s.key), s.code == null && s.quick != null);
     return { skill: s.key, name: skillName(s.key, "en"), mastery: s.mastery, code: s.code, quick: s.quick, status: s.status, level: s.target, why, revisit,
-      lesson: LESSONS[s.key]?.en?.title ?? null, failedCode, codeMistakes, missedQuick, solved: s.solved };
+      lesson: LESSONS[s.key]?.en?.title ?? null, failedCode, codeMistakes, missedQuick, projectMistakes, solved: s.solved };
   });
 }
 
@@ -150,6 +165,7 @@ export async function workOnNote(env: Env, g: GuildRow, uid: string, skill: stri
     ...w.failedCode.map((e) => `Code challenge not solved: "${e.title}" (${e.difficulty}): ${e.detail}`),
     ...w.codeMistakes.map((e) => `Mistake in their code on "${e.title}": ${e.detail}`),
     ...w.missedQuick.map((e) => `Missed: "${e.title}": ${e.detail}`),
+    ...(w.projectMistakes ?? []).map((e) => `In the ${e.kind} "${e.title}": ${e.detail}`),
     `To revisit: ${w.revisit.join(" | ")}`, w.lesson ? `Lesson available in /path: ${w.lesson}` : "",
   ].filter(Boolean).join("\n");
   const text = await chat(env, [

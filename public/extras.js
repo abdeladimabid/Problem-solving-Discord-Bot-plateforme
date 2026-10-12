@@ -1,4 +1,4 @@
-/* ClassBot dashboard: help queue, questions (FAQ), interviews, GitHub projects, classes & league, certificates.
+/* ClassBot dashboard: help queue, questions (FAQ), interviews, classes & league, certificates.
    Loaded after app.js and uses its helpers (api, esc, table, openDialog, toast, …). */
 "use strict";
 
@@ -14,6 +14,8 @@ async function refreshPills() {
     set("#pill-hands", p.hands);
     set("#pill-faq", p.faq);
     set("#pill-shop", p.shop);
+    set("#pill-assess", p.assess);
+    set("#pill-briefs", p.debriefs);
     document.title = (p.hands ? `(${p.hands}) ` : "") + "ClassBot · Teacher dashboard";
   } catch { /* offline or signed out: ignore */ }
 }
@@ -178,140 +180,109 @@ function interviewDialog(x) {
   dlg.classList.add("wide");
 }
 
-// ============================================================== projects
-const PROJECT_LANGS = ["python", "javascript", "php", "java", "c", "cpp"];
-const EXT = { python: "py", javascript: "js", php: "php", java: "java", c: "c", cpp: "cpp" };
-
-async function viewProjects() {
-  const d = await api("/projects");
-  view.innerHTML = `
-    <div class="page-head"><div><h1>GitHub projects</h1><p class="sub">Students link a <b>public</b> GitHub repository with <code>/project submit</code>. The bot runs the file you name against your tests, re-checks after every push (within 15 minutes, or instantly with a webhook) and gives points for each test passed.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn primary" id="pj-new">${icon("plus")} New project</button></div></div>
-    <section class="panel">${table([
-      { label: "Project", html: (p) => `<b>${esc(p.title)}</b><div class="small muted"><code>${esc(p.entry)}</code> · ${esc(LANG[p.lang] || p.lang)} · ${p.tests} tests</div>` },
-      { label: "Status", html: (p) => status(p.status === "open" ? "active" : "expired", p.status === "open" ? "Open" : "Closed") },
-      { label: "Repos linked", num: true, sort: "linked", html: (p) => `${p.linked}` },
-      { label: "All tests pass", num: true, sort: "complete", html: (p) => `${p.complete}` },
-      { label: "Points", num: true, html: (p) => `${p.points}` },
-      { label: "Due", html: (p) => `<span class="small">${p.due_at ? fmtDateTime(p.due_at) : "no date"}</span>` },
-    ], d.items, { empty: "No project yet. A project is a program students write in their own GitHub repository: you give the file name, the language and input/output tests.", onRow: (p) => (location.hash = `#/project/${p.id}`) })}</section>
-    <section class="panel" style="margin-top:18px"><h2>Instant grading on push (optional)</h2>
-      <p class="small">Students can add a webhook in their repository (Settings → Webhooks → Add webhook): Payload URL <code>${esc(d.hook)}</code>, content type <code>application/json</code>, “Just the push event”. Without it, the bot checks every repository by itself every 15 minutes (only files that changed are run).</p></section>`;
-  $("#pj-new").onclick = () => projectDialog(null);
-}
-
-function projectDialog(p) {
-  const local = (u) => { if (!u) return ""; const dt = new Date(u * 1000); dt.setMinutes(dt.getMinutes() - dt.getTimezoneOffset()); return dt.toISOString().slice(0, 16); };
-  openDialog(p ? "Edit project" : "New project", `
-    ${p ? "" : projectAiRow()}
-    <label for="pj-t">Title</label><input type="text" id="pj-t" style="width:100%" maxlength="100" value="${esc(p?.title || "")}" placeholder="e.g. Grade calculator">
-    <label for="pj-d">Instructions for students</label><textarea id="pj-d" maxlength="3000" placeholder="What the program must do, the input format, the output format…">${esc(p?.description || "")}</textarea>
-    <div class="field-row">
-      <div><label for="pj-l">Language</label><select id="pj-l">${PROJECT_LANGS.map((l) => `<option value="${l}" ${l === (p?.lang || (S.guild?.code_lang || "python").split(",")[0]) ? "selected" : ""}>${esc(LANG[l])}</option>`).join("")}</select></div>
-      <div><label for="pj-e">File to run (path in the repo)</label><input type="text" id="pj-e" value="${esc(p?.entry || "")}" placeholder="main.py"></div>
-    </div>
-    <label for="pj-tests">Tests <span class="muted small">(input, a line <code>&gt;&gt;&gt;</code>, the expected output; separate tests with a line <code>---</code>; the first 2 are shown to students as examples)</span></label>
-    <textarea id="pj-tests" class="code" style="min-height:200px" placeholder="1 2\n>>>\n3\n---\n10 -4\n>>>\n6">${esc(p?.testsText || "")}</textarea>
-    <div class="field-row">
-      <div><label for="pj-p">Points (all tests)</label><input type="number" id="pj-p" min="0" max="1000" value="${esc(p?.points ?? 50)}"></div>
-      <div><label for="pj-tl">Time limit per test (s)</label><input type="number" id="pj-tl" min="0.5" max="10" step="0.5" value="${esc(p?.time_limit ?? 2)}"></div>
-      <div><label for="pj-due">Due (optional)</label><input type="datetime-local" id="pj-due" value="${local(p?.due_at)}"></div>
-    </div>
-    ${p ? `<label class="check"><input type="checkbox" id="pj-closed" ${p.status === "closed" ? "checked" : ""}> Closed (students can't submit, no more checks)</label><p class="small muted">Saving re-grades every linked repository with the new tests.</p>`
-        : `<label class="check"><input type="checkbox" id="pj-ann" checked> Announce it in #arena</label>`}
-    <p class="small muted">The program reads the input on stdin and prints the answer, like write-code challenges. Spaces and line breaks in the output don't matter. After the due date, students still get feedback but points stop changing.</p>`,
-  [{ label: p ? "Save" : "Create", primary: true, action: async () => {
-    const due = $("#pj-due", dlg).value;
-    const body = {
-      title: $("#pj-t", dlg).value, description: $("#pj-d", dlg).value, lang: $("#pj-l", dlg).value, entry: $("#pj-e", dlg).value,
-      testsText: $("#pj-tests", dlg).value, points: Number($("#pj-p", dlg).value), time_limit: Number($("#pj-tl", dlg).value),
-      due_at: due ? Math.floor(new Date(due).getTime() / 1000) : null,
-      ...(p ? { status: $("#pj-closed", dlg).checked ? "closed" : "open" } : { announce: $("#pj-ann", dlg).checked }),
-    };
-    const r = p ? await api(`/projects/${p.id}`, { method: "PUT", body }) : await api("/projects", { method: "POST", body });
-    dlg.close();
-    toast(p ? "Saved: repositories will be re-graded" : "Project created");
-    if (p) viewProject(p.id); else location.hash = `#/project/${r.project.id}`;
-  } }]);
-  dlg.classList.add("wide");
-  wireProjectAi();
-  $("#pj-l", dlg).onchange = () => { const e = $("#pj-e", dlg); if (!e.value || /^main\.\w+$/.test(e.value)) e.value = `${$("#pj-l", dlg).value === "java" ? "Main" : "main"}.${EXT[$("#pj-l", dlg).value]}`; };
-  if (!p) $("#pj-l", dlg).onchange();
-}
-
-async function viewProject(id) {
-  const d = await api(`/projects/${id}`);
-  const p = d.project;
-  const full = d.repos.filter((r) => r.total && r.best === r.total).length;
-  const VER = { accepted: "All pass", wrong: "Wrong output", tle: "Too slow", runtime: "Crashes", compile: "Doesn't compile" };
-  view.innerHTML = `
-    <div class="page-head"><div><p class="small"><a href="#/projects">← Projects</a></p><h1>${esc(p.title)}</h1>
-      <p class="sub"><code>${esc(p.entry)}</code> · ${esc(LANG[p.lang] || p.lang)} · ${p.tests.length} tests · ${p.points} pts · ${p.due_at ? `due ${fmtDateTime(p.due_at)}` : "no due date"} · ${p.status === "open" ? status("active", "Open") : status("expired", "Closed")}</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="pj-recheck">Re-check everyone</button><button class="btn" id="pj-edit">Edit</button><button class="btn danger" id="pj-del">Delete</button></div></div>
-    <div class="figures">
-      <div class="figure"><div class="ico">🔗</div><div><b>${d.repos.length}</b><span>repositories linked</span></div></div>
-      <div class="figure"><div class="ico">${icon("check")}</div><div><b>${full}</b><span>pass every test</span></div></div>
-      <div class="figure"><div class="ico">⚠️</div><div><b>${d.repos.filter((r) => r.error).length}</b><span>can't be read (private or missing file)</span></div></div>
-    </div>
-    <section class="panel" style="margin-top:18px">${table([
-      { label: "Student", sort: "name", html: (r) => `<a href="#/student/${esc(r.discord_id)}">${esc(r.name || r.discord_id)}</a>` },
-      { label: "Repository", html: (r) => `<a href="https://github.com/${esc(r.repo)}" target="_blank" rel="noopener noreferrer">${esc(r.repo)}</a>${r.branch !== "HEAD" ? ` <span class="tag">${esc(r.branch)}</span>` : ""}` },
-      { label: "Best", sort: "best", num: true, html: (r) => `<b>${r.best}</b>/${r.total || p.tests.length}` },
-      { label: "Last run", html: (r) => (r.error ? `<span class="status failed">${esc(r.error === "proj.err_missing" ? "File not found / private" : r.error === "proj.err_big" ? "File too big" : "GitHub error")}</span>` : r.result ? `<span class="status ${r.result.verdict === "accepted" ? "solved" : "failed"}">${esc(VER[r.result.verdict] || r.result.verdict)}</span> <span class="small muted">${r.passed}/${r.total}</span>` : "—") },
-      { label: "Points", sort: "points", num: true, html: (r) => `${r.points}` },
-      { label: "Checked", sort: "checked_at", html: (r) => `<span class="small">${fmtAgo(r.checked_at)} · ${r.runs} run${r.runs === 1 ? "" : "s"}</span>` },
-      { label: "", html: (r) => `<button class="btn small" data-grade="${esc(r.discord_id)}">Grade now</button>` },
-    ], d.repos, { empty: "No repository linked yet. Students use /project submit repo:<link>." })}</section>
-    <section class="panel" style="margin-top:18px"><details><summary><b>Instructions & tests</b></summary>
-      ${p.description ? `<p style="white-space:pre-wrap">${esc(p.description)}</p>` : ""}<pre class="code-view">${esc(p.testsText)}</pre></details></section>`;
-  $$("[data-grade]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/projects/${id}/check`, { method: "POST", body: { discord_id: b.dataset.grade } }); toast("Graded"); viewProject(id); }));
-  $("#pj-recheck").onclick = (e) => busy(e.currentTarget, async () => { await api(`/projects/${id}/check`, { method: "POST", body: {} }); toast("Every repository will be checked in the next minutes"); });
-  $("#pj-edit").onclick = () => projectDialog(p);
-  $("#pj-del").onclick = () => confirmDialog("Delete this project?", "Linked repositories are forgotten. Points already given stay.", "Delete", async () => { await api(`/projects/${id}`, { method: "DELETE" }); location.hash = "#/projects"; }, true);
-}
-
 // ================================================================ classes
+function certCards(items) {
+  if (!items.length) return `<p class="empty">Nobody scored in this season yet.</p>`;
+  return items.map((c) => `<a class="cert-card ${c.rank <= 3 ? "top" : ""}" href="${esc(c.url)}" target="_blank" rel="noopener"><span class="cert-rank">${["🥇", "🥈", "🥉"][c.rank - 1] || "#" + c.rank}</span><span class="cert-name">${esc(c.name)}</span><span class="small muted">${c.points} pts</span><span class="cert-open">Open ↗</span></a>`).join("");
+}
 async function viewClasses() {
   const [cmp, lg, certs] = await Promise.all([api("/compare"), api("/league"), api("/certificates")]);
-  const max = Math.max(1, ...cmp.classes.map((c) => c.week.score));
-  view.innerHTML = `
-    <div class="page-head"><div><h1>Classes</h1><p class="sub">Every Discord server where the bot runs is a class. Compare your groups, join the class league, and hand out certificates.</p></div></div>
-    <div class="stack">
-      <section class="panel"><div class="panel-head"><h2>All your classes · this week</h2><span class="small muted">week of ${fmtDate(cmp.weekStart)}</span></div>
-        ${table([
-          { label: "Class", sort: "name", html: (c) => `<b>${esc(c.name || c.id)}</b>${c.id === S.g ? ' <span class="tag lang">open now</span>' : ""}${c.league.on ? ` <span class="tag">🏆 ${esc(c.league.name)}</span>` : ""}<div class="small muted">${esc(c.season)} · ${esc((c.code_lang || "").split(",").map((l) => LANG[l] || l).join(", "))}</div>` },
-          { label: "Students", num: true, html: (c) => `${c.week.students}` },
-          { label: "Active", num: true, html: (c) => `${c.week.active} <span class="small muted">(${c.week.participation}%)</span>` },
-          { label: "Solved", num: true, html: (c) => `${c.week.solved} ${delta(c.week.solved, c.prev.solved)}` },
-          { label: "Pts / student", num: true, html: (c) => `<b>${c.week.score}</b> ${delta(c.week.score, c.prev.score)}<div class="minibar"><span style="width:${Math.round((100 * c.week.score) / max)}%"></span></div>` },
-          { label: "Accuracy (4 wk)", num: true, html: (c) => pct(c.accuracy) },
-          { label: "Solved, 4 weeks", html: (c) => sparkline(c.trend) },
-          { label: "", html: (c) => (c.id === S.g ? "" : `<button class="btn small" data-open="${esc(c.id)}">Open</button>`) },
-        ], cmp.classes, { empty: "No class yet." })}
-      </section>
-      <div class="grid cols-2-even">
-        <section class="panel"><h2>🏆 Class league</h2>
-          <p class="small muted">Classes that join compete every week: points earned by students ÷ class size (at least 5), so small and big groups are on equal terms. Points you give by hand don't count. Each Monday the result is posted in #arena; students see it any time with <code>/league</code>.</p>
-          <label class="check"><input type="checkbox" id="lg-on" ${lg.cfg.on ? "checked" : ""}> This class plays in the league</label>
-          <label for="lg-name">Name shown in the league</label>
-          <div class="toolbar"><input type="text" id="lg-name" maxlength="40" value="${esc(lg.cfg.name)}" style="flex:1"><button class="btn primary" id="lg-save">Save</button></div>
-          ${lg.table.length ? `<ol class="league">${lg.table.map((r) => `<li class="${r.guild_id === S.g ? "me" : ""}"><b>${esc(r.name)}</b> <span>${r.score} pts/student · ${r.active}/${r.students} active</span></li>`).join("")}</ol>` : `<p class="empty">No class in the league yet.</p>`}
-        </section>
-        <section class="panel"><h2>🎓 Certificates</h2>
-          <p class="small muted">A printable certificate (rank, points, solved challenges, badges, strong skills) for each student. When you start a new season, every student who scored gets theirs by DM.</p>
-          <div class="toolbar"><select id="ct-season">${[...new Set([...certs.seasons, certs.current])].map((s) => `<option ${s === certs.season ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
-            <button class="btn" id="ct-send">Send by DM now</button></div>
-          <div class="cert-list">${certs.items.length ? certs.items.map((c) => `<a href="${esc(c.url)}" target="_blank" rel="noopener">#${c.rank} ${esc(c.name)} <span class="muted small">· ${c.points} pts</span></a>`).join("") : `<p class="empty">Nobody scored in this season yet.</p>`}</div>
-        </section>
+  const cls = cmp.classes;
+  const totalStudents = cls.reduce((s, c) => s + c.week.students, 0);
+  const totalActive = cls.reduce((s, c) => s + c.week.active, 0);
+  const best = [...cls].sort((a, b) => b.week.score - a.week.score)[0];
+  const myRank = lg.table.findIndex((r) => r.guild_id === S.g);
+  const top = Math.max(1, ...lg.table.map((r) => r.score));
+  const MED = ["🥇", "🥈", "🥉"];
+  const card = (c) => {
+    const me = c.id === S.g;
+    return `<article class="cl-card ${me ? "me" : ""}">
+      <header><div><h3>${esc(c.name || c.id)}</h3><div class="small muted">${esc(c.season)} · ${esc((c.code_lang || "").split(",").map((l) => LANG[l] || l).join(", "))}</div></div>
+        ${me ? `<span class="tag lang">open now</span>` : `<button class="btn small" data-open="${esc(c.id)}">Open →</button>`}</header>
+      <div class="cl-score"><b>${c.week.score}</b><span>pts / student this week</span>${delta(c.week.score, c.prev.score)}</div>
+      <div class="cl-stats">
+        <div><span>Students</span><b>${c.week.students}</b></div>
+        <div><span>Active</span><b>${c.week.active}</b><i class="cl-bar"><i style="width:${c.week.participation}%"></i></i><small>${c.week.participation}%</small></div>
+        <div><span>Solved</span><b>${c.week.solved}</b>${delta(c.week.solved, c.prev.solved)}</div>
+        <div><span>Accuracy</span><b>${pct(c.accuracy)}</b><small>4 weeks</small></div>
       </div>
+      <footer><span class="small muted">Solved, last 4 weeks</span>${sparkline(c.trend, me ? "var(--blue)" : "var(--s2)")}
+        ${c.league.on ? `<span class="tag" title="Plays in the league">🏆 ${esc(c.league.name)}</span>` : `<span class="small muted">not in the league</span>`}</footer>
+    </article>`;
+  };
+  const row = (r, i) => `<li class="lg-row ${r.guild_id === S.g ? "me" : ""}">
+      <span class="lg-rank">${MED[i] || i + 1}</span>
+      <div class="lg-who"><b>${esc(r.name)}</b>${r.guild_id === S.g ? ` <span class="tag lang">your class</span>` : r.remote ? ` <span class="tag" title="Hosted on another teacher's ClassBot">other ClassBot</span>` : ""}
+        <div class="lg-track"><i style="width:${Math.round((100 * r.score) / top)}%"></i></div></div>
+      <div class="lg-num"><b>${r.score}</b><span>pts/student</span></div>
+      <div class="lg-num"><b>${r.participation}%</b><span>${r.active}/${r.students} active</span></div></li>`;
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Classes & league</h1><p class="sub">Your classes side by side, the league with other classes (yours and other teachers'), and the certificates.</p></div></div>
+    <div class="figures">
+      <div class="figure"><b>${cls.length}</b><span>class${cls.length > 1 ? "es" : ""} on this ClassBot</span></div>
+      <div class="figure"><b>${totalStudents}</b><span>students · ${totalActive} active this week</span></div>
+      <div class="figure"><b>${best ? esc(String(best.week.score)) : "—"}</b><span>best pts/student${best ? ` · ${esc(best.name || "")}` : ""}</span></div>
+      <a class="figure clickable" href="#league"><b>${lg.cfg.on && myRank >= 0 ? `${MED[myRank] || "#" + (myRank + 1)}` : "—"}</b><span>${lg.cfg.on ? `league rank · ${lg.table.length} classes` : "not in the league yet"}</span></a>
+    </div>
+    <div class="stack" style="margin-top:16px">
+      <section class="panel"><div class="panel-head"><h2>Your classes</h2><span class="small muted">week of ${fmtDate(cmp.weekStart)} · ▲▼ vs last week</span></div>
+        ${cls.length ? `<div class="cl-grid">${cls.map(card).join("")}</div>` : `<p class="empty">No class yet.</p>`}</section>
+
+      <section class="panel lg-panel" id="league">
+        <div class="lg-hero">
+          <div><h2 style="margin:0">🏆 Class league</h2><p class="small muted" style="margin:4px 0 0">Points students earned this week ÷ class size (at least 5): small and big classes are on equal terms. Points you give by hand don't count. Results in #arena every Monday, and <code>/league</code> any time.</p></div>
+          ${lg.last?.length > 1 && lg.last[0].score > 0 ? `<div class="lg-last">🏅 Last week<b>${esc(lg.last[0].name)}</b><span>${lg.last[0].score} pts/student</span></div>` : ""}
+        </div>
+        <div class="lg-grid">
+          <div>
+            <h3 class="lg-h">This week</h3>
+            ${lg.table.length ? `<ol class="lg-table">${lg.table.map(row).join("")}</ol>` : `<div class="lg-empty">No class in the league yet. Tick <b>Plays in the league</b>, then invite the other classes with your link.</div>`}
+          </div>
+          <aside class="stack" style="gap:12px">
+            <div class="lg-box">
+              <div class="lg-box-head"><h3>This class</h3><label class="switch" title="Plays in the league"><input type="checkbox" id="lg-on" ${lg.cfg.on ? "checked" : ""}><span></span></label></div>
+              <label for="lg-name" style="margin-top:0">Name in the league</label>
+              <div class="toolbar" style="margin:0"><input type="text" id="lg-name" maxlength="40" value="${esc(lg.cfg.name)}" style="flex:1"><button class="btn primary" id="lg-save">Save</button></div>
+            </div>
+            <div class="lg-box">
+              <h3>🔗 Invite other classes</h3>
+              ${lg.link ? `<p class="small muted" style="margin:0 0 8px">Send this link to the other teachers (each on their own ClassBot): they paste it under <i>Classes from other ClassBots</i>. Only class numbers are shared, never students' names.</p>
+                <div class="lg-link"><code>${esc(lg.link)}</code><button class="btn small primary" id="lg-copy">Copy</button></div>
+                <button class="linkish small" id="lg-renew">Renew the link (the old one stops working)</button>`
+                : `<p class="small muted" style="margin:0">Turn on <b>Plays in the league</b> and save: your invitation link appears here.</p>`}
+            </div>
+            <div class="lg-box">
+              <h3>🌍 Classes from other ClassBots <span class="muted small">${lg.remotes.length}</span></h3>
+              <div class="toolbar" style="margin:0"><input type="url" id="lg-url" placeholder="Paste their league link" style="flex:1"><button class="btn" id="lg-add">Add</button></div>
+              ${lg.remotes.length ? `<ul class="lg-remotes">${lg.remotes.map((r) => `<li><span class="lg-dot ${r.error ? "bad" : "ok"}" title="${r.error ? esc(r.error) : "connected"}"></span><div><b>${esc(r.name)}</b>
+                <div class="small ${r.error ? "" : "muted"}" ${r.error ? 'style="color:var(--down)"' : ""}>${r.error ? esc(r.error) : `read ${r.fetched_at ? fmtAgo(r.fetched_at) : "—"}${r.data?.this ? ` · ${r.data.this.score} pts/student` : ""}`}</div></div>
+                <button class="icon-x" data-rm="${esc(r.url)}" title="Remove from your league" aria-label="Remove">✕</button></li>`).join("")}</ul>
+                <button class="linkish small" id="lg-refresh">↻ Read them again</button>`
+                : `<p class="small muted" style="margin:8px 0 0">Paste the link another teacher sent you. Ask them to add yours too.</p>`}
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel"><div class="panel-head"><h2>🎓 Certificates</h2>
+          <div class="toolbar" style="margin:0"><select id="ct-season">${[...new Set([...certs.seasons, certs.current])].map((s) => `<option ${s === certs.season ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
+            <button class="btn" id="ct-send">Send by DM now</button></div></div>
+        <p class="small muted" style="margin-top:-4px">A printable certificate for each student (rank, points, solved challenges, badges, strong skills). When you start a new season, every student who scored gets theirs by DM.</p>
+        <div class="cert-grid">${certCards(certs.items)}</div>
+      </section>
     </div>`;
   $$("[data-open]").forEach((b) => b.onclick = () => { const sel = $("#guild"); sel.value = b.dataset.open; sel.onchange(); location.hash = "#/overview"; });
   $("#lg-save").onclick = (e) => busy(e.currentTarget, async () => { await api("/league", { method: "PUT", body: { on: $("#lg-on").checked, name: $("#lg-name").value } }); toast("League settings saved"); viewClasses(); });
-  $("#ct-season").onchange = async () => { const d = await api(`/certificates?season=${encodeURIComponent($("#ct-season").value)}`); $(".cert-list").innerHTML = d.items.map((c) => `<a href="${esc(c.url)}" target="_blank" rel="noopener">#${c.rank} ${esc(c.name)} <span class="muted small">· ${c.points} pts</span></a>`).join("") || `<p class="empty">Nobody scored in this season.</p>`; };
+  if ($("#lg-copy")) $("#lg-copy").onclick = () => navigator.clipboard.writeText(lg.link).then(() => toast("League link copied: send it to the other teachers"), () => toast("Copy failed: select the link by hand", true));
+  if ($("#lg-renew")) $("#lg-renew").onclick = () => confirmDialog("Renew the league link?", "The other ClassBots that added this class stop seeing it until you send them the new link.", "Renew", async () => { await api("/league", { method: "PUT", body: { newLink: true } }); toast("New link made"); viewClasses(); });
+  $("#lg-add").onclick = (e) => busy(e.currentTarget, async () => { await api("/league/remotes", { method: "POST", body: { url: $("#lg-url").value } }); toast("Class added to your league"); viewClasses(); });
+  $$("[data-rm]").forEach((b) => b.onclick = () => confirmDialog("Remove this class from your league?", "It stops showing in your league and in /league. You can add it back with its link.", "Remove", async () => { await api("/league/remotes", { method: "DELETE", body: { url: b.dataset.rm } }); viewClasses(); }));
+  if ($("#lg-refresh")) $("#lg-refresh").onclick = (e) => busy(e.currentTarget, async () => { await api("/league/refresh", { method: "POST" }); viewClasses(); });
+  $("#ct-season").onchange = async () => { const d = await api(`/certificates?season=${encodeURIComponent($("#ct-season").value)}`); $(".cert-grid").innerHTML = certCards(d.items); };
   $("#ct-send").onclick = () => confirmDialog("Send the certificates now?", `Every student who scored in “${$("#ct-season").value}” gets their certificate link by DM.`, "Send", async () => { const r = await api("/certificates/send", { method: "POST", body: { season: $("#ct-season").value } }); toast(`${r.sent} certificate(s) sent`); });
 }
 
-Object.assign(routes, { hands: viewHands, questions: viewQuestions, interviews: viewInterviews, projects: viewProjects, project: viewProject, classes: viewClasses });
+Object.assign(routes, { hands: viewHands, questions: viewQuestions, interviews: viewInterviews, classes: viewClasses });
 
 // ================================================== ✨ generate for a skill
 const GEN_KINDS = { write: "Write code (judged by tests)", quick: "Quick (any type)", mcq: "Multiple choice", output: "Predict the output", bug: "Find the bug", complexity: "Complexity" };
@@ -471,29 +442,6 @@ async function viewPathPage() {
   if ($("#p-reset")) $("#p-reset").onclick = () => confirmDialog("Back to the default path?", "Your steps and lessons are replaced by the built-in ones. Students keep their progress.", "Reset", async () => { await api("/path", { method: "PUT", body: { reset: true } }); toast("Default path restored"); viewPathPage(); }, true);
 }
 
-// ====================================================== project with AI
-function projectAiRow() {
-  return `<div class="ai-row"><b class="small">✨ Let the AI draft it</b>
-    <div class="toolbar" style="margin:6px 0 0"><input type="text" id="pj-idea" placeholder="Idea (optional), e.g. a library loan tracker" style="flex:1" maxlength="300">
-    <select id="pj-adiff">${Object.entries(DIFF).map(([k, v]) => `<option value="${k}" ${k === "medium" ? "selected" : ""}>${v}</option>`).join("")}</select>
-    <button type="button" class="btn small" id="pj-ai">Generate</button></div>
-    <p class="muted small" style="margin:6px 0 0">The AI writes the instructions and test inputs; the expected outputs are computed by really running its reference solution.</p></div>`;
-}
-function wireProjectAi() {
-  const b = $("#pj-ai", dlg);
-  if (!b) return;
-  b.onclick = () => busy(b, async () => {
-    b.textContent = "Designing… (up to 1 min)";
-    try {
-      const r = await api("/projects/ai", { method: "POST", body: { idea: $("#pj-idea", dlg).value, difficulty: $("#pj-adiff", dlg).value, lang: $("#pj-l", dlg).value } });
-      $("#pj-t", dlg).value = r.title;
-      $("#pj-d", dlg).value = r.description;
-      $("#pj-tests", dlg).value = r.testsText;
-      toast(`Draft ready with ${r.tests} tests: check it, then Create`);
-    } finally { b.textContent = "Generate"; }
-  });
-}
-
 // ============================================================= overview
 async function loadLive() {
   const el = $("#ov-live");
@@ -504,7 +452,7 @@ async function loadLive() {
   const tile = (href, emoji, big, label, detail = "", hot = false) => `<a class="tile ${hot ? "hot" : ""}" href="${href}"><span class="tile-ico" aria-hidden="true">${emoji}</span><b>${big}</b><span class="tile-label">${label}</span>${detail ? `<span class="tile-detail">${detail}</span>` : ""}</a>`;
   const ev = d.events;
   const evBits = [ev.quiz ? `🎤 quiz “${esc(ev.quiz.title)}” ${ev.quiz.status === "live" ? "live" : "ready"}` : "", ...ev.bosses.map((b) => `👹 ${esc(b.name)}: ${b.left}/${b.hp} HP`), ev.bounties ? `💰 ${ev.bounties} bount${ev.bounties > 1 ? "ies" : "y"} open` : ""].filter(Boolean);
-  const pr = d.projects;
+  const pr = d.briefs;
   el.innerHTML = `<div class="panel-head"><h2>Live in your class</h2><span class="small muted">updates every time you open this page</span></div>
     <div class="live-grid">
       ${tile("#/hands", "✋", d.hands.waiting, "waiting for help", d.hands.waiting && d.hands.oldest ? `oldest: ${waitText(now - d.hands.oldest)}` : d.hands.helping ? `${d.hands.helping} being helped` : "students use /help-me", d.hands.waiting > 0)}
@@ -512,7 +460,8 @@ async function loadLive() {
       ${d.created ? tile("#/challenges", "🧩", d.created, "student challenges to review", "written with /create", true) : ""}
       ${d.sessions ? tile("#/sessions", "⏱️", d.sessions, "class session running", "watch the live grid", true) : ""}
       ${tile("#/events", "🎉", ev.bosses.length + ev.bounties + (ev.quiz ? 1 : 0), "events running", evBits.join("<br>") || "quiz, boss battle or bounty", evBits.length > 0)}
-      ${tile("#/projects", "🐙", pr.open, `open project${pr.open === 1 ? "" : "s"}`, pr.open ? `${pr.complete}/${pr.linked} repos pass every test${pr.nextDue ? `<br>next due ${fmtDateTime(pr.nextDue.due_at)}` : ""}` : "GitHub repos graded on push")}
+      ${tile("#/briefs", "📄", pr.open, `brief${pr.open === 1 ? "" : "s"} in progress`, pr.toDebrief ? `${pr.toDebrief} hand-in${pr.toDebrief > 1 ? "s" : ""} to debrief` : pr.nextDue ? `${pr.handed} handed in · due ${fmtDateTime(pr.nextDue.due_at)}` : "generate one from the planning", pr.toDebrief > 0)}
+      ${d.assess.open ? tile("#/assessments", "📝", d.assess.open, `assessment${d.assess.open > 1 ? "s" : ""} open`, d.assess.locked ? `${d.assess.locked} student(s) stopped: let them back in` : `${d.assess.active} answering now`, d.assess.locked > 0) : ""}
       ${tile("#/interviews", "🎤", d.interviews.n, "mock interviews this week", d.interviews.avg != null ? `average ${d.interviews.avg}/5` : "students use /interview")}
       ${tile("#/skills", "🗓️", `${d.plans.done}/${d.plans.made}`, "daily plans finished (7 days)", d.plans.people ? `${d.plans.people} student${d.plans.people > 1 ? "s" : ""} use /today` : "students use /today")}
       ${tile("#/events", "🙋", d.helped, "helpful peer explanations (7 days)", "classmates explaining mistakes")}
@@ -577,10 +526,11 @@ try { coinsTab = localStorage.getItem("coinsTab") || "coins"; } catch {}
 async function viewCoins() {
   const d = await api("/coins");
   const selected = new Set();
-  const builtinName = { freeze: "Streak freeze", hint: "Hint token", double: "Double code hour", contract: "Challenge contract", shield: "Duel shield",
+  const builtinName = { freeze: "Streak freeze", hint: "Hint token", buddy: "Squad buddy", double: "Double code hour", contract: "Challenge contract", shield: "Duel shield",
     title: "Custom title", color: "Name color", theme: "Profile theme", motto: "Motto", emoji: "Profile emoji", showcase: "Badge showcase", lang: "Favourite language",
     pin: "Proudest solve", frame: "Avatar frame", victory: "Victory message", levelup: "Level-up style", flair: "Leaderboard flair" };
   const builtinHelp = { freeze: "A missed day doesn't break their streak.", hint: "Their next hint costs no points.",
+    buddy: "A student picks a classmate to be in the same squad next sprint. “Max” is how many the whole class can buy per season (1 = the first student to buy it). You see it on Teams & squads, and random squads keep them together.",
     double: "×2 points on write-code they pick (practice, /today, /path). Never on your assignments, the daily or sessions.",
     contract: "They pick a goal (5 easy, 3 medium or 2 hard code/SQL solves) and win the reward if they reach it in time.",
     shield: "A lost duel doesn't cost Elo rating.", title: "A title next to their name.", color: "Their name in a color they pick (a Discord role).",

@@ -6,7 +6,7 @@ import { all, one } from "../shared/db.ts";
 import { getAttempt, getChallenge, renderFor, startAttempt } from "../shared/challenges.ts";
 import { quizAnswer } from "../shared/events.ts";
 import type { BossRow, BountyRow } from "../shared/events.ts";
-import { CONTRACTS, FAV_LANGS, FLAIRS, FRAMES, LEVELUP_STYLES, SHOP, ShopError, THEMES, buy, cosmeticLabel, inventory, isEmoji, shopItems } from "../shared/shop.ts";
+import { CONTRACTS, FAV_LANGS, FLAIRS, FRAMES, LEVELUP_STYLES, SHOP, ShopError, THEMES, buddySold, buy, cosmeticLabel, inventory, isEmoji, shopItems } from "../shared/shop.ts";
 import type { ShopItem } from "../shared/shop.ts";
 import { notifyPurchase } from "../shared/notify.ts";
 import { HelpError, answerHelp, askHelp, rateHelp } from "../shared/help.ts";
@@ -58,6 +58,9 @@ async function shopView(ix: Ix, note = "") {
   const L = ix.L;
   const inv = await inventory(ix.env, ix.guild, ix.userId);
   const items = shopItems(ix.guild);
+  // 🤝 only `max` squad buddies for the whole class each season: shown as sold out once bought
+  const bd = items.find((x) => x.key === "buddy");
+  const buddyLeft = bd ? Math.max(0, (bd.max ?? 1) - (await buddySold(ix.env, ix.guild))) : 0;
   const t0 = Math.floor(Date.now() / 1000);
   const b = inv.boosts, k = b.contract;
   const owned = [
@@ -73,7 +76,7 @@ async function shopView(ix: Ix, note = "") {
   for (const grp of GROUPS) {
     const list = items.filter((it) => !it.custom && it.group === grp);
     if (list.length) embeds.push({ title: t(L, `shop.group.${grp}`), color: COLORS.gold,
-      description: list.map((it) => `${it.emoji} **${t(L, `shop.name.${it.key}`)}** · **${it.price}** 🪙 — ${t(L, `shop.desc.${it.key}`, itemVars(it))}`).join("\n").slice(0, 1050) });
+      description: list.map((it) => `${it.emoji} **${t(L, `shop.name.${it.key}`)}** · **${it.price}** 🪙 — ${t(L, `shop.desc.${it.key}`, itemVars(it))}${it.key === "buddy" ? ` · ${buddyLeft ? t(L, "shop.buddy_left", { n: buddyLeft }) : t(L, "shop.buddy_out")}` : ""}`).join("\n").slice(0, 1050) });
   }
   const own = items.filter((it) => it.custom);
   if (own.length) embeds.push({ title: t(L, "shop.group.custom"), color: COLORS.purple,
@@ -84,7 +87,7 @@ async function shopView(ix: Ix, note = "") {
     const description = (it.custom ? it.desc || "" : t(L, `shop.desc.${it.key}`, itemVars(it))).slice(0, 100);
     return { label, value: it.key, ...(description ? { description } : {}), ...(isEmoji(it.emoji) ? { emoji: { name: it.emoji } } : {}) };
   };
-  const built = items.filter((it) => !it.custom).slice(0, 25), mine = own.slice(0, 25);
+  const built = items.filter((it) => !it.custom && !(it.key === "buddy" && !buddyLeft)).slice(0, 25), mine = own.slice(0, 25);
   const components = [];
   if (built.length) components.push(row({ type: 3, custom_id: "shopm", placeholder: t(L, "shop.menu"), options: built.map(opt) }));
   if (mine.length) components.push(row({ type: 3, custom_id: "shopmc", placeholder: t(L, "shop.menu_custom"), options: mine.map(opt) }));
@@ -104,6 +107,12 @@ export async function shopButton(ix: Ix, key: string) {
   const tx = TEXTS[key];
   if (tx && !item.custom) {
     return json(modal(`mshop:${key}`, t(L, `shop.modal_${key}`, { days: item.days ?? 7 }).slice(0, 45), [{ id: "v", label: t(L, `shop.modal_${key}_label`).slice(0, 45), max: tx.max, ...(tx.value ? { value: tx.value } : {}) }]));
+  }
+  if (key === "buddy") {
+    // already bought by someone in the class this season: no need to pick a classmate
+    if ((await buddySold(ix.env, ix.guild)) >= (item.max ?? 1)) return say(t(L, "shop.buddy_sold"));
+    // a member picker: the student chooses the classmate
+    return json({ type: 4, data: { flags: 64, content: t(L, "shop.pick.buddy", { price: item.price }), components: [row({ type: 5, custom_id: "shopsel:buddy", placeholder: t(L, "shop.pick.buddy_ph"), min_values: 1, max_values: 1 })] } });
   }
   if (PICKERS.includes(key)) {
     later(ix, async () => {
@@ -157,6 +166,11 @@ export function doBuy(ix: Ix, key: string, detail: string, inPlace = false) {
       if (r.item?.custom) {
         ix.ctx.waitUntil(notifyPurchase(ix.env, ix.guild, ix.userName, r.item.name ?? "", r.item.price).catch((e) => console.error("shop notify", e)));
         return shopView(ix, t(L, "shop.bought.custom", { name: r.item.name ?? "" }));
+      }
+      if (key === "buddy") {
+        const mate = await one<{ name: string | null }>(ix.env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", ix.guild.id, r.detail ?? "");
+        ix.ctx.waitUntil(notifyPurchase(ix.env, ix.guild, ix.userName, `🤝 ${t(L, "shop.name.buddy")} → ${mate?.name ?? r.detail}`, r.item?.price ?? 0).catch((e) => console.error("shop notify", e)));
+        return shopView(ix, t(L, "shop.bought.buddy", { detail: `<@${r.detail}>` }));
       }
       const shown = key === "contract" ? (() => { const c = CONTRACTS[detail.trim()]; return t(L, "shop.contract_goal", { n: c.target, level: t(L, `diff.${c.level}`) }); })()
         : cosmeticLabel(L, key, r.detail ?? "");

@@ -3,7 +3,8 @@
 //   GET  /replay/:id       public race replay of a finished contest
 //   GET  /u/:key           a student's shared profile page
 //   GET  /cert/:token      an end-of-season certificate (print / save as PDF)
-//   POST /gh/hook          optional GitHub push webhook for graded projects
+//   GET  /quiz/:token      a student's assessment (full screen)
+//   GET  /github/connect   a student links GitHub (from /github); POST /github/webhook: the class's GitHub App
 //   cron every minute      contests, duels, assignments, daily, weekly recap
 import type { Ctx, Env } from "../shared/types.ts";
 import { verifyDiscord } from "../shared/discord.ts";
@@ -14,7 +15,10 @@ import { handleEditor } from "./editor.ts";
 import { codeToPng } from "../shared/codeimage.ts";
 import { one } from "../shared/db.ts";
 import { certPage, profilePage } from "./pages.ts";
-import { onPush } from "../shared/projects.ts";
+import { handleQuiz } from "./quiz.ts";
+import { leagueFeed } from "../shared/league.ts";
+import { handleBattle } from "./battle.ts";
+import { githubPages, githubWebhook } from "../shared/github.ts";
 
 /** A quick challenge's code as a PNG (Discord shows it instead of copyable text). Cached at the edge. */
 async function codeImage(request: Request, env: Env, ctx: Ctx, id: number): Promise<Response> {
@@ -53,18 +57,16 @@ export default {
     if (prof && request.method === "GET") return profilePage(env, prof[1]);
     const cert = url.pathname.match(/^\/cert\/([A-Za-z0-9._-]{40,260})$/);
     if (cert && request.method === "GET") return certPage(env, cert[1]);
-    if (url.pathname === "/gh/hook" && request.method === "POST") {
-      // GitHub sends "ping" when the webhook is created, then "push" events. We only use the
-      // repository name and download the file ourselves, so a forged call can't change a grade.
-      const event = request.headers.get("x-github-event") ?? "";
-      if (event === "ping") return new Response("pong");
-      if (event !== "push") return new Response(null, { status: 204 });
-      const text = await request.text();
-      let payload: any = null;
-      try { payload = JSON.parse(text.startsWith("payload=") ? decodeURIComponent(text.slice(8).replace(/\+/g, " ")) : text); } catch { payload = null; }
-      const n = payload ? await onPush(env, payload) : 0;
-      return new Response(n ? "queued" : "unknown repository", { status: 202 });
-    }
+    const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate))?$/);
+    if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
+    const bt = url.pathname.match(/^\/battle\/(tv|judge)\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|claim|act))?\/?$/);
+    if (bt) return handleBattle(request, env, bt[1] as "tv" | "judge", Number(bt[2]), bt[3], bt[4]);
+    const lgf = url.pathname.match(/^\/league\/feed\/([\w-]{1,30})\.([a-f0-9]{24})$/);
+    if (lgf && request.method === "GET") return leagueFeed(env, lgf[1], lgf[2]);
+    const ghw = url.pathname.match(/^\/github\/webhook(?:\/([\w-]{1,30}))?$/);
+    if (ghw && request.method === "POST") return githubWebhook(request, env, ctx, ghw[1] ?? null);
+    const ghp = url.pathname.match(/^\/github\/(connect|callback|setup)(?:\/[\w-]{1,30})?$/);
+    if (ghp && request.method === "GET") return githubPages(request, env, ghp[1]);
     if (url.pathname === "/") return new Response("ClassBot is running ✅ (Discord endpoint: /interactions)");
     return new Response("not found", { status: 404 });
   },

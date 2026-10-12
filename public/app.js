@@ -346,7 +346,7 @@ const routes = {
 async function route() {
   const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const fn = routes[name] || viewOverview;
-  const parent = { student: "students", contest: "contests", session: "sessions", project: "projects" }[name] || name;
+  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "briefs", assessment: "assessments", battle: "battles" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
@@ -445,7 +445,7 @@ async function viewOverview() {
           <a href="#/challenges/ai"><span class="ico">${icon("spark")}</span><span><b>Generate with AI</b><small>checked by running it</small></span></a>
           <a href="#/contests"><span class="ico">${icon("trophy")}</span><span><b>Follow a contest</b><small>live commentary in #arena</small></span></a>
           <a href="#/students"><span class="ico">${icon("users")}</span><span><b>Check on students</b><small>trends, code, gaps</small></span></a>
-          <a href="#/settings"><span class="ico">${icon("gear")}</span><span><b>Scoring & checks</b><small>points per type, diagnostics</small></span></a>
+          <a href="#/settings/scoring"><span class="ico">${icon("gear")}</span><span><b>Scoring & checks</b><small>points per type, diagnostics</small></span></a>
         </div></section>
       ${d.claimList?.length ? `<section class="panel"><h2>Self-reported HackerRank solves</h2><p class="muted small">HackerRank couldn't be reached when these students pressed Check. They get no points until you approve. Open their HackerRank profile to check.</p>
         <div class="table-wrap"><table>${d.claimList.map((c) => `<tr><td><a href="#/student/${c.discord_id}">${esc(c.name || "?")}</a>${c.hr_display ? `<div class="small"><a href="https://www.hackerrank.com/profile/${encodeURIComponent(c.hr_display)}" target="_blank" rel="noopener">${esc(c.hr_display)}</a>${c.hr_verified ? "" : " (not verified)"}</div>` : ""}</td><td>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>` : esc(c.title)}</td>
@@ -631,6 +631,7 @@ async function viewStudent(id) {
         <div class="figure"><b>${p.daily_streak}</b><span>day daily streak</span></div>
         <div class="figure"><b>${d.contests.played}</b><span>contests · ${d.contests.wins} won · ${d.contests.podiums} podiums</span></div>
       </div>
+      ${typeof learningPanel === "function" ? learningPanel(d, id) : ""}
       ${workOnPanel(d.coach, id)}
       ${coachPanel(d.coach)}
       <div class="grid cols-2-even">
@@ -714,6 +715,7 @@ async function viewStudent(id) {
   showTab("solved");
   $("#assign").onclick = () => assignDialog([id]);
   wireWorkOn(id, p.name);
+  if (typeof wireLearning === "function") wireLearning(d, id);
   const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(id); };
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);
@@ -1157,12 +1159,15 @@ async function viewContest(id) {
 async function viewTeams() {
   const [teams, students] = await Promise.all([api("/teams"), loadStudents()]);
   view.innerHTML = `
-    <div class="page-head"><div><h1>Teams</h1><p class="sub">A team's contest score is the average of its members, so everyone counts.</p></div>
+    <div class="page-head"><div><h1>Teams & squads</h1><p class="sub">The squads the class works in this sprint, and the teams of the HackerRank contests.</p></div></div>
+    <div id="squads-sec"><p class="muted">Loading the squads…</p></div>
+    <div class="page-head" style="margin-top:22px"><div><h2 style="margin:0">🏆 Contest teams</h2><p class="sub">A team's contest score is the average of its members, so everyone counts.</p></div>
       <div class="toolbar" style="margin:0"><input type="text" id="tn" placeholder="New team name" aria-label="New team name"><button class="btn primary" id="add">Create team</button></div></div>
     ${teams.length ? `<div class="grid cols-2-even">${teams.map((t) => `<section class="panel"><div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><h2>${esc(t.name)}</h2><span class="muted" title="Team points from HackerRank contests this season">${t.points} contest pts</span></div>
       <p>${t.members.length ? t.members.map((m) => `<a href="#/student/${m.id}">${esc(m.name || m.id)}</a>`).join(", ") : '<span class="muted">No members yet.</span>'}</p>
       <div class="toolbar" style="margin:0"><button class="btn small" data-edit="${t.id}">Choose members</button><button class="btn small danger" data-del="${t.id}">Delete</button></div></section>`).join("")}</div>`
       : `<div class="panel"><p class="empty">No teams yet. Create one above, then choose its members.</p></div>`}`;
+  if (typeof squadsSection === "function") squadsSection($("#squads-sec")).catch((e) => { $("#squads-sec").innerHTML = `<div class="notice">${esc(e.message)}</div>`; });
   $("#add").onclick = (e) => busy(e.currentTarget, async () => { await api("/teams", { method: "POST", body: { name: $("#tn").value } }); toast("Team created"); S.students = null; viewTeams(); });
   $$("[data-del]").forEach((b) => b.onclick = () => confirmDialog("Delete this team?", "Members stay in the class; only the team is removed.", "Delete team", async () => { await api(`/teams/${b.dataset.del}`, { method: "DELETE" }); S.students = null; viewTeams(); }, true));
   $$("[data-edit]").forEach((b) => b.onclick = () => {
@@ -1181,7 +1186,7 @@ async function viewTeams() {
 }
 
 // ========================================================== settings
-async function viewSettings() {
+async function viewSettings(arg) {
   const [g] = await Promise.all([api("/settings"), loadDiscord()]);
   S.guild = g;
   const roles = (sel) => `<option value="">Off</option>` + S.discord.roles.map((r) => `<option value="${r.id}" ${r.id === sel ? "selected" : ""}>@${esc(r.name)}</option>`).join("");
@@ -1189,48 +1194,110 @@ async function viewSettings() {
   const sc = g.scoring;
   const kinds = g.score_kinds || Object.keys(KIND);
   const ic = g.integrity || { editor: "required", explain: true, similarity: true, codeImage: true, quickLimit: 0, practiceWeight: 1 };
+  const TABS = [
+    ["general", "⚙️", "General", "Language, track, channels"],
+    ["programme", "🎓", "Programme", "Planning & competencies"],
+    ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
+    ["roles", "🏷️", "Roles", "Contest & automatic roles"],
+    ["scoring", "🧮", "Scoring", "Points per level and type"],
+    ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
+    ["notify", "🔔", "Notifications", "Your Discord DMs"],
+    ["season", "🗓️", "Season", "Start a new season"],
+    ["diag", "🩺", "Diagnostics", "Is everything answering?"],
+  ];
+  const tab0 = TABS.some(([k]) => k === arg) ? arg : "general";
+  const head = (title, sub) => `<header class="set-head"><h2>${title}</h2><p class="sub">${sub}</p></header>`;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Settings</h1><p class="sub">For ${esc(g.name || "this server")}</p></div></div>
-    <div class="stack">
-    <div class="grid cols-2-even">
-      <section class="panel"><h2>Bot</h2>
+    <div class="page-head"><div><h1>Settings</h1><p class="sub">${esc(g.name || "this server")} · everything here is for this class only</p></div></div>
+    <div class="set-layout">
+    <nav class="set-nav" aria-label="Settings sections">${TABS.map(([k, ic, t, d]) => `<a href="#/settings/${k}" data-tab="${k}"><span class="set-ic" aria-hidden="true">${ic}</span><span><b>${t}</b><small>${d}</small></span></a>`).join("")}</nav>
+    <div class="set-body">
+
+    <section class="set-sec" data-sec="general">
+      ${head("General", "How the bot speaks, what the class learns, and where it posts.")}
+      <div class="panel set-card"><h3>Class</h3>
         <div class="field-row">
-          <div><label for="s-lang">Language</label><select id="s-lang"><option value="en" ${g.lang === "en" ? "selected" : ""}>English</option><option value="fr" ${g.lang === "fr" ? "selected" : ""}>Français</option></select></div>
-          <div><label for="s-track">What the class learns <span class="muted">(one at a time: challenges, daily challenge, path and lessons follow it)</span></label><select id="s-track" style="width:100%">${trackOptions(trackKeyOf(g))}</select></div>
+          <div><label for="s-lang">Language of the bot</label><select id="s-lang"><option value="en" ${g.lang === "en" ? "selected" : ""}>English</option><option value="fr" ${g.lang === "fr" ? "selected" : ""}>Français</option></select></div>
+          <div><label for="s-track">What the class learns</label><select id="s-track" style="width:100%">${trackOptions(trackKeyOf(g))}</select></div>
         </div>
-        <label for="s-arena">#arena channel <span class="muted">(everything public: daily challenge, duels, contests, level-ups, assignments, weekly recap)</span></label>
+        <p class="muted small">Challenges, the daily challenge, the path and the lessons follow the track. Briefs follow the <a href="#/settings/programme" data-goto="programme">programme</a>.</p>
+      </div>
+      <div class="panel set-card"><h3>Channels</h3>
+        <label for="s-arena">#arena <span class="muted">(everything public: daily challenge, duels, contests, level-ups, assignments, weekly recap)</span></label>
         <select id="s-arena" style="width:100%"><option value="">Find a channel named "arena" automatically</option>${channelOptions(g.arena_channel)}</select>
         <label for="s-daily">Daily challenge channel <span class="muted">(optional)</span></label><select id="s-daily" style="width:100%"><option value="">Same as #arena</option>${channelOptions(g.daily_channel !== g.arena_channel ? g.daily_channel : "")}</select>
-        <label for="s-hour">Daily challenge time <span class="muted">(UTC hour)</span></label>
-        <input type="number" id="s-hour" min="0" max="23" value="${g.daily_hour}"> <span class="muted small" id="s-local"></span>
-        <p class="muted small" style="margin-top:12px">HackerRank solves count only for students who proved their account (code in their HackerRank bio) or that you verified. Self-reports wait for your approval.</p>
-        <p style="margin-top:16px"><button class="btn primary" id="save">Save settings</button></p>
-      </section>
-      <div class="stack">
-        <section class="panel"><h2>Contest roles</h2>
-          <p class="muted small">Leave on <b>Off</b> and the automatic roles below create 🏆 Contest Champion and 🔥 On Fire for you, or pick roles you already have.</p>
-          <label for="s-champ">Champion role <span class="muted">(latest contest winner)</span></label><select id="s-champ" style="width:100%">${roles(g.champion_role)}</select>
-          <label for="s-streak">Streak role <span class="muted">(3 contests or 5 dailies in a row)</span></label><select id="s-streak" style="width:100%">${roles(g.streak_role)}</select>
-          <p class="muted small">In Discord's Server Settings → Roles, drag the bot's role above these roles, or it can't give them out.</p>
-        </section>
-        <section class="panel"><h2>Season</h2>
-          <p>Current season: <b>${esc(g.season)}</b></p>
-          <label for="s-season">New season name</label><input type="text" id="s-season" style="width:100%" placeholder="e.g. Spring 2027">
-          <label class="check"><input type="checkbox" id="s-announce" checked> Announce it in #arena</label>
-          <p class="muted small">Season points restart from zero. All history stays in the dashboard.</p>
-          <p><button class="btn" id="season">Start new season</button></p>
-        </section>
       </div>
-    </div>
-    <section class="panel" id="autoroles"><div class="panel-head"><h2>Automatic roles</h2><span class="toolbar" style="margin:0"><label class="check" style="margin:0"><input type="checkbox" id="ar-on"> On</label><button class="btn" id="ar-sync">Create &amp; update now</button></span></div>
-      <p class="muted small">The bot creates these roles in your server and moves them to the right students by itself (every few minutes). <b>Class Leader</b> and <b>Top 3</b> are shown in their own group at the top of the member list. Badges (first solve, 10 solves, duel wins…) are given automatically too and shown in <code>/profile</code>.</p>
-      <div id="ar-body"><p class="muted">Loading…</p></div>
+      <div class="panel set-card"><h3>Daily challenge</h3>
+        <label for="s-hour">Posted at <span class="muted">(UTC hour)</span></label>
+        <div class="toolbar" style="margin:0"><input type="number" id="s-hour" min="0" max="23" value="${g.daily_hour}" style="width:90px"> <span class="muted small" id="s-local"></span></div>
+        <p class="muted small">Levels and types per weekday: <a href="#/daily">Daily challenge</a>.</p>
+      </div>
+      <p class="muted small">HackerRank solves count only for students who proved their account (code in their HackerRank bio) or that you verified. Self-reports wait for your approval.</p>
+      <div class="set-foot"><button class="btn primary" id="save">Save</button></div>
     </section>
-    <section class="panel" id="anticheat"><h2>Anti-cheat</h2>
-      <p class="muted small">Makes AI and copy-paste slower and <b>visible</b> to you. No tool can make it impossible: a student can still retype code from a phone. That's why the explanation step and class sessions matter most.</p>
+
+    <section class="set-sec" data-sec="programme" hidden>
+      ${head("Programme", "The planning of the year (weeks, sprints) and the competency framework. Briefs, debriefs and the competency record follow it.")}
+      <div id="set-programme"><p class="muted">Loading…</p></div>
+    </section>
+
+    <section class="set-sec" data-sec="github" hidden>
+      ${head("GitHub & Watcher", "The GitHub App the students install with /github, its webhook, the activity reports, and the import from GitHub Watcher.")}
+      <div id="set-github"><p class="muted">Loading…</p></div>
+    </section>
+
+    <section class="set-sec" data-sec="roles" hidden>
+      ${head("Roles", "Roles the bot gives out by itself in your server.")}
+      <div class="panel set-card"><h3>Contest roles</h3>
+        <p class="muted small">Leave on <b>Off</b> and the automatic roles below create 🏆 Contest Champion and 🔥 On Fire for you, or pick roles you already have.</p>
+        <div class="field-row">
+          <div><label for="s-champ">Champion role <span class="muted">(latest contest winner)</span></label><select id="s-champ" style="width:100%">${roles(g.champion_role)}</select></div>
+          <div><label for="s-streak">Streak role <span class="muted">(3 contests or 5 dailies in a row)</span></label><select id="s-streak" style="width:100%">${roles(g.streak_role)}</select></div>
+        </div>
+        <p class="muted small">In Discord's Server Settings → Roles, drag the bot's role above these roles, or it can't give them out.</p>
+      </div>
+      <div class="panel set-card" id="autoroles"><div class="panel-head"><h3 style="margin:0">Automatic roles</h3><span class="toolbar" style="margin:0"><label class="check" style="margin:0"><input type="checkbox" id="ar-on"> On</label><button class="btn small" id="ar-sync">Create &amp; update now</button></span></div>
+        <p class="muted small">The bot creates these roles and moves them to the right students by itself (every few minutes). <b>Class Leader</b> and <b>Top 3</b> are shown in their own group at the top of the member list. Badges are given automatically too and shown in <code>/profile</code>.</p>
+        <div id="ar-body"><p class="muted">Loading…</p></div>
+      </div>
+    </section>
+
+    <section class="set-sec" data-sec="scoring" hidden>
+      ${head("Scoring", `Points = <b>level base × type multiplier</b> (then daily ×1.5, assignment on time ×1.5, duel win ×2, hint ×0.5…). ${g.scoring_custom ? "<b>Custom scoring is on.</b>" : "Default scoring."}`)}
       <div class="grid cols-2-even">
-        <div>
-          <label for="ac-editor">Write-code answers</label>
+        <div class="stack">
+          <div class="panel set-card"><h3>Base points per level</h3>
+            <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sb-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sb-${d}" value="${sc.base[d]}"></div>`).join("")}</div>
+            <h3>Multiplier per type</h3>
+            <div class="field-row" style="flex-wrap:wrap">${kinds.map((k) => `<div><label for="sm-${k}">${esc(KIND[k] || k)}</label><input type="number" min="0" max="100" step="0.5" id="sm-${k}" value="${sc.mult[k]}"></div>`).join("")}</div>
+          </div>
+          <div class="panel set-card"><h3>Anti-farming for quick challenges</h3>
+            <p class="muted small">Multiple choice, complexity, output and bug take seconds, so in <b>/practice and duels</b> their points shrink after a few a day. <b>Write code and HackerRank are never limited</b>, and nothing you hand out is either. Solving the same challenge again never gives points.</p>
+            <div class="field-row" style="flex-wrap:wrap">
+              <div><label for="sq-full">Full points for the first</label><input type="number" min="0" max="1000" id="sq-full" value="${sc.quick.full}"></div>
+              <div><label for="sq-red">then this many more</label><input type="number" min="0" max="1000" id="sq-red" value="${sc.quick.reduced}"></div>
+              <div><label for="sq-pct">at (% of the points)</label><input type="number" min="0" max="100" id="sq-pct" value="${sc.quick.pct}"></div>
+            </div>
+            <label class="check"><input type="checkbox" id="sq-lock" ${sc.quick.lock !== false ? "checked" : ""}><span>🔒 After that, students <b>can't pick quick challenges</b> until the next day (in <code>/practice</code> and quick duels)</span></label>
+            <p class="muted small" id="sq-sum"></p>
+            <div class="field-row">
+              <div><label for="s-cap">Max quick-challenge points a day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
+              <div><label for="s-award">Contest special award</label><input type="number" min="0" id="s-award" value="${sc.award}"></div>
+            </div>
+          </div>
+          <div class="panel set-card"><h3>HackerRank contest points</h3>
+            <div class="field-row" style="flex-wrap:wrap">${[["first", "1st"], ["second", "2nd"], ["third", "3rd"], ["top10", "Top 10"], ["play", "Played"]].map(([k, l]) => `<div><label for="sc-${k}">${l}</label><input type="number" min="0" id="sc-${k}" value="${sc.contest[k]}"></div>`).join("")}</div>
+          </div>
+        </div>
+        <div class="panel set-card set-sticky"><h3>Preview</h3><div id="s-preview"></div></div>
+      </div>
+      <div class="set-foot">${g.scoring_custom ? `<button class="btn" id="reset-sc">Back to defaults</button>` : ""}<button class="btn primary" id="save-sc">Save scoring</button></div>
+    </section>
+
+    <section class="set-sec" data-sec="anticheat" id="anticheat" hidden>
+      ${head("Anti-cheat", "Makes AI and copy-paste slower and <b>visible</b> to you. No tool can make it impossible: a student can still retype code from a phone. That's why the explanation step and class sessions matter most.")}
+      <div class="grid cols-2-even">
+        <div class="panel set-card"><h3>Write-code answers</h3>
           <select id="ac-editor" style="width:100%">
             <option value="required" ${ic.editor === "required" ? "selected" : ""}>Only in the code editor page (recommended)</option>
             <option value="optional" ${ic.editor === "optional" ? "selected" : ""}>Editor or Discord form (form answers are flagged)</option>
@@ -1238,52 +1305,54 @@ async function viewSettings() {
           </select>
           <p class="muted small">The editor blocks pasting, records when the student leaves the page and keeps a replay of the typing.</p>
           <label class="check"><input type="checkbox" id="ac-explain" ${ic.explain ? "checked" : ""}> <span><b>Explain your code</b>: after an accepted answer, half the points wait until the student answers 2 questions about their own code (3 minutes)</span></label>
-          <label class="check"><input type="checkbox" id="ac-sim" ${ic.similarity ? "checked" : ""}> <span><b>Similarity check</b>: flag two students whose code is almost the same (names and spacing ignored)</span></label>
-          <label class="check"><input type="checkbox" id="ac-img" ${ic.codeImage ? "checked" : ""}> <span><b>Code as an image</b> in quick challenges (output, bug, complexity), so it can't be copied into a chatbot</span></label>
+          <label class="check"><input type="checkbox" id="ac-sim" ${ic.similarity ? "checked" : ""}> <span><b>Similarity check</b>: flag two students whose code is almost the same</span></label>
+          <label class="check"><input type="checkbox" id="ac-img" ${ic.codeImage ? "checked" : ""}> <span><b>Code as an image</b> in quick challenges, so it can't be copied into a chatbot</span></label>
         </div>
-        <div>
-          <label for="ac-quick">Time to answer a quick challenge</label>
+        <div class="panel set-card"><h3>Quick challenges</h3>
+          <label for="ac-quick">Time to answer</label>
           <select id="ac-quick" style="width:100%">${[[0, "No limit"], [30, "30 seconds"], [45, "45 seconds"], [60, "1 minute"], [90, "1 min 30"], [120, "2 minutes"], [180, "3 minutes"], [300, "5 minutes"]].map(([v, l]) => `<option value="${v}" ${ic.quickLimit === v ? "selected" : ""}>${l}</option>`).join("")}${[0, 30, 45, 60, 90, 120, 180, 300].includes(ic.quickLimit) ? "" : `<option value="${ic.quickLimit}" selected>${ic.quickLimit} seconds</option>`}</select>
           <p class="muted small">A late answer still gets checked but earns no points.</p>
-          <label for="ac-pw">Points for quick challenges in /practice</label>
+          <label for="ac-pw">Points in /practice</label>
           <select id="ac-pw" style="width:100%">${[[1, "Full points"], [0.75, "75%"], [0.5, "Half (supervised work counts more)"], [0.25, "25%"], [0, "No points (practice only)"]].map(([v, l]) => `<option value="${v}" ${ic.practiceWeight === v ? "selected" : ""}>${l}</option>`).join("")}${[1, 0.75, 0.5, 0.25, 0].includes(ic.practiceWeight) ? "" : `<option value="${ic.practiceWeight}" selected>×${ic.practiceWeight}</option>`}</select>
           <p class="muted small">Write code and HackerRank always give full points. Class sessions, assignments, the daily challenge and duels are not affected.</p>
         </div>
       </div>
-      <p><button class="btn primary" id="save-ac">Save anti-cheat</button> <a class="btn" href="#/integrity">Review flagged answers</a></p>
+      <p class="muted small">Assessments have their own protection (full screen, stopped when they leave it): see <a href="#/assessments">Assessments</a>.</p>
+      <div class="set-foot"><a class="btn" href="#/integrity">Review flagged answers</a><button class="btn primary" id="save-ac">Save anti-cheat</button></div>
     </section>
-    <section class="panel"><h2>Scoring</h2>
-      <p class="muted small">Points = <b>level base × type multiplier</b> (then daily ×1.5, assignment on time ×1.5, duel win ×2, hint ×0.5…). ${g.scoring_custom ? "<b>Custom scoring is on.</b>" : "Default scoring."}</p>
-      <div class="grid cols-2-even">
-        <div>
-          <h3>Base points per level</h3>
-          <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sb-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sb-${d}" value="${sc.base[d]}"></div>`).join("")}</div>
-          <h3>Multiplier per type</h3>
-          <div class="field-row" style="flex-wrap:wrap">${kinds.map((k) => `<div><label for="sm-${k}">${esc(KIND[k] || k)}</label><input type="number" min="0" max="100" step="0.5" id="sm-${k}" value="${sc.mult[k]}"></div>`).join("")}</div>
-          <h3>Anti-farming for quick challenges</h3>
-          <p class="muted small">Multiple choice, complexity, output and bug take seconds, so in <b>/practice and duels</b> their points shrink after a few a day. <b>Write code and HackerRank are never limited</b>, and nothing you hand out (daily challenge, assignments, class sessions) is either. Solving the same challenge again never gives points.</p>
-          <div class="field-row" style="flex-wrap:wrap">
-            <div><label for="sq-full">Full points for the first</label><input type="number" min="0" max="1000" id="sq-full" value="${sc.quick.full}"></div>
-            <div><label for="sq-red">then this many more</label><input type="number" min="0" max="1000" id="sq-red" value="${sc.quick.reduced}"></div>
-            <div><label for="sq-pct">at (% of the points)</label><input type="number" min="0" max="100" id="sq-pct" value="${sc.quick.pct}"></div>
-          </div>
-          <label class="check"><input type="checkbox" id="sq-lock" ${sc.quick.lock !== false ? "checked" : ""}><span>🔒 After that, students <b>can't pick quick challenges</b> until the next day (in <code>/practice</code> and quick duels)</span></label>
-          <p class="muted small" id="sq-sum"></p>
-          <div class="field-row">
-            <div><label for="s-cap">Max quick-challenge points a day</label><input type="number" min="0" id="s-cap" value="${sc.cap}"></div>
-            <div><label for="s-award">Contest special award</label><input type="number" min="0" id="s-award" value="${sc.award}"></div>
-          </div>
-          <h3>HackerRank contest points</h3>
-          <div class="field-row" style="flex-wrap:wrap">${[["first", "1st"], ["second", "2nd"], ["third", "3rd"], ["top10", "Top 10"], ["play", "Played"]].map(([k, l]) => `<div><label for="sc-${k}">${l}</label><input type="number" min="0" id="sc-${k}" value="${sc.contest[k]}"></div>`).join("")}</div>
-        </div>
-        <div><h3>Preview</h3><div id="s-preview"></div></div>
+
+    <section class="set-sec" data-sec="notify" hidden>
+      ${head("Notifications", "Which Discord DMs you get, and who else gets them.")}
+      <div class="panel set-card"><div id="s-notify"><p class="muted">Loading…</p></div></div>
+    </section>
+
+    <section class="set-sec" data-sec="season" hidden>
+      ${head("Season", `Current season: <b>${esc(g.season)}</b>. Season points restart from zero; all history stays in the dashboard.`)}
+      <div class="panel set-card">
+        <label for="s-season" style="margin-top:0">New season name</label><input type="text" id="s-season" style="width:100%;max-width:420px" placeholder="e.g. Spring 2027">
+        <label class="check"><input type="checkbox" id="s-announce" checked> Announce it in #arena</label>
       </div>
-      <p><button class="btn primary" id="save-sc">Save scoring</button> ${g.scoring_custom ? `<button class="btn" id="reset-sc">Back to defaults</button>` : ""}</p>
+      <div class="set-foot"><button class="btn primary" id="season">Start new season</button></div>
     </section>
-    <section class="panel"><h2>🔔 Discord notifications</h2><div id="s-notify"><p class="muted">Loading…</p></div></section>
-    <section class="panel"><h2>Diagnostics</h2><p class="muted small">Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.</p>
-      <p><button class="btn" id="diag">Run checks</button></p><div id="diag-out"></div></section>
-    </div>`;
+
+    <section class="set-sec" data-sec="diag" hidden>
+      ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
+      <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
+    </section>
+    </div></div>`;
+  const loaded = new Set();
+  const showTab = (k) => {
+    $$(".set-nav a").forEach((a) => a.setAttribute("aria-current", String(a.dataset.tab === k)));
+    $$(".set-sec").forEach((x) => (x.hidden = x.dataset.sec !== k));
+    history.replaceState(null, "", `#/settings/${k}`);
+    if (!loaded.has(k)) {
+      loaded.add(k);
+      if (k === "programme" && typeof programmeSettings === "function") programmeSettings($("#set-programme"));
+      if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
+    }
+  };
+  $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });
+  showTab(tab0);
   const local = () => { const h = (Number($("#s-hour").value) + offset + 24) % 24; $("#s-local").textContent = `= ${String(Math.floor(h)).padStart(2, "0")}:${h % 1 ? "30" : "00"} your time`; };
   $("#s-hour").oninput = local;
   local();
@@ -1328,7 +1397,6 @@ async function viewSettings() {
     } } });
     toast("Anti-cheat settings saved");
   });
-  if (location.hash.includes("anticheat")) setTimeout(() => $("#anticheat")?.scrollIntoView({ behavior: "smooth" }), 50);
   $("#diag").onclick = (e) => busy(e.currentTarget, async () => {
     $("#diag-out").innerHTML = `<p class="muted">Running… (up to a minute)</p>`;
     const d = await api("/diagnostics");
@@ -2134,42 +2202,96 @@ async function viewSession(id) {
 // ============================================================ skills
 async function viewSkills() {
   const [d] = await Promise.all([api("/skills/class"), loadSkillDefs()]);
-  const sortBy = sessionStorage.getItem("classbot.skSort") || "";
-  const rows = [...d.students];
-  if (sortBy) rows.sort((a, b) => (a.skills[sortBy]?.mastery ?? 101) - (b.skills[sortBy]?.mastery ?? 101));
-  let showAll = false;
-  try { showAll = sessionStorage.getItem("classbot.skAll") === "1"; } catch { /* storage blocked */ }
+  const store = (k, v) => { try { if (v === undefined) return sessionStorage.getItem(k) || ""; sessionStorage.setItem(k, v); } catch { /* storage blocked */ } return ""; };
+  let sortBy = store("classbot.skSort");
+  const showAll = store("classbot.skAll") === "1";
   const cols = showAll || !d.track?.length ? d.skills : d.track;
-  const weak = Object.entries(d.average).filter(([k, v]) => v != null && cols.includes(k)).sort((a, b) => a[1] - b[1]).slice(0, 3);
+  const shown = (v) => (v && v.evidence >= 2 ? v.mastery : null);
+  const overall = (st) => { const xs = cols.map((k) => shown(st.skills[k])).filter((x) => x != null); return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null; };
+  const stats = cols.map((k) => {
+    const xs = d.students.map((st) => shown(st.skills[k]));
+    return { k, avg: d.average[k] ?? null, solid: xs.filter((x) => x != null && x >= 65).length, mid: xs.filter((x) => x != null && x >= 35 && x < 65).length, low: xs.filter((x) => x != null && x < 35).length, none: xs.filter((x) => x == null).length };
+  });
+  const tried = stats.filter((x) => x.avg != null);
+  const classAvg = tried.length ? Math.round(tried.reduce((a, x) => a + x.avg, 0) / tried.length) : null;
+  const weak = [...tried].sort((a, b) => a.avg - b.avg).slice(0, 3);
+  const struggling = d.students.filter((st) => { const o = overall(st); return o != null && o < 35; }).length;
+  const bar = (m) => `<span class="sk-bar"><i style="width:${m ?? 0}%;background:${masteryInk(m)}"></i></span>`;
+
   view.innerHTML = `
-    <div class="page-head"><div><h1>Skills</h1><p class="sub">How well each student masters each skill (last 4 months): 80% from the code they write, 20% from the other types. Click a skill to sort, or to send a practice set.</p></div>
-      ${d.track?.length && d.track.length < d.skills.length ? `<label class="check" style="margin:0"><input type="checkbox" id="sk-all" ${showAll ? "checked" : ""}><span>Show skills outside this class's track (${d.skills.length - d.track.length})</span></label>` : ""}</div>
+    <div class="page-head"><div><h1>Skills</h1><p class="sub">How well each student masters each skill over the last 4 months: 80% from the code they write, 20% from the other question types.</p></div>
+      ${d.track?.length && d.track.length < d.skills.length ? `<label class="check" style="margin:0"><input type="checkbox" id="sk-all" ${showAll ? "checked" : ""}><span>Include skills outside this class's track (${d.skills.length - d.track.length})</span></label>` : ""}</div>
     <div class="stack">
-      ${weak.length ? `<div class="figures">${weak.map(([k, v]) => `<button class="figure clickable" data-pset="${k}" title="Send a practice set"><b style="color:${masteryInk(v)}">${v}%</b><span>${esc(skillLabel(k))} · class average</span></button>`).join("")}
-        <div class="figure"><b>${d.students.length}</b><span>students with results</span></div></div>` : ""}
+      <div class="figures">
+        <div class="figure"><b style="color:${masteryInk(classAvg)}">${classAvg ?? "—"}${classAvg != null ? "%" : ""}</b><span>class average</span></div>
+        <div class="figure"><b>${d.students.length}</b><span>students with results</span></div>
+        <div class="figure"><b style="color:${struggling ? "var(--down)" : "inherit"}">${struggling}</b><span>under 35% overall</span></div>
+        ${weak.map((x) => `<button class="figure clickable" data-pset="${x.k}" title="Send a practice set"><b style="color:${masteryInk(x.avg)}">${x.avg}%</b><span>${esc(skillLabel(x.k))} · weakest</span></button>`).join("")}
+      </div>
+      ${d.students.length ? `
       <section class="panel">
-        ${d.students.length ? `<div class="table-wrap heat"><table><thead><tr><th>Student</th>${cols.map((k) => `<th class="ctr heat-col ${sortBy === k ? "sorted" : ""}" data-sort="${k}" title="${esc(skillLabel(k))}: sort / practice set"><span>${esc(skillLabel(k))}</span></th>`).join("")}</tr>
-          <tr class="avg"><td class="muted small">Class average</td>${cols.map((k) => `<td class="ctr"><b style="color:${masteryInk(d.average[k])}">${d.average[k] ?? "—"}${d.average[k] != null ? "%" : ""}</b></td>`).join("")}</tr></thead>
-          <tbody>${rows.map((st) => `<tr><td><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)} ${esc(st.name || st.discord_id)}</a></td>${cols.map((k) => {
-            const v = st.skills[k];
-            const tip = v ? `${v.mastery}%${v.code != null ? ` · code ${v.code}%` : v.proven === false ? " · not shown in code yet" : ""}${v.codeMistakes ? ` · ${v.codeMistakes} mistake(s) in their code` : ""}` : "not tried";
-            return `<td class="heat-cell ${v && v.proven === false ? "unproven" : ""}" style="background:${v && v.evidence >= 2 ? masteryColor(v.mastery) : "transparent"}" title="${esc(skillLabel(k))}: ${esc(tip)}">${v && v.evidence >= 2 ? `<b style="color:${masteryInk(v.mastery)}">${v.mastery}</b>` : `<span class="muted">${v ? "·" : ""}</span>`}</td>`;
-          }).join("")}</tr>`).join("")}</tbody></table></div>
-          <p class="muted small">🟩 65%+ solid (reliable at medium or hard) · 🟨 35–64% getting there · 🟥 under 35% needs work · empty = not enough tries yet · <i>italic</i> = not shown in code yet (max 20%). Easy challenges alone go up to 50%: harder ones are needed to reach the top.</p>`
-        : `<p class="empty">No results yet. The map fills in as students solve challenges.</p>`}
+        <div class="panel-head" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+          <h2 style="margin:0">Class map</h2>
+          <div class="sk-tools"><input type="search" id="sk-q" placeholder="Find a student…">
+            <select id="sk-sort"><option value="">Sort: name</option><option value="@overall" ${sortBy === "@overall" ? "selected" : ""}>Sort: weakest overall</option>
+              ${cols.map((k) => `<option value="${esc(k)}" ${sortBy === k ? "selected" : ""}>Weakest in ${esc(skillLabel(k))}</option>`).join("")}</select></div>
+        </div>
+        <div class="sk-matrix-wrap"><table class="sk-matrix">
+          <thead><tr><th class="sk-who">Student</th><th class="sk-all-col">Overall</th>${cols.map((k) => `<th class="sk-col ${sortBy === k ? "sorted" : ""}" data-sort="${esc(k)}" title="${esc(skillLabel(k))}"><div><span>${esc(skillLabel(k))}</span></div></th>`).join("")}</tr></thead>
+          <tbody id="sk-body"></tbody>
+          <tfoot><tr><td class="sk-who"><b>Class average</b></td><td class="sk-all-col">${classAvg != null ? `<b style="color:${masteryInk(classAvg)}">${classAvg}%</b>` : "—"}</td>${stats.map((x) => `<td><span class="sk-cell" style="background:${masteryColor(x.avg)};color:${masteryInk(x.avg)}">${x.avg ?? "—"}</span></td>`).join("")}</tr></tfoot>
+        </table></div>
+        <div class="sk-legend small muted"><span><i style="background:var(--up-bg);border-color:var(--up)"></i> 65%+ solid</span><span><i style="background:var(--warn-bg);border-color:var(--warn)"></i> 35–64% getting there</span><span><i style="background:var(--down-bg);border-color:var(--down)"></i> under 35% needs work</span><span><i></i> not enough tries</span><span><em>italic</em> = not shown in code yet (max 20%)</span><span>Easy challenges alone cap at 50%.</span></div>
       </section>
+      <section class="panel">
+        <h2>Skill by skill</h2>
+        <p class="muted small" style="margin-top:-6px">Where the class stands on each skill. Send a practice set: each student gets challenges at their own level.</p>
+        <div class="sk-cards">${[...stats].sort((a, b) => (a.avg ?? 101) - (b.avg ?? 101)).map((x) => {
+          return `<div class="sk-card">
+            <div class="sk-card-head"><b>${esc(skillLabel(x.k))}</b><span class="sk-avg" style="color:${masteryInk(x.avg)}">${x.avg ?? "—"}${x.avg != null ? "%" : ""}</span></div>
+            <div class="sk-split" title="${x.solid} solid · ${x.mid} getting there · ${x.low} need work · ${x.none} not enough tries">
+              <i style="flex:${x.solid};background:var(--up)"></i><i style="flex:${x.mid};background:var(--warn)"></i><i style="flex:${x.low};background:var(--down)"></i><i style="flex:${x.none};background:var(--surface-2)"></i></div>
+            <div class="small muted">${x.solid} solid · ${x.mid} getting there · <span style="color:${x.low ? "var(--down)" : "inherit"}">${x.low} need work</span>${x.none ? ` · ${x.none} untried` : ""}</div>
+            <div class="sk-card-foot"><button class="btn small" data-gen="${esc(x.k)}">✨ Challenges</button><button class="btn small primary" data-pset="${esc(x.k)}">Practice set</button></div>
+          </div>`; }).join("")}</div>
+      </section>` : `<section class="panel"><p class="empty">No results yet. The map fills in as students solve challenges.</p></section>`}
     </div>`;
+
+  const body = $("#sk-body");
+  const draw = () => {
+    if (!body) return;
+    const q = ($("#sk-q")?.value || "").trim().toLowerCase();
+    let rows = d.students.filter((st) => !q || (st.name || st.discord_id).toLowerCase().includes(q));
+    rows.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    if (sortBy === "@overall") rows.sort((a, b) => (overall(a) ?? 101) - (overall(b) ?? 101));
+    else if (sortBy) rows.sort((a, b) => (shown(a.skills[sortBy]) ?? 101) - (shown(b.skills[sortBy]) ?? 101));
+    body.innerHTML = rows.map((st) => {
+      const o = overall(st);
+      return `<tr><td class="sk-who"><a href="#/student/${esc(st.discord_id)}">${avatar(st.name, st.discord_id)}<span>${esc(st.name || st.discord_id)}</span></a></td>
+        <td class="sk-all-col"><div class="sk-overall">${bar(o)}<b style="color:${masteryInk(o)}">${o ?? "—"}</b></div></td>
+        ${cols.map((k) => {
+          const v = st.skills[k], m = shown(v);
+          const tip = v ? `${v.mastery}%${v.code != null ? ` · code ${v.code}%` : v.proven === false ? " · not shown in code yet" : ""}${v.codeMistakes ? ` · ${v.codeMistakes} mistake(s) in their code` : ""}${v.evidence < 2 ? " · not enough tries yet" : ""}` : "not tried";
+          return `<td><span class="sk-cell ${v && v.proven === false ? "unproven" : ""} ${m == null ? "empty" : ""}" style="${m != null ? `background:${masteryColor(m)};color:${masteryInk(m)}` : ""}" title="${esc(skillLabel(k))}: ${esc(tip)}">${m ?? (v ? "·" : "")}</span></td>`;
+        }).join("")}</tr>`;
+    }).join("") || `<tr><td colspan="${cols.length + 2}" class="muted">No student matches.</td></tr>`;
+  };
+  draw();
+  const setSort = (k) => { sortBy = k; store("classbot.skSort", k); $$("th.sk-col").forEach((th) => th.classList.toggle("sorted", th.dataset.sort === k)); if ($("#sk-sort")) $("#sk-sort").value = k; draw(); };
+  if ($("#sk-q")) $("#sk-q").oninput = draw;
+  if ($("#sk-sort")) $("#sk-sort").onchange = (e) => setSort(e.target.value);
   $$("[data-sort]").forEach((th) => th.onclick = () => {
     const k = th.dataset.sort;
     openDialog(skillLabel(k), `<p>Class average: <b>${d.average[k] ?? "—"}%</b></p>`, [
-      { label: "Sort by this skill", action: async () => { sessionStorage.setItem("classbot.skSort", k); dlg.close(); viewSkills(); } },
+      { label: "Sort by this skill", action: async () => { dlg.close(); setSort(k); } },
       { label: "✨ Generate challenges", action: async () => genForSkillDialog(k, (d.average[k] ?? 50) < 35 ? "easy" : "medium") },
       { label: "Send a practice set", primary: true, action: async () => practiceSetDialog(k, d) },
     ]);
   });
   $$("[data-pset]").forEach((b) => b.onclick = () => practiceSetDialog(b.dataset.pset, d));
+  $$("[data-gen]").forEach((b) => b.onclick = () => genForSkillDialog(b.dataset.gen, (d.average[b.dataset.gen] ?? 50) < 35 ? "easy" : "medium"));
   const all = $("#sk-all");
-  if (all) all.onchange = () => { try { sessionStorage.setItem("classbot.skAll", all.checked ? "1" : "0"); } catch { /* ignore */ } viewSkills(); };
+  if (all) all.onchange = () => { store("classbot.skAll", all.checked ? "1" : "0"); viewSkills(); };
 }
 
 function practiceSetDialog(skill, d) {

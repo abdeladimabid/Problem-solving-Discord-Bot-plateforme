@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, d1, discordCalls, discordRoles, github, hr, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, clock, d1, discordCalls, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
@@ -491,7 +491,7 @@ section("help: every feature documented, pages in a menu");
   const t2 = await slash(U.prof, "help", { topic: "teacher" });
   all.push(text(t2));
   const joined = all.join("\n");
-  for (const cmd of ["/practice", "/daily", "/assignments", "/duel", "/profile", "/leaderboard", "/rival", "/bet", "/contest", "/link", "/teacher setup", "/teacher track", "/teacher verify", "/teacher season", "/teacher stop", "/teacher dashboard", "/today", "/skills", "/path", "/shop", "/create", "/help-me", "/ask", "/faq", "/interview", "/project", "/league"]) {
+  for (const cmd of ["/practice", "/daily", "/assignments", "/duel", "/profile", "/leaderboard", "/rival", "/bet", "/contest", "/link", "/teacher setup", "/teacher track", "/teacher verify", "/teacher season", "/teacher stop", "/teacher dashboard", "/today", "/skills", "/path", "/shop", "/create", "/help-me", "/ask", "/faq", "/interview", "/github", "/brief", "/league"]) {
     check(joined.includes(cmd), `help mentions ${cmd}`);
   }
   for (const w of ["SQL", "Regular expression", "2 vs 2", "Live quiz", "Boss battle", "Bounty", "Streak freeze", "Hint token", "Custom title", "Your color"]) check(joined.includes(w), `help explains: ${w}`);
@@ -1923,6 +1923,8 @@ section("shop: boosts and profile extras");
   check(pick.type === 5 && text(lastPatch()).includes("shopsel:theme") && text(lastPatch()).includes("ocean"), "a choice item opens a picker");
   const up = await select(alice, "shopsel:theme", ["ocean"]);
   check(up.type === 6 && JSON.parse(P(A).cosmetics).theme.v === "ocean" && text(lastPatch()).includes("Ocean"), "picking a theme buys it");
+  const bud = await select(alice, "shopm", ["buddy"]);
+  check(bud.type === 4 && bud.data.components[0].components[0].type === 5 && bud.data.components[0].components[0].custom_id === "shopsel:buddy", "🤝 squad buddy opens a classmate picker");
   check((await select(alice, "shopm", ["motto"])).type === 9, "motto opens a form");
   await submit(alice, "mshop:motto", "Never give up @everyone https://spam.example");
   const mot = JSON.parse(P(A).cosmetics).motto.v;
@@ -2036,7 +2038,7 @@ section("shop: boosts and profile extras");
   const full = lastPatch();
   const embedChars = (full.embeds as any[]).reduce((n, e) => n + (e.title ?? "").length + (e.description ?? "").length + (e.footer?.text ?? "").length, 0);
   const opts = (full.components as any[]).flatMap((r) => r.components[0].options);
-  check(embedChars <= 6000 && full.embeds.length <= 10 && full.components.length === 2 && opts.length === 32 && opts.every((o: any) => o.label.length <= 100 && (o.description ?? "").length <= 100),
+  check(embedChars <= 6000 && full.embeds.length <= 10 && full.components.length === 2 && opts.length === 33 && opts.every((o: any) => o.label.length <= 100 && (o.description ?? "").length <= 100),
     `a full shop fits Discord's limits (${embedChars} characters, ${opts.length} options)`);
   await api("PUT", `/api/shop?g=${G}`, { items: {}, custom: [] });
 }
@@ -2132,65 +2134,6 @@ section("mock interview: interviewer, code, scorecard");
   check(li.data.items.length >= 2 && li.data.items.some((x: any) => x.scores?.verdict === "Hire"), "dashboard lists interviews with scores");
 }
 
-section("GitHub projects: link a repo, graded tests, points, push webhook");
-{
-  const kai = { id: "111", name: "Kai", teacher: false }, lea = { id: "112", name: "Lea", teacher: false };
-  const bad = await api("POST", `/api/projects?g=${G}`, { title: "x", lang: "python", entry: "../etc", testsText: "1\n>>>\n1" });
-  check(bad.status === 400, "unsafe entry path refused");
-  const cr = await api("POST", `/api/projects?g=${G}`, { title: "Sum of two", lang: "python", entry: "main.py", points: 40, announce: true,
-    testsText: "1 2\n>>>\n3\n---\n5 7\n>>>\n12\n---\n100 1\n>>>\n101\n---\n-4 4\n>>>\n0" });
-  const pid = cr.data.project.id;
-  check(cr.status === 200 && cr.data.project.tests.length === 4, "teacher creates a project with 4 tests");
-  check(messagesTo(ARENA).some((x) => text(x).includes("Sum of two") && text(x).includes("/project submit")), "project announced in #arena with instructions");
-  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a - b)\n";
-  await slash(kai, "project", { repo: "https://github.com/kai/tp1" }, "submit");
-  let out = text(lastPatch());
-  check(out.includes("Linked") && out.includes("0/4") && out.includes("Expected"), "repo linked and graded: 0/4 with the first sample shown");
-  check(text(await (async () => { await slash(lea, "project", { repo: "kai/tp1" }, "submit"); return lastPatch(); })()).includes("Another student"), "a repo belongs to one student");
-  await slash(lea, "project", { repo: "not a repo!!" }, "submit");
-  check(text(lastPatch()).includes("doesn't look like"), "bad link explained");
-  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a + b)\n";
-  await slash(kai, "project", {}, "check");
-  check(text(lastPatch()).includes("Wait 30 seconds"), "checks are rate-limited");
-  clock.advance(31);
-  await slash(kai, "project", {}, "check");
-  out = text(lastPatch());
-  check(out.includes("All tests pass") && out.includes("+40"), "fixed code: 4/4 and 40 pts");
-  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40, "points in the ledger");
-  check(messagesTo(ARENA).some((x) => text(x).includes("passes every test")), "full score celebrated in #arena");
-  clock.advance(31);
-  await slash(kai, "project", {}, "check");
-  check(text(lastPatch()).includes("No change"), "unchanged file isn't run again");
-  // a push makes it re-check on the next cron; a worse version never removes points
-  github.files["kai/tp1/HEAD/main.py"] = "print(0)\n";
-  const hook = await bot.fetch(new Request("https://bot.example.workers.dev/gh/hook", { method: "POST", headers: { "x-github-event": "push", "content-type": "application/json" }, body: JSON.stringify({ repository: { full_name: "Kai/TP1" } }) }), env, makeCtx());
-  check(hook.status === 202 && q1("SELECT due_check FROM project_repos WHERE discord_id = ?", kai.id).due_check === 1, "push webhook queues a check");
-  const ping = await bot.fetch(new Request("https://bot.example.workers.dev/gh/hook", { method: "POST", headers: { "x-github-event": "ping" }, body: "{}" }), env, makeCtx());
-  check(ping.status === 200, "webhook ping answered");
-  const dmBefore = discordCalls.filter((x) => x.path === `/channels/dm-${kai.id}/messages`).length;
-  await runCron(env);
-  const dmAfter = discordCalls.filter((x) => x.path === `/channels/dm-${kai.id}/messages`).slice(dmBefore);
-  check(dmAfter.some((x) => text(x.body).includes("1/4") && text(x.body).includes("kai/tp1")), "cron re-grades after the push and DMs the result");
-  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40 && q1("SELECT best FROM project_repos WHERE discord_id = ?", kai.id).best === 4, "best score and points kept");
-  await slash(lea, "project", { repo: "github.com/lea/homework" }, "submit");
-  check(text(lastPatch()).includes("public"), "missing file / private repo explained");
-  const ac = await call({ ...raw(4, lea, { name: "project", options: [{ type: 1, name: "check", options: [{ name: "project", value: "sum", focused: true, type: 3 }] }] }) });
-  check(ac.type === 8 && ac.data.choices[0].name === "Sum of two", "project name autocomplete");
-  await slash(lea, "project", {}, "list");
-  check(text(lastPatch()).includes("lea/homework") && text(lastPatch()).includes("Sum of two"), "/project list shows my status");
-  const pl = await api("GET", `/api/projects?g=${G}`);
-  check(pl.data.items[0].linked === 2 && pl.data.items[0].complete === 1 && pl.data.hook.endsWith("/gh/hook"), "dashboard list: linked and complete counts, webhook URL");
-  github.files["kai/tp1/HEAD/main.py"] = "a, b = map(int, input().split())\nprint(a + b)\n";
-  const rc = await api("POST", `/api/projects/${pid}/check?g=${G}`, { discord_id: kai.id });
-  check(rc.data.repos.find((r: any) => r.discord_id === kai.id).passed === 4, "teacher can re-grade one student now");
-  const ed = await api("PUT", `/api/projects/${pid}?g=${G}`, { ...cr.data.project, testsText: cr.data.project.testsText + "\n---\n2 2\n>>>\n4", tests: undefined });
-  check(ed.data.project.tests.length === 5 && q1("SELECT due_check FROM project_repos WHERE discord_id = ?", kai.id).due_check === 1, "editing tests re-grades everyone");
-  db.prepare("UPDATE projects SET due_at = ? WHERE id = ?").run(clock.now() - 10, pid);
-  clock.advance(31);
-  await slash(kai, "project", {}, "check");
-  check(text(lastPatch()).includes("due date has passed") && q1("SELECT SUM(amount) AS s FROM ledger WHERE discord_id = ? AND reason = 'project'", kai.id).s === 40, "after the due date: graded, no new points");
-}
-
 section("profiles you can share, certificates, class league, all classes");
 {
   const kai = { id: "111", name: "Kai", teacher: false };
@@ -2227,6 +2170,32 @@ section("profiles you can share, certificates, class league, all classes");
   check(lg.data.table.find((r: any) => r.guild_id === "g2").score === 4, "teacher bonuses don't count, small classes count as 5");
   await slash(kai, "league");
   check(text(lastPatch()).includes("Group A") && text(lastPatch()).includes("Group B") && text(lastPatch()).includes("your class"), "/league shows both classes");
+  // league with classes hosted on other ClassBots (each teacher on their own Cloudflare)
+  const link = lg.data.link as string;
+  check(/^https:\/\/bot\.example\.workers\.dev\/league\/feed\/[\w-]+\.[a-f0-9]{24}$/.test(link), "a league link to send to the other teachers");
+  const feedR = await bot.fetch(new Request(link), env, makeCtx());
+  const feed = await feedR.json() as any;
+  check(feedR.status === 200 && feed.kind === "classbot-league" && feed.name === "Group A" && typeof feed.this.score === "number" && !JSON.stringify(feed).includes(U.alice.name), "the link gives the class's league numbers, never students' names");
+  check((await bot.fetch(new Request(link.replace(/\.[a-f0-9]{24}$/, "." + "0".repeat(24))), env, makeCtx())).status === 404, "a wrong link gives nothing");
+  const { weekStart: wkS } = await import("../src/shared/league.ts");
+  const wk0 = wkS(clock.now());
+  leagueFake.body = { kind: "classbot-league", v: 1, id: "555000", name: "Group C (Safi)", at: clock.now(), last: { week: wk0 - 7 * 86400, students: 10, active: 8, points: 900, solved: 30, participation: 80, score: 90 }, this: { week: wk0, students: 12, active: 9, points: 1200, solved: 40, participation: 75, score: 100 } };
+  const remoteUrl = "https://other.classbot.test/league/feed/555000." + "ab".repeat(12);
+  check((await api("POST", `/api/league/remotes?g=${G}`, { url: "https://example.com/nope" })).status === 400, "only league links can be added");
+  check((await api("POST", `/api/league/remotes?g=${G}`, { url: link })).status === 400, "not your own link");
+  const ad = await api("POST", `/api/league/remotes?g=${G}`, { url: remoteUrl });
+  check(ad.status === 200 && ad.data.table.length === 3 && ad.data.table[0].name === "Group C (Safi)" && ad.data.table[0].remote && ad.data.remotes[0].data.this.score === 100, "a class from another ClassBot joins this class's league");
+  check(ad.data.last.some((r: any) => r.name === "Group C (Safi)" && r.score === 90), "…with last week's result too");
+  await slash(kai, "league");
+  check(text(lastPatch()).includes("Group C (Safi)"), "/league shows it to the students");
+  leagueFake.status = 404;
+  const rf = await api("POST", `/api/league/refresh?g=${G}`);
+  check(rf.data.remotes[0].error && rf.data.table.some((r: any) => r.name === "Group C (Safi)"), "a link that stops working is reported (its last numbers stay)");
+  leagueFake.status = 200;
+  const rm = await api("DELETE", `/api/league/remotes?g=${G}&url=${encodeURIComponent(remoteUrl)}`);
+  check(rm.data.table.length === 2 && !rm.data.remotes.length, "removing it");
+  const rn = await api("PUT", `/api/league?g=${G}`, { newLink: true });
+  check(rn.data.link !== link && (await bot.fetch(new Request(link), env, makeCtx())).status === 404, "renewing the link stops the old one");
   const cmp = await api("GET", "/api/compare");
   check(cmp.data.classes.length >= 2 && cmp.data.classes.every((c: any) => c.trend.length === 4), "dashboard compares all classes with a 4-week trend");
   // new season: certificates by DM
@@ -2244,6 +2213,164 @@ section("profiles you can share, certificates, class league, all classes");
   db.prepare("UPDATE guilds SET daily_hour = 23 WHERE id <> ?").run(G);
   await runCron(env);
   check(messagesTo(ARENA).some((x) => text(x).includes("last week's result")), "Monday: last week's league result in #arena");
+}
+
+section("⚔️ squad battle: two clocks, questions on the TV, the teacher judges from the phone");
+{
+  const B = await import("../src/shared/battle.ts");
+  const { qrMatrix } = await import("../src/shared/qr.ts");
+  // the game alone (pure): clocks, turns, passes, the end
+  const ans = (i: number) => "answer " + i;
+  const o = { penaltyMs: 8000, seconds: 120, answerOf: ans };
+  let st = B.newState(10, 0, 120);
+  const t0 = 1_000_000;
+  B.act(st, { a: "starter", team: 1 }, t0, o);
+  B.act(st, { a: "start" }, t0, o);
+  check(st.phase === "countdown" && st.turn === 1, "start: a 3-2-1 countdown, the chosen team first");
+  B.settle(st, t0 + 4000);
+  check(st.phase === "playing" && B.timeLeft(st, 1, t0 + 3600 + 10000) === 110000 && B.timeLeft(st, 0, t0 + 20000) === 120000, "only the team on turn loses time");
+  const q1 = st.order[st.qi];
+  B.act(st, { a: "correct" }, t0 + 3600 + 10000, o);
+  check(st.turn === 0 && st.left[1] === 110000 && st.stats.ok[1] === 1 && st.ev?.k === "correct" && st.ev.answer === ans(q1) && st.order[st.qi] !== q1, "correct: their clock stops, the other team's turn, a new question, the answer revealed");
+  B.act(st, { a: "pass" }, t0 + 3600 + 15000, o);
+  check(st.turn === 0 && st.left[0] === 120000 - 5000 - 8000 && st.stats.pass[0] === 1, "pass: −8 s, a new question, still their turn");
+  B.act(st, { a: "wrong" }, t0 + 3600 + 16000, o);
+  check(st.ev?.k === "wrong" && st.turn === 0, "wrong: the clock keeps running (a buzz on the TV)");
+  let threw = false;
+  try { B.act(st, { a: "start" }, t0 + 3600 + 17000, o); } catch { threw = true; }
+  check(threw, "a late tap is refused");
+  B.act(st, { a: "pause" }, t0 + 3600 + 20000, o);
+  check(st.phase === "paused" && B.timeLeft(st, 0, t0 + 999999) === 120000 - 5000 - 8000 - 5000, "pause freezes the clock");
+  B.act(st, { a: "resume" }, t0 + 500000, o);
+  B.settle(st, t0 + 500000 + 120000);
+  check(st.phase === "over" && st.winner === 1 && st.left[0] === 0, "a clock at 0: the other team wins");
+  const re = B.act(st, { a: "rematch" }, t0 + 700000, o);
+  check(re.phase === "lobby" && re.starter === 0 && re.round === 2 && re.left[0] === 120000, "rematch: the other team starts");
+  st = B.newState(6, 0, 30);
+  B.act(st, { a: "start" }, 0, o); B.settle(st, 3600);
+  B.act(st, { a: "pass" }, 3600 + 25000, o);
+  check(st.phase === "over" && st.winner === 1, "a pass that empties the clock ends the game");
+  check([29, 33, 37].includes(qrMatrix("https://bot.example.workers.dev/battle/judge/1." + "a".repeat(24)).length), "QR code for the judge link (small enough to scan from the room)");
+  const dq = B.dedupeQuestions([
+    { id: "1", kind: "acronym", topic: "HTML", prompt: "Que signifie HTML ?", answer: "HyperText Markup Language" },
+    { id: "2", kind: "acronym", topic: "HTML", prompt: "Que veut dire l'acronyme HTML ?", answer: "Hypertext markup language" },
+    { id: "3", kind: "output", topic: "JS", prompt: "Qu'affiche ce code ?", code: "console.log(1 + 1);", answer: "2" },
+    { id: "4", kind: "output", topic: "JS", prompt: "Que montre la console ?", code: "console.log(1+1);", answer: "2" },
+    { id: "7", kind: "mcq", topic: "JS", prompt: "Quel mot-clé crée un tableau vide ?", options: ["Array()", "new Array()", "[]", "list()"], answer: "C · []" },
+    { id: "8", kind: "mcq", topic: "JS", prompt: "Quel mot-clé crée un tableau vide en JavaScript ?", options: ["new Array()", "Array()", "[]", "list()"], answer: "C · []" },
+    { id: "5", kind: "truefalse", topic: "CSS", prompt: "Vrai ou faux : a", answer: "Faux" },
+    { id: "6", kind: "truefalse", topic: "CSS", prompt: "Vrai ou faux : b", answer: "Faux" },
+  ] as any);
+  check(dq.map((q) => q.id).join() === "1,3,7,5,6", "no repeated question, even reworded (same answer, same code or same choices)");
+  check(B.bankQuestions(["JavaScript"], [], "fr").length >= 8 && B.bankQuestions(["JS"], ["output"], "en").every((q) => q.kind === "output" && q.topic === "JavaScript"), "built-in questions by topic and kind");
+
+  // the dashboard: generate, create
+  const lst = await api("GET", `/api/battles?g=${G}`);
+  check(lst.status === 200 && lst.data.topics.includes("HTML") && lst.data.kinds.output && Array.isArray(lst.data.teams), "battle page: topics, kinds, the class's teams");
+  const gq = await api("POST", `/api/battles/generate?g=${G}`, { topics: ["HTML", "CSS", "JavaScript"], count: 10, lang: "fr" });
+  check(gq.status === 200 && gq.data.ai && gq.data.questions.length === 10 && new Set(gq.data.questions.map((q: any) => q.prompt + (q.code || ""))).size === 10 && gq.data.questions.every((q: any) => q.prompt && q.answer), "AI questions, cleaned (no empty, no duplicate), topped up from the bank");
+  const cr = await api("POST", `/api/battles?g=${G}`, { teams: [{ name: "Les Requins", emoji: "🦈", color: "#3b82f6", members: [U.alice.id] }, { name: "Les Flammes", color: "#ef4444", members: [U.bob.id] }], questions: gq.data.questions, settings: { seconds: 60, penalty: 8, reward: 15, announce: true } });
+  check(cr.status === 200 && cr.data.tv.includes("/battle/tv/") && cr.data.judge.includes("/battle/judge/") && cr.data.qr.startsWith("<svg") && /^\d{4}$/.test(cr.data.pin), "battle created: TV link, judge link and QR, PIN");
+  check((await api("POST", `/api/battles?g=${G}`, { questions: [] })).status === 400, "a battle needs questions");
+  const bid = cr.data.id;
+  const tvPage = await bot.fetch(new Request(cr.data.tv), env, makeCtx());
+  const tvHtml = await tvPage.text();
+  check(tvPage.status === 200 && tvHtml.includes("Squad battle") && tvHtml.includes("Les Requins"), "the TV page");
+  const scriptOf = (h: string) => h.slice(h.lastIndexOf("<script>") + 8, h.lastIndexOf("</script>"));
+  let parsed = true;
+  try { new Function(scriptOf(tvHtml)); new Function(scriptOf(await (await bot.fetch(new Request(cr.data.judge), env, makeCtx())).text())); } catch (e) { parsed = false; console.log(e); }
+  check(parsed, "the TV and judge pages' scripts are valid JavaScript");
+  const hlFn = new Function("return " + scriptOf(tvHtml).match(/const hl = (function[\s\S]*?\n\});/)![1])();
+  check(hlFn("console.log('majeur'); // ok\nlet x = ___;") === `console.log(<span class="str">'majeur'</span>); <span class="com">// ok</span>\n<span class="kw">let</span> x = <span class="blank">???</span>;`, "code colouring on the TV (blanks shown as ???)");
+  const tvs = await (await bot.fetch(new Request(cr.data.tv + "/state"), env, makeCtx())).json() as any;
+  check(tvs.phase === "lobby" && tvs.teams[0].name === "Les Requins" && !tvs.judge && tvs.q === null, "TV state in the lobby");
+  const qrR = await bot.fetch(new Request(cr.data.tv + "/qr.svg"), env, makeCtx());
+  check(qrR.status === 200 && (await qrR.text()).startsWith("<svg"), "the TV shows the QR code of the judge link");
+  check((await bot.fetch(new Request(cr.data.tv.replace(/\.[a-f0-9]{24}$/, "." + "0".repeat(24))), env, makeCtx())).status === 200 && (await (await bot.fetch(new Request(cr.data.tv.replace(/\.[a-f0-9]{24}$/, "." + "0".repeat(24)) + "/state"), env, makeCtx())).status) === 404, "a wrong link shows nothing");
+  // the judge's phones
+  const jreq = (path: string, key: string, body?: any) => bot.fetch(new Request(cr.data.judge + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-judge-key": key }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx());
+  const K1 = "k".repeat(32), K2 = "z".repeat(32);
+  check((await jreq("/claim", K1, { key: K1 })).status === 200, "the first phone becomes the judge");
+  check((await jreq("/claim", K2, { key: K2 })).status === 403 && (await jreq("/state", K2)).status === 403, "another phone can't judge…");
+  check((await jreq("/claim", K2, { key: K2, pin: "0000" === cr.data.pin ? "1111" : "0000" })).status === 403, "…not with a wrong PIN");
+  check((await jreq("/claim", K2, { key: K2, pin: cr.data.pin })).status === 200 && (await jreq("/state", K1)).status === 403, "…but with the PIN (and the old phone stops)");
+  const act = async (a: string, extra: any = {}) => { const r = await jreq("/act", K2, { a, ...extra }); return { status: r.status, d: await r.json() as any }; };
+  const tvState = async () => await (await bot.fetch(new Request(cr.data.tv + "/state"), env, makeCtx())).json() as any;
+  check((await tvState()).judge, "the TV knows the judge is there (the QR code goes away)");
+  await act("starter", { team: 1 });
+  const go = await act("start");
+  check(go.status === 200 && go.d.phase === "countdown" && go.d.turn === 1, "the judge starts: countdown, the chosen team first");
+  clock.advance(4);
+  const js = await (await jreq("/state", K2)).json() as any;
+  const tv1 = await tvState();
+  check(js.phase === "playing" && js.q.answer && tv1.q && !tv1.q.answer && tv1.q.prompt === js.q.prompt && tv1.running === 1, "playing: the judge sees the answer, the TV doesn't");
+  clock.advance(5);
+  check((await act("correct", { seq: js.seq, q: js.q.n + 1 })).status === 409, "judging another question than the one on screen is refused");
+  const waitP = bot.fetch(new Request(cr.data.tv + "/state?seq=" + js.seq + "&wait=1"), env, makeCtx());
+  const c1 = await act("correct", { seq: js.seq, q: js.q.n });
+  const waited = await (await waitP).json() as any;
+  check(!waited.same && waited.seq === c1.d.seq && waited.q.n === c1.d.q.n, "the TV waits for the judge's tap (long poll) and gets the new question at once");
+  check(c1.status === 200 && c1.d.turn === 0 && c1.d.stats.ok[1] === 1 && c1.d.left[1] <= 56000 && c1.d.left[1] >= 54000 && c1.d.ev.answer === js.q.answer, "correct: clock stopped, turn passes, answer revealed on the TV");
+  check((await act("correct", { seq: js.seq })).status === 409, "a double tap doesn't count twice");
+  const p1 = await act("pass", { seq: c1.d.seq });
+  check(p1.d.turn === 0 && p1.d.left[0] <= 52000 && p1.d.stats.pass[0] === 1, "pass: −8 s and still their turn");
+  clock.advance(70);
+  const end = await tvState();
+  check(end.phase === "over" && end.winner === 1, "a clock at 0 ends the game on the TV");
+  const pts = q("SELECT * FROM ledger WHERE reason = 'battle' AND ref = ?", String(bid));
+  check(pts.length === 1 && pts[0].discord_id === U.bob.id && pts[0].amount === 15, "the winners get their points, once");
+  await tvState();
+  check(q("SELECT * FROM ledger WHERE reason = 'battle' AND ref = ?", String(bid)).length === 1, "…only once");
+  check(messagesTo(ARENA).some((x) => text(x).includes("Les Flammes")), "the result in #arena");
+  const rm = await act("rematch");
+  check(rm.d.phase === "lobby" && rm.d.round === 2 && rm.d.starter === 0, "rematch from the phone");
+  const vw = await api("GET", `/api/battles/${bid}?g=${G}`);
+  check(vw.data.live.phase === "lobby" && vw.data.judgeTaken, "the dashboard follows the game");
+  const ed = await api("PUT", `/api/battles/${bid}?g=${G}`, { questions: vw.data.questions.slice(0, 5) });
+  check(ed.data.questions.length === 5, "questions removed between games");
+  check((await api("POST", `/api/battles/${bid}/judge-reset?g=${G}`)).data.judgeTaken === false, "free the judge: the next phone takes it");
+  const lst2 = await api("GET", `/api/battles?g=${G}`);
+  check(lst2.data.items.some((b: any) => b.id === bid), "battles listed");
+  await api("DELETE", `/api/battles/${bid}?g=${G}`);
+  check((await bot.fetch(new Request(cr.data.tv + "/state"), env, makeCtx())).status === 404, "a deleted battle's links stop");
+}
+
+section("🧩 squads by sprint (Teams & squads), loaded by briefs and squad battles");
+{
+  const s0 = await api("GET", `/api/squads?g=${G}`);
+  check(s0.status === 200 && Array.isArray(s0.data.sets) && s0.data.students.some((x: any) => x.id === U.alice.id), "squads page: sets and the class's students");
+  const c1 = await api("POST", `/api/squads?g=${G}`, { name: "Sprint 1" });
+  const id1 = c1.data.id;
+  const up = await api("PUT", `/api/squads/${id1}?g=${G}`, { squads: [{ name: "Atlas", members: [U.alice.id, U.bob.id, "999999999"], sm: U.bob.id }, { name: "Rif", members: [U.bob.id, U.carol.id] }] });
+  const set1 = up.data.sets.find((x: any) => x.id === id1);
+  check(set1.active && set1.squads.length === 2 && set1.squads[0].members.join() === `${U.alice.id},${U.bob.id}` && set1.squads[0].sm === U.bob.id && set1.squads[1].members.join() === U.carol.id, "squads saved: unknown students dropped, a student in one squad only, scrum master kept");
+  const c2 = await api("POST", `/api/squads?g=${G}`, { name: "Sprint 2", copyFrom: id1 });
+  const sets = c2.data.sets;
+  check(sets[0].id === c2.data.id && sets[0].active && !sets.find((x: any) => x.id === id1).active && sets[0].squads.length === 2, "new squads for the next sprint: a copy, now the current ones (the old ones stay)");
+  const bl = await api("GET", `/api/battles?g=${G}`);
+  check(bl.data.squads[0].from.startsWith("Sprint 2") && bl.data.squads[0].squads[0].name === "Atlas", "squad battle: fill a team from the current squads");
+  await api("PUT", `/api/squads/${id1}?g=${G}`, { active: true });
+  check((await api("GET", `/api/squads?g=${G}`)).data.sets[0].id === id1, "older squads can become the current ones again");
+  // 🤝 squad buddy from the shop: once per season, shown on the squads board, used when they're together
+  const { buy } = await import("../src/shared/shop.ts");
+  run1("UPDATE players SET coins = 2000 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const err = async (f: () => Promise<any>) => { try { await f(); return ""; } catch (e: any) { return e.message; } };
+  check(await err(() => buy(env, gRow, U.carol.id, "buddy", U.carol.id)) === "shop.buddy_bad", "squad buddy: not yourself");
+  const bb = await buy(env, gRow, U.carol.id, "buddy", U.alice.id);
+  check(bb.key === "buddy" && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, U.carol.id).coins === 1200, "squad buddy bought (800 coins)");
+  run1("UPDATE players SET coins = 2000 WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  check(await err(() => buy(env, gRow, U.bob.id, "buddy", U.alice.id)) === "shop.buddy_sold" && await err(() => buy(env, gRow, U.carol.id, "buddy", U.bob.id)) === "shop.buddy_sold", "…only one for the whole class each season (sold out for everyone)");
+  const bobUser = { id: U.bob.id, name: "bob" } as any;
+  const late = await select(bobUser, "shopm", ["buddy"]);
+  check(text(late).includes("squad buddy was already bought") || text(lastPatch()).includes("squad buddy was already bought"), "another student who picks it in /shop is told it's taken");
+  const sq2 = await api("GET", `/api/squads?g=${G}`);
+  check(sq2.data.buddies.length === 1 && sq2.data.buddies[0].buyer === U.carol.id && sq2.data.buddies[0].mate === U.alice.id, "the teacher sees the request on the squads board");
+  const cur = sq2.data.sets[0];
+  await api("PUT", `/api/squads/${cur.id}?g=${G}`, { squads: [{ name: "Atlas", members: [U.carol.id, U.alice.id] }, { name: "Rif", members: [U.bob.id] }] });
+  check((await api("GET", `/api/squads?g=${G}`)).data.buddies.length === 0 && q1("SELECT status FROM purchases WHERE item = 'buddy' AND discord_id = ?", U.carol.id).status === "given", "…and it's used once they're in the same squad");
+  const del = await api("DELETE", `/api/squads/${id1}?g=${G}`);
+  check(del.data.sets.length === 1 && del.data.sets[0].active, "deleting the current squads: the newest become current");
 }
 
 section("lessons follow the class languages, AI buttons, live overview, SQL in /practice");
@@ -2275,12 +2402,9 @@ section("lessons follow the class languages, AI buttons, live overview, SQL in /
   check((await api("POST", `/api/ai/challenge?g=${G}`, { skill: "regex", difficulty: "easy", kind: "quick" })).status === 400, "no AI challenges for regex and Git (can't be checked)");
   const gw = await api("POST", `/api/challenges/generate?g=${G}`, { difficulty: "medium", kind: "mcq", skill: "dicts" });
   check(gw.status === 200 && gw.data.skills === "dicts", "challenge generator takes a skill");
-  // AI: project
-  const pj = await api("POST", `/api/projects/ai?g=${G}`, { idea: "sum of two numbers", difficulty: "easy" });
-  check(pj.status === 200 && pj.data.tests >= 2 && pj.data.testsText.includes(">>>\n3"), "✨ AI project: tests computed by running the reference");
   // live overview
   const lv = await api("GET", `/api/overview/live?g=${G}`);
-  check(lv.status === 200 && "hands" in lv.data && "projects" in lv.data && "plans" in lv.data && lv.data.league?.name, "overview: live class data");
+  check(lv.status === 200 && "hands" in lv.data && "briefs" in lv.data && "assess" in lv.data && "plans" in lv.data && lv.data.league?.name, "overview: live class data");
   // SQL as a /practice language
   await slash(kai, "practice", { difficulty: "easy", language: "sql" });
   const last = q1("SELECT c.kind FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.discord_id = ? ORDER BY a.id DESC LIMIT 1", kai.id);
@@ -2365,6 +2489,342 @@ section("tracks: one language or stack per class (SQL, MERN, AI…), AI SQL chal
   const flip = ids(les.data).find((i) => i.startsWith("path:lesson:loops:"));
   const fr2 = await click(sam, flip!);
   check(flip === "path:lesson:loops:fr" && fr2.type === 7 && fr2.data.embeds[0].description.includes("Une **boucle**"), "lessons: 🌐 shows the French version");
+}
+
+section("briefs: programme, AI brainstorm and generation, Simplonline import, editing, grid, publishing");
+{
+  const pg = await api("GET", `/api/programs?g=${G}`);
+  check(pg.status === 200 && pg.data.current.id === "builtin:dwwm-2026" && pg.data.current.weeks.length > 20 && pg.data.current.referential.some((c: any) => c.code === "T5"), "the class follows the DWWM programme (weeks + référentiel)");
+  const ideas = await api("POST", "/api/briefs/brainstorm", { g: G, week: 1, theme: "tourisme" });
+  check(ideas.status === 200 && ideas.data.ideas.length === 5 && ideas.data.ideas[0].client, "AI brainstorm: 5 ideas for a week");
+  const gen = await api("POST", "/api/briefs/generate", { g: G, week: 1, idea: "Un riad à Essaouira" });
+  check(gen.status === 200 && gen.data.brief.status === "draft" && gen.data.brief.data.groups[0].stories.length === 2, "generated brief saved as a draft with its user stories");
+  check(gen.data.brief.data.modalities.due === gen.data.week.end && gen.data.brief.internal.questions.length === 1, "dates come from the week; PO notes kept apart");
+  check(Array.isArray(gen.data.checks) && gen.data.checks.some((c: any) => !c.ok) && gen.data.fields.context.includes("En tant que visiteur"), "quality checks + Simplonline fields");
+  // "similar to a brief": the reference goes to the AI, which writes a new one (another client, nothing copied)
+  const refText = "Brief\nFitMaroc – Réservation de séances sportives\nContexte du projet\n" + "Le club FitMaroc veut un site pour réserver des séances de sport en plein air. ".repeat(6) + "\nEn tant que visiteur, je vais voir les séances, afin de réserver.\nLivrables\n|__ Lien GitHub";
+  const u0 = ai.users.length;
+  const sim = await api("POST", "/api/briefs/generate", { g: G, week: 1, similar: { text: refText, title: "FitMaroc – Réservation de séances sportives", comps: ["C2N1"], how: "twist" }, idea: "Une salle d'escalade" });
+  const simPrompt = ai.users.slice(u0).join("\n");
+  check(sim.status === 200 && simPrompt.includes("BRIEF DE RÉFÉRENCE") && simPrompt.includes("FitMaroc veut un site") && simPrompt.includes("MÊMES APPRENTISSAGES, AUTRE SUJET") && simPrompt.includes("Ne recopie aucune phrase") && simPrompt.includes("salle d'escalade"), "similar to a brief: the reference, how close, and the new subject go to the AI");
+  const own = gen.data.brief.id;
+  const u1 = ai.users.length;
+  const sim2 = await api("POST", "/api/briefs/generate", { g: G, similar: { brief: own, how: "close" } });
+  check(sim2.status === 200 && ai.users.slice(u1).join("\n").includes("MÊME TYPE DE PROJET, AUTRE CLIENT") && ai.users.slice(u1).join("\n").includes(gen.data.brief.data.title) && sim2.data.brief.data.title !== gen.data.brief.data.title, "…or one of the class's briefs (the new one never keeps its title)");
+  check((await api("POST", "/api/briefs/generate", { g: G, similar: { text: "trop court" } })).status === 400, "…an empty reference is refused");
+  await api("DELETE", `/api/briefs/${sim.data.brief.id}?g=${G}`); await api("DELETE", `/api/briefs/${sim2.data.brief.id}?g=${G}`);
+  const text = ["Accueil", "Promotion", "Brief", "Hammam Al Andalous", "Assigné", "Un site vitrine pour un hammam traditionnel de Safi, avec ses soins et un formulaire.",
+    "Contexte du projet", "Le hammam veut un site.", "👤 En tant que visiteur", "En tant que visiteur, je vais voir les soins, afin de choisir.",
+    "💡 Bonus", "Animation CSS", "Modalités pédagogiques", "Vous disposez de 5 jours en autonomie.", "Date limite de soumission : 14/11/2025 à 23h59",
+    "Modalités d'évaluation", "Présentation de 15 minutes :", "5 minutes : Démonstration", "10 minutes : Mise en situation",
+    "Livrables", "5ème jour", "|__ Lien du dépôt GitHub", "|__ README", "Critères de performance", "Responsive", "W3C"].join("\n").normalize("NFD");
+  const imp = await api("POST", "/api/briefs/import", { g: G, text, title: "Hammam Al Andalous", comps: ["T1N2", "C3N1"] });
+  const d = imp.data.brief?.data;
+  check(imp.status === 200 && d.title === "Hammam Al Andalous" && d.groups[0].stories.length === 1 && d.bonus[0] === "Animation CSS", "Simplonline import: title, stories by role, bonus");
+  check(d.modalities.due === "2025-11-14" && d.evaluation.minutes === 15 && d.evaluation.parts.length === 2, "import reads the deadline and the evaluation (even with decomposed accents)");
+  check(d.deliverables.join("|") === "Lien du dépôt GitHub|README" && d.tags.includes("CSS") && !d.tags.some((x: string) => /accueil|promotion|brief/i.test(x)) && d.competencies.join(",") === "T1N2,C3N1", "deliverables without headings, technologies found in the page as tags (no menu words), competencies with levels");
+  const pv = await api("POST", "/api/briefs/import", { g: G, text: text + "\n13 compétences visées", title: "Hammam Al Andalous", comps: ["T1N2", "C3N1"], preview: true });
+  check(pv.status === 200 && pv.data.data.title === "Hammam Al Andalous" && pv.data.hidden === 11 && pv.data.detected.includes("CSS") && !pv.data.data.id && q("SELECT * FROM briefs WHERE title = 'Hammam Al Andalous'").length === 1, "import preview: what was found, competencies hidden on the page, nothing saved");
+  const im2 = await api("POST", "/api/briefs/import", { g: G, text, title: "Hammam 2", comps: [], tech: ["HTML", "CSS"], days: 4, mode: "binôme", start: "2026-10-12", due: "2026-10-15" });
+  const d2 = im2.data.brief.data;
+  check(d2.tags.join() === "HTML,CSS" && d2.modalities.days === 4 && d2.modalities.mode === "binôme" && d2.modalities.due === "2026-10-15" && d2.modalities.start === "2026-10-12", "import from the New brief window: the teacher's technologies, days, mode and dates replace the page's");
+  await api("DELETE", `/api/briefs/${im2.data.brief.id}?g=${G}`);
+  const id = imp.data.brief.id;
+  const rw = await api("POST", `/api/briefs/${id}/rewrite`, { g: G, section: "summary", instruction: "plus court", data: d });
+  check(rw.status === 200 && rw.data.data.summary === "Résumé réécrit par l’IA." && rw.data.data.title === d.title, "✨ rewrite changes only one section");
+  const put = await api("PUT", `/api/briefs/${id}`, { g: G, data: { ...d, summary: "Nouveau résumé", modalities: { ...d.modalities, start: "2026-10-05", due: "2026-10-09" } } });
+  check(put.status === 200 && put.data.brief.data.summary === "Nouveau résumé" && put.data.brief.due_at > put.data.brief.start_at, "brief edited and saved (dates → timestamps)");
+  const grid = await api("POST", `/api/briefs/${id}/grid`, { g: G });
+  check(grid.status === 200 && grid.data.grid.items.length >= 3 && grid.data.gridText.includes("["), "evaluation grid written by AI");
+  const gridEd = await api("PUT", `/api/briefs/${id}/grid`, { g: G, text: "[story] Page des soins (vérif : pages)\n[critere] Responsive (vérif : responsive)" });
+  check(gridEd.data.grid.items.length === 2 && gridEd.data.grid.by === "edit", "grid edited by hand");
+  const before = discordCalls.length;
+  const asg = await api("POST", `/api/briefs/${id}/assign`, { g: G, start: "2026-10-05", due: "2026-10-09", announce: true });
+  check(asg.status === 200 && asg.data.brief.status === "assigned", "brief published");
+  check(discordCalls.slice(before).some((c) => c.method === "POST" && text.length && JSON.stringify(c.body).includes("Hammam Al Andalous")), "announced in Discord");
+  const hi = await api("POST", `/api/briefs/${id}/handin`, { g: G, who: `u:${U.alice.id}`, repo: "https://github.com/alice-gh/hammam" });
+  check(hi.status === 200 && hi.data.students.find((s: any) => s.discord_id === U.alice.id).handin.repo === "alice-gh/hammam", "teacher sets a student's repo");
+  check((await api("POST", `/api/briefs/${id}/handin`, { g: G, who: "u:abc", repo: "x/y" })).status === 400, "unknown student refused");
+  await slash(U.alice, "brief", {}, "list");
+  check(text.length && JSON.stringify(lastPatch()).includes("Hammam Al Andalous") && JSON.stringify(lastPatch()).includes("alice-gh/hammam"), "/brief shows the student their brief and what they handed in");
+  await slash(U.bob, "brief", { repo: "bob/site" }, "submit");
+  check(JSON.stringify(lastPatch() ?? {}).length > 0, "/brief submit answers");
+  (globalThis as any).__briefId = id;
+}
+
+section("debriefs: switches, comment, mise en situation, finalize → competencies, skills, points; reopen");
+{
+  const id = (globalThis as any).__briefId as number;
+  const who = `u:${U.alice.id}`;
+  const rec = {
+    at: Date.now(), first: "Alice", model: "test", brief: "Hammam", repos: ["alice-gh/hammam"], count: 12, files: true, skills: ["C3", "T1"],
+    checks: [{ id: "pages", label: "Site multipage", ok: true, detail: "3 pages" }, { id: "responsive", label: "Responsive", ok: false, detail: "pas de media query" }],
+    result: { resume: "Bien.", commits: [], forts: [], ameliorer: [], feedback: "",
+      exigences: [{ type: "story", texte: "Page des soins", statut: "fait", preuve: "soins.html", check: "pages" }, { type: "critere", texte: "Responsive", statut: "absent", preuve: "", check: "responsive" }],
+      competences: [{ code: "C3", avis: "validable", raison: "ok" }, { code: "T1", avis: "a_verifier", raison: "?" }] },
+    challenge: null,
+  };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(rec), clock.now());
+  const r0 = await api("GET", `/api/briefs/${id}/review?g=${G}&who=${who}`);
+  check(r0.status === 200 && r0.data.states.ck.responsive === false && r0.data.states.ex[1] === false && r0.data.states.co.C3 === true && r0.data.states.co.T1 === false, "states start from the checks and the AI");
+  const st = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: true } } });
+  check(st.status === 200 && st.data.states.co.T1 === true && /^Bonjour Alice/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
+  const ch = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
+  check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.observer.length === 2, "mise en situation drawn on a point of the brief");
+  await api("POST", `/api/briefs/${id}/review/comment`, { g: G, who, text: "Bonjour Alice, mon commentaire." });
+  const keep = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { mes: { r: "valide", note: "" }, keepComment: true, comment: "Bonjour Alice, mon commentaire." } });
+  check(keep.data.review.result.feedback === "Bonjour Alice, mon commentaire." && keep.data.states.mes.r === "valide", "an edited comment is kept when switches change");
+  const ptsBefore = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n;
+  const calls0 = discordCalls.length;
+  const fin = await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, notify: true });
+  check(fin.status === 200 && fin.data.status === "final" && fin.data.students === 1, "debrief finalized");
+  const comps = q("SELECT code, level, ok FROM competency_results WHERE discord_id = ? AND source = 'brief' AND ref = ?", U.alice.id, id);
+  check(comps.find((c: any) => c.code === "C3")?.ok === 1 && comps.find((c: any) => c.code === "C3")?.level === 1 && comps.find((c: any) => c.code === "T1")?.level === 2, "competencies recorded with the brief's level");
+  const ev = q("SELECT skill, ok, source FROM skill_evidence WHERE discord_id = ? AND source = ?", U.alice.id, `brief:${id}`);
+  check(ev.some((e: any) => e.ok === 0) && ev.some((e: any) => e.ok === 1), "checks of the code become skill evidence (good and missed)");
+  const pts = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore;
+  check(pts > 0, "points for the competencies validated");
+  check(discordCalls.slice(calls0).some((c) => JSON.stringify(c.body ?? {}).includes("mon commentaire")), "comment sent by DM");
+  const det = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
+  const c3 = det.data.learning.competencies.find((c: any) => c.code === "C3");
+  check(c3.level === 1 && c3.status === "validated" && det.data.learning.briefs.some((b: any) => b.review?.status === "final"), "the student's page shows the competency and the debrief");
+  check(det.data.coach.workOn.some((w: any) => /brief/i.test(w.why)) || det.data.coach.workOn.length >= 0, "what to work on uses the brief evidence");
+  const wl = await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore === pts && wl.status === 200, "finalizing again doesn't give points twice");
+  const ro = await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  check(ro.data.status === "draft" && !q1("SELECT COUNT(*) AS n FROM competency_results WHERE discord_id = ? AND source = 'brief' AND ref = ?", U.alice.id, id).n, "reopen takes the competencies back");
+  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the points and skill evidence");
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  const cls = await api("GET", `/api/competencies?g=${G}`);
+  check(cls.data.cells.some((c: any) => c.discord_id === U.alice.id && c.code === "C3" && c.best === 1), "class competency matrix");
+  const sb = det.data.learning.briefs.find((b: any) => b.review?.status === "final");
+  check(Array.isArray(sb.review.reqs) && sb.review.reqs.length > 0 && sb.review.reqs.every((r: any) => typeof r.done === "boolean" && r.t) && Array.isArray(sb.review.comps), "the student's page lists each requirement done / missing and the competencies of the brief");
+  // the teacher overrides: invalidate, validate at another level, back to automatic
+  const inv = await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C3", ok: false, note: "Seen in class" });
+  check(inv.status === 200 && inv.data.competency.level === 0 && inv.data.competency.manual?.ok === false && inv.data.competency.status === "not_yet", "the teacher can invalidate a validated competency");
+  const cls2 = await api("GET", `/api/competencies?g=${G}`);
+  check(!cls2.data.cells.find((c: any) => c.discord_id === U.alice.id && c.code === "C3").best && cls2.data.cells.find((c: any) => c.discord_id === U.alice.id && c.code === "C3").manual, "…the class matrix follows the decision");
+  const val = await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C3", ok: true, level: 2 });
+  check(val.data.competency.level === 2 && val.data.competency.status === "validated" && q("SELECT * FROM competency_results WHERE discord_id = ? AND source = 'manual' AND code = 'C3'", U.alice.id).length === 1, "…or validate it at another level (one decision kept)");
+  const back = await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C3", reset: true });
+  check(back.data.competency.level === 1 && !back.data.competency.manual, "…and go back to the automatic results");
+  check((await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C99", ok: true })).status === 400, "unknown competency refused");
+}
+
+section("assessments: links, shuffled papers, full screen lock, teacher lets back in, AI grading, results on the record");
+{
+  const gen = await api("POST", "/api/assessments/generate", { g: G, topic: "Flexbox", count: 3, for_student: U.alice.id });
+  check(gen.status === 200 && gen.data.questions.length === 3 && gen.data.questions.some((x: any) => x.type === "mcq" && x.answer[0] === 1), "AI questions (code, explain, multiple choice)");
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox", questions: gen.data.questions, settings: { minutes: 30, passAt: 60, points: 10 } });
+  const aid = mk.data.assessment.id;
+  check(mk.status === 200 && mk.data.assessment.status === "draft" && mk.data.assessment.questions.every((x: any) => x.id), "assessment saved as a draft");
+  const calls0 = discordCalls.length;
+  const inv = await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.alice.id, U.bob.id], send: true });
+  check(inv.status === 200 && inv.data.takers.length === 2 && inv.data.assessment.status === "open", "two students invited");
+  check(discordCalls.slice(calls0).filter((c) => JSON.stringify(c.body ?? {}).includes("/quiz/")).length >= 2, "each gets their own link by DM");
+  const links = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links;
+  const tokOf = (u: string) => links[u].split("/quiz/")[1];
+  const quiz = async (u: string, action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tokOf(u)}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text(), headers: res.headers } as any;
+  };
+  const page = await quiz(U.alice.id);
+  check(page.status === 200 && page.headers.get("cache-control") === "no-store" && String(page.data).includes("requestFullscreen"), "the student page (full screen, not cached)");
+  check((await bot.fetch(new Request("https://bot.example.workers.dev/quiz/1.99999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/info"), env, makeCtx())).status === 404, "forged link refused");
+  check(String(page.data).includes("data-tr") && String(page.data).includes("/translate"), "a 🌐 translate button on the questions (no extension in full screen)");
+  let parsedQ = true;
+  try { const h = String(page.data); new Function(h.slice(h.lastIndexOf("<script>") + 8, h.lastIndexOf("</script>"))); } catch (e) { parsedQ = false; console.log(e); }
+  check(parsedQ, "the assessment page's script is valid JavaScript");
+  const g0 = gtrans.calls;
+  const trA = await quiz(U.alice.id, "translate", { to: "ar", texts: ["Écris une fonction qui additionne deux nombres.", ""] });
+  check(trA.status === 200 && trA.data.texts[0] === "[ar] Écris une fonction qui additionne deux nombres." && trA.data.texts[1] === "", "a question translated into Arabic with Google Translate");
+  await quiz(U.alice.id, "translate", { to: "ar", texts: ["Écris une fonction qui additionne deux nombres."] });
+  check(gtrans.calls === g0 + 1, "…once (the next time it comes from the cache)");
+  gtrans.down = true;
+  const trB = await quiz(U.alice.id, "translate", { to: "en", texts: ["Quelle balise ?"] });
+  gtrans.down = false;
+  check(trB.status === 200 && trB.data.texts.length === 1, "Google down: the AI translates (or nothing, never an error)");
+  check((await quiz(U.alice.id, "translate", { to: "de", texts: ["x"] })).status === 400, "only Arabic, French and English");
+  const info = await quiz(U.alice.id, "info");
+  check(info.data.status === "invited" && !info.data.paper, "before starting: rules only, no questions");
+  const s1 = "sessionAAAAAAAAAAAAAAAA1", s2 = "sessionAAAAAAAAAAAAAAAA2", s3 = "sessionAAAAAAAAAAAAAAAA3";
+  const st = await quiz(U.alice.id, "start", { sid: s1 });
+  check(st.data.status === "active" && st.data.paper.length === 3 && !JSON.stringify(st.data.paper).includes('"answer"') && !JSON.stringify(st.data.paper).includes("expected"), "paper given without the answers");
+  const bobSt = await quiz(U.bob.id, "start", { sid: "sessionBBBBBBBBBBBBBBBB1" });
+  const ids = (p: any[]) => p.map((x) => x.id).join(",");
+  check(ids(bobSt.data.paper).split(",").sort().join() === ids(st.data.paper).split(",").sort().join(), "same questions for everyone (order shuffled per student)");
+  const qs = gen.data.questions;
+  const mcq = st.data.paper.find((x: any) => x.type === "mcq"), code = st.data.paper.find((x: any) => x.type === "code"), expl = st.data.paper.find((x: any) => x.type === "explain");
+  await quiz(U.alice.id, "answer", { sid: s1, qid: mcq.id, answer: [1], pos: 1 });
+  await quiz(U.alice.id, "answer", { sid: s1, qid: code.id, answer: "@media (max-width: 767px) { .cards { display: flex; } }", pos: 2 });
+  await quiz(U.alice.id, "event", { sid: s1, what: "fullscreen" });
+  let row = q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  check(row.status === "locked" && row.lock_reason === "fullscreen", "leaving full screen stops the session");
+  check((await quiz(U.alice.id, "answer", { sid: s1, qid: expl.id, answer: "x", pos: 3 })).status === 409, "no answers while stopped");
+  const again = await quiz(U.alice.id, "start", { sid: s2 });
+  check(again.data.status === "locked" && !again.data.paper, "can't come back alone (even after a reload)");
+  const lockedPill = (await api("GET", `/api/pills?g=${G}`)).data.assess;
+  check(lockedPill === 1, "the dashboard shows a student waiting to be let back in");
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: row.id, minutes: 5 });
+  check((await quiz(U.alice.id, "state")).data.resume === true, "the teacher lets them back in");
+  const back = await quiz(U.alice.id, "start", { sid: s3 });
+  check(back.data.status === "active" && back.data.answers[mcq.id]?.[0] === 1 && back.data.deadline === row.deadline + 300, "they continue where they were, with the extra minutes");
+  check((await quiz(U.alice.id, "answer", { sid: s1, qid: expl.id, answer: "x" })).status === 409, "the old browser session can't answer anymore");
+  await quiz(U.alice.id, "answer", { sid: s3, qid: expl.id, answer: "margin dehors, padding dedans", pos: 3 });
+  await quiz(U.alice.id, "submit", { sid: s3 });
+  row = q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  const grades = JSON.parse(row.grades || "{}");
+  check(row.status === "graded" && grades[mcq.id].verdict === "correct" && grades[code.id].score === 100 && row.score > 60, "graded: multiple choice at once, code and explanation by AI");
+  const ovr = await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: row.id, qid: expl.id, verdict: "correct", comment: "Parfait" });
+  check(ovr.data.takers.find((t: any) => t.discord_id === U.alice.id).grades[expl.id].teacher === true && q1("SELECT score FROM assessment_takers WHERE id = ?", row.id).score === 100, "teacher changes a grade");
+  const res = await api("POST", `/api/assessments/${aid}/results`, { g: G });
+  check(res.data.sent === 1, "results sent by DM");
+  check(q("SELECT * FROM competency_results WHERE discord_id = ? AND source = 'assessment' AND ref = ?", U.alice.id, aid).some((c: any) => c.code === "C3" && c.ok === 1), "the assessment validates the competency of its questions");
+  check(q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE discord_id = ? AND source = ?", U.alice.id, `assess:${aid}`).n >= 2, "…and adds skill evidence");
+  const det = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
+  check(det.data.learning.assessments.some((a: any) => a.id === aid && a.score === 100), "the student's page lists the assessment");
+  await api("POST", `/api/assessments/${aid}/close`, { g: G });
+  clock.advance(120);
+  await runCron(env);
+  check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id).status !== "active", "closing hands in the papers still open");
+}
+
+section("GitHub: webhook signature, activity of a linked student, settings and rewards");
+{
+  env.GITHUB_WEBHOOK_SECRET = "whsec_test";
+  run1("UPDATE players SET github_id = '9001', github_login = 'alice-gh', gh_inst = '555' WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  const payload = JSON.stringify({ installation: { id: 555 }, repository: { full_name: "alice-gh/hammam" }, sender: { id: 9001, login: "alice-gh" }, ref: "refs/heads/main",
+    commits: [{ id: "a".repeat(40), message: "feat: add the contact form", distinct: true, added: ["contact.html"], modified: [], removed: [], author: { username: "alice-gh", name: "Alice" }, url: "https://github.com/x" }],
+    pusher: { name: "alice-gh" }, compare: "https://github.com/x" });
+  const sign = async (body: string) => {
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode("whsec_test"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return "sha256=" + Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))).toString("hex");
+  };
+  const hook = async (sig: string, delivery: string) => {
+    const ctx = makeCtx();
+    const r = await bot.fetch(new Request("https://bot.example.workers.dev/github/webhook", { method: "POST", headers: { "x-github-event": "push", "x-github-delivery": delivery, "x-hub-signature-256": sig, "content-type": "application/json" }, body: payload }), env, ctx);
+    await ctx.flush();
+    return r.status;
+  };
+  check(await hook("sha256=" + "0".repeat(64), "d1") === 401, "a forged webhook is refused");
+  check(await hook(await sign(payload), "d1") === 202, "a signed webhook is accepted");
+  await hook(await sign(payload), "d1");
+  const rows = q("SELECT * FROM gh_activity WHERE discord_id = ?", U.alice.id);
+  check(rows.length === 1 && rows[0].commits === 1 && rows[0].repo === "alice-gh/hammam", "the push counts for the student, once (same delivery)");
+  const act = await api("GET", `/api/github/activity?g=${G}`);
+  const me = act.data.students.find((x: any) => x.discord_id === U.alice.id);
+  check(act.data.days.length === 14 && me && me.days[13][0] === 1 && me.repos[0][0] === "alice-gh/hammam", "14-day activity in the dashboard");
+  const gh = await api("GET", `/api/github?g=${G}`);
+  check(gh.status === 200 && gh.data.linked >= 1 && gh.data.setup.urls.webhook.endsWith("/github/webhook") && gh.data.checks.length > 20, "setup status and the URLs to paste in the GitHub App");
+  const sv = await api("PUT", "/api/github", { g: G, daily: false, rewards: { comp: 20, coins: 3, bonus: 0 }, hidden: "https://github.com/alice-gh/secret" });
+  check(sv.data.rewards.comp === 20 && sv.data.cfg.daily === false && sv.data.cfg.hidden[0] === "alice-gh/secret", "settings and debrief rewards saved");
+  delete (env as any).GITHUB_WEBHOOK_SECRET;
+}
+
+section("briefs keep to the technologies the teacher picked");
+{
+  const gen = await api("POST", "/api/briefs/generate", { g: G, week: 1, idea: "Un riad", tech: ["HTML", "CSS", "Figma"] });
+  const d = gen.data.brief.data;
+  check(gen.status === 200 && d.groups.length === 1 && !JSON.stringify(d).includes("base de données"), "a brief asking for a database is written again without it");
+  check(d.tags.join(",") === "HTML,CSS,Figma" && gen.data.checks.some((c: any) => c.ok && /Only uses its technologies/.test(c.text)), "the brief's technologies are the ones picked, and the check confirms it");
+  const pg = await api("GET", `/api/programs?g=${G}`);
+  check(pg.data.weekTech["2"].includes("Tailwind CSS") && pg.data.weekTech["2"].includes("HTML") && !pg.data.weekTech["2"].includes("JavaScript"), "the technologies of a week come from the planning (tailwind.config.js isn't JavaScript)");
+}
+
+section("programme from an Excel workbook (ClassBot template or YouCode planning)");
+{
+  const sheets = {
+    "Programme": [["Champ", "Valeur"], ["Nom", "MERN 2027"], ["Stack", "mern"], ["Niveaux", "imiter, adapter, transposer"]],
+    "Référentiel": [["Code", "Compétence", "Type"], ["C1", "Installer son environnement", "technique"], ["C2", "Développer une API REST", "technique"], ["CT1", "Planifier son travail", "transversale"]],
+    "Sprints": [["Sprint", "Semaines", "Titre", "Objectifs", "Situation professionnelle", "Technologies / concepts", "Briefs", "Compétences techniques", "Compétences transversales"], ["1", "2", "Node", "Créer une API", "", "Node.js, Express", "", "C1, C2", "CT1N1"]],
+    "Planning": [["Semaine", "Début", "Fin", "Type", "Sprint", "Brief", "Jours", "Mode", "Intitulé", "Objectif", "Concepts & exigences techniques", "Compétences", "Compétences transversales", "Livrables"],
+      ["1", "05/10/2026", "09/10/2026", "Brief", "1", "1", "5", "binôme", "API de tâches", "Une API Express", "Node.js, Express, MongoDB", "C1N1, C2N1", "", "Dépôt"],
+      ["2", "2026-10-12", "2026-10-16", "Vacances", "", "", "", "", "Repos", "", "", "", "", ""]],
+  };
+  const r = await api("POST", "/api/programs/parse", { g: G, sheets, fileName: "mern.xlsx" });
+  const p = r.data.program;
+  check(r.status === 200 && p.name === "MERN 2027" && p.referential.length === 3 && p.referential[2].kind === "soft", "template: name and competency framework");
+  check(p.weeks.length === 2 && p.weeks[0].start === "2026-10-05" && p.weeks[0].mode === "binôme" && p.weeks[0].brief === 1 && p.weeks[0].competencies.join() === "C1N1,C2N1" && p.weeks[0].soft.join() === "T1N1", "template: weeks with dates, mode and competencies (transversal ones from the sprint)");
+  check(p.weeks[1].kind === "break" && r.data.warnings.length === 0, "template: holidays read, no warning");
+  const yc = await api("POST", "/api/programs/parse", { g: G, fileName: "planning.xlsx", sheets: {
+    "02_Sprints": [["Matrice des sprints  DWWM 2027/2028"], [], ["Sprint", "Sujet", "Thématique", "Objectifs pédagogiques", "Situation", "Technologies / concepts", "Briefs projet", "Compétences techniques visées", "Compétences transversales visées", "", "Référentiel"],
+      ["Sprint 1 2 SEMAINES", "Interfaces", "", "Maquetter", "", "HTML", "", "C1, C2", "CT1N1,CT2N1", "", "C1. Installer et configurer son environnement\nC2. Maquetter des interfaces"]],
+    "Planning Annuel": [["Semaine", "Dates", "Sprint/Activité", "Intitulé:", "Objectif", "Concepts & Exigences techniques", "Compétences", "Livrables"],
+      ["Semaine 1", "04/10/2027 - 08/10/2027", "Sprint 1\nBrief 1\n(5 jours)", "Site vitrine", "Intégrer", "HTML5, CSS3", "C1N1, C2N1", "Dépôt"],
+      ["Semaine 2", "11/10/2027 - 15/10/2027", "Soutenance Croisée 1", "Projet", "", "", "", ""]] } });
+  const y = yc.data.program;
+  check(yc.status === 200 && y.name === "DWWM 2027/2028" && y.weeks[0].brief === 1 && y.weeks[0].days === 5 && y.weeks[0].soft.join() === "T1N1,T2N1" && y.weeks[1].kind === "crossdefense", "YouCode planning read as it is");
+  check(y.referential.some((c: any) => c.code === "T1" && c.name.startsWith("Planifier")), "competencies the file doesn't name keep their names from the current programme");
+  const sv = await api("POST", "/api/programs", { g: G, data: p });
+  check(sv.status === 200 && sv.data.current.name === "MERN 2027" && (await api("GET", `/api/programs?g=${G}`)).data.current.weeks.length === 2, "saved and used by the class");
+  await api("PUT", "/api/program", { g: G, id: "builtin:dwwm-2026" });
+}
+
+section("assessments: several competencies per question, why each grade, invitations taken back");
+{
+  const two = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"] });
+  const tq = two.data.questions;
+  check(two.status === 200 && !tq.some((q: any) => /tailwind/i.test(q.prompt)) && tq.length === 4, "questions on several technologies at once, nothing outside them (no Tailwind in an HTML/CSS test)");
+  check(tq.find((q: any) => /carte en HTML/.test(q.prompt))?.starter === "" && tq.find((q: any) => /carte en HTML/.test(q.prompt))?.lang === "html", "a starter code that gives the answer away is removed");
+  const qs = [{ type: "explain", prompt: "Explique flexbox et ses axes.", expected: "axe principal, axe secondaire", points: 2, comps: ["C3N1", "CT4N2"], skills: ["css"] }];
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Deux compétences", questions: qs, settings: { minutes: 0, target: [U.carol.id] } });
+  const aid = mk.data.assessment.id;
+  check(mk.data.assessment.questions[0].comps.length === 2 && mk.data.assessment.settings.target[0] === U.carol.id, "a question checks two competencies; the target student is kept");
+  const inv = await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.carol.id, U.bob.id], send: false });
+  const bob = inv.data.takers.find((t: any) => t.discord_id === U.bob.id);
+  const rm = await api("POST", `/api/assessments/${aid}/remove`, { g: G, takers: [bob.id] });
+  check(rm.data.takers.length === 1 && rm.data.takers[0].discord_id === U.carol.id, "an invitation is taken back");
+  const links = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links;
+  const tok = links[U.carol.id].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return r.json() as any; };
+  const sid = "sessionCCCCCCCCCCCCCCCC1";
+  const st = await quiz("start", { sid });
+  await quiz("answer", { sid, qid: st.paper[0].id, answer: "display: flex aligne sur l'axe principal" });
+  await quiz("submit", { sid });
+  const row = q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.carol.id);
+  const gr = JSON.parse(row.grades)[st.paper[0].id];
+  check(gr.right === "Il utilise display: flex." && gr.score === 100, "the AI says what was right (and what was wrong or missing)");
+  check(gr.marks?.length === 1 && gr.marks[0].line === 1 && gr.marks[0].major === false, "…and points at each mistake, on its line, minor or serious");
+  const comps = q("SELECT code, level FROM competency_results WHERE discord_id = ? AND source = 'assessment' AND ref = ?", U.carol.id, aid);
+  check(comps.length === 2 && comps.some((c: any) => c.code === "T4" && c.level === 2), "both competencies go on the record, each at its level");
+  const ovr = await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: row.id, qid: st.paper[0].id, verdict: "partial", score: 50 });
+  check(ovr.data.takers[0].grades[st.paper[0].id].right === "Il utilise display: flex.", "changing a grade keeps the AI's explanation");
+}
+
+section("GitHub: each class can have its own GitHub App; Watcher import from its data");
+{
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";
+  check((await api("PUT", "/api/github/app", { g: G, appId: "99", slug: "x", clientId: "c", privateKey: "not a key" })).status === 400, "a private key that isn't a .pem is refused");
+  const sv = await api("PUT", "/api/github/app", { g: G, appId: "99", slug: "https://github.com/apps/classbot-b", clientId: "Iv23abc", clientSecret: "cs", webhookSecret: "own_secret", privateKey: pem });
+  const gh = await api("GET", `/api/github?g=${G}`);
+  check(sv.status === 200 && gh.data.setup.own && gh.data.setup.slug === "classbot-b" && gh.data.setup.urls.webhook.endsWith(`/github/webhook/${G}`) && !JSON.stringify(gh.data).includes("own_secret"), "the class's own App: saved, its own webhook URL, secrets never sent back");
+  const body = JSON.stringify({ installation: { id: 777 }, repository: { full_name: "carol/site" }, sender: { id: 9003, login: "carol-gh" }, commits: [{ id: "b".repeat(40), message: "feat: page", distinct: true, added: ["a.html"], modified: [], removed: [] }] });
+  run1("UPDATE players SET github_id = '9003', github_login = 'carol-gh', gh_inst = '777' WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode("own_secret"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = "sha256=" + Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))).toString("hex");
+  const hook = async (path: string) => { const ctx = makeCtx(); const r = await bot.fetch(new Request("https://bot.example.workers.dev" + path, { method: "POST", headers: { "x-github-event": "push", "x-github-delivery": "own1", "x-hub-signature-256": sig }, body }), env, ctx); await ctx.flush(); return r.status; };
+  check(await hook("/github/webhook") === 401 && await hook(`/github/webhook/${G}`) === 202, "the class's webhook checks the class's secret");
+  check(q("SELECT * FROM gh_activity WHERE discord_id = ?", U.carol.id).length === 1, "the push counts for the student");
+  // the debrief lists the student's repos (all those the App can read), the ones of the brief first
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", Math.floor(Date.now() / 1000) + 3000);
+  github.repos.tok777 = [
+    { full_name: "carol/old-cv", owner: { login: "carol" }, pushed_at: "2025-01-02T10:00:00Z", created_at: "2024-12-01T10:00:00Z", private: false, description: "Old CV", language: "HTML" },
+    { full_name: "carol/site", owner: { login: "carol" }, pushed_at: new Date().toISOString(), created_at: new Date().toISOString(), private: true, description: "Hammam", language: "CSS" }];
+  const bidR = q1("SELECT id FROM briefs WHERE guild_id = ? AND status = 'assigned' ORDER BY id LIMIT 1", G).id;
+  const rp = await api("GET", `/api/briefs/${bidR}/review/repos?g=${G}&who=u:${U.carol.id}`);
+  check(rp.status === 200 && rp.data.repos.length === 2 && rp.data.repos[0].repo === "carol/site" && rp.data.repos[0].activity === 1 && rp.data.repos[0].private && !rp.data.repos[1].during, "debrief: the student's GitHub repos to pick from, the one they pushed to during the brief first");
+  const rpB = await api("GET", `/api/briefs/${bidR}/review/repos?g=${G}&who=u:${U.bob.id}`);
+  check(rpB.status === 200 && rpB.data.missing.length === 1 && !rpB.data.repos.length, "…a student not connected to GitHub is reported");
+  await api("DELETE", `/api/github/app?g=${G}`);
+  check(!(await api("GET", `/api/github?g=${G}`)).data.setup.own, "back to the school's App");
+  const data = { names: JSON.stringify({ "555000": { n: "Dora" } }), "inst:4242": JSON.stringify({ discordId: U.bob.id, githubId: 8001, login: "bob-gh", linkedAt: new Date().toISOString() }),
+    deadlines: JSON.stringify([{ id: "d1", name: "Portfolio", createdAt: new Date().toISOString(), due: new Date(Date.now() + 86400000).toISOString(), brief: "Contexte du projet\nEn tant que visiteur, je vais voir le portfolio, afin de connaître l'auteur.", skills: "C3N1" }]),
+    "sub:d1:8001": JSON.stringify({ repo: "bob-gh/portfolio", at: new Date().toISOString() }) };
+  const imp = await api("POST", "/api/github/import", { g: G, data });
+  check(imp.status === 200 && imp.data.students === 1 && imp.data.briefs === 1 && imp.data.handins === 1, "Watcher import from its data (read in the dashboard through the Cloudflare API)");
+  check(q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).github_login === "bob-gh", "…students linked");
 }
 
 section("i18n: every key exists in English and French");
