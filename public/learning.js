@@ -115,6 +115,7 @@ async function viewBriefs(tab = "list") {
     ${r.ai ? "" : `<div class="notice warn" style="margin-bottom:16px"><b>No AI is set up.</b> You can still write and import briefs; generating and analyzing need the Groq key or Workers AI.</div>`}
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
+      <button role="tab" data-t="follow">Follow-up</button>
       <button role="tab" data-t="plan">Planning</button>
       <button role="tab" data-t="prog">Programme &amp; competencies</button>
     </div>
@@ -127,6 +128,7 @@ async function viewBriefs(tab = "list") {
       { label: "Competencies", html: (b) => (b.competencies || "").split(",").filter(Boolean).map((c) => compChip(c)).join(" ") || `<span class="muted">—</span>` },
       { label: "Due", sort: "due_at", html: (b) => dueIn(b.due_at) },
     ], items, { onRow: (b) => (location.hash = `#/brief/${b.id}`), empty: "No brief yet: generate one from an idea, or import one from Simplonline." }),
+    follow: () => `<div id="w-follow"><p class="muted">Loading…</p></div>`,
     plan: () => planningHtml(P, pg),
     prog: () => `<section class="panel"><div class="panel-head"><h2>${esc(P.name)}</h2><a class="btn" href="#/settings/programme">${icon("gear")} Change it in Settings</a></div>
       <p class="muted small">To change the planning or the competencies (another year, another stack), download the Excel template in Settings → Programme, fill it and upload it.</p>
@@ -136,6 +138,7 @@ async function viewBriefs(tab = "list") {
     $$("[data-t]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.t === k)));
     $("#br-tab").innerHTML = tabs[k]();
     if (k === "plan") $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
+    if (k === "follow") wFollow($("#w-follow")).catch((e) => toast(e.message, true));
   };
   $$("[data-t]").forEach((b) => b.onclick = () => show(b.dataset.t));
   show(tab);
@@ -581,7 +584,7 @@ function assignBriefDialog() {
     <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (the GitHub report channel, else the announcements channel)</label>
     ${BR.B.grid ? "" : `<p class="muted small">The evaluation grid is written now from the brief (you can edit it after).</p>`}`,
     [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
-      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($("#w-sp") ? { sprint: $("#w-sp").value } : {}), announce: $("#ab-a").checked } });
+      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();
     } }]);
   wSprintField(dlg, b.sprint ?? null, "#ab-d", b.week);
