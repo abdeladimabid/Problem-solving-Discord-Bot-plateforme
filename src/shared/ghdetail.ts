@@ -63,9 +63,10 @@ export async function syncStudentGithub(env: Env, g: GuildRow, did: string, days
     } catch { continue; }
     if (!Array.isArray(commits) || !commits.length) continue;
     let sizes: Record<string, any> = {};
-    try { sizes = await commitSizes(env, app, pl.gh_inst, r.full_name, commits.map((c) => c.sha).filter((s: string) => /^[0-9a-f]{40}$/.test(s)).slice(0, 60)); } catch { /* sizes unknown */ }
+    try { sizes = await commitSizes(env, app, pl.gh_inst, r.full_name, commits.filter((c) => !c.author?.login || String(c.author.login).toLowerCase() === pl.github_login!.toLowerCase()).map((c) => c.sha).filter((s: string) => /^[0-9a-f]{40}$/.test(s)).slice(0, 60)); } catch { /* sizes unknown */ }
     for (const c of commits) {
       if (!/^[0-9a-f]{40}$/.test(String(c.sha))) continue;
+      if (c.author?.login && String(c.author.login).toLowerCase() !== pl.github_login.toLowerCase()) continue; // a squad mate's commit
       const info = sizes[c.sha] ?? ((c.parents?.length ?? 1) > 1 ? { merge: true } : null);
       const a = classifyCommit({ message: c.commit?.message ?? "" }, info, { TINY_LINES: cfg.tiny, HUGE_LINES: cfg.huge });
       const res = await run(env, `INSERT OR IGNORE INTO gh_log (guild_id, id, discord_id, kind, repo, branch, t, title, size, bad, flags, adds, dels, url)

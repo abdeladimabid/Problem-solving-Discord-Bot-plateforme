@@ -72,11 +72,7 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
-<<<<<<< HEAD
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }> };
-=======
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string> };
->>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {

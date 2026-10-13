@@ -422,17 +422,10 @@ const weekday = (day: string) => new Date(day + "T00:00:00Z").getUTCDay();
 export async function activityOf(env: Env, g: GuildRow, days = 14) {
   const today = dayOf(now());
   const list = Array.from({ length: days }, (_, i) => shiftDay(today, i - days + 1));
-<<<<<<< HEAD
-  const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null }>(env,
-    "SELECT discord_id, name, github_login, gh_linked_at FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
-  const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; commits: number; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
-    "SELECT discord_id, day, t, repo, commits, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
-=======
   const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null; gh_sel: string | null }>(env,
     "SELECT discord_id, name, github_login, gh_linked_at, gh_sel FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
-  const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
-    "SELECT discord_id, day, t, repo, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
->>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
+  const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; commits: number; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
+    "SELECT discord_id, day, t, repo, commits, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
   const cfg = githubCfg(g), skip = new Set(cfg.skip);
   const ix = new Map(list.map((d, i) => [d, i]));
   const by = new Map<string, typeof rows>();
