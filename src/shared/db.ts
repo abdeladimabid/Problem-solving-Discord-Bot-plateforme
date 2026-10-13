@@ -36,7 +36,7 @@ export async function getPlayer(env: Env, guildId: string, discordId: string, na
   await run(
     env,
     `INSERT INTO players (guild_id, discord_id, name, coins, created_at, last_active) VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT (guild_id, discord_id) DO UPDATE SET name = COALESCE(excluded.name, players.name), last_active = excluded.last_active`,
+     ON CONFLICT (guild_id, discord_id) DO UPDATE SET name = CASE WHEN players.name_lock = 1 THEN players.name ELSE COALESCE(excluded.name, players.name) END, last_active = excluded.last_active`,
     guildId, discordId, name ?? null, RULES.startCoins, now(), now(),
   );
   return (await one<PlayerRow>(env, "SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", guildId, discordId))!;
