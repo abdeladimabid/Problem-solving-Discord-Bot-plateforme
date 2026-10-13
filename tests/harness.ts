@@ -234,6 +234,7 @@ export const ai = {
   judgeVerdict: "accepted",
   prompts: [] as string[],
   users: [] as string[],
+  chTech: false,   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
 };
 
 // a real (small) problem: maximum subarray sum. The reference is O(n), the brute O(n^2).
@@ -351,6 +352,7 @@ function fakeAI() {
       if (sys.includes("commentaire de fin de sprint")) return { response: JSON.stringify({ commentaire: "Les objectifs technologiques de ce sprint se sont concentrés sur HTML et CSS.\n\nGlobalement, la majorité des apprenants ont atteint les objectifs fixés." }) };
       if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
       if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
+      if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", consigne: "Modifie la couleur du fond du formulaire en utilisant Flexbox, ajoute une règle @media pour la taille du texte.", observer: ["Flexbox appliqué", "règle @media ajoutée"] }) };
       if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
       if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {
