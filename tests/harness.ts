@@ -72,7 +72,7 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]> };
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -205,6 +205,21 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     leagueFake.calls++;
     return Response.json(leagueFake.status === 200 ? leagueFake.body : { error: "This class isn't in the league (or the link was renewed)." }, { status: leagueFake.status });
   }
+  if (url.hostname === "api.github.com") {
+    // an installation: which repos the student lets the App see (github.sel[id], else all)
+    const im = url.pathname.match(/^\/app\/installations\/(\d+)$/);
+    if (im) { github.calls++; return Response.json({ id: Number(im[1]), repository_selection: github.sel[im[1]] || "all" }); }
+    // a repo's commits (newest first) and its files at a commit or HEAD
+    if (/^\/app-manifests\/[\w-]+\/conversions$/.test(url.pathname) && (init.method || "GET").toUpperCase() === "POST") {
+      github.calls++;
+      return url.pathname.includes("/bad-") ? Response.json({ message: "Not Found" }, { status: 404 })
+        : Response.json({ id: 424242, slug: "classbot-cs-class", client_id: "Iv23made", client_secret: "made_secret", webhook_secret: "made_whsec", pem: "-----BEGIN RSA PRIVATE KEY-----\nmade\n-----END RSA PRIVATE KEY-----" }, { status: 201 });
+    }
+    let gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits$/);
+    if (gm && github.commits[gm[1]]) return Response.json(github.commits[gm[1]]);
+    gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([^/]+)$/);
+    if (gm && github.trees[gm[1] + "@" + gm[2]]) return Response.json({ tree: github.trees[gm[1] + "@" + gm[2]].map((path) => ({ type: "blob", path })) });
+  }
   if (url.hostname === "api.github.com" && url.pathname === "/installation/repositories") {
     const tok = String(new Headers(init.headers || {}).get("authorization") || "").replace(/^(token|Bearer)\s+/i, "");
     const all = github.repos[tok] ?? [];
@@ -222,6 +237,8 @@ export const ai = {
   judgeVerdict: "accepted",
   prompts: [] as string[],
   users: [] as string[],
+  chTech: false,
+  levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
 };
 
 // a real (small) problem: maximum subarray sum. The reference is O(n), the brute O(n^2).
@@ -335,6 +352,22 @@ function fakeAI() {
           situation: { title: "Intégrateur", need: "Un site en ligne" }, competencies: ["C3N1", "T1N1"], resources: [], internal: { learning: ["HTML"], questions: ["Combien de pages ?"] } }) };
       }
       if (sys.includes("Pour chaque exigence numérotée")) return { response: JSON.stringify({ contexte: "Un site vitrine.", technologies: ["HTML", "CSS"], verif: { "1": "pages", "2": "form" } }) };
+      if (sys.includes("classer chaque apprenant à la fin d’un sprint")) return { response: JSON.stringify({ niveaux: [{ id: "A1", niveau: "excellent", raison: "Tout est validé." }, { id: "A2", niveau: "super", raison: "x" }] }) };
+      if (sys.includes("commentaire de fin de sprint")) return { response: JSON.stringify({ commentaire: "Les objectifs technologiques de ce sprint se sont concentrés sur HTML et CSS.\n\nGlobalement, la majorité des apprenants ont atteint les objectifs fixés." }) };
+      if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
+      if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
+      if (sys.includes("Donne le niveau de l’apprenant")) return { response: JSON.stringify({ niveau: ai.levelAnswer || "Bon", pourquoi: "Le brief est presque complet, une notion à revoir." }) };
+      if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
+        { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },
+        { q: "Comment écrire une variable avec Sass ?", a: "Avec un $ devant le nom.", notion: "variables Sass" },
+        { q: "Quelle différence entre une classe et un id ?", a: "Une classe se réutilise, un id est unique.", notion: "classe et id" },
+        { q: "Sans réponse ?", a: "", notion: "rien" },
+        { q: "À quoi sert l’attribut alt ?", a: "Décrire l’image pour l’accessibilité.", notion: "attribut alt" },
+        { q: "Comment relier les pages entre elles ?", a: "Avec des liens dans le menu.", notion: "liens du menu" },
+        { q: "Pourquoi un seul h1 par page ?", a: "Pour le titre principal et le SEO.", notion: "titre h1" },
+        { q: "Que fait git push ?", a: "Envoie les commits sur GitHub.", notion: "git push" },
+      ] }) };
+      if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", consigne: "Modifie la couleur du fond du formulaire en utilisant Flexbox, ajoute une règle @media pour la taille du texte.", observer: ["Flexbox appliqué", "règle @media ajoutée"] }) };
       if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
       if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {

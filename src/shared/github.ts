@@ -68,6 +68,43 @@ export async function saveGhApp(env: Env, guildId: string, b: Record<string, unk
   return ghAppOf(env, guildId);
 }
 export const githubReady = (a: GhApp) => !!(a.clientId && a.clientSecret && a.slug);
+
+// ------------------------------------------------ "Create the GitHub App for me" (GitHub's app manifest)
+// The teacher clicks once on GitHub ("Create GitHub App"): the URLs, permissions and events are already filled in,
+// and GitHub sends back the App ID, slug, Client ID, secrets and private key, saved as the class's own App.
+export class ManifestError extends Error {}
+const MANIFEST_TTL = 3600;
+/** What the dashboard posts to GitHub: the form's address (with a one-time state) and the manifest. */
+export async function githubManifest(env: Env, g: GuildRow, dashOrigin: string) {
+  if (!env.PUBLIC_URL) throw new ManifestError("The bot's address (PUBLIC_URL) isn't set: run npm run setup first.");
+  const state = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await run(env, "DELETE FROM gh_manifest_states WHERE exp < ?", now());
+  await run(env, "INSERT INTO gh_manifest_states (state, guild_id, exp) VALUES (?, ?, ?)", state, g.id, now() + MANIFEST_TTL);
+  const urls = githubUrls(env, { own: true, guildId: g.id } as GhApp);
+  const name = `ClassBot ${String(g.name || g.id)}`.replace(/[^\w .-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 34);
+  const manifest = {
+    name, url: (env.PUBLIC_URL || "").replace(/\/$/, ""), description: "Follows the students' GitHub work for ClassBot (briefs, debriefs, reports).",
+    hook_attributes: { url: urls.webhook, active: true },
+    redirect_url: `${dashOrigin.replace(/\/$/, "")}/api/github/manifest/done`,
+    callback_urls: [urls.callback], setup_url: urls.setup, setup_on_update: true, request_oauth_on_install: false,
+    public: true, // the students install it on their own accounts
+    default_permissions: { contents: "read", metadata: "read", pull_requests: "read", issues: "read" },
+    default_events: ["push", "pull_request", "pull_request_review", "issues", "create"],
+  };
+  return { action: `${GH_WEB}/settings/apps/new?state=${state}`, manifest };
+}
+/** GitHub came back with a code: turn it into the App's credentials and save them for the class that asked. */
+export async function finishManifest(env: Env, state: string, code: string) {
+  const st = /^[a-f0-9]{32}$/.test(state) ? await one<{ guild_id: string; exp: number }>(env, "SELECT guild_id, exp FROM gh_manifest_states WHERE state = ?", state) : null;
+  if (!st || st.exp < now()) throw new ManifestError("This link has expired: click “Create the GitHub App for me” again.");
+  await run(env, "DELETE FROM gh_manifest_states WHERE state = ?", state);
+  if (!/^[\w-]{1,100}$/.test(code)) throw new ManifestError("GitHub didn't send the code back.");
+  const res = await fetch(`https://api.github.com/app-manifests/${code}/conversions`, { method: "POST", headers: { Accept: "application/vnd.github+json", "User-Agent": "classbot", "X-GitHub-Api-Version": "2022-11-28" } });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok || !j?.id || !j?.pem) throw new ManifestError(`GitHub didn't create the App (${res.status} ${String(j?.message || "").slice(0, 120)}).`);
+  await saveGhApp(env, st.guild_id, { appId: String(j.id), slug: String(j.slug || ""), clientId: String(j.client_id || ""), clientSecret: String(j.client_secret || ""), webhookSecret: String(j.webhook_secret || ""), privateKey: String(j.pem) });
+  return { guildId: st.guild_id, slug: String(j.slug || "") };
+}
 export const githubCanRead = (a: GhApp) => !!(a.privateKey && (a.appId || a.clientId));
 /** The three URLs to paste in the App: a class's own App has its own webhook (its own secret). */
 export function githubUrls(env: Env, a: GhApp) {
@@ -148,13 +185,16 @@ export async function githubPages(request: Request, env: Env, path: string): Pro
   const mine = installations.find((i: any) => i.account && i.account.id === user.id);
   // authorized but the App isn't installed on their account yet: install it (GitHub comes back to /github/setup)
   if (!mine) return new Response(null, { status: 302, headers: { Location: `${GH_WEB}/apps/${app.slug}/installations/new`, "Set-Cookie": cookie(st.state) } });
-  await linkGithub(env, st.guildId, st.discordId, { id: String(user.id), login: String(user.login), inst: String(mine.id) });
-  return html(200, "✅ GitHub connected", `Your account <b>${esc(user.login)}</b> is connected. Your work now counts in your learning record. You can close this tab.`,
+  await linkGithub(env, st.guildId, st.discordId, { id: String(user.id), login: String(user.login), inst: String(mine.id), sel: String(mine.repository_selection || "") });
+  // "Only select repositories": the next projects are not followed until they are added
+  const some = mine.repository_selection === "selected"
+    ? `<p>⚠️ The app can see only some of your repositories: your next projects will not be counted. <a href="${GH_WEB}/settings/installations/${mine.id}">Choose <b>All repositories</b></a>.</p>` : "";
+  return html(200, "✅ GitHub connected", `Your account <b>${esc(user.login)}</b> is connected. Your work now counts in your learning record. You can close this tab.${some}`,
     { "Set-Cookie": "cb_gh=; Path=/github; HttpOnly; Secure; SameSite=Lax; Max-Age=0" });
 }
 
 /** Link a GitHub account to a student (in every class they are in) and say so in Discord. */
-export async function linkGithub(env: Env, guildId: string, discordId: string, gh: { id: string; login: string; inst: string }) {
+export async function linkGithub(env: Env, guildId: string, discordId: string, gh: { id: string; login: string; inst: string; sel?: string }) {
   // one GitHub account belongs to one student
   await run(env, "UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE github_id = ? AND discord_id != ?", gh.id, discordId);
   // the installation belongs to one GitHub App: link it in every class of this student that uses the same App
@@ -166,8 +206,8 @@ export async function linkGithub(env: Env, guildId: string, discordId: string, g
   }
   if (!same.includes(guildId)) same.push(guildId);
   const before = await one<{ github_id: string | null }>(env, "SELECT github_id FROM players WHERE guild_id = ? AND discord_id = ?", guildId, discordId);
-  await run(env, `UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_linked_at = COALESCE(gh_linked_at, ?) WHERE discord_id = ? AND guild_id IN (${same.map(() => "?").join(",")})`,
-    gh.id, gh.login, gh.inst, now(), discordId, ...same);
+  await run(env, `UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ?, gh_linked_at = COALESCE(gh_linked_at, ?) WHERE discord_id = ? AND guild_id IN (${same.map(() => "?").join(",")})`,
+    gh.id, gh.login, gh.inst, gh.sel || null, now(), discordId, ...same);
   // connecting the same account again (a new /github) is not news: one message per new link
   const g = before?.github_id === gh.id ? null : await getGuild(env, guildId);
   if (g) {
@@ -207,6 +247,9 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
     }
     return;
   }
+  // the student changed which repos the App can see (All / Only select repositories): keep it for the dashboard
+  const sel = (event === "installation" || event === "installation_repositories") && p?.installation?.repository_selection;
+  if (sel) await run(env, "UPDATE players SET gh_sel = ? WHERE gh_inst = ?", String(sel), inst);
   if (event === "installation" || event === "installation_repositories") return;
   const repoName = String(p?.repository?.full_name || "").toLowerCase();
   // commit sizes once (needs the App's private key), for every class
@@ -225,6 +268,16 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
     const sender = p.sender && String(p.sender.id) !== String(owner.github_id)
       ? await one<PlayerRow>(env, "SELECT * FROM players WHERE guild_id = ? AND github_id = ?", g.id, String(p.sender.id)) : owner;
     const analysis = pushCommits.length ? Object.fromEntries(pushCommits.map((c: any) => [c.id, classifyCommit(c, sizes[c.id], { TINY_LINES: cfg.tiny, HUGE_LINES: cfg.huge })])) : null;
+    // only the pusher's own recent commits count for them: a copied project (starter, a classmate's repo, an old project)
+    // brings old commits or commits written by other people
+    if (analysis) {
+      const login = String(p.sender?.login || "").toLowerCase();
+      for (const c of pushCommits) {
+        const a: any = analysis[c.id], who = String(c.author?.username || "").toLowerCase(), t = Date.parse(c.timestamp || "");
+        if (who && login && who !== login) a.notMine = true;
+        if (t && Date.now() - t > 14 * 86400000) a.old = true;
+      }
+    }
     const embed = formatWebhook(event, p, sender?.discord_id ?? null, analysis, sender?.name ?? null);
     if (!embed) continue;
     if (sender) {
@@ -268,8 +321,8 @@ const weekday = (day: string) => new Date(day + "T00:00:00Z").getUTCDay();
 export async function activityOf(env: Env, g: GuildRow, days = 14) {
   const today = dayOf(now());
   const list = Array.from({ length: days }, (_, i) => shiftDay(today, i - days + 1));
-  const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null }>(env,
-    "SELECT discord_id, name, github_login, gh_linked_at FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
+  const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null; gh_sel: string | null }>(env,
+    "SELECT discord_id, name, github_login, gh_linked_at, gh_sel FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
   const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
     "SELECT discord_id, day, t, repo, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
   const cfg = githubCfg(g), skip = new Set(cfg.skip);
@@ -299,7 +352,7 @@ export async function activityOf(env: Env, g: GuildRow, days = 14) {
         if (d < since || active.has(d)) break;
         if (!skip.has(weekday(d))) idle++;
       }
-      return { discord_id: s.discord_id, name: s.name, login: s.github_login, days: grid, last, idle,
+      return { discord_id: s.discord_id, name: s.name, login: s.github_login, sel: s.gh_sel || "", days: grid, last, idle,
         repos: Object.entries(repos).map(([r, [n, tt]]) => [r, n, tt] as [string, number, number]).sort((a, b) => b[1] - a[1]).slice(0, 8) };
     }),
   };
