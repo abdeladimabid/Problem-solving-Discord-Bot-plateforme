@@ -4,6 +4,8 @@ import { addPoints, aiBudgetLeft, all, confirmHackerRank, getGuild, now, one, pl
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
+import { forClass } from "../shared/aictx.ts";
+import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
 import { aiHealth, aiProviderLabel, generateQuick, generateWrite } from "../shared/ai.ts";
 import { bankExamples, guildLangs, loadTests, pickGuildLang, regrade, saveGeneratedWrite } from "../shared/challenges.ts";
 import { stopContest, trackContest, trackingEmbed } from "../shared/contests.ts";
@@ -63,6 +65,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
   const method = request.method;
   const body: any = method === "GET" || method === "DELETE" ? {} : await request.json().catch(() => ({}));
   const gid = url.searchParams.get("g") ?? body.g;
+  if (gid) env = forClass(env, gid);   // the AI uses this class's keys (Settings → AI)
   const guild = async () => {
     if (!gid) throw new HttpError(400, "missing server (g)");
     const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", gid);
@@ -277,7 +280,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", g.id, m[1]);
       const text = await workOnNote(env, g, m[1], String(body.skill ?? ""), p?.name ?? "");
-      if (!text) throw new HttpError(503, "The AI couldn't write the note right now (daily AI budget used up, or nothing to say on this skill). Write it yourself below.");
+      if (!text) throw new HttpError(503, "The AI couldn't write the note right now (the AI is used up or unavailable: see Settings → AI; or nothing to say on this skill). Write it yourself below.");
       return ok({ text });
     }
     m = path.match(/^\/students\/(\d+)\/message$/);
@@ -374,12 +377,21 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
 
     // -------------------------------------------------------------- teams
-    // -------------------------------------------------------------- 🤖 AI (Groq key), for all the classes of this ClassBot
-    if (path === "/settings/ai") {
+    // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
+    if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
+      const g = await guild();
+      const view = async () => ({ ...(await classAiView(env, g.id)), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
       try {
-        if (method === "GET") return ok(await aiSettingsView(env));
-        if (method === "PUT") return ok(await saveAiSettings(env, body));
-      } catch (e) { if (e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
+        if (path === "/settings/ai" && method === "GET") return ok(await view());
+        if (path === "/settings/ai" && method === "PUT") { await updateClassAi(env, g.id, body); return ok(await view()); }
+        if (path === "/settings/ai/providers" && method === "POST") { const r = await addProvider(env, g.id, body); return ok({ ...(await view()), warn: r.warn }); }
+        let am = path.match(/^\/settings\/ai\/providers\/([\w-]{1,20})$/);
+        if (am && method === "DELETE") { await removeProvider(env, g.id, am[1]); return ok(await view()); }
+        am = path.match(/^\/settings\/ai\/providers\/([\w-]{1,20})\/test$/);
+        if (am && method === "POST") return ok({ test: await testSaved(env, g.id, am[1]), ...(await view()) });
+        if (path === "/settings/ai/copy" && method === "POST") return ok(await copyClassAi(env, g.id, Array.isArray(body.to) ? body.to : []));
+        if (path === "/settings/ai/legacy" && method === "DELETE") { await saveAiSettings(env, { clear: true }); return ok(await view()); }
+      } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
     }
     // -------------------------------------------------------------- 🧩 squads by sprint
     if (path === "/squads" || path.startsWith("/squads/")) {
@@ -591,7 +603,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       await run(env, "UPDATE faq SET draft = NULL WHERE id = ? AND guild_id = ? AND status = 'pending'", Number(hm[1]), g.id);
       const d = await draftAnswer(env, g, Number(hm[1]));
-      if (!d) throw new HttpError(503, "The AI couldn't write a draft right now (daily AI budget used up or AI unavailable). Write the answer yourself.");
+      if (!d) throw new HttpError(503, "The AI couldn't write a draft right now: the free AI is used up for today, or your AI keys failed (see Settings → AI). Write the answer yourself.");
       return ok({ items: await faqList(env, g) });
     }
 
@@ -755,13 +767,31 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
   const program = await programOf(env, g);
   const actAll = (s.player as any)?.github_id ? await activityOf(env, g, 14) : null;
   const act = actAll?.students.find((x) => x.discord_id === did) ?? null;
-  const assessments = await all(env,
-    `SELECT a.id, a.title, t.status, t.score, t.submitted_at, t.summary FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+  // each assessment: score, the competencies it validated or not, question by question (verdict and points)
+  const arows = await all<{ id: number; title: string; status: string; score: number | null; submitted_at: number | null; summary: string | null; taker: number; grades: string | null; questions: string; brief_id: number | null; brief: string | null; settings: string | null }>(env,
+    `SELECT a.id, a.title, t.status, t.score, t.submitted_at, t.summary, t.id AS taker, t.grades, a.questions, a.brief_id, a.settings, b.title AS brief
+       FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id LEFT JOIN briefs b ON b.id = a.brief_id
       WHERE t.guild_id = ? AND t.discord_id = ? ORDER BY t.id DESC LIMIT 20`, g.id, did);
+  const acomps = await all<{ ref: number; code: string; ok: number; level: number | null; note: string | null }>(env,
+    "SELECT ref, code, ok, level, note FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'assessment'", g.id, did);
+  const assessments = arows.map((r) => {
+    let qs: any[] = [], gr: Record<string, any> = {}, st: any = {};
+    try { qs = JSON.parse(r.questions || "[]"); } catch { qs = []; }
+    try { gr = JSON.parse(r.grades || "{}"); } catch { gr = {}; }
+    try { st = JSON.parse(r.settings || "{}"); } catch { st = {}; }
+    return { id: r.id, title: r.title, status: r.status, score: r.score, submitted_at: r.submitted_at, summary: r.summary, taker: r.taker, passAt: Number(st.passAt) || 60,
+      brief: r.brief_id ? { id: r.brief_id, title: r.brief } : null,
+      questions: qs.map((q, i) => ({ n: i + 1, type: q.type, prompt: String(q.prompt || "").slice(0, 140), points: q.points || 1, verdict: gr[q.id]?.verdict ?? null, score: gr[q.id]?.score ?? null })),
+      comps: acomps.filter((c) => c.ref === r.id).map((c) => ({ code: c.code, ok: !!c.ok, level: c.level, note: c.note })) };
+  });
+  // the sprint reviews (level and decision per sprint)
+  const sprints = await all<{ sprint: number; level: string | null; plevel: string | null; decision: string | null; note: string | null; updated_at: number | null }>(env,
+    "SELECT sprint, level, plevel, decision, note, updated_at FROM sprint_reviews WHERE guild_id = ? AND discord_id = ? ORDER BY sprint", g.id, did).catch(() => []);
   const learning = {
     github: { login: (s.player as any)?.github_login ?? null, linkedAt: (s.player as any)?.gh_linked_at ?? null, activity: act, days: actAll?.days ?? [] },
     competencies: await competencyMap(env, g, did, program), levels: program.levels, program: program.name,
     briefs: await studentBriefs(env, g, did), assessments,
+    sprints: sprints.map((x) => ({ ...x, title: program.sprints?.find((y: any) => y.n === x.sprint)?.title ?? `Sprint ${x.sprint}` })),
   };
   return {
     ...s, level: { ...s.level, title: t("en", titleKey(s.level.level)) },
@@ -1172,7 +1202,7 @@ async function diagnostics(env: Env, g: GuildRow) {
   const queue = await all(env, "SELECT status, COUNT(*) AS n FROM ai_queue WHERE guild_id = ? AND created_at > ? GROUP BY status", g.id, now() - 86400);
   const bank = await all(env, `SELECT kind, difficulty, COUNT(*) AS n FROM challenges WHERE status = 'active' AND (guild_id IS NULL OR guild_id = ?)
     AND (kind = 'code' OR lang = ?) GROUP BY kind, difficulty`, g.id, g.lang);
-  return { runner, ai: { ...ai, provider: aiProviderLabel(env) }, hackerrank, arena, budget, queue, bank, migrations };
+  return { runner, ai: { ...ai, provider: await aiProviderLabel(env) }, hackerrank, arena, budget, queue, bank, migrations };
 }
 
 // ================================================================ daily

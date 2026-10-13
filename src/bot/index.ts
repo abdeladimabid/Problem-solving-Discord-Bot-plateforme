@@ -18,6 +18,7 @@ import { certPage, profilePage } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
 import { leagueFeed } from "../shared/league.ts";
 import { handleBattle } from "./battle.ts";
+import { sharePage } from "../shared/assessshare.ts";
 import { applyAppSettings } from "../shared/appsettings.ts";
 import { githubPages, githubWebhook } from "../shared/github.ts";
 
@@ -63,6 +64,8 @@ export default {
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
     const bt = url.pathname.match(/^\/battle\/(tv|judge)\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|claim|act))?\/?$/);
     if (bt) return handleBattle(request, env, bt[1] as "tv" | "judge", Number(bt[2]), bt[3], bt[4]);
+    const shr = url.pathname.match(/^\/share\/assessment\/(\d{1,9})\.([A-Za-z0-9_-]{32})\/?$/);
+    if (shr && request.method === "GET") return sharePage(request, env, Number(shr[1]), shr[2]);
     const lgf = url.pathname.match(/^\/league\/feed\/([\w-]{1,30})\.([a-f0-9]{24})$/);
     if (lgf && request.method === "GET") return leagueFeed(env, lgf[1], lgf[2]);
     const ghw = url.pathname.match(/^\/github\/webhook(?:\/([\w-]{1,30}))?$/);

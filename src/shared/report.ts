@@ -1,5 +1,6 @@
 // Weekly report for each active student: numbers, progress, the habit to fix, next week's goal.
 // Sent by DM on Mondays (one AI note per student if the AI budget allows, else a plain summary).
+import { forClass } from "./aictx.ts";
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
 import { t } from "./i18n.ts";
@@ -79,7 +80,7 @@ export async function sendWeeklyReports(env: Env, perRun = 3) {
       + (f.improved ? ` Biggest progress: ${skillName(f.improved.key, "en")} (+${f.improved.delta}%).` : "")
       + (f.mistake ? ` Most frequent mistake: ${t("en", `report.habit.${f.mistake}`)}.` : "")
       + (f.focus ? ` Weakest skill to train next: ${skillName(f.focus, "en")}.` : "");
-    const note = await weeklyNote(env, { lang: g.lang, name: r.name ?? "", facts });
+    const note = await weeklyNote(forClass(env, g.id), { lang: g.lang, name: r.name ?? "", facts });
     const body = JSON.stringify({ facts: f, note });
     await run(env, "INSERT OR IGNORE INTO weekly_reports (guild_id, discord_id, week, body, created_at) VALUES (?, ?, ?, ?, ?)", g.id, r.discord_id, week, body, t0);
     await dm(env, r.discord_id, { embeds: [reportEmbed(g, r.name ?? "", f, note)] }).catch(() => {});

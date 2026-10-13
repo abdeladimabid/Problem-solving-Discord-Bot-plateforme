@@ -9,7 +9,7 @@
 /* eslint-disable */
 import type { Env, GuildRow, PlayerRow } from "../types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "../db.ts";
-import { extractJson, groqChat, workersChat } from "../ai.ts";
+import { extractJson, groqChat, hasKeyedAi, workersChat } from "../ai.ts";
 import type { BriefData } from "../briefs.ts";
 import { cleanBrief, simplonText } from "../briefs.ts";
 import type { Program } from "../program.ts";
@@ -31,11 +31,11 @@ export class DebriefError extends Error {}
 // ------------------------------------------------------------------ the AI
 /** Groq first with a compact prompt (its free tier is small), then Workers AI with the full one. */
 export async function askReview(env: Env, system: string, user: string | ((compact: boolean) => string), cost = 3): Promise<{ ok: true; data: any; model: string } | { ok: false; msg: string }> {
-  if (!(await aiBudgetOk(env, cost))) return { ok: false, msg: "The AI limit for today is reached. Try again tomorrow." };
+  if (!(await aiBudgetOk(env, cost))) return { ok: false, msg: "ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow." };
   await aiBudgetUse(env, cost);
   const text = (compact: boolean) => (typeof user === "function" ? user(compact) : user);
   let why = "";
-  if (env.GROQ_API_KEY) {
+  if (await hasKeyedAi(env)) {
     try {
       const r = await groqChat(env, [{ role: "system", content: system }, { role: "user", content: text(true) }], { maxTokens: 2500, temperature: 0.2, json: true, timeoutMs: 100000 });
       const data = extractJson(r.text);
@@ -51,7 +51,7 @@ export async function askReview(env: Env, system: string, user: string | ((compa
   } catch (e) {
     why = (why ? why + "; " : "") + String((e as Error)?.message ?? e);
   }
-  return { ok: false, msg: /4006|neurons|daily/i.test(why) ? "The free AI limit for today is reached. Try again tomorrow." : `The AI didn't answer properly (${why.slice(0, 120)}). Try again in a minute.` };
+  return { ok: false, msg: /4006|neurons|daily/i.test(why) ? "Cloudflare's free AI limit for today is reached: add your own AI key in Settings → AI, or try again tomorrow." : `The AI didn't answer properly (${why.slice(0, 120)}). Try again in a minute.` };
 }
 
 // ------------------------------------------------------------------ the grid
@@ -134,7 +134,41 @@ export async function getReview(env: Env, briefId: number, who: string): Promise
   if (!r) return null;
   let rec: any = {};
   try { rec = JSON.parse(r.record || "{}"); } catch { rec = {}; }
+  rec.assess = await briefAssessments(env, briefId, who, rec);
   return { ...r, rec };
+}
+
+/**
+ * The assessments linked to this brief, for the student (or each squad member): score and competencies validated or
+ * not. They count in the debrief: a competency the assessment didn't validate starts "not validated" (the teacher's
+ * switch still decides), and the comment says how the assessment went.
+ */
+export async function briefAssessments(env: Env, briefId: number, who: string, rec: any = null) {
+  const list = await all<{ id: number; title: string }>(env, "SELECT id, title FROM assessments WHERE brief_id = ? ORDER BY id", briefId).catch(() => []);
+  if (!list.length) return [];
+  let ids: string[] = who.startsWith("u:") ? [who.slice(2)] : (rec?.squad?.members ?? []).map((m: any) => String(m.gid));
+  if (!ids.length && who.startsWith("s:")) {
+    const b = await one<{ squads: string | null }>(env, "SELECT squads FROM briefs WHERE id = ?", briefId);
+    ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
+  }
+  if (!ids.length) return [];
+  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }> }[] = [];
+  for (const a of list) {
+    const takers = await all<{ discord_id: string; score: number | null; status: string }>(env,
+      `SELECT discord_id, score, status FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
+    const graded = takers.filter((t) => t.status === "graded");
+    if (!graded.length) { if (takers.length) out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
+    const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
+      `SELECT discord_id, code, ok, level, note FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
+    const comps: Record<string, { ok: boolean; level: number | null; note: string | null }> = {};
+    for (const r of rows) {
+      const c = comps[r.code];
+      // a squad: validated only if every member who took it validated it
+      comps[r.code] = c ? { ok: c.ok && !!r.ok, level: Math.min(c.level ?? 1, r.level ?? 1), note: c.note } : { ok: !!r.ok, level: r.level, note: r.note };
+    }
+    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps });
+  }
+  return out;
 }
 async function putReview(env: Env, g: GuildRow, briefId: number, who: string, rec: any, status: string | null = null) {
   await run(env, `INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -384,6 +418,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     for (const m of rec.contrib || []) m.perStep = stepRhythm(b.steps, inRepo.filter((c) => String(c.author || "").toLowerCase() === String(m.login || "").toLowerCase()).map((c) => c.date));
     rec.suivi = await suiviFor(env, b.id, who, b.steps, rec.rhythm);
   }
+  rec.assess = await briefAssessments(env, b.id, who, rec);
   result.feedback = buildComment(first, rec, undefined);
   if (squad) result.feedback = await groupComment(env, result.feedback, squad.name);
   await putReview(env, g, b.id, who, rec, "draft");

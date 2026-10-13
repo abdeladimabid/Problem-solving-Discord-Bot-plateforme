@@ -1,6 +1,7 @@
 // Background AI generation. Practice requests that need a brand-new challenge
 // (a topic, or the bank is exhausted) are queued; the cron job generates the
 // challenge (it can take a minute) and edits the student's message when ready.
+import { forClass } from "./aictx.ts";
 import type { Difficulty, Env, GuildRow } from "./types.ts";
 import { getGuild, now, one, run } from "./db.ts";
 import { t } from "./i18n.ts";
@@ -25,6 +26,7 @@ export async function enqueue(env: Env, g: GuildRow, o: { discordId: string | nu
 
 /** Generate a challenge now (used by the queue and by the daily challenge). */
 export async function generateFor(env: Env, g: GuildRow, kind: string, difficulty: Difficulty, topic: string | null, lang?: string | null) {
+  env = forClass(env, g.id);   // the AI uses this class's keys
   if (kind === "write") {
     const w = await generateWrite(env, { difficulty, topic, lang: g.lang });
     return w ? saveGeneratedWrite(env, g, w, difficulty) : null;
@@ -47,7 +49,7 @@ export async function processQueue(env: Env, limit = 1): Promise<number> {
     done++;
     const g = await getGuild(env, job.guild_id);
     try {
-      const c = await generateFor(env, g, job.kind, job.difficulty, job.topic, job.code_lang);
+      const c = await generateFor(forClass(env, g.id), g, job.kind, job.difficulty, job.topic, job.code_lang);
       if (!c) throw new Error("generation failed");
       await run(env, "UPDATE ai_queue SET status = 'done', challenge_id = ?, updated_at = ? WHERE id = ?", c.id, now(), job.id);
       if (job.token && job.discord_id) {

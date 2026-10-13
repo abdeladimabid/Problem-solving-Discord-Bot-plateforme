@@ -2,6 +2,7 @@
 //   • the announcement in French: dates (Discord timestamps: each student sees their own time), steps, squads with
 //     their scrum master, how to hand in (each student, or only the scrum master) and the expected repo name
 //   • the status: who pushed on time, late, or nothing (with mentions)
+import { briefChannel } from "./github.ts";
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
 import { send } from "./discord.ts";
@@ -24,7 +25,7 @@ async function briefRow(env: Env, g: GuildRow, id: number) {
 /** The announcement of a brief, in French. */
 export async function announceFr(env: Env, g: GuildRow, id: number) {
   const { b, squads } = await briefRow(env, g, id);
-  const ch = channelOf(g);
+  const ch = await briefChannel(env, g);   // a new brief goes to #general (or the channel chosen)
   if (!ch) throw new WatcherMsgError("No Discord channel for the reports: Settings → GitHub & Watcher.");
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name || p.discord_id]));
   const lines = [`**Début :** ${ts(b.start_at ?? b.created_at, "D")}`, `**Rendu :** ${ts(b.due_at, "F")} (${ts(b.due_at, "R")})`];

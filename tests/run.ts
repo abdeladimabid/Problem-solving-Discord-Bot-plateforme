@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
@@ -2847,6 +2847,73 @@ section("assessments: several competencies per question, why each grade, invitat
   check(ovr.data.takers[0].grades[st.paper[0].id].right === "Il utilise display: flex.", "changing a grade keeps the AI's explanation");
 }
 
+section("assessments: shared with other teachers by a link, linked to a brief (debrief and comment), AI questions keep the competencies");
+{
+  // the AI forgot the competencies: the ones the teacher picked are used
+  const gen = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"], comps: ["C3N1"] });
+  check(gen.status === 200 && gen.data.questions.every((q: any) => q.comps?.length), "AI questions keep the competencies picked for the assessment");
+  // share: a link with the questions only; another class imports a draft copy
+  const qs = [{ type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "extérieur / intérieur", points: 2, comps: ["C3N1"], skills: ["css"] },
+    { type: "mcq", prompt: "Quelle propriété crée une grille ?", choices: ["display: grid", "float: left"], answer: [0], points: 1, comps: ["C3N1"] }];
+  const mk = await api("POST", "/api/assessments", { g: G, title: "CSS de base", questions: qs, settings: { minutes: 20 } });
+  const aid = mk.data.assessment.id;
+  const sh = await api("GET", `/api/assessments/${aid}/share?g=${G}`);
+  check(sh.status === 200 && /\/share\/assessment\/\d+\.[A-Za-z0-9_-]{32}$/.test(sh.data.url), "a share link");
+  const path = new URL(sh.data.url).pathname;
+  const pub = await bot.fetch(new Request("https://bot.example.workers.dev" + path + "?json=1"), env, makeCtx());
+  const pj: any = await pub.json();
+  check(pub.status === 200 && pj.kind === "classbot-assessment" && pj.questions.length === 2 && !JSON.stringify(pj).includes("discord_id"), "the link gives the questions (never the students' papers)");
+  const page = await bot.fetch(new Request("https://bot.example.workers.dev" + path, { headers: { accept: "text/html" } }), env, makeCtx());
+  check(page.status === 200 && (await page.text()).includes("Import from a link"), "…and a page for a teacher who opens it");
+  const url = (env.PUBLIC_URL || "https://bot.example.workers.dev").replace(/\/$/, "") + path;
+  run1("INSERT OR IGNORE INTO guilds (id, name, created_at) VALUES ('g-other', 'Other teacher', 0)");
+  const pv = await api("POST", "/api/assessments/import", { g: "g-other", url });
+  check(pv.status === 200 && pv.data.preview.n === 2 && pv.data.preview.comps.includes("C3") && !pv.data.id, "import: a preview first");
+  const im = await api("POST", "/api/assessments/import", { g: "g-other", url, import: true });
+  const copy = q1("SELECT * FROM assessments WHERE id = ?", im.data.id);
+  check(im.status === 200 && copy.guild_id === "g-other" && copy.status === "draft" && JSON.parse(copy.questions)[0].comps[0].code === "C3", "…then a draft copy in the other class, with the competencies");
+  check((await api("POST", "/api/assessments/import", { g: "g-other", url: "https://example.com/nope" })).status === 400, "a wrong link is refused");
+  const renewed = await api("DELETE", `/api/assessments/${aid}/share?g=${G}`);
+  check(renewed.data.url !== sh.data.url && (await api("POST", "/api/assessments/import", { g: "g-other", url })).status === 400, "a new link: the old one stops working");
+  // linked to a brief: a competency the assessment didn't validate starts "not validated" in the debrief, and the comment says it
+  const bid = (globalThis as any).__briefId as number;
+  await api("PUT", `/api/assessments/${aid}`, { g: G, title: "CSS de base", brief_id: bid, questions: mk.data.assessment.questions, settings: { minutes: 20 } });
+  check(q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === bid, "an assessment linked to a brief");
+  const inv = await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.carol.id], send: false });
+  const tk = inv.data.takers[0].id;
+  run1("UPDATE assessment_takers SET status = 'graded', grades = ?, score = 20 WHERE id = ?", JSON.stringify({}), tk);
+  for (const q of mk.data.assessment.questions) await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: tk, qid: q.id, verdict: "wrong", score: 0 });
+  const who = `u:${U.carol.id}`;
+  const rec = { at: Date.now(), first: "Carol", model: "test", brief: "Hammam", repos: ["carol/site"], count: 4, checks: [],
+    result: { resume: "", commits: [], forts: [], ameliorer: [], feedback: "", exigences: [], competences: [{ code: "C3", avis: "validable", raison: "ok" }, { code: "C4", avis: "validable", raison: "ok" }] }, challenge: null };
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, who);
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify(rec), clock.now());
+  const st = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
+  check(st.status === 200 && st.data.states.co.C3 === false && st.data.states.co.C4 === true, `the assessment's "not validated" counts in the debrief (${JSON.stringify(st.data.states?.co)})`);
+  check(/-Évaluation :\n« CSS de base » : 0 %.*à retravailler : C3/.test(st.data.review.result.feedback), "…and the comment says how the assessment went");
+  check(st.data.review.assess?.[0]?.title === "CSS de base", "…the debrief page shows the assessment");
+  const sw = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { co: { C3: true, C4: true } } });
+  check(sw.data.states.co.C3 === true, "the teacher's switch still decides");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, who);
+  const sp = await api("GET", `/api/students/${U.carol.id}?g=${G}`);
+  const sa = sp.data.learning.assessments.find((x: any) => x.id === aid);
+  check(sa && sa.brief?.id === bid && sa.comps.some((c: any) => c.code === "C3" && !c.ok) && sa.questions.length === 2 && sa.questions[0].verdict === "wrong", "the student page: score, competencies and each question of the assessment");
+}
+
+section("a new brief is announced in #general (or the channel chosen)");
+{
+  const { briefChannel, saveGithubCfg } = await import("../src/shared/github.ts");
+  const { getGuild } = await import("../src/shared/db.ts");
+  let g = await getGuild(env, G);
+  await saveGithubCfg(env, g, { briefs: null, autoGeneral: false });
+  g = await getGuild(env, G);
+  check(await briefChannel(env, g) === "c1", "the server's #general is found (not #arena)");
+  await api("PUT", "/api/github", { g: G, briefs: "c2" });
+  g = await getGuild(env, G);
+  check(await briefChannel(env, g) === "2", "…or the channel the teacher chose");
+  discordFake.channels = [];
+}
+
 section("GitHub: each class can have its own GitHub App; Watcher import from its data");
 {
   const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";
@@ -3121,19 +3188,56 @@ section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
   await api("DELETE", `/api/github/app?g=${G}`);
 }
 
-section("🤖 Settings → AI: each teacher sets their own Groq key from the dashboard");
+section("🤖 Settings → AI: each class has its own AI keys, each one the backup of the one before");
 {
+  const { chat } = await import("../src/shared/ai.ts");
+  const { forClass } = await import("../src/shared/aictx.ts");
+  const { resetAiCaches } = await import("../src/shared/aikeys.ts");
+  const { aiBudgetOk } = await import("../src/shared/db.ts");
+  run1("INSERT OR IGNORE INTO guilds (id, name, created_at) VALUES ('g-other', 'Other teacher', 0)");
+  resetAiCaches();
   const a0 = await api("GET", `/api/settings/ai?g=${G}`);
-  check(a0.status === 200 && a0.data.source === "none" && a0.data.models.length >= 2, "no key yet: Cloudflare's AI answers");
-  check((await api("PUT", `/api/settings/ai?g=${G}`, { key: "not-a-key" })).status === 400, "a key that isn't a Groq key is refused");
-  const bad = await api("PUT", `/api/settings/ai?g=${G}`, { key: "gsk_bad" + "x".repeat(40) });
-  check(bad.status === 400 && /refused/i.test(bad.data.error), "a key Groq refuses is not saved (tested first)");
-  const good = "gsk_good" + "A".repeat(40);
-  const sv = await api("PUT", `/api/settings/ai?g=${G}`, { key: good, model: "llama-3.3-70b-versatile" });
-  check(sv.status === 200 && sv.data.source === "settings" && sv.data.model === "llama-3.3-70b-versatile" && !JSON.stringify(sv.data).includes(good) && sv.data.masked.endsWith("AAAA"), "the key is saved after Groq accepts it, and never sent back (only masked)");
-  check(env.GROQ_API_KEY === good && env.GROQ_MODEL === "llama-3.3-70b-versatile", "…and used by the AI right away");
-  const cl = await api("PUT", `/api/settings/ai?g=${G}`, { clear: true, model: "" });
-  check(cl.data.source === "none" && !env.GROQ_API_KEY, "remove the key: back to Cloudflare's AI (or the secret)");
+  check(a0.status === 200 && !a0.data.providers.length && a0.data.presets.gemini && a0.data.presets.anthropic && a0.data.classes.some((c: any) => c.id === "g-other"), "no key yet: the providers to choose from, the other classes");
+  check((await api("POST", `/api/settings/ai/providers?g=${G}`, { type: "gemini", key: "AIza-bad-key-123456" })).status === 400, "a key the provider refuses is not saved (tested first)");
+  check((await api("POST", `/api/settings/ai/providers?g=${G}`, { type: "nope", key: "x" })).status === 400, "an unknown provider is refused");
+  const gem = await api("POST", `/api/settings/ai/providers?g=${G}`, { type: "gemini", key: "AIza-good-" + "k".repeat(30), model: "gemini-2.5-flash" });
+  check(gem.status === 200 && gem.data.providers.length === 1 && !JSON.stringify(gem.data).includes("k".repeat(30)) && gem.data.usage.own, "a Gemini key: tested, saved, never sent back");
+  const gq = await api("POST", `/api/settings/ai/providers?g=${G}`, { type: "groq", key: "gsk_good" + "A".repeat(40) });
+  check(gq.status === 200 && gq.data.providers.length === 2 && gq.data.providers[1].type === "groq", "…and Groq as its backup");
+  // the class's AIs answer, in order; the next one when one fails; Cloudflare's AI last
+  const envG = forClass(env, G);
+  aiFake.calls = [];
+  check(await chat(envG, [{ role: "user", content: "hi" }], { maxTokens: 50, temperature: 0 }) === "gemini-answer" && aiFake.calls[0] === "generativelanguage.googleapis.com:gemini-2.5-flash", "the first AI answers");
+  aiFake.down = ["generativelanguage.googleapis.com"];
+  check(await chat(envG, [{ role: "user", content: "hi" }], { maxTokens: 50, temperature: 0 }) === "ok", "its limit is reached: the backup (Groq) answers");
+  const st = await api("GET", `/api/settings/ai?g=${G}`);
+  check(/limit reached/.test(st.data.providers[0].err || ""), "the problem is shown in the settings");
+  aiFake.down = [];
+  const ids = st.data.providers.map((p: any) => p.id);
+  const re = await api("PUT", `/api/settings/ai?g=${G}`, { order: [ids[1], ids[0]], off: { [ids[0]]: true } });
+  check(re.data.providers[0].type === "groq" && re.data.providers[1].off, "reorder, turn one off");
+  // no ClassBot daily limit for a class with its own keys; the other class keeps its own counter
+  run1("INSERT OR REPLACE INTO ai_usage (day, count) VALUES (?, 99999)", new Date().toISOString().slice(0, 10));
+  check(await aiBudgetOk(envG, 3) && !(await aiBudgetOk(forClass(env, "g-other"), 3)), "the daily limit only applies to classes without keys");
+  run1("DELETE FROM ai_usage");
+  // the ClassBot's own key (Cloudflare secret) isn't used by other teachers' classes
+  env.GROQ_API_KEY = "gsk_good" + "S".repeat(40);
+  const other = forClass(env, "g-other");
+  const { aiStatus } = await import("../src/shared/aikeys.ts");
+  check(await aiStatus(other) === "workers", "another class doesn't get the ClassBot's key (it has several classes)");
+  await api("PUT", `/api/settings/ai?g=g-other`, { server: true });
+  env.GROQ_API_KEY = "gsk_good" + "S".repeat(40);   // (the dashboard request put the real settings back in env)
+  check(await aiStatus(other) === "keys", "…unless its settings allow it");
+  await api("PUT", `/api/settings/ai?g=g-other`, { server: false, workers: false });
+  check(await aiStatus(other) === null, "Cloudflare's AI can be turned off too");
+  delete (env as any).GROQ_API_KEY;
+  // copy the keys to another class of mine; Claude works too
+  const cp = await api("POST", `/api/settings/ai/copy?g=${G}`, { to: ["g-other"] });
+  check(cp.data.copied === 1 && (await api("GET", `/api/settings/ai?g=g-other`)).data.providers.length === 2, "copy this class's AIs to another class");
+  const cl = await api("POST", `/api/settings/ai/providers?g=g-other`, { type: "anthropic", key: "sk-ant-good-" + "z".repeat(30) });
+  check(cl.status === 200 && cl.data.providers.at(-1).type === "anthropic", "a Claude key works (its own API format)");
+  for (const p of (await api("GET", `/api/settings/ai?g=${G}`)).data.providers) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
+  check(!(await api("GET", `/api/settings/ai?g=${G}`)).data.providers.length, "remove the keys: back to Cloudflare's AI");
 }
 
 section("GitHub: a student who connects the same account again isn't announced twice");

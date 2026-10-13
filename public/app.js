@@ -642,7 +642,9 @@ async function viewStudent(arg) {
   const avgPct = finals.length ? Math.round(finals.reduce((s, b) => s + b.review.pct, 0) / finals.length) : null;
   const gh = L?.github, act = gh?.activity;
   const intOpen = intRows.filter((a) => a.level && !a.reviewed).length;
-  const TABS = [["overview", "Overview"], ["learning", `Briefs & competencies`], ["github", "GitHub"], ["challenges", "Challenges"], ["points", "Points & history"]];
+  const nAssess = (L?.assessments || []).length, nDebriefs = (L?.briefs || []).filter((b) => b.review).length;
+  const TABS = [["overview", "Overview"], ["learning", `Briefs & debriefs${nDebriefs ? ` <span class="tabn">${nDebriefs}</span>` : ""}`], ["assess", `Assessments${nAssess ? ` <span class="tabn">${nAssess}</span>` : ""}`],
+    ["comps", "Competencies"], ["github", "GitHub"], ["challenges", "Challenges"], ["points", "Points & history"]];
   view.innerHTML = `
     <div class="stu-hero">
       <div class="stu-id"><span class="stu-av">${avatar(p.name, id)}</span><div>
@@ -661,7 +663,7 @@ async function viewStudent(arg) {
     ${row.attention.length ? `<div class="notice" style="margin-bottom:12px"><b>Worth a check-in:</b> ${esc(row.attention.join(", "))}.</div>` : ""}
     <div class="stu-kpis">
       <button type="button" data-go="points"><b>${d.seasonPoints}</b><span>season points${d.seasonRank ? ` · #${d.seasonRank} of ${d.seasonSize}` : ""}</span></button>
-      <button type="button" data-go="learning"><b>${compOk.length}<small>/${comps.length}</small></b><span>competencies validated</span></button>
+      <button type="button" data-go="comps"><b>${compOk.length}<small>/${comps.length}</small></b><span>competencies validated</span></button>
       <button type="button" data-go="learning"><b ${avgPct != null ? `style="color:${typeof masteryInk === "function" ? masteryInk(avgPct) : "inherit"}"` : ""}>${avgPct != null ? avgPct + "%" : "—"}</b><span>brief requirements met${finals.length ? ` · ${finals.length} debriefed` : ""}</span></button>
       <button type="button" data-go="github"><b>${act?.last ? fmtAgo(act.last).replace(/ ago$/, "") : gh?.login ? "—" : "off"}</b><span>${act?.last ? "since the last push" : gh?.login ? "no push yet" : "GitHub not linked"}${act?.idle >= 3 ? ` · <span style="color:var(--down)">${act.idle} days idle</span>` : ""}</span></button>
       <button type="button" data-go="challenges"><b>${d.solved.total}</b><span>challenges solved · ${pct(d.accuracy)} accuracy</span></button>
@@ -679,15 +681,20 @@ async function viewStudent(arg) {
           <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
         </div>
         <div class="stack">
-          ${L ? `<section class="panel"><div class="panel-head"><h2>🎓 Competencies</h2><a class="btn small" href="#/student/${esc(id)}?tab=learning">Details →</a></div>
+          ${L ? `<section class="panel"><div class="panel-head"><h2>🎓 Competencies</h2><a class="btn small" href="#/student/${esc(id)}?tab=comps">Details →</a></div>
             <div class="stu-comp-bar"><i style="width:${comps.length ? Math.round((100 * compOk.length) / comps.length) : 0}%"></i></div>
             <p class="small"><b>${compOk.length}</b> of ${comps.length} validated${comps.filter((c) => c.status === "not_yet").length ? ` · <span style="color:var(--down)">${comps.filter((c) => c.status === "not_yet").length} not yet</span>` : ""}</p>
             <div class="stu-comp-mini">${comps.map((c) => `<span class="cmm ${c.status}" title="${esc(c.name)}">${esc(c.label)}</span>`).join("")}</div></section>` : ""}
+          ${L ? `<section class="panel"><div class="panel-head"><h2>📝 Assessments</h2><a class="btn small" href="#/student/${esc(id)}?tab=assess">All →</a></div>
+            ${L.assessments.length ? `<ul class="ov-assess">${L.assessments.slice(0, 3).map((a) => `<li><a href="#/assessment/${a.id}">${esc(a.title)}</a>
+              <span>${a.score != null ? `<b style="color:${masteryInk(a.score)}">${a.score}%</b>` : `<span class="muted small">${esc(STATUS[a.status] || a.status)}</span>`}</span></li>`).join("")}</ul>` : `<p class="muted small">No assessment yet.</p>`}</section>` : ""}
           ${workOnPanel(d.coach, id)}
         </div>
       </div>
       ${coachPanel(d.coach)}`,
-    learning: () => (typeof learningPanel === "function" ? learningPanel(d, id) : `<p class="muted">—</p>`),
+    learning: () => (typeof learningPanel === "function" ? learningPanel(d, id, "briefs") : `<p class="muted">—</p>`),
+    assess: () => (typeof learningPanel === "function" ? learningPanel(d, id, "assess") : `<p class="muted">—</p>`),
+    comps: () => (typeof learningPanel === "function" ? learningPanel(d, id, "comps") : `<p class="muted">—</p>`),
     github: () => `<div id="gh-tab"></div>`,
     challenges: () => `
       <div class="figures">
@@ -780,7 +787,7 @@ async function viewStudent(arg) {
     pane.innerHTML = panes[k]();
     try { history.replaceState(null, "", `#/student/${id}${k === "overview" ? "" : `?tab=${k}`}`); } catch { /* ignore */ }
     if (k === "overview") { wireWorkOn(id, p.name); }
-    if (k === "learning" && typeof wireLearning === "function") wireLearning(d, id);
+    if (k === "comps" && typeof wireLearning === "function") wireLearning(d, id);
     if (k === "github" && typeof studentGithubTab === "function") studentGithubTab($("#gh-tab"), id, d);
     if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); }
     if (k === "points") $("#tab-points").innerHTML = tabs.points();
@@ -1261,37 +1268,95 @@ async function viewTeams() {
 
 // ========================================================== settings
 /** Settings → AI: the Groq key of this ClassBot (for all its classes). The key is never shown again. */
-async function aiSettings(root) {
+/** Settings → AI: this class's AIs, in order. ClassBot asks the first; if it fails, the next one, and so on. */
+async function aiSettings(root, flash = null) {
   const d = await api("/settings/ai");
-  const SRC = {
-    settings: ["ok", "✅ Groq is on", `Key saved here (${esc(d.masked)}). Every class of this ClassBot uses it.`],
-    secret: ["ok", "✅ Groq is on", `Key from the Cloudflare secret GROQ_API_KEY (${esc(d.masked)}). Save a key here to replace it without the command line.`],
-    none: ["warn", "⚠️ No Groq key", d.hasWorkersAi ? "Cloudflare's AI answers for now (slower, simpler texts). Add your free Groq key below." : "No AI is set up: add your free Groq key below."],
-  }[d.source];
+  const P = d.presets;
+  const ago = (t) => (t ? fmtAgo(t) : "");
+  const chain = [...d.providers.filter((p) => !p.off).map((p) => p.label), ...(d.server?.allowed ? ["ClassBot's key"] : []), ...(d.workers && d.hasWorkers ? ["Cloudflare AI"] : [])];
+  const status = d.usage.own ? ["ok", "✅ This class uses its own AI keys", `${d.providers.filter((p) => !p.off).length} AI${d.providers.filter((p) => !p.off).length > 1 ? "s" : ""}, each one the backup of the one before. No ClassBot daily limit: only your providers' own limits.`]
+    : d.server?.allowed ? ["ok", "✅ This class uses the ClassBot's key", `${esc(d.server.label)} (${esc(d.server.masked)}). Add this class's own key below so it doesn't depend on it.`]
+    : ["warn", "⚠️ No AI key for this class", d.hasWorkers && d.workers ? `Cloudflare's free AI answers, with a daily limit for this class (${d.usage.today}/${d.usage.limit} used today). Add a free key below: Groq or Google Gemini take 2 minutes.` : "No AI answers for this class: add a key below."];
   root.innerHTML = `
-    <div class="panel set-card ai-status ${SRC[0]}"><div><b>${SRC[1]}</b><div class="small muted">${SRC[2]}</div></div>
-      ${d.source === "settings" ? `<button class="btn small danger" id="ai-clear">Remove the key</button>` : ""}</div>
+    ${flash ? `<div class="notice small" style="margin-bottom:12px">${esc(flash)}</div>` : ""}
+    <div class="panel set-card ai-status ${status[0]}"><div><b>${status[1]}</b><div class="small muted">${status[2]}</div>
+      <div class="ai-chain small">${chain.length ? chain.map((c, i) => `<span>${i ? "→ " : ""}${esc(c)}</span>`).join(" ") : "<span>nothing</span>"}</div></div></div>
+
     <div class="panel set-card">
-      <h3 style="margin-top:0">${d.source === "none" ? "Add" : "Change"} the Groq key</h3>
-      <ol class="ai-steps">
-        <li>Open <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a> and sign in (free, with Google or GitHub).</li>
-        <li>Click <b>Create API Key</b>, give it a name (e.g. “ClassBot”) and copy it: it starts with <code>gsk_</code>.</li>
-        <li>Paste it here and click <b>Save and test</b>. ClassBot checks it with Groq before saving.</li>
-      </ol>
-      <label for="ai-key">Groq API key</label>
-      <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="gsk_…" style="width:100%;max-width:520px;font-family:var(--mono, monospace)">
-      <label for="ai-model">Model <span class="muted">(the first one is the best; ClassBot falls back to the others when it's busy)</span></label>
-      <select id="ai-model" style="max-width:520px"><option value="">Automatic (${esc(d.models[0])} first)</option>${d.models.map((m) => `<option value="${esc(m)}" ${m === d.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
-      <p class="small muted">🔒 The key is stored in your ClassBot's database and never shown again. It's for all the classes of this ClassBot. Don't paste it in Discord or in a chat; if it leaks, delete it on console.groq.com and make a new one.</p>
-      <div class="set-foot"><button class="btn primary" id="ai-save">Save and test</button></div>
-    </div>`;
-  $("#ai-save", root).onclick = (e) => busy(e.currentTarget, async () => {
-    const key = $("#ai-key", root).value.trim();
-    await api("/settings/ai", { method: "PUT", body: { ...(key ? { key } : {}), model: $("#ai-model", root).value } });
-    toast(key ? "Groq key saved: it works ✅" : "Saved");
+      <div class="panel-head"><h3 style="margin:0">This class's AIs</h3><span class="small muted">${d.usage.today} AI calls today</span></div>
+      ${d.providers.length ? `<ol class="ai-list">${d.providers.map((p, i) => `<li class="ai-item ${p.off ? "off" : ""} ${p.err ? "bad" : ""}" data-pid="${p.id}">
+          <span class="ai-n">${i + 1}</span>
+          <div class="ai-main"><b>${esc(p.label)}</b> <span class="small muted">${i === 0 ? "first choice" : "backup"}</span>
+            <div class="small"><code>${esc(p.masked)}</code> · model <input class="ai-model" data-model="${p.id}" value="${esc(p.model)}" list="ai-ml-${p.id}" aria-label="Model"><datalist id="ai-ml-${p.id}">${(P[p.type]?.models || []).map((m) => `<option value="${esc(m)}">`).join("")}</datalist>${p.base ? ` · <span class="muted">${esc(p.base)}</span>` : ""}</div>
+            <div class="small ${p.err ? "ai-err" : "muted"}">${p.err ? `⚠️ Last problem ${ago(p.errAt)}: ${esc(p.err)}` : p.okAt ? `✓ answered ${ago(p.okAt)}` : "not used yet"}</div></div>
+          <div class="ai-act">
+            <button class="btn small" data-up="${i}" ${i ? "" : "disabled"} title="Ask it earlier" aria-label="Move up">↑</button><button class="btn small" data-down="${i}" ${i < d.providers.length - 1 ? "" : "disabled"} title="Ask it later" aria-label="Move down">↓</button>
+            <button class="btn small" data-test="${p.id}">Test</button>
+            <label class="check small" title="Turned off: skipped, the key is kept"><input type="checkbox" data-on="${p.id}" ${p.off ? "" : "checked"}> on</label>
+            <button class="btn small danger" data-del="${p.id}" aria-label="Remove">✕</button></div>
+        </li>`).join("")}</ol>` : `<p class="muted small">No AI key yet for this class.</p>`}
+      ${d.server ? `<label class="check ai-row"><input type="checkbox" id="ai-server" ${d.server.allowed ? "checked" : ""}> Also use the <b>ClassBot's key</b> (${esc(d.server.label)}, ${esc(d.server.masked)}) after this class's AIs
+        <span class="small muted">· it's the Cloudflare secret of this ClassBot: leave it off for other teachers' classes, so they use their own keys</span></label>` : ""}
+      ${d.hasWorkers ? `<label class="check ai-row"><input type="checkbox" id="ai-workers" ${d.workers ? "checked" : ""}> <b>Cloudflare's free AI</b> as the last backup <span class="small muted">· slower and simpler; ${d.usage.own ? "no limit counted while this class has its own keys" : `daily limit for this class: ${d.usage.today}/${d.usage.limit} used today`}</span></label>` : ""}
+      ${d.legacy ? `<p class="small notice">An old Groq key (${esc(d.legacy)}) is saved for <b>all classes</b> of this ClassBot. Keys are per class now: <button class="btn small danger" id="ai-legacy">Delete the old shared key</button></p>` : ""}
+    </div>
+
+    <div class="panel set-card" id="ai-add">
+      <h3 style="margin-top:0">＋ Add an AI ${d.providers.length ? "(as a backup)" : ""}</h3>
+      <div class="ai-pick">${Object.entries(P).map(([k, v]) => `<button type="button" class="ai-pv" data-type="${k}" aria-pressed="${k === (d.providers.length ? "gemini" : "groq")}"><b>${esc(v.label)}</b><span class="small muted">${esc(v.free)}</span></button>`).join("")}</div>
+      <div id="ai-form"></div>
+    </div>
+
+    ${d.providers.length && d.classes.length ? `<div class="panel set-card"><h3 style="margin-top:0">Use the same AIs in my other classes</h3>
+      <p class="small muted" style="margin-top:0">Copies these AIs (with their keys) to the classes you tick. Only tick your own classes: another teacher should use their own keys.</p>
+      <div class="checks">${d.classes.map((c) => `<label class="check small"><input type="checkbox" data-copy="${esc(c.id)}"> ${esc(c.name)}</label>`).join("")}</div>
+      <div class="set-foot"><button class="btn" id="ai-copy">Copy to the ticked classes</button></div></div>` : ""}
+
+    <p class="small muted">🔒 Keys are stored in this ClassBot's database, for this class only, and never shown again (only their first and last characters). Don't paste them in Discord or in a chat; if one leaks, delete it on the provider's site and add a new one here.</p>`;
+
+  const form = (type) => {
+    const v = P[type];
+    $("#ai-form", root).innerHTML = `
+      <ol class="ai-steps small">
+        ${v.custom ? `<li>Give the address of an OpenAI-compatible API (it ends with <code>/v1</code>), its key and a model name.</li>` : `<li>Open <a href="${esc(v.keyUrl)}" target="_blank" rel="noopener">${esc(v.keyUrl.replace(/^https:\/\//, ""))}</a> and sign in.</li>
+        <li>Create an API key${v.keyHint ? ` (it starts with <code>${esc(v.keyHint)}</code>)` : ""} and copy it.</li>`}
+        <li>Paste it here: ClassBot tests it before saving.</li></ol>
+      ${v.custom ? `<label for="ai-base">API address</label><input type="url" id="ai-base" placeholder="https://api.together.xyz/v1" style="width:100%;max-width:520px">` : ""}
+      <label for="ai-key">${esc(v.label)} API key</label>
+      <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="${esc(v.keyHint || "paste the key")}" style="width:100%;max-width:520px;font-family:var(--mono, monospace)">
+      <label for="ai-m">Model</label>
+      <input id="ai-m" list="ai-mlist" value="${esc(v.models[0] || "")}" placeholder="model name" style="width:100%;max-width:520px"><datalist id="ai-mlist">${v.models.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
+      <p class="small muted" style="margin:6px 0 0">${v.models.length ? `Suggested: ${v.models.map((m) => `<code>${esc(m)}</code>`).join(", ")}. Model names change: if the test says “model not found”, copy the exact name from the provider's site.` : ""}</p>
+      <div class="set-foot"><button class="btn primary" id="ai-addbtn">Test and add</button></div>`;
+    $("#ai-addbtn", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const r = await api("/settings/ai/providers", { method: "POST", body: { type, key: $("#ai-key", root).value.trim(), model: $("#ai-m", root).value.trim(), base: $("#ai-base", root)?.value.trim() } });
+      toast(r.warn ? "Added (see the note)" : `${v.label} added: it works ✅`);
+      aiSettings(root, r.warn);
+    });
+  };
+  $$(".ai-pv", root).forEach((b) => b.onclick = () => { $$(".ai-pv", root).forEach((x) => x.setAttribute("aria-pressed", String(x === b))); form(b.dataset.type); });
+  form($(".ai-pv[aria-pressed=true]", root).dataset.type);
+  const put = (body, msg = "Saved") => api("/settings/ai", { method: "PUT", body }).then(() => { toast(msg); aiSettings(root); });
+  const ids = d.providers.map((p) => p.id);
+  $$("[data-up]", root).forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; put({ order: ids }, "Order saved"); });
+  $$("[data-down]", root).forEach((b) => b.onclick = () => { const i = Number(b.dataset.down); [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; put({ order: ids }, "Order saved"); });
+  $$("[data-on]", root).forEach((c) => c.onchange = () => put({ off: { [c.dataset.on]: !c.checked } }, c.checked ? "Turned on" : "Turned off: it's skipped"));
+  $$("[data-model]", root).forEach((inp) => inp.onchange = () => put({ models: { [inp.dataset.model]: inp.value.trim() } }, "Model saved"));
+  $$("[data-test]", root).forEach((b) => b.onclick = () => busy(b, async () => {
+    const r = await api(`/settings/ai/providers/${b.dataset.test}/test`, { method: "POST", body: {} });
+    toast(r.test.ok ? (r.test.warn || "It answers ✅") : r.test.error, !r.test.ok || !!r.test.warn);
     aiSettings(root);
+  }));
+  $$("[data-del]", root).forEach((b) => b.onclick = () => confirmDialog("Remove this AI?", "Its key is deleted from ClassBot. The next AI in the list takes its place.", "Remove", async () => { await api(`/settings/ai/providers/${b.dataset.del}`, { method: "DELETE" }); aiSettings(root); }, true));
+  if ($("#ai-server", root)) $("#ai-server", root).onchange = (e) => put({ server: e.target.checked }, e.target.checked ? "This class may use the ClassBot's key" : "This class no longer uses the ClassBot's key");
+  if ($("#ai-workers", root)) $("#ai-workers", root).onchange = (e) => put({ workers: e.target.checked });
+  if ($("#ai-legacy", root)) $("#ai-legacy", root).onclick = () => confirmDialog("Delete the old shared key?", "Classes without their own AI then use Cloudflare's free AI (or the Cloudflare secret, for the classes allowed to).", "Delete", async () => { await api("/settings/ai/legacy", { method: "DELETE" }); aiSettings(root); }, true);
+  if ($("#ai-copy", root)) $("#ai-copy", root).onclick = (e) => busy(e.currentTarget, async () => {
+    const to = $$("[data-copy]:checked", root).map((c) => c.dataset.copy);
+    if (!to.length) return toast("Tick at least one class", true);
+    const r = await api("/settings/ai/copy", { method: "POST", body: { to } });
+    toast(`Copied to ${r.copied} class(es)`);
   });
-  if ($("#ai-clear", root)) $("#ai-clear", root).onclick = () => confirmDialog("Remove the Groq key?", "ClassBot goes back to the Cloudflare secret if there is one, else to Cloudflare's AI.", "Remove", async () => { await api("/settings/ai", { method: "PUT", body: { clear: true } }); aiSettings(root); }, true);
 }
 
 async function viewSettings(arg) {
@@ -1306,7 +1371,7 @@ async function viewSettings(arg) {
     ["general", "⚙️", "General", "Language, track, channels"],
     ["programme", "🎓", "Programme", "Planning & competencies"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
-    ["ai", "🤖", "AI (Groq)", "Your API key"],
+    ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1445,7 +1510,7 @@ async function viewSettings(arg) {
     </section>
 
     <section class="set-sec" data-sec="ai" hidden>
-      ${head("AI (Groq)", "Briefs, debriefs, assessments, squad battles and the coach use AI. With your own free Groq key it's faster and writes better long documents. Without one, Cloudflare's AI answers (slower, simpler).")}
+      ${head("AI keys", "Briefs, debriefs, assessments, squad battles, the FAQ and the coach use AI. Add this class's own keys (Groq, Google Gemini, OpenRouter, ChatGPT, Claude…): ClassBot asks them in order, and when one fails or reaches its limit, the next one answers.")}
       <div id="set-ai"><p class="muted">Loading…</p></div>
     </section>
 

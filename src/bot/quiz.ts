@@ -7,6 +7,7 @@
 //   GET  /quiz/<t>/state    is the session stopped? did the teacher let them back in?
 //   POST /quiz/<t>/submit   hand in
 import type { Ctx, Env } from "../shared/types.ts";
+import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
 import { AssessError, leaveEvent, lockState, readTakerToken, saveAnswer, sessionInfo, startSession, submit } from "../shared/assess.ts";
@@ -16,6 +17,10 @@ const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { sta
 export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: string, action: string | undefined): Promise<Response> {
   const takerId = await readTakerToken(env, token);
   if (!takerId) return action ? json({ error: "expired" }, 404) : new Response(PAGE("expired"), { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
+  if (action) {   // the AI (translation, grading) uses the class's keys
+    const tk = await env.DB.prepare("SELECT guild_id FROM assessment_takers WHERE id = ?").bind(takerId).first<{ guild_id: string }>().catch(() => null);
+    if (tk?.guild_id) env = forClass(env, tk.guild_id);
+  }
   if (!action && request.method === "GET") return new Response(PAGE(token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" } });
   if (request.method === "GET" && action === "info") return json(await sessionInfo(env, takerId));
   if (request.method === "GET" && action === "state") return json(await lockState(env, takerId));

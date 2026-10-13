@@ -223,7 +223,7 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
     const who = sq ? `s:${sq.id}` : `u:${uid}`;
     const handin = await one<{ repo: string; plan: string | null; at: number }>(env, "SELECT repo, plan, at FROM brief_handins WHERE brief_id = ? AND who = ?", b.id, who);
     const push = await one<{ first: number | null }>(env, "SELECT MIN(t) AS first FROM gh_activity WHERE guild_id = ? AND discord_id = ? AND t >= ? AND commits > 0", g.id, uid, b.start_at ?? b.created_at);
-    const rv = await one<{ status: string; final_at: number | null; sent_at: number | null; record: string }>(env, "SELECT status, final_at, sent_at, record FROM brief_reviews WHERE brief_id = ? AND who = ?", b.id, who);
+    const rv = await one<{ status: string; final_at: number | null; sent_at: number | null; record: string; level: string | null; plevel: string | null }>(env, "SELECT status, final_at, sent_at, record, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", b.id, who);
     let summary: any = null;
     if (rv) {
       try {
@@ -245,7 +245,7 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
       } catch { summary = null; }
     }
     out.push({ id: b.id, title: b.title, status: b.status, start: b.start_at, due: b.due_at, kind: b.kind, squad: sq ? { id: sq.id, name: sq.name, sm: sq.sm === uid } : null, who,
-      handin, pushed: push?.first ? (b.due_at && push.first > b.due_at ? "late" : "on") : null, review: rv ? { status: rv.status, final_at: rv.final_at, sent_at: rv.sent_at, ...summary } : null });
+      handin, pushed: push?.first ? (b.due_at && push.first > b.due_at ? "late" : "on") : null, review: rv ? { status: rv.status, final_at: rv.final_at, sent_at: rv.sent_at, level: rv.level || rv.plevel || null, levelProposed: !rv.level && !!rv.plevel, ...summary } : null });
   }
   return out;
 }

@@ -18,6 +18,8 @@ import { logPr, logPush } from "./ghdetail.ts";
 export interface GithubCfg {
   channel: string | null;      // where reports and reminders go (none chosen: a #github channel if there is one, else announcements)
   links: string | null;        // where "X connected GitHub" goes: a channel id, "off", or null = the report channel
+  briefs?: string | null;      // where a new brief is announced (none chosen: the server's #general, else the report channel)
+  autoGeneral?: boolean;       // #general was looked for once
   forum: string | null;        // a forum channel: one thread per student with their activity (optional)
   forumError?: { msg: string; at: number } | null; // the last time posting in the forum failed (shown in the settings)
   auto?: boolean;              // the #github channel / forum were looked for once
@@ -32,6 +34,7 @@ export function githubCfg(g: Pick<GuildRow, "github"> | null | undefined): Githu
   return {
     channel: o.channel ? String(o.channel) : null, forum: o.forum ? String(o.forum) : null,
     links: o.links === "off" ? "off" : o.links ? String(o.links) : null, forumError: o.forumError ?? null, auto: !!o.auto,
+    briefs: o.briefs ? String(o.briefs) : null, autoGeneral: !!o.autoGeneral,
     daily: o.daily !== false, weekly: o.weekly !== false, hour: n(o.hour, 17, 0, 23), minute: n(o.minute, 15, 0, 59),
     skip: Array.isArray(o.skip) ? o.skip.map(Number).filter((d: number) => d >= 0 && d <= 6) : [6, 0], weeklyDay: n(o.weeklyDay, 5, 0, 6),
     inactiveDays: n(o.inactiveDays, 3, 0, 14), reminders: o.reminders !== false, tiny: n(o.tiny, 2, 0, 50), huge: n(o.huge, 2000, 100, 100000),
@@ -126,6 +129,22 @@ export function githubUrls(env: Env, a: GhApp) {
 const reportChannel = (g: GuildRow, cfg: GithubCfg) => cfg.channel || g.announce_channel || g.daily_channel || null;
 const linksChannel = (g: GuildRow, cfg: GithubCfg) => (cfg.links === "off" ? null : cfg.links || reportChannel(g, cfg));
 const discordCode = (e: unknown) => Number((String((e as Error)?.message ?? "").match(/"code":\s*(\d+)/) || [])[1] || 0);
+
+/** Where a new brief is announced: the channel chosen, else the server's #general (found once), else the report channel. */
+export async function briefChannel(env: Env, g: GuildRow): Promise<string | null> {
+  let cfg = await ensureGithubChannels(env, g);
+  if (!cfg.briefs && !cfg.autoGeneral) {
+    let found: string | null = null;
+    try {
+      const list = await dapi<any[]>(env, "GET", `/guilds/${g.id}/channels`);
+      const text = (list || []).filter((c) => c.type === 0 || c.type === 5).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const norm = (n: unknown) => String(n || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
+      found = (text.find((c) => norm(c.name) === "general") ?? text.find((c) => norm(c.name).includes("general")))?.id ?? null;
+    } catch (e) { console.error("general channel", e); }
+    cfg = await saveGithubCfg(env, g, { autoGeneral: true, ...(found ? { briefs: found } : {}) });
+  }
+  return cfg.briefs || reportChannel(g, cfg);
+}
 
 /**
  * Nothing chosen in the settings yet: use the class's own GitHub channels if it has some (a text channel and a forum

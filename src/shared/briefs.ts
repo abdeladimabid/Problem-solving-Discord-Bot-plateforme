@@ -259,7 +259,7 @@ function weekBlock(p: Program, w: ProgramWeek | null): string {
 }
 
 async function ask(env: Env, system: string, user: string, maxTokens: number, temperature: number): Promise<any> {
-  if (!(await aiBudgetOk(env, 4))) throw new BriefError("The AI limit for today is reached. Try again tomorrow.");
+  if (!(await aiBudgetOk(env, 4))) throw new BriefError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow.");
   await aiBudgetUse(env, 4);
   let last: unknown = null;
   for (let i = 0; i < 2; i++) {

@@ -27,7 +27,7 @@ const langLabel = (l: string) => LANGS[l as CodeLang]?.label ?? l;
 export async function writeLesson(env: Env, g: GuildRow, skill: string, hint = ""): Promise<{ en: string; fr: string }> {
   const s = skillDef(skill);
   if (!s) throw new GenError("unknown skill");
-  if (!(await aiBudgetOk(env, 2))) throw new GenError("The daily AI budget is used up. Try again tomorrow, or write the lesson yourself.");
+  if (!(await aiBudgetOk(env, 2))) throw new GenError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow.");
   await aiBudgetUse(env, 2);
   const tr = trackOf(g);
   const langs = tr.family === "sql" ? "SQL (SQLite)" : tr.family === "mern" ? "JavaScript (the MERN stack: MongoDB, Express, React, Node)"
@@ -123,7 +123,7 @@ export async function sqlChallenge(env: Env, g: GuildRow, o: { skill: string; di
   const difficulty = DIFFS.includes(o.difficulty) ? o.difficulty : "easy";
   const language = g.lang === "fr" ? "French" : "English";
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (!(await aiBudgetOk(env, 3))) throw new GenError("The daily AI budget is used up. Try again tomorrow.");
+    if (!(await aiBudgetOk(env, 3))) throw new GenError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow.");
     await aiBudgetUse(env, 3);
     const raw = await chat(env, [
       { role: "system", content: `You write SQL exercises (SQLite) for ${difficulty} level students. Focus: ${SQL_FOCUS[o.skill] ?? "SELECT queries"}.${o.topic ? " Theme: " + o.topic + "." : ""}

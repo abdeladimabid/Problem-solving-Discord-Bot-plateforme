@@ -2,6 +2,7 @@
 // Discord form. Pasting and dropping text is blocked, the statement can't be
 // copied, leaving the page is recorded, and every change is logged for the
 // teacher's replay. Links are signed per attempt (see integrity.ts).
+import { forClass } from "../shared/aictx.ts";
 import type { AttemptRow, ChallengeRow, Ctx, Env, GuildRow } from "../shared/types.ts";
 import { getGuild, now, one, run } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
@@ -25,6 +26,7 @@ export async function handleEditor(request: Request, env: Env, _ctx: Ctx, token:
   if (!who) return json({ error: "This link has expired. Open the challenge again in Discord to get a new one." }, 403);
   const a = await getAttempt(env, who.attemptId);
   if (!a || a.discord_id !== who.userId) return json({ error: "Unknown challenge." }, 404);
+  env = forClass(env, a.guild_id);   // the AI uses this class's keys
   const c = await getChallenge(env, a.challenge_id);
   if (!c || c.kind !== "write") return json({ error: "Unknown challenge." }, 404);
   const g = await getGuild(env, a.guild_id);

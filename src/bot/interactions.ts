@@ -1,6 +1,7 @@
 // Discord interactions: slash commands, buttons, select menus, forms and autocomplete.
 // Anything that touches the database more than a couple of times is DEFERRED
 // (Discord gets an answer within 3 seconds, the real work continues after).
+import { forClass } from "../shared/aictx.ts";
 import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow, Lang } from "../shared/types.ts";
 import { levelFor, tailoredPick } from "../shared/forme.ts";
 import { SKILLS, skillName } from "../shared/skills.ts";
@@ -43,6 +44,7 @@ export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<R
   // Buttons in DMs (assignments, reminders) carry no server: find it from what the button points to.
   const guildId = raw.guild_id ?? ((raw.type === 3 || raw.type === 5) && user?.id ? await guildFromButton(env, String(raw.data?.custom_id ?? ""), user.id) : null);
   if (!guildId) return say(t("en", "err.guild_only"));
+  env = forClass(env, guildId);   // the AI uses this class's keys (Settings → AI)
   const guild = await getGuild(env, guildId);
   const perms = BigInt(raw.member?.permissions ?? "0");
   const ix: Ix = {
