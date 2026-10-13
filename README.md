@@ -320,3 +320,6 @@ tests/          end-to-end tests (npm test) and the demo preview (npm run previe
 - **AI grading** ignores spelling, grammar and language mistakes: only the technical content counts.
 - **Student page tabs:** Overview, Briefs & debriefs (sprint reviews, each debrief with its level), Assessments (score, competencies, each question), Competencies, GitHub, Challenges, Points & history.
 - **The menu is in sections** (Class, Projects, Evaluation, Practice, Games & rewards, Setup) that open and close, remembered in the browser; a closed section shows its waiting counts. **Simple mode** keeps one section open at a time: every page stays one click away.
+
+### Your own Cloudflare settings (several teachers, one repo)
+`wrangler.bot.jsonc` and `wrangler.admin.jsonc` hold **your** ClassBot's settings (database ID, Discord app, addresses). They are **not in git**: each teacher deploys the same code to their own Cloudflare account, so `git pull` never changes them. The repo has `wrangler.bot.example.jsonc` and `wrangler.admin.example.jsonc`; `npm run setup` makes your files from them the first time. Before every `npm run update` / `deploy`, a check stops if a file is missing or still says PASTE, and tells you when the example has a new setting to copy into yours.

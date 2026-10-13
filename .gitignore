@@ -6,3 +6,6 @@ node_modules/
 _to_delete/
 .dev.vars.*
 *.log
+# each teacher's own Cloudflare settings (made from wrangler.*.example.jsonc)
+wrangler.bot.jsonc
+wrangler.admin.jsonc
