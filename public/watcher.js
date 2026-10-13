@@ -306,10 +306,17 @@ async function openWatchStudent(D, id) {
     ${barChart(labels, [{ name: "Score", values: s.day.map((x) => x.score), color: "var(--blue)" }, { name: "Not scored (tiny / huge)", values: s.day.map((x) => x.tiny + x.huge), color: "var(--line-strong)" }], { height: 170, every: 2 })}
     ${briefRows ? `<h3>Briefs</h3><div class="table-wrap"><table class="grid-table"><tbody>${briefRows}</tbody></table></div>` : ""}
     <details style="margin-top:12px"><summary><b>Repos</b> <span class="muted small">${s.repos.length}</span></summary>
-      <ul class="small">${s.repos.map(([r, n]) => `<li><a href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r)}</a> <span class="muted">· ${n} action(s)</span></li>`).join("") || `<li class="muted">No repo activity yet.</li>`}</ul></details>
+      <ul class="small">${s.repos.map(([r, n]) => `<li><a href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r)}</a> <span class="muted">· ${n} action(s)</span></li>`).join("") || `<li class="muted">No repo activity yet.</li>`}</ul>
+      <p style="margin:6px 0 0"><button class="btn small" id="w-recount">Recount since the brief started</button></p></details>
     <details><summary><b>Day by day</b></summary><div class="table-wrap"><table class="grid-table"><thead><tr><th>Day</th><th class="num">Score</th><th class="num">Commits</th><th class="num">Lines</th><th class="num">PRs</th><th class="num">Other</th><th class="num">Tiny</th><th class="num">Huge</th><th class="num">Unclear</th></tr></thead>
       <tbody>${s.day.map((x, i) => `<tr><td>${esc(D.A.days[i])}</td><td class="num"><b>${x.score}</b></td><td class="num">${x.real}</td><td class="num">${x.lines}</td><td class="num">${x.prs}</td><td class="num">${x.other}</td><td class="num">${x.tiny || ""}</td><td class="num">${x.huge || ""}</td><td class="num">${x.vague || ""}</td></tr>`).reverse().join("")}</tbody></table></div></details>`;
   $("#w-close", panel).onclick = () => { box.hidden = true; };
+  // a repo shared late: its earlier pushes never came; count them since the brief in progress started
+  $("#w-recount", panel).onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api("/github/recount", { method: "POST", body: { discord_id: id } });
+    toast(!r.since ? "No brief in progress: nothing to recount" : r.counted ? `Recounted ${r.counted} commit(s) from ${r.repos} repo(s) since ${fmtDate(r.since)}` : "Nothing missing: every push since the brief started was already counted");
+    if (r.counted) { box.hidden = true; viewGithubAll(); }
+  });
   $("#w-unlink", panel).onclick = () => confirmDialog("Unlink this GitHub account?", "The student can link again with /github. Past activity stays.", "Unlink",
     async () => { await api("/github/unlink", { method: "POST", body: { discord_id: id } }); box.hidden = true; viewGithubAll(); }, true);
 }
@@ -777,17 +784,8 @@ function wApplySimple() {
 .cb-more-menu .btn { width: 100%; justify-content: flex-start; }
 .cb-simple #db-body .empty-state p.muted, .cb-simple #db-cst, .cb-simple .db-side > section:last-child > p.small.muted { display: none; }`;
   document.head.append(st);
-  const nav = $("#nav");
-  if (!nav) return;
-  const sw = document.createElement("label");
-  sw.className = "cb-simple-sw";
-  sw.innerHTML = `<input type="checkbox" id="cb-simple-t"> Simple mode`;
-  nav.after(sw);
-  $("#cb-simple-t").onchange = (e) => {
-    try { localStorage.setItem("cb-simple", e.target.checked ? "1" : "0"); } catch { /* this visit only */ }
-    wApplySimple();
-    if (e.target.checked && ![...W_KEEP, "#/brief/", "#/debrief/"].some((h) => location.hash.startsWith(h))) location.hash = "#/github"; else route();
-  };
+  // no "Simple mode" switch in the menu any more: the menu is in sections (nav.js). Turned off for those who had it on.
+  try { localStorage.removeItem("cb-simple"); } catch { /* nothing saved */ }
   wApplySimple();
 })();
 
