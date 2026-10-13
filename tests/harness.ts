@@ -72,7 +72,7 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string> };
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -215,7 +215,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       return url.pathname.includes("/bad-") ? Response.json({ message: "Not Found" }, { status: 404 })
         : Response.json({ id: 424242, slug: "classbot-cs-class", client_id: "Iv23made", client_secret: "made_secret", webhook_secret: "made_whsec", pem: "-----BEGIN RSA PRIVATE KEY-----\nmade\n-----END RSA PRIVATE KEY-----" }, { status: 201 });
     }
-    let gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits$/);
+    let gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/branches$/);
+    if (gm && github.branches[gm[1]]) return Response.json(github.branches[gm[1]].map((name) => ({ name })));
+    gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits$/);
+    const onBranch = gm && url.searchParams.get("sha") ? github.commits[gm[1] + "@" + url.searchParams.get("sha")] : null;
+    if (onBranch) return Response.json(onBranch.filter((c: any) => !url.searchParams.get("since") || c.commit.author.date >= url.searchParams.get("since")!));
     if (gm && github.commits[gm[1]]) return Response.json(github.commits[gm[1]]);
     gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([^/]+)$/);
     if (gm && github.trees[gm[1] + "@" + gm[2]]) return Response.json({ tree: github.trees[gm[1] + "@" + gm[2]].map((path) => ({ type: "blob", path })) });
