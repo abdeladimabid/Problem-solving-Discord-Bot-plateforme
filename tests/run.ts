@@ -13,7 +13,7 @@ import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
 import { finish } from "../src/shared/challenges.ts";
-import { getGuild } from "../src/shared/db.ts";
+import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
@@ -3489,6 +3489,27 @@ section("GitHub: every commit on the student page, history from GitHub, AI summa
   const nob = await api("POST", `/api/students/${"424242"}/github/sync`, { g: G });
   check(nob.status === 400, "a student without GitHub gets a clear message");
   await api("DELETE", `/api/github/app?g=${G}`);
+}
+
+section("students: the teacher edits a name (Discord no longer replaces it), removes a student from the class");
+{
+  const id = "990901";
+  await getPlayer(env, G, id, "Discord Nick");
+  run1("INSERT INTO team_members (guild_id, team_id, discord_id) VALUES (?, 1, ?)", G, id);
+  run1("INSERT INTO gh_activity (guild_id, discord_id, delivery, day, t, commits) VALUES (?, ?, 'x1', '2026-10-01', 1, 1)", G, id);
+  run1("INSERT INTO brief_handins (brief_id, guild_id, who, repo, at) VALUES (1, ?, ?, 'a/b', 1)", G, `u:${id}`);
+  const ed = await api("PUT", `/api/students/${id}`, { g: G, name: "  Yasmine   B. " });
+  await getPlayer(env, G, id, "New Nick");
+  check(ed.status === 200 && q1("SELECT name, name_lock FROM players WHERE guild_id = ? AND discord_id = ?", G, id).name === "Yasmine B.", "the teacher's name is kept when the student uses ClassBot again");
+  await api("PUT", `/api/students/${id}`, { g: G, name: "" });
+  await getPlayer(env, G, id, "New Nick");
+  check(q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, id).name === "New Nick", "…empty: the Discord name again");
+  check((await api("PUT", "/api/students/123456", { g: G, name: "X" })).status === 404, "…an unknown student: refused");
+  const del = await api("DELETE", `/api/students/${id}?g=${G}`);
+  check(del.status === 200 && !q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", G, id)
+    && !q("SELECT 1 FROM team_members WHERE discord_id = ?", id).length && !q("SELECT 1 FROM gh_activity WHERE discord_id = ?", id).length
+    && !q("SELECT 1 FROM brief_handins WHERE who = ?", `u:${id}`).length, "removed from the class: profile, team, GitHub activity and brief work");
+  check(!(await api("GET", `/api/students?g=${G}`)).data.some((r: any) => r.discord_id === id) && (await api("DELETE", `/api/students/${id}?g=${G}`)).status === 404, "…gone from the list");
 }
 
 section("i18n: every key exists in English and French");
