@@ -9,7 +9,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, parseGrid, saveCommentText, saveMembers, saveStates, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
@@ -31,7 +31,7 @@ const bad = (msg: string) => { throw new ApiError(400, msg); };
 const techList = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\n]+/)).map((x) => String(x).trim().slice(0, 40)).filter(Boolean))].slice(0, 20);
 
 export async function learningApi(env: Env, ctx: Ctx, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
-  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
+  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints|progress)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
   try {
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
@@ -272,7 +272,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck|oral|level))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -313,6 +313,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "states") { await saveStates(env, g, id, who, body.states ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || "")); return ok(await reviewView(env, g, id, who)); }
+    // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
+    if (act === "oral" && method === "POST") {
+      if (body.del != null) await delOral(env, g, id, who, Number(body.del), body.states?.oral);
+      else await makeOral(env, g, b, who);
+      return ok(await reviewView(env, g, id, who));
+    }
+    if (act === "level" && method === "POST") { await setReviewLevel(env, g, id, who, String(body.level || "")); return ok(await reviewView(env, g, id, who)); }
     if (act === "members") { await saveMembers(env, g, id, who, body.members ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);
@@ -325,6 +332,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "stepcheck" && method === "POST") { const prop = await proposeStep(env, g, b, who, Number(body.n)); return ok({ prop, ...(await reviewView(env, g, id, who)) }); }
     if (act === "step" && method === "POST") { await saveStep(env, g, b, who, Number(body.n), String(body.final || ""), String(body.note || "")); return ok(await reviewView(env, g, id, who)); }
   }
+
+  // ------------------------------------------------------------ progress: the level of each debrief, brief by brief
+  if (path === "/progress" && method === "GET") return ok(await progressView(env, await guild()));
 
   // ------------------------------------------------------------ sprints (the sprint review for the administration's report)
   if (path === "/sprints" && method === "GET") return ok(await sprintsOverview(env, await guild()));
