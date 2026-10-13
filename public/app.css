@@ -1374,3 +1374,14 @@ a.stu-chip:hover { border-color: var(--blue); }
   .nav-grp, .nav-gb { flex-direction: row; } .nav-gb { padding-left: 0; margin-left: 0; border-left: 0; }
   .nav-gh { display: none; } .nav-grp.closed .nav-gb { display: flex; }
 }
+
+/* line icons (icons.js turns the emojis into these) */
+svg.ic { width: 1.15em; height: 1.15em; vertical-align: -0.2em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+svg.ic.ok { color: var(--up); } svg.ic.ko { color: var(--down); } svg.ic.warn { color: var(--warn); } svg.ic.blue { color: var(--blue); }
+svg.ic.gold { color: #d4a017; } svg.ic.silver { color: #94a3b8; } svg.ic.bronze { color: #b87333; } svg.ic.violet { color: #7c3aed; } svg.ic.fire { color: #ea580c; } svg.ic.muted { color: var(--ink-faint); }
+:root[data-theme="dark"] svg.ic.violet { color: #a78bfa; }
+h1 svg.ic, h2 svg.ic, h3 svg.ic { width: 1em; height: 1em; vertical-align: -0.12em; }
+.figure .ico svg.ic { width: 20px; height: 20px; vertical-align: 0; }
+.nav-gi svg.ic { width: 15px; height: 15px; vertical-align: -0.2em; }
+.btn svg.ic { margin-right: 2px; }
+.btn.primary svg.ic, .nav a[aria-current="page"] svg.ic { color: inherit; }
