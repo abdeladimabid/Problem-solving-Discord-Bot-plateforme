@@ -753,7 +753,7 @@ async function wfCard(box, item, ctx, B = null) {
 // a short menu (GitHub, Briefs, Sprints, Competencies, Teams & squads, Settings), GitHub as the home page, Briefs opens on
 // the cards with one "+ New brief" (the AI, import and blank briefs under "More"), shorter debrief texts. Off = nothing changes.
 const wSimple = () => { try { return localStorage.getItem("cb-simple") === "1"; } catch { return false; } };
-const W_KEEP = ["#/github", "#/briefs", "#/sprints", "#/competencies", "#/teams", "#/settings"];
+const W_KEEP = ["#/github", "#/briefs", "#/sprints", "#/progress", "#/competencies", "#/teams", "#/settings"];
 function wApplySimple() {
   const on = wSimple();
   document.body.classList.toggle("cb-simple", on);
@@ -765,7 +765,7 @@ function wApplySimple() {
   st.textContent = `
 .cb-simple #nav a:not(.cb-keep), .cb-simple #nav .nav-label { display: none; }
 .cb-simple #nav a[href="#/github"] { order: -6; } .cb-simple #nav a[href="#/briefs"] { order: -5; } .cb-simple #nav a[href="#/sprints"] { order: -4; }
-.cb-simple #nav a[href="#/competencies"] { order: -3; } .cb-simple #nav a[href="#/teams"] { order: -2; } .cb-simple #nav a[href="#/settings"] { order: -1; }
+.cb-simple #nav a[href="#/progress"] { order: -4; } .cb-simple #nav a[href="#/competencies"] { order: -3; } .cb-simple #nav a[href="#/teams"] { order: -2; } .cb-simple #nav a[href="#/settings"] { order: -1; }
 .cb-simple-sw { display: flex; gap: 8px; align-items: center; padding: 8px 10px; margin-top: 8px; color: var(--ink-soft); font-size: 13px; cursor: pointer; border-top: 1px solid var(--line); }
 .cb-more { position: relative; display: inline-block; } .cb-more > summary { list-style: none; } .cb-more > summary::-webkit-details-marker { display: none; }
 .cb-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 4px; min-width: 190px;
@@ -810,7 +810,125 @@ async function wBriefs(tab) {
   if (sub) sub.hidden = true;
 }
 
+// ================================================================= Debrief: oral questions (5 max) and the level (like GitHub Watcher)
+const W_LV = [["excellent", "Excellent"], ["bon", "Bon"], ["moyen", "Moyen"], ["faible", "Faible"], ["critique", "Critique"]];
+const W_LV_NAME = Object.fromEntries(W_LV);
+(() => {
+  const st = document.createElement("style");
+  st.textContent = `
+.pgc-excellent { --c: #15803d; } .pgc-bon { --c: #22a55a; } .pgc-moyen { --c: #e0a030; } .pgc-faible { --c: #f87171; } .pgc-critique { --c: #dc2626; }
+.w-lv.on { background: var(--c); border-color: var(--c); color: #fff; } .w-lv.prop { border: 2px dashed var(--c); }
+.w-or-row { grid-template-columns: 44px minmax(0, 1fr) auto; }
+.pg-table { border-collapse: collapse; } .pg-table th, .pg-table td { padding: 5px 8px; text-align: left; white-space: nowrap; }
+.pg-table th.pg-b { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; color: var(--ink-soft); max-height: 130px; overflow: hidden; }
+.pg-sq { display: inline-block; width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong); vertical-align: middle; }
+.pg-sq.has { background: var(--c); border-color: var(--c); } .pg-sq.ev { border-style: dashed; border-color: var(--ink-soft); }
+.pg-year { display: inline-flex; gap: 10px; font-size: 13px; font-weight: 700; } .pg-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; background: var(--c); }`;
+  document.head.append(st);
+})();
+
+// The level proposed from the switches on the screen: brief 40 %, competencies 30 %, oral questions and mise en situation 15 % each
+function wPropLevel() {
+  const ex = DB.R.review?.result?.exigences || [];
+  const s = currentStates();
+  const exOn = (i) => (typeof s.ex[i] === "boolean" ? s.ex[i] : !!(DB.R.states?.ex || [])[i]);
+  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const parts = [];
+  if (main.length) parts.push([0.4, main.filter(exOn).length / main.length]);
+  const co = Object.values(s.co);
+  if (co.length) parts.push([0.3, co.filter(Boolean).length / co.length]);
+  const or = s.oral || DB.R.states?.oral || [];
+  if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
+  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
+  if (m !== undefined) parts.push([0.15, m]);
+  if (!parts.length) return "";
+  const sc = parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0);
+  return sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique";
+}
+
+// Called at the end of the debrief page: fills its "Oral questions" and "Level" panels
+function wDebriefExtras() {
+  const rec = DB.R.review, final = DB.R.status === "final";
+  const box = $("#db-oral"), lvBox = $("#db-level"), body = $("#db-body");
+  if (!rec || !box || !lvBox) return;
+  const qs = rec.oral || [], st = DB.R.states?.oral || [];
+  const head = () => `Oral questions${qs.length ? ` <span class="muted">${$$("[data-or]:checked", box).length}/${qs.length}</span>` : ""}`;
+  box.innerHTML = `<div class="panel-head" style="margin:0"><h2 id="db-orh"></h2>
+      ${final ? "" : `<button class="btn small" id="db-ornew">${qs.length ? "Other questions" : "✨ Propose questions"}</button>`}</div>
+    ${qs.length ? `<div class="db-rows">${qs.map((q, i) => `<div class="db-row w-or-row">${sw(`data-or="${i}"`, !!st[i], final)}
+      <div><b>${i + 1}. ${esc(q.q)}</b><div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}</div>` : ""}</div>
+      ${final ? "<span></span>" : `<button class="btn small" data-ordel="${i}" title="Remove" aria-label="Remove question ${i + 1}">✕</button>`}</div>`).join("")}</div>` : ""}`;
+  $("#db-orh", box).innerHTML = head();
+  $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); });
+  if ($("#db-ornew", box)) $("#db-ornew", box).onclick = (e) => {
+    const btn = e.currentTarget;
+    const go = () => busy(btn, async () => {
+      toast("⏳ The AI writes the questions…");
+      const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who } });
+      DB.R = { ...DB.R, ...R };
+      wDebriefExtras();
+      saveStatesSoon();
+    });
+    if (qs.length) confirmDialog("Replace these questions?", "Another set of questions is written.", "Replace", go); else go();
+  };
+  $$("[data-ordel]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who, del: Number(b.dataset.ordel), states: { oral: currentStates().oral } } });
+    DB.R = { ...DB.R, ...R };
+    wDebriefExtras();
+    saveStatesSoon();
+  }));
+  // the level: proposed (dashed) from the switches, yours when you click; it can be changed at any time
+  const draw = () => {
+    const p = wPropLevel(), cur = (DB.R.review?.level || {}).lvl || "";
+    lvBox.innerHTML = `<h2>Level</h2><p class="muted small" style="margin:0 0 8px">${p ? `Proposed: <b>${W_LV_NAME[p]}</b>` : "Switch the points first."}${cur ? ` · yours: <b>${W_LV_NAME[cur]}</b>` : ""}</p>
+      <div class="toolbar" style="margin:0">${W_LV.map(([v, l]) => `<button class="btn small w-lv pgc-${v} ${cur === v ? "on" : !cur && p === v ? "prop" : ""}" data-lv="${v}">${l}</button>`).join("")}</div>`;
+    $$("[data-lv]", lvBox).forEach((b) => b.onclick = () => busy(b, async () => {
+      const next = cur === b.dataset.lv ? "" : b.dataset.lv;
+      const R = await api(`/briefs/${DB.bid}/review/level`, { method: "POST", body: { who: DB.who, level: next } });
+      DB.R = { ...DB.R, ...R };
+      toast(next ? `Level saved: ${W_LV_NAME[next]}` : "Level removed");
+      draw();
+    }));
+  };
+  DB.lvDraw = draw;
+  draw();
+  if (body && !body.dataset.wlv) {
+    body.dataset.wlv = "1";
+    body.addEventListener("change", () => DB.lvDraw?.());
+    body.addEventListener("click", (e) => { if (e.target.closest('[data-seg="mes"]')) setTimeout(() => DB.lvDraw?.(), 0); });
+  }
+}
+
+// ================================================================= Progress: one column per brief, one square per debrief (its level)
+const W_PG = { filter: "all", sort: "name" };
+async function viewProgress() {
+  const P = await api("/progress");
+  const rank = { critique: 0, faible: 1, moyen: 2, bon: 3, excellent: 4 };
+  const byName = (a, b) => a.s.name.localeCompare(b.s.name, undefined, { sensitivity: "base" });
+  const rows = P.students.map((s) => {
+    const lv = P.briefs.map((b) => P.cells[`${b.id}:${s.discord_id}`] || null);
+    const count = Object.fromEntries(W_LV.map(([v]) => [v, lv.filter((c) => c && c.lv === v).length]));
+    const set = lv.filter((c) => c && c.lv in rank);
+    return { s, lv, count, low: count.faible + count.critique, avg: set.length ? set.reduce((t, c) => t + rank[c.lv], 0) / set.length : 9 };
+  }).filter((x) => W_PG.filter === "all" || x.low > 0).sort(W_PG.sort === "low" ? (a, b) => a.avg - b.avg || byName(a, b) : byName);
+  const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("");
+  const legend = W_LV.map(([v, l]) => `<span style="margin-right:12px"><i class="pg-dot pgc-${v}"></i>${l}</span>`).join("");
+  view.innerHTML = `<div class="page-head"><div><h1>Progress</h1><p class="sub">One square per debrief: its level.</p></div></div>
+    <div class="toolbar"><select id="pg-f">${opt([["all", "All students"], ["low", "Faible or Critique"]], W_PG.filter)}</select>
+      <select id="pg-s">${opt([["name", "Name"], ["low", "Lowest level first"]], W_PG.sort)}</select></div>
+    ${!P.briefs.length ? `<div class="empty-state"><p class="muted">No debrief yet.</p></div>` : `<section class="panel"><div class="table-wrap"><table class="pg-table">
+      <thead><tr><th></th>${P.briefs.map((b) => `<th class="pg-b" title="${esc(b.title)}">${esc(b.title.slice(0, 24))}</th>`).join("")}<th>Over the year</th></tr></thead>
+      <tbody>${rows.map((x) => `<tr><td><b>${esc(x.s.name)}</b></td>${x.lv.map((c, i) => {
+        const b = P.briefs[i];
+        return `<td>${c ? `<a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}"></a>`
+          : `<span class="pg-sq" title="${esc(b.title)}: no debrief"></span>`}</td>`;
+      }).join("")}<td><span class="pg-year">${W_LV.filter(([v]) => x.count[v]).map(([v, l]) => `<span title="${l}"><i class="pg-dot pgc-${v}"></i>${x.count[v]}</span>`).join("")}</span></td></tr>`).join("")}</tbody></table></div>
+      <p class="muted small" style="margin:10px 0 0">${legend}</p></section>`}`;
+  $("#pg-f").onchange = (e) => { W_PG.filter = e.target.value; viewProgress(); };
+  $("#pg-s").onchange = (e) => { W_PG.sort = e.target.value; viewProgress(); };
+}
+
 // one GitHub page (the Watcher's view of it); old Watcher links lead there
-Object.assign(routes, { github: viewGithubAll, watch: () => { location.hash = "#/github"; }, "watch-students": () => { location.hash = "#/github"; }, sprints: viewSprints });
+Object.assign(routes, { github: viewGithubAll, watch: () => { location.hash = "#/github"; }, "watch-students": () => { location.hash = "#/github"; }, sprints: viewSprints, progress: viewProgress });
 // simple mode: Briefs on the cards, GitHub as the home page
 Object.assign(routes, { briefs: wBriefs, overview: () => (wSimple() ? (location.hash = "#/github") : viewOverview()) });

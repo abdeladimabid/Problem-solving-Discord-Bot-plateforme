@@ -16,7 +16,7 @@ import type { Program } from "../program.ts";
 import { programOf } from "../program.ts";
 import {
   CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, checkLabel, checkList,
-  cleanAi, firstNameOf, gridToText, gridWanted, memberComment, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
+  DEBRIEF_LEVELS, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, memberComment, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
 import { githubGet, githubText, installationToken, repoSnapshot, squadContribution } from "./gh.ts";
@@ -416,6 +416,7 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
     ck: Object.fromEntries(Object.keys(st.ck).map((id) => [id, bool(raw?.ck?.[id], st.ck[id])])),
     ex: st.ex.map((v: boolean, i: number) => bool(Array.isArray(raw?.ex) ? raw.ex[i] : undefined, v)),
     co: Object.fromEntries(Object.keys(st.co).map((code) => [code, bool(raw?.co?.[code], st.co[code])])),
+    oral: st.oral.map((v: boolean, i: number) => bool(Array.isArray(raw?.oral) ? raw.oral[i] : undefined, v)),
   };
   if (rec.challenge && raw?.mes && typeof raw.mes === "object") {
     rec.challenge.result = CH_RESULTS.includes(raw.mes.r) ? raw.mes.r : "";
@@ -427,8 +428,88 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
   rec.result.feedback = buildComment(rec.first || "", rec, final);
   if (rec.squad) rec.result.feedback = await groupComment(env, rec.result.feedback, rec.squad.name);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
+  rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)) };
   await putReview(env, g, briefId, who, rec);
+  await levelCols(env, briefId, who, rec);
   return { feedback: rec.result.feedback, states: reviewStates(rec) };
+}
+
+// The level in its own columns, for the Progress page
+const levelCols = (env: Env, briefId: number, who: string, rec: any) =>
+  run(env, "UPDATE brief_reviews SET level = ?, plevel = ? WHERE brief_id = ? AND who = ?", rec.level?.lvl || null, rec.level?.prop || null, briefId, who);
+
+/** The debrief's level, chosen by the teacher (or none); proposed from the switches; it can be changed at any time. */
+export async function setReviewLevel(env: Env, g: GuildRow, briefId: number, who: string, lvl: string) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
+  const rec = r.rec;
+  rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)), lvl: DEBRIEF_LEVELS.includes(lvl) ? lvl : "", at: Date.now() };
+  await putReview(env, g, briefId, who, rec);
+  await levelCols(env, briefId, who, rec);
+}
+
+/** Oral questions of the soutenance: at most 5, on the brief's notions and technologies only (1 AI call), each with the
+ *  expected answer and its notion. Each starts Not valid; another set replaces them. */
+export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) {
+  const r = await getReview(env, b.id, who);
+  if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
+  const rec = r.rec;
+  const tech = String(b.grid?.tech || b.data.tags.join(", "));
+  const levels = b.skills.filter((c) => /^C/.test(c)).map((c) => Number(c.slice(-1)));
+  const lvl = levels.length ? Math.min(...levels) : 1;
+  const points = (rec.result.exigences || []).filter((e: any) => e.type !== "bonus" && e.type !== "oral").map((e: any) => "- " + e.texte).slice(0, 25).join("\n");
+  const system = [
+    "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
+    "Prépare les questions orales de la soutenance : au plus 5 questions courtes que le formateur pose à l’apprenant pour vérifier qu’il comprend son projet.",
+    "Règles :",
+    `- Niveau ${lvl} sur 3 : des questions simples de compréhension, la réponse tient en une ou deux phrases.`,
+    "- Seulement les notions et les technologies du brief : aucune technique que le brief ne cite pas.",
+    "- Une notion différente par question (ex. une balise, une propriété, une commande Git, une bonne pratique demandée).",
+    "- Pour chaque question : la réponse attendue, courte, et la notion en 2 à 4 mots.",
+    'Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots"}]}',
+  ].join("\n");
+  const user = [`PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`, tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", points ? `POINTS DU BRIEF :\n${points}` : ""].filter(Boolean).join("\n");
+  const ask = await askReview(env, system, user, 1);
+  if (!ask.ok) throw new DebriefError(ask.msg);
+  const qs = (Array.isArray(ask.data?.questions) ? ask.data.questions : [])
+    .map((x: any) => ({ q: oneLine(x?.q, 240), a: oneLine(x?.a, 400), notion: oneLine(x?.notion, 60) }))
+    .filter((x: any) => x.q && x.a && !chOutsideBrief(x.q + " " + x.a, b.text + " " + tech).length).slice(0, 5);
+  if (!qs.length) throw new DebriefError("The AI answer could not be used. Click again.");
+  rec.oral = qs;
+  rec.final = { ...(rec.final || {}), oral: qs.map(() => false) };
+  await putReview(env, g, b.id, who, rec);
+}
+/** Removes one question; the other switches as they are on the screen are kept. */
+export async function delOral(env: Env, g: GuildRow, briefId: number, who: string, i: number, sent: unknown) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !Array.isArray(r.rec.oral) || !Number.isInteger(i) || !r.rec.oral[i]) throw new DebriefError("This question is not there anymore.");
+  const rec = r.rec;
+  const keep = Array.isArray(sent) && sent.length === rec.oral.length ? sent.map((v) => v === true) : reviewStates(rec).oral;
+  rec.oral.splice(i, 1);
+  keep.splice(i, 1);
+  rec.final = { ...(rec.final || {}), oral: keep };
+  await putReview(env, g, briefId, who, rec);
+}
+
+/** Progress: one column per brief, one square per debrief (its level); a squad's debrief counts for each member. */
+export async function progressView(env: Env, g: GuildRow) {
+  const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null }>(env,
+    "SELECT id, title, due_at, squads FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
+  const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string }>(env,
+    "SELECT brief_id, who, level, plevel, status FROM brief_reviews WHERE guild_id = ?", g.id);
+  const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
+  const squadsOf = new Map(briefs.map((b) => [b.id, cleanSquads(b.squads || "[]")]));
+  const cells: Record<string, { lv: string; plv: string; who: string; final: boolean }> = {};
+  for (const r of rows.sort((a, b) => (a.who < b.who ? 1 : -1))) {
+    const c = { lv: r.level || "", plv: r.plevel || "", who: r.who, final: r.status === "final" };
+    if (r.who.startsWith("u:")) cells[`${r.brief_id}:${r.who.slice(2)}`] = c;
+    else for (const m of (squadsOf.get(r.brief_id) || []).find((s) => `s:${s.id}` === r.who)?.members || []) cells[`${r.brief_id}:${m}`] = c;
+  }
+  const used = new Set(Object.keys(cells).map((k) => Number(k.split(":")[0])));
+  return {
+    briefs: briefs.filter((b) => used.has(b.id)).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at })),
+    students: students.map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id })), cells,
+  };
 }
 
 /** The teacher edited the comment by hand: keep their text. */

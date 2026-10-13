@@ -2622,6 +2622,40 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check((await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C99", ok: true })).status === 400, "unknown competency refused");
 }
 
+section("debriefs: oral questions (5 max, on the brief only), the level proposed then chosen, Progress");
+{
+  const id = (globalThis as any).__briefId as number;
+  const who = `u:${U.bob.id}`;
+  const rec = {
+    at: Date.now(), first: "Bob", model: "test", brief: "Hammam", repos: ["bob-gh/hammam"], count: 8, files: true, skills: ["C3", "T1"],
+    checks: [{ id: "pages", label: "Site multipage", ok: true, detail: "3 pages" }],
+    result: { resume: "Bien.", commits: [], forts: [], ameliorer: [], feedback: "",
+      exigences: [{ type: "story", texte: "Page des soins", statut: "fait", preuve: "soins.html", check: "pages" }],
+      competences: [{ code: "C3", avis: "validable", raison: "ok" }] },
+    challenge: null,
+  };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(rec), clock.now());
+  const o1 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who });
+  const qs = o1.data.review?.oral || [];
+  check(o1.status === 200 && qs.length === 5 && !qs.some((q: any) => /Sass/.test(q.q) || !q.a) && o1.data.states.oral.every((v: boolean) => v === false), "at most 5 questions, on the brief only, each Not valid first");
+  const sys = ai.prompts[ai.prompts.length - 1];
+  check(sys.includes("au plus 5 questions courtes") && sys.includes("aucune technique que le brief ne cite pas"), "…the brief's notions and technologies only");
+  const o2 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, del: 1, states: { oral: [true, false, false, true, false] } });
+  check(o2.data.review.oral.length === 4 && JSON.stringify(o2.data.states.oral) === "[true,false,true,false]", "a question removed, the other switches kept");
+  const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
+  const fb = s1.data.review.result.feedback;
+  check(/-Questions orales :\nTu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Notions à revoir : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
+  check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
+  const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
+  const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
+  check(l1.data.review.level.lvl === "moyen" && l2.data.review.level.lvl === "bon" && q1("SELECT level FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).level === "bon", "the teacher's level, changed at any time");
+  const P = await api("GET", `/api/progress?g=${G}`);
+  const cell = P.data.cells?.[`${id}:${U.bob.id}`];
+  check(P.status === 200 && P.data.briefs.some((b: any) => b.id === id) && cell?.lv === "bon" && cell.who === who, "Progress: the square of the debrief, with its level");
+  check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "nope" })).data.review.level.lvl === "", "unknown level: none");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who);
+}
+
 section("assessments: links, shuffled papers, full screen lock, teacher lets back in, AI grading, results on the record");
 {
   const gen = await api("POST", "/api/assessments/generate", { g: G, topic: "Flexbox", count: 3, for_student: U.alice.id });

@@ -816,9 +816,11 @@ function renderDebrief() {
       </section>
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
+      <section class="panel" id="db-oral"></section>
       <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : "Written from your switches. Edit it freely: your text is kept."}</p></section>
+      <section class="panel" id="db-level"></section>
       <section class="panel">${final ? `<h2>✅ Finalized</h2>
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
@@ -829,6 +831,7 @@ function renderDebrief() {
   updateMeter();
   wireDebrief();
   renderSteps(final);
+  if (typeof wDebriefExtras === "function") wDebriefExtras();
 }
 
 // Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
@@ -919,7 +922,8 @@ function currentStates() {
   $$("[data-ck]").forEach((c) => (ck[c.dataset.ck] = c.checked));
   $$("[data-ex]").forEach((c) => (ex[Number(c.dataset.ex)] = c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
-  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" } };
+  const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
+  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
 }
 function updateMeter() {
   const ex = DB.R.review?.result?.exigences || [];

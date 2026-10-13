@@ -352,6 +352,16 @@ function fakeAI() {
       if (sys.includes("commentaire de fin de sprint")) return { response: JSON.stringify({ commentaire: "Les objectifs technologiques de ce sprint se sont concentrés sur HTML et CSS.\n\nGlobalement, la majorité des apprenants ont atteint les objectifs fixés." }) };
       if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
       if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
+      if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
+        { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },
+        { q: "Comment écrire une variable avec Sass ?", a: "Avec un $ devant le nom.", notion: "variables Sass" },
+        { q: "Quelle différence entre une classe et un id ?", a: "Une classe se réutilise, un id est unique.", notion: "classe et id" },
+        { q: "Sans réponse ?", a: "", notion: "rien" },
+        { q: "À quoi sert l’attribut alt ?", a: "Décrire l’image pour l’accessibilité.", notion: "attribut alt" },
+        { q: "Comment relier les pages entre elles ?", a: "Avec des liens dans le menu.", notion: "liens du menu" },
+        { q: "Pourquoi un seul h1 par page ?", a: "Pour le titre principal et le SEO.", notion: "titre h1" },
+        { q: "Que fait git push ?", a: "Envoie les commits sur GitHub.", notion: "git push" },
+      ] }) };
       if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", consigne: "Modifie la couleur du fond du formulaire en utilisant Flexbox, ajoute une règle @media pour la taille du texte.", observer: ["Flexbox appliqué", "règle @media ajoutée"] }) };
       if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
