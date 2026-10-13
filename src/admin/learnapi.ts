@@ -9,7 +9,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
@@ -319,7 +319,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       else await makeOral(env, g, b, who);
       return ok(await reviewView(env, g, id, who));
     }
-    if (act === "level" && method === "POST") { await setReviewLevel(env, g, id, who, String(body.level || "")); return ok(await reviewView(env, g, id, who)); }
+    if (act === "level" && method === "POST") {
+      if (body.ai) await makeReviewLevel(env, g, id, who, body.states ?? null, String(body.comment || "").slice(0, 6000));
+      else await setReviewLevel(env, g, id, who, String(body.level || ""));
+      return ok(await reviewView(env, g, id, who));
+    }
     if (act === "members") { await saveMembers(env, g, id, who, body.members ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);
