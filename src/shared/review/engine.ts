@@ -161,7 +161,7 @@ const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.t
 
 // Comment in the teacher's style, built only from the checklist (checks + brief requirements + competencies).
 // Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
-export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null) {
+export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null) {
   const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
   const ok = (id) => !!c[id] && c[id].ok === true;
   const ko = (id) => !!c[id] && c[id].ok === false;
@@ -170,7 +170,7 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const part = (t) => { const m = String(t).match(/je (vais|veux|dois|souhaite|peux)\s+(.+?)(,?\s+(afin|pour que|pour qu’|pour qu')\b|$)/i); return (m ? m[2] : String(t)).replace(/\.$/, ''); };
   const tw = /Tailwind/.test(d('responsive'));
   const sec = { 'Fonctionnalités': [], 'Intégration': [], 'Responsive': [], 'JavaScript': [], 'POO / Architecture': [], 'Base de données': [], 'Sécurité': [], 'API': [], 'Tests': [],
-    'Bonnes pratiques': [], 'Git / GitHub': [], 'Hébergement': [], 'Bonus': [], 'Mise en situation': [] };
+    'Bonnes pratiques': [], 'Git / GitHub': [], 'Suivi du projet': [], 'Hébergement': [], 'Bonus': [], 'Mise en situation': [] };
   const pages = (d('pages').match(/page\(s\) : ([^;]+)/) || [])[1];
   if (ok('pages') && pages) sec['Intégration'].push(`Ton site contient bien plusieurs pages (${pages.trim()}).`);
   if (ok('nav')) sec['Intégration'].push(`Le menu permet d’accéder à toutes les pages${ok('active') ? ' et indique la page en cours' : ''}.`);
@@ -212,6 +212,10 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     sec['Mise en situation'].push(ch.result === 'valide' ? `Tu as réussi la mise en situation${t}.` : ch.result === 'partiel' ? `La mise en situation${t} est partiellement réussie.` : `La mise en situation${t} n’est pas validée.`);
     if (ch.note) sec['Mise en situation'].push(String(ch.note).trim());
   }
+  // Oral questions asked: the notions still Not valid are notions to review
+  const asked = Array.isArray(oral) ? oral : [];
+  const toReview = asked.filter((x) => !x.ok).map((x) => String(x.notion).trim()).filter(Boolean);
+  if (asked.length) sec['Questions orales'] = [toReview.length ? `Tu as bien répondu à ${asked.length - toReview.length} question${asked.length - toReview.length > 1 ? 's' : ''} orale${asked.length - toReview.length > 1 ? 's' : ''} sur ${asked.length}.` : 'Tu as bien répondu à toutes les questions orales.'];
 
   // Git / GitHub, always judged: number and regularity of commits, messages and their style, branches when used
   const gitAdvice = [];
@@ -292,6 +296,22 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   for (const [id, text] of ADV) if (ko(id) && !bonusOnly.has(id) && !(id === 'responsive' && ko('breakpoints'))) advice.push(text);
   for (const id of Object.keys(DETECTORS)) if (ko(id) && !bonusOnly.has(id)) advice.push(DETECTORS[id][3]);
   advice.push(...gitAdvice);
+  // Steps of the brief: the teacher's result for each step, and when the work was done (see steps.ts)
+  const stepsDone = suivi && Array.isArray(suivi.steps) ? suivi.steps.filter((x) => STEP_RESULTS.includes(x.final)) : [];
+  const SP = sec['Suivi du projet'];
+  if (stepsDone.length) {
+    if (stepsDone.length === suivi.steps.length && stepsDone.every((x) => x.final === 'a_temps')) {
+      SP.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
+      for (const x of stepsDone) if (x.note) SP.push(`${x.name} : ${x.note}`);
+    } else for (const x of stepsDone) SP.push(`${x.name} : ${STEP_FR[x.final]}.${x.note ? ' ' + x.note : ''}`);
+    if (stepsDone.some((x) => x.final !== 'a_temps')) advice.push('de terminer chaque partie à la date prévue : découpe le travail et avance à chaque étape');
+  }
+  const rh = suivi && suivi.rhythm, nSteps = suivi && suivi.steps ? suivi.steps.length : 0;
+  const total = rh ? rh.reduce((a, b) => a + b, 0) : 0;
+  if (rh && nSteps >= 2 && total >= 5) {
+    const last = (rh[nSteps - 1] || 0) + (rh[nSteps] || 0);
+    if (last / total >= 0.6) SP.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
+  }
   for (const e of exigences.filter((x) => (x.type === 'livrable' || x.type === 'critere') && own(x))) advice.push(`de compléter ce point du brief : ${String(e.texte).replace(/\s*:$/, '').replace(/\.$/, '')}`);
   const parts = [`Bonjour${firstName ? ` ${firstName}` : ''},`];
   for (const [title, lines] of Object.entries(sec)) if (lines.length) parts.push(`-${title} :\n${lines.join('\n')}`);
@@ -301,10 +321,11 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const more = exigences.filter((x) => x.type === 'bonus' && !itemValid(x)).slice(0, 4).map((x) => part(x.texte).replace(/[\s:;,.]+$/, '')).filter(Boolean);
   if (more.length === 1) parts.push(`Pour progresser, tu peux aussi essayer ce bonus : ${more[0]}.`);
   else if (more.length) parts.push(`Pour progresser, tu peux aussi essayer ces bonus :\n${more.map((t) => `- ${t}`).join('\n')}`);
+  if (toReview.length) parts.push(`Notions à revoir : ${toReview.join(', ')}.`);
   const compOk = competences.filter((x) => x.ok === true).map((x) => skillDisplay(x.code));
   const compKo = competences.filter((x) => x.ok === false).map((x) => skillDisplay(x.code));
   if (compOk.length || compKo.length) parts.push([compOk.length ? `Compétences validées : ${compOk.join(', ')}.` : '', compKo.length ? `Compétences non validées : ${compKo.join(', ')}.` : ''].filter(Boolean).join('\n'));
-  const unfinished = exigences.some((x) => x.type !== 'bonus' && !itemValid(x)) || compKo.length > 0 || !!(ch && ch.result !== 'valide');
+  const unfinished = exigences.some((x) => x.type !== 'bonus' && !itemValid(x)) || compKo.length > 0 || !!(ch && ch.result !== 'valide') || stepsDone.some((x) => x.final === 'non_fait') || toReview.length > 0;
   parts.push(advice.length || unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
   return parts.join('\n\n');
 }
@@ -320,9 +341,32 @@ export function reviewStates(rec) {
   for (const x of r.competences || []) co[x.code] = typeof (saved.co || {})[x.code] === 'boolean' ? saved.co[x.code] : x.avis === 'validable';
   const ch = (rec && rec.challenge) || null;
   const mes = { r: (saved.mes && CH_RESULTS.includes(saved.mes.r) ? saved.mes.r : ch && ch.result) || '', note: String((saved.mes && typeof saved.mes.note === 'string' ? saved.mes.note : ch && ch.note) || '') };
-  return { ck, ex, co, mes };
+  // oral questions: each one starts Not valid, the teacher switches it after the answer
+  const oral = ((rec && rec.oral) || []).map((q, i) => typeof (saved.oral || [])[i] === 'boolean' ? saved.oral[i] : false);
+  return { ck, ex, co, mes, oral };
 }
 export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
+export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'];
+// The level proposed after the debrief, from the switches: brief (40 %), competencies (30 %), oral questions and
+// mise en situation (15 % each), only the parts that were evaluated. The teacher chooses the level, and can change it.
+export function debriefLevel(rec, st) {
+  const ex = ((rec && rec.result) || {}).exigences || [];
+  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'oral');
+  const parts = [];
+  if (main.length) parts.push([0.4, main.filter((i) => st.ex[i]).length / main.length]);
+  const co = Object.values(st.co || {});
+  if (co.length) parts.push([0.3, co.filter(Boolean).length / co.length]);
+  const or = st.oral || [];
+  if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
+  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
+  if (m !== undefined) parts.push([0.15, m]);
+  if (!parts.length) return '';
+  const sc = parts.reduce((a, p) => a + p[0] * p[1], 0) / parts.reduce((a, p) => a + p[0], 0);
+  return sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique';
+}
+// The teacher's result for a step of the brief (see steps.ts)
+export const STEP_RESULTS = ['a_temps', 'en_retard', 'non_fait'];
+export const STEP_FR = { a_temps: 'validée à temps', en_retard: 'validée en retard', non_fait: 'non validée' };
 
 // The comment from the final checklist states
 export function buildComment(firstName, rec, states) {
@@ -332,7 +376,8 @@ export function buildComment(firstName, rec, states) {
   const items = (r.exigences || []).map((e, i) => ({ ...e, ok: st.ex[i] }));
   const comps = (r.competences || []).map((x) => ({ code: x.code, ok: st.co[x.code] }));
   const ch = rec.challenge ? { ...rec.challenge, result: st.mes.r, note: st.mes.note } : null;
-  return buildFeedback(firstName, checks, items, comps, ch);
+  const oral = (rec.oral || []).map((q, i) => ({ notion: q.notion || q.q, ok: !!st.oral[i] }));
+  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral);
 }
 
 // The sure checks win over the AI: a requirement that a check proves (or disproves) gets the check's answer
@@ -1041,6 +1086,9 @@ export function memberComment(m, rec, ms) {
       : `Ton travail au sein du squad est bien visible : ${work}${m.reviews ? `, et ${m.reviews} relecture${m.reviews > 1 ? 's' : ''} de pull request` : ''}.`);
     if (m.cards != null) lines.push(m.cards ? `Sur le tableau de planification, ${m.cards} carte${m.cards > 1 ? 's' : ''} t’${m.cards > 1 ? 'étaient attribuées' : 'était attribuée'}, dont ${m.cardsDone} terminée${m.cardsDone > 1 ? 's' : ''}.`
       : 'Aucune carte ne t’était attribuée sur le tableau de planification : pense à t’assigner tes tâches.');
+    if (Array.isArray(m.perStep) && Array.isArray(rec.stepNames) && rec.stepNames.length) {
+      lines.push(`Tes commits par étape : ${rec.stepNames.map((nm, i) => `${nm} : ${m.perStep[i] || 0}`).join(', ')}${m.perStep[rec.stepNames.length] ? `, après la dernière étape : ${m.perStep[rec.stepNames.length]}` : ''}.`);
+    }
     if (m.sm && ck('pr_review') === false) lines.push('Pense à faire approuver chaque pull request avant de la fusionner : c’est ton rôle de garantir la qualité du code fusionné.');
   }
   // Quiz
@@ -1071,7 +1119,7 @@ export function memberComment(m, rec, ms) {
 // "Mise en situation": one small task on a user story of the brief drawn at random (done or not done in the project),
 // carried out in front of the teacher. It follows the brief (technologies, level) and is a small slice: never a whole page.
 export const CH_LEVEL = {
-  1: ['imiter', '10 min', 'une seule petite chose, en s’inspirant de son propre code ou d’un exemple du cours (ex. dupliquer une carte et changer son contenu, ajouter un lien dans le menu, changer la couleur ou la taille d’un élément, changer la disposition d’une section sur mobile, ajouter une courte section : un titre, un texte, une image).'],
+  1: ['imiter', '10 min', 'une seule petite chose, en s’inspirant de son propre code ou d’un exemple du cours (ex. dupliquer une carte et changer son contenu, ajouter un lien dans le menu, changer la couleur ou la taille d’un élément, ajouter une courte section : un titre, un texte, une image).'],
   2: ['adapter', '15 min', 'adapter un élément existant à une nouvelle contrainte simple (ex. une autre disposition pour la tablette, une courte section qui reprend un style existant).'],
   3: ['transposer', '20 min', 'refaire un petit élément semblable à un autre endroit du projet, sans modèle à copier.'],
 };
@@ -1080,6 +1128,13 @@ export const JS_BRIEF = /javascript|\bjs\b|\bdom\b|fetch|\bapi\b|localstorage|é
 export const CH_NEEDS_JS = /javascript|\bjs\b|<script|\bscript\b|addeventlistener|\bdom\b|onclick|au clic|en cliquant|filtrer|trier|rechercher|que le visiteur puisse (choisir|filtrer|trier|rechercher)|interacti|dynamique/i;
 // Too big for a few minutes: a whole page, a whole site, "everything"
 export const CH_TOO_BIG = /page (entière|complète)|toute la page|tout le site|\b(crée|construis|réalise|refais|développe|fais|code|intègre) (une|la|ta|toute la) (nouvelle )?page\b/i;
+// Techniques a task may name only when the brief names them (otherwise it says the result and the learner chooses how)
+const CH_TECH = /(?<![\w@-])(flexbox|flex|grid|@media|media[- ]?quer(?:y|ies)|bootstrap|tailwind|sass|scss|z-index|keyframes|transform|transition|animation)(?![\w-])/gi;
+export function chOutsideBrief(text: string, brief: string): string[] {
+  const b = String(brief || "").toLowerCase();
+  const found = [...new Set((String(text || "").match(CH_TECH) || []).map((w) => w.toLowerCase()))];
+  return found.filter((w) => !(b.includes(w) || (/media/.test(w) && /@media|media[- ]?quer/.test(b))));
+}
 
 // User stories seen in the code (not an analysis, a logo or a meeting), done or not; otherwise any story
 export function challengePool(ex) {

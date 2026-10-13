@@ -5,7 +5,7 @@ import { GH_WEB } from './gh.ts';
 
 export function countAction(event: string, p: any, analysis: any) {
   if (event === 'push') {
-    const list = Object.values(analysis || {}).filter((a) => a.kind !== 'merge');
+    const list = Object.values(analysis || {}).filter((a) => a.kind !== 'merge' && !a.notMine && !a.old);
     const flagged = list.filter((a) => a.flags.length > 0); // huge / node_modules: suspicious, not scored
     const real = list.filter((a) => a.kind === 'real' && a.flags.length === 0);
     return {

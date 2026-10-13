@@ -312,6 +312,7 @@ async function password() {
   const url = `https://classbot-admin.${state.subdomain}.workers.dev`;
   console.log(C.green(`\n🎉 Done! Open ${url} and sign in with your password.`));
   console.log("  To change it later, run this command again.");
+  console.log(`  ${C.bold("GitHub")} (briefs, debriefs, reports): in the dashboard, Settings → GitHub & Watcher → ${C.bold("✨ Create the GitHub App for me")} (2 clicks).`);
   openUrl(url);
 }
 

@@ -668,6 +668,8 @@ ol.league li.me b { color: var(--blue); }
 .db-rows { display: grid; gap: 2px; }
 .db-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 4px; border-bottom: 1px solid var(--line); }
 .db-row:last-child { border-bottom: 0; }
+.db-step { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.db-step:last-child { border-bottom: 0; }
 .db-row .switch { margin-top: 2px; }
 .db-row.info { opacity: .85; }
 .db-i { text-align: center; }
