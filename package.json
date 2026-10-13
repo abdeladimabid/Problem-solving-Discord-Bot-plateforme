@@ -20,9 +20,9 @@
     "export:challenges": "node --no-warnings scripts/export-challenges.mjs"
   },
   "devDependencies": {
-    "wrangler": "^4.0.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.6.0",
-    "@types/node": "^22.0.0"
+    "wrangler": "^4.150.0"
   },
   "engines": {
     "node": ">=22.6"
