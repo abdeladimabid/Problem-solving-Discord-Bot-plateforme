@@ -2572,6 +2572,16 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check(st.status === 200 && st.data.states.co.T1 === true && /^Bonjour Alice/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
   const ch = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
   check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.observer.length === 2, "mise en situation drawn on a point of the brief");
+  {
+    const sys = ai.prompts[ai.prompts.length - 1], usr = ai.users[ai.users.length - 1];
+    check(sys.includes("Une seule chose à faire, sur le point tiré au sort") && sys.includes("Ne nomme aucune technique ou propriété que le brief ne cite pas") && !sys.includes("disposition d’une section sur mobile"), "…one thing on the drawn point, no technique the brief doesn't cite");
+    check(usr.includes("BRIEF :\n") && !usr.includes("CE QUE LE PROJET UTILISE"), "…the whole brief, not what the student's code uses");
+    ai.chTech = true; const n0 = ai.users.length;
+    const ct = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
+    ai.chTech = false;
+    const again = ai.users.slice(n0).filter((u) => u.includes("POINT DU BRIEF TIRÉ AU SORT"));
+    check(ct.status === 200 && again.length === 2 && /elle nomme [^)]*@media[^)]*, que le brief ne demande pas/.test(again[1]) && !/flexbox|@media/i.test(ct.data.review.challenge.consigne), "…a task naming Flexbox / @media is refused and asked again");
+  }
   await api("POST", `/api/briefs/${id}/review/comment`, { g: G, who, text: "Bonjour Alice, mon commentaire." });
   const keep = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { mes: { r: "valide", note: "" }, keepComment: true, comment: "Bonjour Alice, mon commentaire." } });
   check(keep.data.review.result.feedback === "Bonjour Alice, mon commentaire." && keep.data.states.mes.r === "valide", "an edited comment is kept when switches change");

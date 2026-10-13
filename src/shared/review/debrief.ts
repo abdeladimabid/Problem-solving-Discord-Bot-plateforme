@@ -15,7 +15,7 @@ import { cleanBrief, simplonText } from "../briefs.ts";
 import type { Program } from "../program.ts";
 import { programOf } from "../program.ts";
 import {
-  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, checkLabel, checkList,
+  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, checkLabel, checkList,
   cleanAi, firstNameOf, gridToText, gridWanted, memberComment, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
@@ -464,7 +464,7 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
   const js = JS_BRIEF.test(b.text) || /javascript|\bjs\b|php|laravel|sql|react|vue|node|symfony|python/i.test(tech);
   const c = Object.fromEntries((rec.checks || []).map((x: any) => [x.id, x]));
   const pages = (String(c.pages?.detail || "").match(/page\(s\) : ([^;]+)/) || [])[1] || "";
-  const uses = [c.layout?.ok ? c.layout.detail : "", c.responsive?.ok ? c.responsive.detail : ""].filter(Boolean).join(" ; ");
+  // not what the project's code uses (Flexbox, Grid…): the AI took it for something the brief asks
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
     `Propose UNE mise en situation : une seule petite tâche que l’apprenant réalise seul, devant le formateur, sur son propre projet, en ${duree}, pour vérifier qu’il comprend et sait faire le point du brief tiré au sort.`,
@@ -475,14 +475,16 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
       : "- Ce point n’est pas réussi ou pas terminé dans son projet : il en réalise un petit morceau, pour montrer s’il a compris comment le faire.",
     `- Utilise seulement ce que le brief demande et ce que le projet utilise déjà.${js ? "" : " Le brief est en HTML et CSS : pas de JavaScript, rien d’interactif."}`,
     "- Pas de nouvelle fonctionnalité, pas de bonus, rien que le brief ne demande pas.",
+    "- Une seule chose à faire, sur le point tiré au sort uniquement : pas un autre élément, pas deux consignes en une.",
+    "- Ne nomme aucune technique ou propriété que le brief ne cite pas (ex. Flexbox, Grid, @media, Bootstrap) : décris le résultat visible à obtenir, l’apprenant choisit comment faire.",
     "- Le résultat se vérifie en moins d’une minute.",
     "- Consigne en 1 à 3 phrases courtes, en tutoyant l’apprenant, avec un exemple concret tiré de son projet.",
     'Réponds UNIQUEMENT avec ce JSON : {"titre":"max 8 mots","consigne":"1 à 3 phrases","observer":["ce que le formateur vérifie, max 12 mots"]} avec 2 ou 3 éléments dans "observer".',
   ].join("\n");
   const user = (extra: string) => [
-    `PROJET : ${b.title}`, `BRIEF (début) :\n${b.text.slice(0, 1500)}`,
+    `PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`,
     `POINT DU BRIEF TIRÉ AU SORT (${done ? "réussi" : "pas réussi ou pas terminé"} dans le projet) : ${ex[item].texte}`,
-    pages ? `PAGES DU PROJET : ${pages}` : "", tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", uses ? `CE QUE LE PROJET UTILISE : ${uses}` : "", extra,
+    pages ? `PAGES DU PROJET : ${pages}` : "", tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", extra,
   ].filter(Boolean).join("\n");
   let extra = "";
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -496,15 +498,17 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
     };
     if (!cand.titre || !cand.consigne) throw new DebriefError("The AI answer could not be read. Click again.");
     const text = cand.titre + " " + cand.consigne;
+    const outside = chOutsideBrief(text + " " + cand.observer.join(" "), b.text + " " + tech);
     const why = !js && CH_NEEDS_JS.test(text + " " + cand.observer.join(" ")) ? "elle demandait du JavaScript ou une nouvelle fonctionnalité"
-      : CH_TOO_BIG.test(text) ? `elle était trop grosse pour ${duree} (une page entière)` : "";
+      : CH_TOO_BIG.test(text) ? `elle était trop grosse pour ${duree} (une page entière)`
+      : outside.length ? `elle nomme ${outside.join(", ")}, que le brief ne demande pas` : "";
     if (!why) {
       if (mine) { rec.members = rec.members || {}; rec.members[mine] = { ...(rec.members[mine] || {}), ch: cand }; }
       else rec.challenge = cand;
       await putReview(env, g, b.id, who, rec);
       return cand;
     }
-    extra = `ATTENTION : ta proposition précédente ne convient pas (${why}). Propose une tâche plus petite, en ${duree}, sur ce que le projet a déjà${js ? "" : ", en HTML et CSS"}.`;
+    extra = `ATTENTION : ta proposition précédente ne convient pas (${why}). Propose une tâche plus petite, en ${duree}, sur ce que le projet a déjà${js ? "" : ", en HTML et CSS"}${outside.length ? ", en décrivant le résultat sans nommer de technique" : ""}.`;
   }
   throw new DebriefError("The AI proposed something too big or outside the brief. Click again.");
 }

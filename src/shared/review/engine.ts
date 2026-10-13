@@ -1093,7 +1093,7 @@ export function memberComment(m, rec, ms) {
 // "Mise en situation": one small task on a user story of the brief drawn at random (done or not done in the project),
 // carried out in front of the teacher. It follows the brief (technologies, level) and is a small slice: never a whole page.
 export const CH_LEVEL = {
-  1: ['imiter', '10 min', 'une seule petite chose, en s’inspirant de son propre code ou d’un exemple du cours (ex. dupliquer une carte et changer son contenu, ajouter un lien dans le menu, changer la couleur ou la taille d’un élément, changer la disposition d’une section sur mobile, ajouter une courte section : un titre, un texte, une image).'],
+  1: ['imiter', '10 min', 'une seule petite chose, en s’inspirant de son propre code ou d’un exemple du cours (ex. dupliquer une carte et changer son contenu, ajouter un lien dans le menu, changer la couleur ou la taille d’un élément, ajouter une courte section : un titre, un texte, une image).'],
   2: ['adapter', '15 min', 'adapter un élément existant à une nouvelle contrainte simple (ex. une autre disposition pour la tablette, une courte section qui reprend un style existant).'],
   3: ['transposer', '20 min', 'refaire un petit élément semblable à un autre endroit du projet, sans modèle à copier.'],
 };
@@ -1102,6 +1102,13 @@ export const JS_BRIEF = /javascript|\bjs\b|\bdom\b|fetch|\bapi\b|localstorage|é
 export const CH_NEEDS_JS = /javascript|\bjs\b|<script|\bscript\b|addeventlistener|\bdom\b|onclick|au clic|en cliquant|filtrer|trier|rechercher|que le visiteur puisse (choisir|filtrer|trier|rechercher)|interacti|dynamique/i;
 // Too big for a few minutes: a whole page, a whole site, "everything"
 export const CH_TOO_BIG = /page (entière|complète)|toute la page|tout le site|\b(crée|construis|réalise|refais|développe|fais|code|intègre) (une|la|ta|toute la) (nouvelle )?page\b/i;
+// Techniques a task may name only when the brief names them (otherwise it says the result and the learner chooses how)
+const CH_TECH = /(?<![\w@-])(flexbox|flex|grid|@media|media[- ]?quer(?:y|ies)|bootstrap|tailwind|sass|scss|z-index|keyframes|transform|transition|animation)(?![\w-])/gi;
+export function chOutsideBrief(text: string, brief: string): string[] {
+  const b = String(brief || "").toLowerCase();
+  const found = [...new Set((String(text || "").match(CH_TECH) || []).map((w) => w.toLowerCase()))];
+  return found.filter((w) => !(b.includes(w) || (/media/.test(w) && /@media|media[- ]?quer/.test(b))));
+}
 
 // User stories seen in the code (not an analysis, a logo or a meeting), done or not; otherwise any story
 export function challengePool(ex) {
