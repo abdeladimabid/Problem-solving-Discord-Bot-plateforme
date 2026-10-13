@@ -443,7 +443,54 @@ export async function setReviewLevel(env: Env, g: GuildRow, briefId: number, who
   const r = await getReview(env, briefId, who);
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
   const rec = r.rec;
-  rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)), lvl: DEBRIEF_LEVELS.includes(lvl) ? lvl : "", at: Date.now() };
+  rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)), lvl: DEBRIEF_LEVELS.includes(lvl) ? lvl : "", why: "", by: "you", at: Date.now() };
+  await putReview(env, g, briefId, who, rec);
+  await levelCols(env, briefId, who, rec);
+}
+
+/** "Generate the level": 1 AI call reads the switches as they are on the screen (brief, competencies), the oral questions,
+ *  the mise en situation and the teacher's comment (without the "Bonjour …" line: no name), and sets the level with a short
+ *  reason (still editable). Without a usable answer: the level computed from the switches. */
+export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, who: string, raw: any, comment: string) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
+  const rec = r.rec;
+  const saved = reviewStates(rec);
+  const bool = (v: unknown, d: boolean) => (typeof v === "boolean" ? v : d);
+  const st = {
+    ck: saved.ck, co: Object.fromEntries(Object.keys(saved.co).map((c) => [c, bool(raw?.co?.[c], saved.co[c])])),
+    ex: saved.ex.map((v: boolean, i: number) => bool(Array.isArray(raw?.ex) ? raw.ex[i] : undefined, v)),
+    oral: saved.oral.map((v: boolean, i: number) => bool(Array.isArray(raw?.oral) ? raw.oral[i] : undefined, v)),
+    mes: raw?.mes && CH_RESULTS.includes(raw.mes.r) ? { r: raw.mes.r, note: String(raw.mes.note || "") } : saved.mes,
+  };
+  const calc = debriefLevel(rec, st);
+  const ex = rec.result.exigences || [];
+  const main = ex.map((e: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const missing = main.filter((i: number) => !st.ex[i]).map((i: number) => ex[i].texte).slice(0, 8);
+  const co = Object.keys(st.co);
+  const oral = rec.oral || [];
+  const MES: Record<string, string> = { valide: "réussie", partiel: "partiellement réussie", non_valide: "non validée" };
+  const text = String(comment || rec.result.feedback || "").replace(/^Bonjour[^\n]*\n/, "").trim().slice(0, 3000);
+  const system = [
+    "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
+    "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
+    "Base-toi sur les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
+    'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
+  ].join("\n");
+  const user = [
+    `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
+    co.length ? `COMPÉTENCES : validées ${co.filter((c) => st.co[c]).map(skillText).join(", ") || "aucune"} ; non validées ${co.filter((c) => !st.co[c]).map(skillText).join(", ") || "aucune"}` : "",
+    oral.length ? `QUESTIONS ORALES : ${st.oral.filter(Boolean).length}/${oral.length} réussies${st.oral.some((v: boolean) => !v) ? ` ; notions à revoir : ${oral.filter((q: any, i: number) => !st.oral[i]).map((q: any) => q.notion || q.q).join(", ")}` : ""}` : "",
+    st.mes.r ? `MISE EN SITUATION : ${MES[st.mes.r]}${st.mes.note ? ` (${oneLine(st.mes.note, 200)})` : ""}` : "",
+    calc ? `NIVEAU CALCULÉ À PARTIR DES VALIDATIONS : ${calc}` : "",
+    text ? `COMMENTAIRE DU FORMATEUR :\n<<<\n${text}\n>>>` : "",
+  ].filter(Boolean).join("\n");
+  const ask = await askReview(env, system, user, 1);
+  const ai = ask.ok && ask.data ? String(ask.data.niveau || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
+  const fromAi = DEBRIEF_LEVELS.includes(ai);
+  const lvl = fromAi ? ai : calc;
+  if (!lvl) throw new DebriefError("Switch the points first.");
+  rec.level = { ...(rec.level || {}), prop: calc, lvl, why: fromAi ? oneLine(ask.data.pourquoi, 200) : "Calculé à partir des validations.", by: fromAi ? "ai" : "calc", at: Date.now() };
   await putReview(env, g, briefId, who, rec);
   await levelCols(env, briefId, who, rec);
 }

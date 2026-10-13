@@ -816,7 +816,7 @@ const W_LV_NAME = Object.fromEntries(W_LV);
 (() => {
   const st = document.createElement("style");
   st.textContent = `
-.pgc-excellent { --c: #15803d; } .pgc-bon { --c: #22a55a; } .pgc-moyen { --c: #e0a030; } .pgc-faible { --c: #f87171; } .pgc-critique { --c: #dc2626; }
+.pgc-excellent { --c: #2563eb; } .pgc-bon { --c: #22a55a; } .pgc-moyen { --c: #e0a030; } .pgc-faible { --c: #f87171; } .pgc-critique { --c: #dc2626; }
 .w-lv.on { background: var(--c); border-color: var(--c); color: #fff; } .w-lv.prop { border: 2px dashed var(--c); }
 .w-or-row { grid-template-columns: 44px minmax(0, 1fr) auto; }
 .pg-table { border-collapse: collapse; } .pg-table th, .pg-table td { padding: 5px 8px; text-align: left; white-space: nowrap; }
@@ -880,8 +880,19 @@ function wDebriefExtras() {
   // the level: proposed (dashed) from the switches, yours when you click; it can be changed at any time
   const draw = () => {
     const p = wPropLevel(), cur = (DB.R.review?.level || {}).lvl || "";
-    lvBox.innerHTML = `<h2>Level</h2><p class="muted small" style="margin:0 0 8px">${p ? `Proposed: <b>${W_LV_NAME[p]}</b>` : "Switch the points first."}${cur ? ` · yours: <b>${W_LV_NAME[cur]}</b>` : ""}</p>
+    const lv = DB.R.review?.level || {};
+    lvBox.innerHTML = `<div class="panel-head" style="margin:0"><h2>Level</h2><button class="btn small" id="db-lvai">✨ Generate the level</button></div>
+      <p class="muted small" style="margin:0 0 8px">${p ? `Proposed: <b>${W_LV_NAME[p]}</b>` : "Switch the points first."}${cur ? ` · yours: <b>${W_LV_NAME[cur]}</b>` : ""}</p>
+      ${cur && lv.why && lv.by !== "you" ? `<p class="small" style="margin:0 0 8px">${lv.by === "ai" ? "✨ " : ""}${esc(lv.why)}</p>` : ""}
       <div class="toolbar" style="margin:0">${W_LV.map(([v, l]) => `<button class="btn small w-lv pgc-${v} ${cur === v ? "on" : !cur && p === v ? "prop" : ""}" data-lv="${v}">${l}</button>`).join("")}</div>`;
+    // the AI reads the switches on the screen, the oral questions, the challenge and the comment, and sets the level
+    $("#db-lvai", lvBox).onclick = (e) => busy(e.currentTarget, async () => {
+      toast("⏳ The AI reads the debrief…");
+      const R = await api(`/briefs/${DB.bid}/review/level`, { method: "POST", body: { who: DB.who, ai: true, states: currentStates(), comment: $("#db-c")?.value || "" } });
+      DB.R = { ...DB.R, ...R };
+      toast(`Level: ${W_LV_NAME[DB.R.review.level.lvl]}`);
+      draw();
+    });
     $$("[data-lv]", lvBox).forEach((b) => b.onclick = () => busy(b, async () => {
       const next = cur === b.dataset.lv ? "" : b.dataset.lv;
       const R = await api(`/briefs/${DB.bid}/review/level`, { method: "POST", body: { who: DB.who, level: next } });

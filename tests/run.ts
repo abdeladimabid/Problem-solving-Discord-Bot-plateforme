@@ -2652,6 +2652,15 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   const P = await api("GET", `/api/progress?g=${G}`);
   const cell = P.data.cells?.[`${id}:${U.bob.id}`];
   check(P.status === 200 && P.data.briefs.some((b: any) => b.id === id) && cell?.lv === "bon" && cell.who === who, "Progress: the square of the debrief, with its level");
+  const ga = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true, states: { oral: [true, true, true, false] }, comment: "Bonjour Bob,\nTrès bon travail sur les pages." });
+  const asked = ai.users[ai.users.length - 1];
+  check(ga.status === 200 && ga.data.review.level.lvl === "bon" && ga.data.review.level.by === "ai" && /presque complet/.test(ga.data.review.level.why)
+    && asked.includes("QUESTIONS ORALES : 3/4 réussies") && asked.includes("COMMENTAIRE DU FORMATEUR :\n<<<\nTrès bon travail") && !asked.includes("Bob"), "✨ the level generated from the switches, the oral questions and the comment (no name sent)");
+  ai.levelAnswer = "génial";
+  const gb = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
+  ai.levelAnswer = "";
+  check(gb.data.review.level.by === "calc" && gb.data.review.level.lvl === gb.data.review.level.prop, "…no usable answer: the level from the validations");
+  check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" })).data.review.level.by === "you", "…still yours to change");
   check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "nope" })).data.review.level.lvl === "", "unknown level: none");
   run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who);
 }

@@ -234,7 +234,8 @@ export const ai = {
   judgeVerdict: "accepted",
   prompts: [] as string[],
   users: [] as string[],
-  chTech: false,   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
+  chTech: false,
+  levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
 };
 
 // a real (small) problem: maximum subarray sum. The reference is O(n), the brute O(n^2).
@@ -352,6 +353,7 @@ function fakeAI() {
       if (sys.includes("commentaire de fin de sprint")) return { response: JSON.stringify({ commentaire: "Les objectifs technologiques de ce sprint se sont concentrés sur HTML et CSS.\n\nGlobalement, la majorité des apprenants ont atteint les objectifs fixés." }) };
       if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
       if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
+      if (sys.includes("Donne le niveau de l’apprenant")) return { response: JSON.stringify({ niveau: ai.levelAnswer || "Bon", pourquoi: "Le brief est presque complet, une notion à revoir." }) };
       if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
         { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },
         { q: "Comment écrire une variable avec Sass ?", a: "Avec un $ devant le nom.", notion: "variables Sass" },
