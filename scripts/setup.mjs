@@ -166,12 +166,18 @@ async function waitWatcher() {
 }
 function watcherNotes(st) {
   if (!state.watcher) return "";
+  const stopCron = "remove the cron trigger of the old Watcher's Worker (Cloudflare → Workers & Pages → github-watcher → Settings → Triggers),\n  so its reports stop. Its data stays as a backup.";
+  // the class uses the Watcher's own App: its webhook now goes to ClassBot (keep it Active), students do nothing
+  if (st && st.keepInst) return `
+  ${C.bold("Your GitHub Watcher data")} is in ClassBot (dashboard → Progress: the debriefs are drafts, finalize them there).
+  Students keep their GitHub App: nothing to do for them. Last step: ${stopCron}
+`;
   return `
   ${C.bold("Your GitHub Watcher data")} is in ClassBot (dashboard → Progress: the debriefs are drafts, finalize them there).
-  ${st && st.keepInst ? "" : `Students: each runs ${C.bold("/github")} once in Discord to install this class's GitHub App (their history is already here).
-  `}Then stop the old Watcher so nothing is posted twice: turn off its GitHub App's webhook
-  (github.com → Settings → Developer settings → GitHub Apps → your Watcher App → uncheck Active), and remove the
-  cron trigger of its Worker (Cloudflare → Workers & Pages → github-watcher → Settings → Triggers). Its data stays as a backup.
+  ${C.bold("No /github for students:")} put the Watcher's GitHub App in ClassBot (dashboard → Settings → GitHub & Watcher: its App ID,
+  slug, Client ID, a new client secret, a webhook secret, a new private key; and ClassBot's 3 URLs in the App), then click Import again.
+  Or keep the class's new App: each student runs ${C.bold("/github")} once, and you turn off the Watcher App's webhook.
+  Either way, ${stopCron}
 `;
 }
 
