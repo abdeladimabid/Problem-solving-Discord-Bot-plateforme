@@ -3067,6 +3067,33 @@ section("briefs: an imported page is kept whole (many user stories) and its step
   run1("DELETE FROM briefs WHERE id = ?", r.data.brief.id);
 }
 
+section("GitHub: students who let the App see only some repos (Only select repositories): flagged, checked, kept up to date");
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }) as string;
+  const sv = await api("PUT", "/api/github/app", { g: G, appId: "77", slug: "classbot-sel", clientId: "Iv23sel", clientSecret: "cs", webhookSecret: "sel_secret", privateKey: pem });
+  check(sv.status === 200, "a class App with its key");
+  const keep = q("SELECT discord_id, github_id, github_login, gh_inst, gh_sel FROM players WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL, gh_sel = NULL WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  run1("UPDATE players SET github_id = '9201', github_login = 'alice-sel', gh_inst = '9301' WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  run1("UPDATE players SET github_id = '9202', github_login = 'bob-sel', gh_inst = '9302' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  github.sel = { "9301": "selected" };
+  const cr = await api("POST", "/api/github/check-repos", { g: G });
+  const alice = q1("SELECT name, gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  check(cr.status === 200 && cr.data.checked >= 2 && cr.data.some.length === 1 && alice.gh_sel === "selected" && q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).gh_sel === "all", "Check repos: the student on Only select repositories is named and kept");
+  const act = await api("GET", `/api/github/activity?g=${G}`);
+  check(act.data.students.find((s: any) => s.discord_id === U.alice.id)?.sel === "selected", "…and the dashboard knows it (flagged Some repos)");
+  const { linkGithub, handleEvent } = await import("../src/shared/github.ts");
+  await linkGithub(env, G, U.carol.id, { id: "9203", login: "carol-sel", inst: "9303", sel: "selected" });
+  check(q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.carol.id).gh_sel === "selected", "connecting keeps the choice");
+  await handleEvent(env, "installation_repositories", { action: "added", installation: { id: 9301, repository_selection: "all" }, repositories_added: [] }, "d-sel");
+  check(q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).gh_sel === "all", "the student chooses All repositories on GitHub: the webhook updates it");
+  github.sel = {};
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL, gh_sel = NULL WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  for (const k of keep) run1("UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ? WHERE guild_id = ? AND discord_id = ?", k.github_id, k.github_login, k.gh_inst, k.gh_sel, G, k.discord_id);
+  await api("DELETE", `/api/github/app?g=${G}`);
+}
+
 section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
 {
   const was = env.PUBLIC_URL;

@@ -447,6 +447,26 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok({ cfg, rewards: rewardsOf({ ...g, github: JSON.stringify(cfg) } as any) });
   }
   if (path === "/github/activity" && method === "GET") return ok(await activityOf(env, await guild(), 14));
+  // which students let the App see only some repos: their new projects are not counted until they add them
+  if (path === "/github/check-repos" && method === "POST") {
+    const g = await guild();
+    const app = await ghAppOf(env, g.id);
+    if (!githubCanRead(app)) bad("Save the App ID and the private key first.");
+    const rows = (await all<{ discord_id: string; name: string | null; github_login: string; gh_inst: string; gh_sel: string | null }>(env,
+      "SELECT discord_id, name, github_login, gh_inst, gh_sel FROM players WHERE guild_id = ? AND gh_inst IS NOT NULL", g.id)).slice(0, 45);
+    const jwt = await appJwt(app);
+    const some: string[] = [];
+    let checked = 0;
+    for (const r of rows) {
+      const res = await fetch(`${GH_API}/app/installations/${r.gh_inst}`, { headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json", "User-Agent": "classbot" } }).catch(() => null);
+      if (!res || !res.ok) continue;
+      const sel = String(((await res.json().catch(() => ({}))) as any).repository_selection || "");
+      checked++;
+      if (sel && sel !== r.gh_sel) await run(env, "UPDATE players SET gh_sel = ? WHERE gh_inst = ?", sel, r.gh_inst);
+      if (sel === "selected") some.push(r.name || r.github_login);
+    }
+    return ok({ checked, some });
+  }
   if (path === "/github/report" && method === "POST") {
     const g = await guild();
     if (body.kind === "weekly") await sendWeekly(env, g); else await sendDaily(env, g);

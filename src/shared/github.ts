@@ -185,13 +185,16 @@ export async function githubPages(request: Request, env: Env, path: string): Pro
   const mine = installations.find((i: any) => i.account && i.account.id === user.id);
   // authorized but the App isn't installed on their account yet: install it (GitHub comes back to /github/setup)
   if (!mine) return new Response(null, { status: 302, headers: { Location: `${GH_WEB}/apps/${app.slug}/installations/new`, "Set-Cookie": cookie(st.state) } });
-  await linkGithub(env, st.guildId, st.discordId, { id: String(user.id), login: String(user.login), inst: String(mine.id) });
-  return html(200, "✅ GitHub connected", `Your account <b>${esc(user.login)}</b> is connected. Your work now counts in your learning record. You can close this tab.`,
+  await linkGithub(env, st.guildId, st.discordId, { id: String(user.id), login: String(user.login), inst: String(mine.id), sel: String(mine.repository_selection || "") });
+  // "Only select repositories": the next projects are not followed until they are added
+  const some = mine.repository_selection === "selected"
+    ? `<p>⚠️ The app can see only some of your repositories: your next projects will not be counted. <a href="${GH_WEB}/settings/installations/${mine.id}">Choose <b>All repositories</b></a>.</p>` : "";
+  return html(200, "✅ GitHub connected", `Your account <b>${esc(user.login)}</b> is connected. Your work now counts in your learning record. You can close this tab.${some}`,
     { "Set-Cookie": "cb_gh=; Path=/github; HttpOnly; Secure; SameSite=Lax; Max-Age=0" });
 }
 
 /** Link a GitHub account to a student (in every class they are in) and say so in Discord. */
-export async function linkGithub(env: Env, guildId: string, discordId: string, gh: { id: string; login: string; inst: string }) {
+export async function linkGithub(env: Env, guildId: string, discordId: string, gh: { id: string; login: string; inst: string; sel?: string }) {
   // one GitHub account belongs to one student
   await run(env, "UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE github_id = ? AND discord_id != ?", gh.id, discordId);
   // the installation belongs to one GitHub App: link it in every class of this student that uses the same App
@@ -203,8 +206,8 @@ export async function linkGithub(env: Env, guildId: string, discordId: string, g
   }
   if (!same.includes(guildId)) same.push(guildId);
   const before = await one<{ github_id: string | null }>(env, "SELECT github_id FROM players WHERE guild_id = ? AND discord_id = ?", guildId, discordId);
-  await run(env, `UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_linked_at = COALESCE(gh_linked_at, ?) WHERE discord_id = ? AND guild_id IN (${same.map(() => "?").join(",")})`,
-    gh.id, gh.login, gh.inst, now(), discordId, ...same);
+  await run(env, `UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ?, gh_linked_at = COALESCE(gh_linked_at, ?) WHERE discord_id = ? AND guild_id IN (${same.map(() => "?").join(",")})`,
+    gh.id, gh.login, gh.inst, gh.sel || null, now(), discordId, ...same);
   // connecting the same account again (a new /github) is not news: one message per new link
   const g = before?.github_id === gh.id ? null : await getGuild(env, guildId);
   if (g) {
@@ -244,6 +247,9 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
     }
     return;
   }
+  // the student changed which repos the App can see (All / Only select repositories): keep it for the dashboard
+  const sel = (event === "installation" || event === "installation_repositories") && p?.installation?.repository_selection;
+  if (sel) await run(env, "UPDATE players SET gh_sel = ? WHERE gh_inst = ?", String(sel), inst);
   if (event === "installation" || event === "installation_repositories") return;
   const repoName = String(p?.repository?.full_name || "").toLowerCase();
   // commit sizes once (needs the App's private key), for every class
@@ -315,8 +321,8 @@ const weekday = (day: string) => new Date(day + "T00:00:00Z").getUTCDay();
 export async function activityOf(env: Env, g: GuildRow, days = 14) {
   const today = dayOf(now());
   const list = Array.from({ length: days }, (_, i) => shiftDay(today, i - days + 1));
-  const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null }>(env,
-    "SELECT discord_id, name, github_login, gh_linked_at FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
+  const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null; gh_sel: string | null }>(env,
+    "SELECT discord_id, name, github_login, gh_linked_at, gh_sel FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
   const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
     "SELECT discord_id, day, t, repo, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
   const cfg = githubCfg(g), skip = new Set(cfg.skip);
@@ -346,7 +352,7 @@ export async function activityOf(env: Env, g: GuildRow, days = 14) {
         if (d < since || active.has(d)) break;
         if (!skip.has(weekday(d))) idle++;
       }
-      return { discord_id: s.discord_id, name: s.name, login: s.github_login, days: grid, last, idle,
+      return { discord_id: s.discord_id, name: s.name, login: s.github_login, sel: s.gh_sel || "", days: grid, last, idle,
         repos: Object.entries(repos).map(([r, [n, tt]]) => [r, n, tt] as [string, number, number]).sort((a, b) => b[1] - a[1]).slice(0, 8) };
     }),
   };

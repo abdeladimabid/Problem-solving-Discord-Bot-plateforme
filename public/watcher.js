@@ -81,6 +81,7 @@ async function watchData() {
     const st = { ...s, display: s.name || s.login, day, week: tot(day, W0, N), prev: tot(day, 0, W0), all: tot(day, 0, N) };
     st.trend = st.week.score - st.prev.score;
     st.reasons = [];
+    if (s.sel === "selected") st.reasons.push(["The app sees only some of their repos: a new project is not counted until they choose All repositories", "Some repos"]);
     if (s.idle >= inactive) st.reasons.push([`No activity for ${s.idle} working days`, `Idle ${s.idle} d`]);
     if (st.week.huge) st.reasons.push([`${st.week.huge} huge commit(s) this week`, `${st.week.huge} huge`]);
     if (st.week.tiny >= 3) st.reasons.push([`${st.week.tiny} tiny commits this week`, `${st.week.tiny} tiny`]);
@@ -166,7 +167,7 @@ async function viewGithubAll() {
   };
   view.innerHTML = `
     <div class="page-head"><div><h1>GitHub</h1></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="gh-d">Send today's report</button><button class="btn" id="gh-w">Weekly report</button><a class="btn" href="#/settings/github">${icon("gear")} Settings</a></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="gh-d">Send today's report</button><button class="btn" id="gh-w">Weekly report</button><button class="btn" id="gh-cr">Check repos</button><a class="btn" href="#/settings/github">${icon("gear")} Settings</a></div></div>
     <div class="stack">
     ${wSetupHtml(ready, G, P)}
     <div class="figures cs-figs">
@@ -239,6 +240,11 @@ async function viewGithubAll() {
   wireBriefButtons(view);
   $("#gh-d").onclick = (e) => busy(e.currentTarget, async () => { await api("/github/report", { method: "POST", body: { kind: "daily" } }); toast("Report sent"); });
   $("#gh-w").onclick = (e) => busy(e.currentTarget, async () => { await api("/github/report", { method: "POST", body: { kind: "weekly" } }); toast("Report sent"); });
+  $("#gh-cr").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api("/github/check-repos", { method: "POST", body: {} });
+    toast(r.some.length ? `${r.some.length} share only some repos (${r.some.join(", ")}): ask them to choose All repositories` : `Checked ${r.checked}: everyone shares all their repos`, !!r.some.length);
+    viewGithubAll();
+  });
 }
 
 // the brief's announcement (in French) and status, posted in Discord
