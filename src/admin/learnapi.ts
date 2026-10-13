@@ -11,11 +11,11 @@ import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrie
 import type { Section } from "../shared/briefs.ts";
 import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
-import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
+import { activityOf, backfillRepos, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
-import { appJwt, GH_API } from "../shared/review/gh.ts";
+import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
@@ -447,6 +447,20 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok({ cfg, rewards: rewardsOf({ ...g, github: JSON.stringify(cfg) } as any) });
   }
   if (path === "/github/activity" && method === "GET") return ok(await activityOf(env, await guild(), 14));
+  // a student's pushes GitHub never sent (a repo shared late): counted since the brief in progress started
+  if (path === "/github/recount" && method === "POST") {
+    const g = await guild();
+    const pl = await one<PlayerRow>(env, "SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", g.id, String(body.discord_id || ""));
+    if (!pl?.gh_inst) bad("This student isn't connected to GitHub.");
+    const app = await ghAppOf(env, g.id);
+    if (!githubCanRead(app)) bad("Save the App ID and the private key first.");
+    let token = "";
+    try { token = await installationToken(env, app, pl!.gh_inst); } catch { bad("Could not reach GitHub."); }
+    const r: any = await githubGet("/installation/repositories?per_page=100", token).catch(() => null);
+    const recent = ((r?.repositories || []) as any[]).filter((x) => Date.parse(x.pushed_at || 0) >= Date.now() - 14 * 86400000)
+      .sort((a, b) => Date.parse(b.pushed_at) - Date.parse(a.pushed_at)).map((x) => String(x.full_name));
+    return ok(await backfillRepos(env, app, String(pl!.gh_inst), [g.id], recent));
+  }
   // which students let the App see only some repos: their new projects are not counted until they add them
   if (path === "/github/check-repos" && method === "POST") {
     const g = await guild();

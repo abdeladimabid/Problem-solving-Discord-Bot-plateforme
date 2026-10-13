@@ -2925,6 +2925,7 @@ section("brief steps: found in the brief, dated in working days, proposed from t
   const p1 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 1 });
   check(p1.status === 200 && p1.data.prop.statut === "a_temps" && p1.data.prop.before === 1 && p1.data.prop.after === 2 && p1.data.prop.files === 1 && p1.data.prop.added === 2, "step 1: proposed from the repo as it was at its date");
   check(ai.users.some((u) => u.includes("ATTENDU : maquette du site") && u.includes("FICHIERS À LA DATE (1) :\nmaquette.png")), "the AI gets what was expected and the files at the date");
+  check(ai.prompts.some((p) => p.includes("Juge SEULEMENT cette étape") && p.includes("bonus n’est pas exigé") && p.includes("à voir à l’oral")), "only this step is judged; a bonus is not required; what a repo cannot show is named");
   const p3 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 3 });
   check(p3.data.prop.statut === "a_venir", "a step not due yet is not read");
   await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 1, final: "a_temps" });
@@ -3090,6 +3091,48 @@ section("GitHub: students who let the App see only some repos (Only select repos
   check(q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).gh_sel === "all", "the student chooses All repositories on GitHub: the webhook updates it");
   github.sel = {};
   run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL, gh_sel = NULL WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  for (const k of keep) run1("UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ? WHERE guild_id = ? AND discord_id = ?", k.github_id, k.github_login, k.gh_inst, k.gh_sel, G, k.discord_id);
+  await api("DELETE", `/api/github/app?g=${G}`);
+}
+
+section("GitHub: a repo shared late — its pushes are counted since the brief in progress started, for whoever wrote each commit, never twice");
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { handleEvent, ghAppOf, pushStatus } = await import("../src/shared/github.ts");
+  const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }) as string;
+  await api("PUT", "/api/github/app", { g: G, appId: "78", slug: "classbot-bf", clientId: "Iv23bf", clientSecret: "cs", webhookSecret: "bf_secret", privateKey: pem });
+  const T = clock.now(), iso = (s: number) => new Date(s * 1000).toISOString();
+  const keep = q("SELECT discord_id, github_id, github_login, gh_inst, gh_sel FROM players WHERE guild_id = ? AND discord_id IN (?, ?)", G, U.alice.id, U.bob.id);
+  run1("UPDATE players SET github_id = '9401', github_login = 'alice-bf', gh_inst = '9501' WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  run1("UPDATE players SET github_id = '9402', github_login = 'bob-bf', gh_inst = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('9501', 'tok-bf', ?)", T + 3600);
+  run1(`INSERT INTO briefs (guild_id, title, status, data, start_at, due_at, created_at) VALUES (?, 'PetNest', 'assigned', '{}', ?, ?, ?)`, G, T - 86400 - 3600, T + 3 * 86400, T - 86400 - 3600);
+  const bid = q1("SELECT id FROM briefs WHERE guild_id = ? AND title = 'PetNest' ORDER BY id DESC LIMIT 1", G).id;
+  const c = (sha: string, id: number, s: number) => ({ sha: sha.repeat(40), author: { id, login: "x" }, commit: { message: "feat: add the catalogue page", author: { date: iso(s) } } });
+  // Alice's squad repo: her commit and Bob's (a squad mate) on two branches; an old commit; someone outside the class
+  github.branches["alice-bf/PetNest"] = ["main", "feat"];
+  github.commits["alice-bf/PetNest@main"] = [c("a", 9401, T - 20 * 3600), c("b", 9402, T - 19 * 3600), c("o", 9401, T - 20 * 86400)];
+  github.commits["alice-bf/PetNest@feat"] = [c("a", 9401, T - 20 * 3600), c("d", 9402, T - 18 * 3600), c("x", 4242, T - 18 * 3600)];
+  const sums = () => Object.fromEntries(q("SELECT discord_id, SUM(commits) AS n FROM gh_activity WHERE guild_id = ? AND delivery LIKE 'bf-%' GROUP BY discord_id", G).map((r: any) => [r.discord_id, r.n]));
+  await handleEvent(env, "installation_repositories", { action: "added", installation: { id: 9501, repository_selection: "selected" }, repositories_added: [{ full_name: "alice-bf/PetNest" }] }, "d-bf", await ghAppOf(env, G));
+  let s = sums();
+  check(s[U.alice.id] === 1 && s[U.bob.id] === 2 && Object.keys(s).length === 2, "the repo just shared: each one's own commits since the brief started (one commit on two branches once; old and outside ones skipped)");
+  const { getGuild } = await import("../src/shared/db.ts");
+  const st = await pushStatus(env, (await getGuild(env, G))!, { start_at: T - 86400 - 3600, due_at: T + 3 * 86400, created_at: T });
+  check(st.get(U.bob.id) === "on" && st.get(U.alice.id) === "on", "…and they count for the brief (pushed on time)");
+  github.repos["tok-bf"] = [{ full_name: "alice-bf/PetNest", pushed_at: iso(T - 3600) }, { full_name: "alice-bf/old", pushed_at: iso(T - 60 * 86400) }];
+  const rc = await api("POST", "/api/github/recount", { g: G, discord_id: U.alice.id });
+  s = sums();
+  check(rc.status === 200 && rc.data.counted === 3 && rc.data.repos === 1 && s[U.alice.id] === 1 && s[U.bob.id] === 2, "Recount again: the same numbers, nothing counted twice");
+  // a push received today from that repo: today is not recounted
+  run1("DELETE FROM gh_activity WHERE guild_id = ? AND delivery LIKE 'bf-%'", G);
+  github.commits["alice-bf/PetNest@main"].unshift(c("t", 9401, T - 60));
+  run1("INSERT INTO gh_activity (guild_id, discord_id, delivery, day, t, repo, commits, real) VALUES (?, ?, 'live-bf', ?, ?, 'alice-bf/PetNest', 1, 1)", G, U.alice.id, iso(T).slice(0, 10), T - 30);
+  await api("POST", "/api/github/recount", { g: G, discord_id: U.alice.id });
+  check(!q("SELECT day FROM gh_activity WHERE guild_id = ? AND delivery LIKE 'bf-%'", G).some((r: any) => r.day >= iso(T).slice(0, 10)), "only the days before the first push received");
+  run1("DELETE FROM gh_activity WHERE guild_id = ? AND (delivery LIKE 'bf-%' OR delivery = 'live-bf')", G);
+  run1("DELETE FROM briefs WHERE id = ?", bid);
+  run1("DELETE FROM gh_tokens WHERE inst = '9501'");
   for (const k of keep) run1("UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ? WHERE guild_id = ? AND discord_id = ?", k.github_id, k.github_login, k.gh_inst, k.gh_sel, G, k.discord_id);
   await api("DELETE", `/api/github/app?g=${G}`);
 }

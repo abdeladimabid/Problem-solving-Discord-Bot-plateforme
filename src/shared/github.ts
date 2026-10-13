@@ -250,6 +250,11 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
   // the student changed which repos the App can see (All / Only select repositories): keep it for the dashboard
   const sel = (event === "installation" || event === "installation_repositories") && p?.installation?.repository_selection;
   if (sel) await run(env, "UPDATE players SET gh_sel = ? WHERE gh_inst = ?", String(sel), inst);
+  // repos just shared with the App: GitHub never sent their earlier pushes, count them since the brief started
+  if (event === "installation_repositories" && p.action === "added" && Array.isArray(p.repositories_added) && p.repositories_added.length) {
+    await backfillRepos(env, app, inst, [...new Set(owners.map((o) => o.guild_id))], p.repositories_added.map((r: any) => String(r?.full_name || "")).filter(Boolean))
+      .catch((e) => console.error("recount", e));
+  }
   if (event === "installation" || event === "installation_repositories") return;
   const repoName = String(p?.repository?.full_name || "").toLowerCase();
   // commit sizes once (needs the App's private key), for every class
@@ -300,6 +305,75 @@ function cleanEmbed(obj: any) {
     out[k] = typeof v === "string" ? v.slice(0, k === "title" ? 256 : 4096) : v;
   }
   return out;
+}
+
+// ------------------------------------------------------------- recount
+/** The pushes GitHub never sent (a repo shared late, a classmate's squad repo). Only from the start of the brief in
+ *  progress (never more than 14 days); the commits of every branch, each once, for the student who wrote it (a squad mate
+ *  for their own commits); only the days before the first push received from that repo, so nothing is counted twice
+ *  (a new recount replaces the same rows). About 3 GitHub calls per repo, plus 1 per branch. */
+export async function backfillRepos(env: Env, app: GhApp, inst: string, guildIds: string[], repos: string[], at = now(), budget = 42) {
+  const starts: Record<string, number> = {};
+  for (const gid of guildIds) {
+    const r = await one<{ s: number | null }>(env, `SELECT MIN(COALESCE(start_at, created_at)) AS s FROM briefs WHERE guild_id = ? AND status = 'assigned'
+      AND COALESCE(start_at, created_at) <= ? AND due_at IS NOT NULL AND due_at + 604800 >= ?`, gid, at, at);
+    if (r?.s) starts[gid] = Math.max(r.s, at - 14 * 86400);
+  }
+  if (!Object.keys(starts).length || !githubCanRead(app)) return { counted: 0, repos: 0, since: 0 };
+  const since = Math.min(...Object.values(starts));
+  let token: string;
+  try { token = await installationToken(env, app, inst); } catch { return { counted: 0, repos: 0, since }; }
+  const tOf = (c: any) => Math.floor((Date.parse(c?.commit?.author?.date || "") || 0) / 1000);
+  let calls = 1, counted = 0, done = 0;
+  for (const repo of repos.slice(0, 10)) {
+    if (calls + 4 > budget) break;
+    const branches = await githubGet(`/repos/${repo}/branches?per_page=30`, token).catch(() => null);
+    calls++;
+    if (!Array.isArray(branches)) continue;
+    const bySha = new Map<string, any>();
+    for (const br of branches.slice(0, 15)) {
+      if (calls + 2 > budget) break;
+      const list = await githubGet(`/repos/${repo}/commits?sha=${encodeURIComponent(br.name)}&since=${new Date(since * 1000).toISOString()}&per_page=100`, token).catch(() => null);
+      calls++;
+      for (const c of Array.isArray(list) ? list : []) if (c?.author?.id && tOf(c) >= since && tOf(c) <= at) bySha.set(c.sha, c);
+    }
+    done++;
+    if (!bySha.size) continue;
+    let sizes: Record<string, any> = {};
+    try { sizes = await commitSizes(env, app, inst, repo, [...bySha.keys()].slice(0, 50)); } catch { sizes = {}; }
+    calls++;
+    for (const gid of Object.keys(starts)) {
+      const g = await getGuild(env, gid);
+      if (!g) continue;
+      const cfg = githubCfg(g);
+      const first = await one<{ t: number | null }>(env, "SELECT MIN(t) AS t FROM gh_activity WHERE guild_id = ? AND repo = ? AND delivery NOT LIKE 'bf-%'", gid, repo);
+      const stopDay = first?.t ? dayOf(first.t) : null;
+      const groups = new Map<string, { gh: string; day: string; list: any[] }>();
+      for (const c of bySha.values()) {
+        const day = dayOf(tOf(c));
+        if (tOf(c) < starts[gid] || (stopDay && day >= stopDay)) continue;
+        const k = `${c.author.id}|${day}`;
+        const gr = groups.get(k) ?? { gh: String(c.author.id), day, list: [] as any[] };
+        gr.list.push(c);
+        groups.set(k, gr);
+      }
+      for (const gr of groups.values()) {
+        const pl = await one<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ? AND github_id = ?", gid, gr.gh);
+        if (!pl) continue;   // not a student of this class
+        const analysis = Object.fromEntries(gr.list.map((c) => [c.sha, classifyCommit({ message: c?.commit?.message || "" }, sizes[c.sha], { TINY_LINES: cfg.tiny, HUGE_LINES: cfg.huge })]));
+        const cnt: any = countAction("push", {}, analysis);
+        if (!cnt.commits) continue;
+        await run(env, `INSERT INTO gh_activity (guild_id, discord_id, delivery, day, t, repo, commits, real, tiny, flagged, bad, lines, prs, other)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+          ON CONFLICT (guild_id, discord_id, delivery) DO UPDATE SET day = excluded.day, t = excluded.t, commits = excluded.commits, real = excluded.real,
+            tiny = excluded.tiny, flagged = excluded.flagged, bad = excluded.bad, lines = excluded.lines`,
+          gid, pl.discord_id, `bf-${repo}-${gr.day}`.slice(0, 200), gr.day, Math.min(...gr.list.map(tOf)), repo.slice(0, 120),
+          cnt.commits || 0, cnt.real || 0, cnt.tiny || 0, cnt.flagged || 0, cnt.bad || 0, cnt.lines || 0);
+        counted += cnt.commits;
+      }
+    }
+  }
+  return { counted, repos: done, since };
 }
 
 /** One forum thread per student ("Name (login)"); a new one if it was deleted. */
