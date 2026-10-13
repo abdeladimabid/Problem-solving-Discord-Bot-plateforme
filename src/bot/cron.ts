@@ -18,6 +18,7 @@ import { sweepEvents } from "../shared/events.ts";
 import { expireShop } from "../shared/shop.ts";
 import { sendMorningPlans } from "./coach.ts";
 import { githubCron } from "../shared/github.ts";
+import { watcherAutoImport } from "../shared/watcher.ts";
 import { assessCron } from "../shared/assess.ts";
 import { announceLeague, refreshRemotes } from "../shared/league.ts";
 import { arenaChannel } from "../shared/arena.ts";
@@ -33,6 +34,8 @@ async function safe(name: string, fn: () => Promise<unknown>) {
 }
 
 export async function runCron(env: Env) {
+  // the old GitHub Watcher's data, once, right after `npm run setup` connected it: alone in its minute
+  try { if (await watcherAutoImport(env)) return; } catch (e) { console.error("cron watcher import failed", e); }
   // AI generation first: students are waiting for it (one job per minute keeps
   // us inside the free plan's limits)
   let generated = false;

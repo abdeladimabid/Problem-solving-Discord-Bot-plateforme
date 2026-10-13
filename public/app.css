@@ -275,6 +275,7 @@ dialog .dlg-foot { display: flex; gap: 10px; justify-content: flex-end; padding:
 .notice { border: 1px solid var(--blue-100); background: var(--blue-50); padding: 12px 16px; border-radius: var(--radius-m); color: var(--ink); }
 .notice.warn { border-color: #f6d79b; background: var(--warn-bg); }
 .notice.danger { border-color: #f5b5b5; background: var(--down-bg); }
+.notice.ok { border-color: var(--up-bg); background: var(--up-bg); }
 .skeleton { height: 120px; border-radius: var(--radius-m); background: linear-gradient(90deg, var(--surface-2), var(--line), var(--surface-2)); background-size: 200% 100%; animation: sk 1.2s infinite; }
 @keyframes sk { to { background-position: -200% 0; } }
 
@@ -1329,6 +1330,8 @@ a.stu-chip:hover { border-color: var(--blue); }
 .db-assess { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; padding: 10px 12px; border-radius: 12px; background: var(--blue-50); }
 .db-as { display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); text-decoration: none; color: var(--ink); }
 .db-as:hover { border-color: var(--blue); }
+.db-adv { font-size: 12.5px; margin: 6px 0 2px; padding: 6px 10px; border-radius: 8px; } .db-adv.ok { background: var(--up-bg); color: var(--up); } .db-adv.ko { background: var(--warn-bg); color: var(--warn); }
+.db-step1 .lvl .pg-dot { margin-right: 4px; }
 .lvl.good { color: var(--up); background: var(--up-bg); }
 
 /* student page: briefs & debriefs, assessments */

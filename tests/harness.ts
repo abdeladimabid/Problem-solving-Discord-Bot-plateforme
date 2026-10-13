@@ -72,7 +72,7 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }> };
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -225,7 +225,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "api.github.com") {
     // an installation: which repos the student lets the App see (github.sel[id], else all)
     const im = url.pathname.match(/^\/app\/installations\/(\d+)$/);
-    if (im) { github.calls++; return Response.json({ id: Number(im[1]), repository_selection: github.sel[im[1]] || "all" }); }
+    if (im) { github.calls++; if (github.foreign.has(im[1])) return Response.json({ message: "Not Found" }, { status: 404 }); return Response.json({ id: Number(im[1]), repository_selection: github.sel[im[1]] || "all" }); }
     // a repo's commits (newest first) and its files at a commit or HEAD
     if (/^\/app-manifests\/[\w-]+\/conversions$/.test(url.pathname) && (init.method || "GET").toUpperCase() === "POST") {
       github.calls++;

@@ -723,6 +723,45 @@ function readPo(root, base) {
 
 // ===================================================================== DEBRIEF
 const STATUT = { fait: ["ok", "Done"], partiel: ["warn", "Partly"], absent: ["bad", "Missing"], non_verifiable: ["", "Can't tell"] };
+// Step 1 of a debrief: the assessment linked to the brief, the surest proof of what the learner masters
+const SC_LVL = (p) => (p >= 90 ? "excellent" : p >= 75 ? "bon" : p >= 55 ? "moyen" : p >= 35 ? "faible" : "critique");
+const SC_LVL_NAME = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
+/** What the graded assessments say of each competency (C3, T5…): true, false, or absent (not tested). */
+function assessVerdicts(assess) {
+  const out = {};
+  for (const a of assess || []) for (const [k, v] of Object.entries(a.comps || {})) {
+    if (!v || typeof v.ok !== "boolean") continue;
+    const b = (parseC(k) || {}).code || k;
+    out[b] = b in out ? out[b] && v.ok : v.ok;
+  }
+  return out;
+}
+function assessPanelHtml(assess) {
+  const list = assess || [];
+  if (!list.length) return `<section class="panel db-step1"><h2>1 · Assessment</h2>
+    <div class="notice warn"><b>No assessment linked to this brief.</b> The debrief works on the project only. An assessment is recommended:
+      it is the surest proof that the learner masters the competencies (a project can be copied or made with AI).
+      <p style="margin:8px 0 0"><a class="btn small" href="#/assessments">Create an assessment</a> <span class="small muted">then choose this brief as its “Linked brief”.</span></p></div></section>`;
+  return `<section class="panel db-step1"><h2>1 · Assessment <span class="muted">it comes first: it decides where each competency starts</span></h2>
+    <div class="db-rows">${list.map((x) => {
+      const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
+      const lv = x.score != null ? SC_LVL(x.score) : "";
+      return `<div class="db-row"><span class="db-i">📝</span><div><a href="#/assessment/${x.id}"><b>${esc(x.title)}</b></a>
+        ${x.score != null ? ` <b style="color:${masteryInk(x.score)}">${x.score}%</b> <span class="lvl"><i class="pg-dot pgc-${lv}"></i>${SC_LVL_NAME[lv]}</span>${x.of > 1 ? ` <span class="small muted">${x.done}/${x.of} graded</span>` : ""}`
+          : ` <span class="lvl warn">${x.of ? "Not graded yet" : "Not taken"}</span>`}
+        ${ok.length || ko.length ? `<div style="margin-top:6px">${ok.map(([k]) => `<span class="lvl good">✓ ${esc(k)}</span>`).join(" ")} ${ko.map(([k, v]) => `<span class="lvl bad" title="${esc(v.note || "")}">✗ ${esc(k)}</span>`).join(" ")}</div>` : ""}
+        ${x.score == null ? `<div class="small muted">${x.of ? "Grade it in the assessment's Results tab: until then the debrief uses the project only." : "This learner wasn't invited to it: the debrief uses the project only."}</div>` : ""}</div></div>`;
+    }).join("")}</div></section>`;
+}
+// a competency where the assessment and the project disagree: a suggestion, the teacher decides
+function compAdvice(avis, a) {
+  if (typeof a !== "boolean") return "";
+  const proj = avis === "validable";
+  if (a === proj) return "";
+  return a ? `<div class="db-adv ok">💡 Suggestion: <b>valid</b>. The assessment shows they master it, but the project doesn't show it yet: check it in the mise en situation or an oral question.</div>`
+    : `<div class="db-adv ko">⚠️ Suggestion: <b>not valid</b>. The project shows it but the assessment doesn't: the code may be copied or made with AI. Check it in the mise en situation or an oral question.</div>`;
+}
+
 const AVIS = { validable: ["ok", "Can be validated"], a_verifier: ["warn", "To check"], non_visible: ["bad", "Not visible"] };
 const MES = [["valide", "Validated"], ["partiel", "Partly"], ["non_valide", "Not validated"]];
 const EXTYPE = { fonctionnalite: "Feature", fonctionnalité: "Feature", technique: "Technical", livrable: "Deliverable", qualite: "Quality", qualité: "Quality", oral: "Oral", bonus: "Bonus", story: "Story", critere: "Criterion" };
@@ -755,7 +794,7 @@ function renderDebrief() {
   const nav = (i) => (order[i] ? `#/debrief/${bid}~${encodeURIComponent(order[i])}` : null);
   view.innerHTML = `
     <div class="page-head"><div>
-      <p class="crumb"><a href="#/briefs">Briefs</a> › <a href="#/brief/${bid}">${esc(B.brief.data.title)}</a></p>
+      <p class="crumb"><a href="#/progress">Progress</a> › <a href="#/brief/${bid}">${esc(B.brief.data.title)}</a></p>
       <h1>Debrief · ${esc(T.name)}</h1>
       <p class="sub">${T.handin ? `Handed in <a href="https://github.com/${esc(T.handin.repo)}" target="_blank" rel="noopener">${esc(T.handin.repo)}</a> ${fmtAgo(T.handin.at)}` : "Not handed in: the analysis uses the repo they pushed to during the brief"}
         ${rec ? ` · analyzed ${fmtAgo(Math.floor(rec.at / 1000))}${rec.model ? ` <span class="muted small">(${esc(rec.model)})</span>` : ""}` : ""} ${R.status ? status(final ? "solved" : "pending", final ? "Finalized" : "Draft") : ""}</p></div>
@@ -766,7 +805,7 @@ function renderDebrief() {
   if ($("#db-an")) $("#db-an").onclick = () => analyzeDialog();
   const body = $("#db-body");
   if (!rec) {
-    body.innerHTML = `${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
+    body.innerHTML = `<div style="margin-bottom:16px">${assessPanelHtml(R.assess)}</div>${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
       <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
       <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
     $("#db-an2").onclick = () => analyzeDialog();
@@ -780,9 +819,11 @@ function renderDebrief() {
   const exByType = {};
   ex.forEach((e, i) => (exByType[e.type] ??= []).push(i));
   const lvlOf = Object.fromEntries((B.brief.data.competencies || []).map((c) => { const p = parseC(c); return [p?.code, p?.level]; }));
+  const aV = assessVerdicts(rec.assess);
   body.innerHTML = `<div class="db-grid">
     <div class="stack">
-      <section class="panel"><div class="panel-head"><h2>Summary</h2><span id="db-pct"></span></div>
+      ${assessPanelHtml(rec.assess)}
+      <section class="panel"><div class="panel-head"><h2>2 · Project (GitHub)</h2><span id="db-pct"></span></div>
         <div id="db-meter"></div>
         ${r.resume ? `<p>${esc(r.resume)}</p>` : ""}
         <div class="grid cols-2-even">
@@ -808,16 +849,15 @@ function renderDebrief() {
       ${rec.squad ? squadMembersHtml(rec, st, final) : ""}
     </div>
     <aside class="stack db-side">
-      <section class="panel"><h2>Competencies</h2>
-        ${(rec.assess || []).length ? `<div class="db-assess">${rec.assess.map((x) => `<a class="db-as" href="#/assessment/${x.id}"><span>📝</span><div><b>${esc(x.title)}</b>
-          <div class="small">${x.score != null ? `<b style="color:${masteryInk(x.score)}">${x.score}%</b>${x.of > 1 ? ` · ${x.done}/${x.of} graded` : ""}` : `<span class="muted">${x.of ? "not graded yet" : "not taken"}</span>`}</div></div></a>`).join("")}
-          <p class="small muted" style="margin:0">Assessment linked to this brief: a competency it didn't validate starts “not validated”, and the comment says how it went. Your switches decide.</p></div>` : ""}
+      <section class="panel"><h2>Competencies <span class="muted">assessment + project · your switch decides</span></h2>
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
           return `<div class="db-row">${sw(`data-co="${esc(c.code)}"`, st.co[c.code], final)}
-            <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span> <span class="lvl ${a[0]}">${esc(a[1])}</span>
-            ${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
+            <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span>
+            <div style="margin-top:4px">${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
+              <span class="lvl ${a[0]}">📁 project: ${esc(a[1])}</span>${(rec.assess || []).some((x) => x.score != null) && !ax.length ? ` <span class="small muted">not in the assessment</span>` : ""}</div>
+            ${compAdvice(c.avis, aV[base])}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
@@ -1585,8 +1625,10 @@ async function githubSettings(root) {
 
     <div class="panel set-card"><h3>Import from GitHub Watcher</h3>
       <p class="small">Brings the Watcher's GitHub links, briefs (deadlines, grids, squads), hand-ins and debriefs into this class, once. Safe to run again.</p>
-      ${su.watcher ? `<p><button class="btn" id="gw-bind">Import (Watcher storage is connected)</button></p>` : ""}
-      <details ${su.watcher ? "" : "open"}><summary class="small"><b>Import with a Cloudflare token</b> (no deploy needed)</summary>
+      ${su.watcherDone?.at ? `<div class="notice ok small"><b>✓ Imported ${fmtAgo(su.watcherDone.at)}</b>${su.watcherDone.by === "setup" ? " by <code>npm run setup</code>" : ""}: ${su.watcherDone.students} students, ${su.watcherDone.briefs} briefs, ${su.watcherDone.reviews} debriefs${su.watcherDone.activity ? `, ${su.watcherDone.activity} GitHub events` : ""}.
+        ${su.watcherDone.keepInst ? "" : "<br>Students run <code>/github</code> once to install this class's App (their history is already here)."}</div>` : ""}
+      ${su.watcher ? `<p><button class="btn" id="gw-bind">${su.watcherDone?.at ? "Import again" : "Import (Watcher storage is connected)"}</button></p>` : ""}
+      <details ${su.watcher || su.watcherDone?.at ? "" : "open"}><summary class="small"><b>Import with a Cloudflare token</b> (no deploy needed)</summary>
         <ol class="small">
           <li>Cloudflare dashboard → <b>Storage &amp; Databases → Workers KV</b>: copy the <b>ID</b> of the Watcher's namespace.</li>
           <li>Your <b>Account ID</b> is on the right of any Workers page (or in the dashboard's URL).</li>
@@ -1631,15 +1673,23 @@ async function githubSettings(root) {
     const LBL = { reports: "📊 Reports", connections: "🔗 Connections", forum: "🧵 Forum" };
     $("#gh-test-out").innerHTML = r.results.map((x) => `<span class="gh-test ${x.ok ? "ok" : "ko"}">${x.ok ? "✓" : "✗"} ${LBL[x.target]}${x.channel ? ` (#${esc(chName(x.channel) || x.channel)})` : ""}: ${esc(x.msg)}</span>`).join("");
   });
-  const done = (r) => toast(`Imported: ${r.students} students, ${r.briefs} briefs, ${r.handins} hand-ins, ${r.reviews} debriefs, ${r.threads ?? 0} forum posts`);
+  const done = (r) => {
+    const parts = [`${r.students} students`, `${r.briefs} briefs`, `${r.handins} hand-ins`, `${r.reviews} debriefs${r.levels ? ` (${r.levels} with a level)` : ""}`,
+      r.comments ? `${r.comments} comments` : "", `${r.threads ?? 0} forum posts`, r.activity ? `${r.activity} GitHub events` : "", r.pushes ? `${r.pushes} first pushes` : "", r.sprints ? `${r.sprints} sprint decisions` : ""].filter(Boolean);
+    openDialog("✅ Imported from GitHub Watcher", `<p>${parts.join(" · ")}.</p>
+      ${r.skipped ? `<p class="small muted">${r.skipped} old debrief(s) skipped: their brief no longer exists in the Watcher.</p>` : ""}
+      ${r.keepInst ? "" : `<div class="notice warn"><b>Students: run <code>/github</code> once.</b> This class uses its own GitHub App, so each student installs it (their history and debriefs are already here). Then turn off the Watcher's App webhook so pushes aren't posted twice.</div>`}
+      <p class="small muted">The debriefs are drafts: open them from Progress, check, and Finalize.</p>`, [{ label: "Open Progress", primary: true, action: () => { location.hash = "#/progress"; } }]);
+  };
   if ($("#gw-bind")) $("#gw-bind").onclick = (e) => busy(e.currentTarget, async () => done(await api("/github/import", { method: "POST", body: {} })));
   $("#gw-run").onclick = (e) => busy(e.currentTarget, async () => {
     const cred = { account: $("#gw-acc").value.trim(), namespace: $("#gw-ns").value.trim(), token: $("#gw-tok").value.trim() };
     const st = $("#gw-st");
     st.textContent = "⏳ Listing the Watcher's data…";
     try {
-      const { keys } = await api("/github/watcher/keys", { method: "POST", body: cred });
-      const data = {};
+      const { keys, meta } = await api("/github/watcher/keys", { method: "POST", body: cred });
+      // the GitHub activity: only metadata, read with the listing
+      const data = Object.fromEntries(Object.entries(meta || {}).map(([k, m]) => [k, { __meta: m }]));
       for (let i = 0; i < keys.length; i += 40) {
         st.textContent = `⏳ Reading ${Math.min(i + 40, keys.length)} / ${keys.length}…`;
         Object.assign(data, (await api("/github/watcher/values", { method: "POST", body: { ...cred, keys: keys.slice(i, i + 40) } })).values);

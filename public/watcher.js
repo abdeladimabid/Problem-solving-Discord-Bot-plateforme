@@ -279,23 +279,6 @@ async function openWatchStudent(D, id) {
   box.hidden = false;
   const panel = $(".w-panel", box);
   panel.innerHTML = `<p class="muted">Loading…</p>`;
-  // the briefs of the last weeks (each read once per page visit)
-  const nowS = Date.now() / 1000;
-  const recent = D.briefs.filter((b) => !b.due_at || b.due_at > nowS - 45 * 86400).slice(0, 8);
-  const det = await Promise.all(recent.map((b) => W_BRIEFS.get(b.id) || api(`/briefs/${b.id}`).then((x) => { W_BRIEFS.set(b.id, x); return x; }).catch(() => null)));
-  const briefRows = recent.map((b, i) => {
-    const B = det[i];
-    if (!B) return "";
-    const x = B.students.find((y) => y.discord_id === id) || {};
-    const sq = B.kind === "squad" ? B.squadRows.find((q) => q.members.map(String).includes(id)) : null;
-    const handin = sq ? sq.handin : x.handin, review = sq ? sq.review : x.review, who = sq ? `s:${sq.id}` : `u:${id}`;
-    const passed = b.due_at && b.due_at <= nowS;
-    const push = x.push === "on" ? (passed ? "On time" : "Pushed") : x.push === "late" ? "Late" : passed ? "Nothing pushed" : "Not yet";
-    return `<tr><td><a href="#/brief/${b.id}">${esc(b.title)}</a>${sq ? ` <span class="small muted">· ${esc(sq.name)}</span>` : ""}</td>
-      <td><span class="lvl ${x.push === "on" ? "ok" : x.push === "late" ? "warn" : "bad"}">${push}</span></td>
-      <td class="small">${handin ? `<a href="https://github.com/${esc(handin.repo)}" target="_blank" rel="noopener">${esc(String(handin.repo).split("/").pop())}</a>` : `<span class="muted">—</span>`}</td>
-      <td><a class="btn small" href="#/debrief/${b.id}~${encodeURIComponent(who)}">${review ? (review.status === "final" ? "✅ Debrief" : "Debrief") : "Debrief"}</a></td></tr>`;
-  }).join("");
   const labels = D.A.days.map((d) => `${Number(d.slice(8))}/${Number(d.slice(5, 7))}`);
   panel.innerHTML = `
     <div class="panel-head"><div><h2 style="margin:0">${avatar(s.display, s.discord_id)} ${esc(s.display)}</h2>
@@ -304,7 +287,7 @@ async function openWatchStudent(D, id) {
     ${s.reasons.length ? `<div class="notice warn"><b>Needs your attention</b><ul class="small" style="margin:6px 0 0">${s.reasons.map((r) => `<li>${esc(r[0])}</li>`).join("")}</ul></div>` : ""}
     <div class="w-mini"><div><b>${s.all.score}</b><span>Score</span></div><div><b>${s.all.real}</b><span>Commits</span></div><div><b>${s.all.lines}</b><span>Lines</span></div><div><b>${s.all.active}/${D.N}</b><span>Active days</span></div></div>
     ${barChart(labels, [{ name: "Score", values: s.day.map((x) => x.score), color: "var(--blue)" }, { name: "Not scored (tiny / huge)", values: s.day.map((x) => x.tiny + x.huge), color: "var(--line-strong)" }], { height: 170, every: 2 })}
-    ${briefRows ? `<h3>Briefs</h3><div class="table-wrap"><table class="grid-table"><tbody>${briefRows}</tbody></table></div>` : ""}
+    <p style="margin:12px 0 0"><a class="btn small" href="#/progress">Debriefs on Progress →</a></p>
     <details style="margin-top:12px"><summary><b>Repos</b> <span class="muted small">${s.repos.length}</span></summary>
       <ul class="small">${s.repos.map(([r, n]) => `<li><a href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r)}</a> <span class="muted">· ${n} action(s)</span></li>`).join("") || `<li class="muted">No repo activity yet.</li>`}</ul>
       <p style="margin:6px 0 0"><button class="btn small" id="w-recount">Recount since the brief started</button></p></details>
@@ -824,8 +807,12 @@ const W_LV_NAME = Object.fromEntries(W_LV);
 .pg-table { border-collapse: collapse; } .pg-table th, .pg-table td { padding: 5px 8px; text-align: left; white-space: nowrap; }
 .pg-table th.pg-b { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; color: var(--ink-soft); max-height: 130px; overflow: hidden; }
 .pg-sq { display: inline-block; width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong); vertical-align: middle; }
-.pg-sq.has { background: var(--c); border-color: var(--c); } .pg-sq.ev { border-style: dashed; border-color: var(--ink-soft); }
+.pg-sq.has { background: var(--c); border-color: var(--c); } a.pg-sq { cursor: pointer; } a.pg-sq:not(.has):hover { border-color: var(--blue); background: var(--surface-2); } a.pg-sq.has:hover { outline: 2px solid var(--c); outline-offset: 2px; } .pg-sq.ev { border-style: dashed; border-color: var(--ink-soft); }
 .pg-cell { position: relative; display: inline-block; }
+.pg-as { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); box-sizing: content-box; vertical-align: middle; }
+.pg-cell .pg-as { position: absolute; right: -5px; bottom: -4px; pointer-events: none; }
+.pg-as.ok { background: var(--up); } .pg-as.open { background: var(--warn); } .pg-as.miss { background: var(--surface); box-shadow: inset 0 0 0 2px var(--down); }
+.pg-noas { font-weight: 400; color: var(--warn); }
 .pg-copy { display: none; position: absolute; left: 24px; top: -3px; z-index: 5; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid var(--line-strong);
   background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: var(--shadow-m); font-size: 14px; }
 .pg-cell:hover .pg-copy, .pg-cell:focus-within .pg-copy { display: inline-flex; align-items: center; justify-content: center; }
@@ -847,6 +834,9 @@ function wPropLevel() {
   if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
   const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
   if (m !== undefined) parts.push([0.15, m]);
+  // the assessment linked to the brief (same weights as the server's debriefLevel)
+  const as = (DB.R.review?.assess || []).filter((a) => a.score != null);
+  if (as.length) parts.push([0.3, as.reduce((x, a) => x + a.score, 0) / as.length / 100]);
   if (!parts.length) return "";
   const sc = parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0);
   return sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique";
@@ -917,6 +907,14 @@ function wDebriefExtras() {
 }
 
 // ================================================================= Progress: one column per brief, one square per debrief (its level)
+// The mark of the assessment linked to the brief, for one student: graded (its score), not graded yet, not taken
+function pgAssess(P, b, sid) {
+  if (!b.assessments) return { html: "", tip: "" };
+  const a = (P.assess || {})[`${b.id}:${sid}`];
+  if (!a) return { html: `<i class="pg-as miss" aria-hidden="true"></i>`, tip: " · assessment not taken" };
+  if (a.st === "graded") return { html: `<i class="pg-as ok" aria-hidden="true"></i>`, tip: ` · assessment ${a.score}%` };
+  return { html: `<i class="pg-as open" aria-hidden="true"></i>`, tip: " · assessment not graded yet" };
+}
 const W_PG = { filter: "all", sort: "name" };
 async function viewProgress() {
   const P = await api("/progress");
@@ -930,17 +928,19 @@ async function viewProgress() {
   }).filter((x) => W_PG.filter === "all" || x.low > 0).sort(W_PG.sort === "low" ? (a, b) => a.avg - b.avg || byName(a, b) : byName);
   const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${l}</option>`).join("");
   const legend = W_LV.map(([v, l]) => `<span style="margin-right:12px"><i class="pg-dot pgc-${v}"></i>${l}</span>`).join("");
-  view.innerHTML = `<div class="page-head"><div><h1>Progress</h1><p class="sub">One square per debrief: its level.</p></div></div>
+  view.innerHTML = `<div class="page-head"><div><h1>Progress</h1><p class="sub">One square per learner and brief: its colour is the debrief's level. Click a square to open that debrief.</p></div></div>
     <div class="toolbar"><select id="pg-f">${opt([["all", "All students"], ["low", "Faible or Critique"]], W_PG.filter)}</select>
       <select id="pg-s">${opt([["name", "Name"], ["low", "Lowest level first"]], W_PG.sort)}</select></div>
-    ${!P.briefs.length ? `<div class="empty-state"><p class="muted">No debrief yet.</p></div>` : `<section class="panel"><div class="table-wrap"><table class="pg-table">
-      <thead><tr><th></th>${P.briefs.map((b) => `<th class="pg-b" title="${esc(b.title)}">${esc(b.title.slice(0, 24))}</th>`).join("")}<th>Over the year</th></tr></thead>
+    ${!P.briefs.length ? `<div class="empty-state"><p class="muted">No brief published yet.</p></div>` : `<section class="panel"><div class="table-wrap"><table class="pg-table">
+      <thead><tr><th></th>${P.briefs.map((b) => `<th class="pg-b" title="${esc(b.title)}${b.assessments ? "" : " · no assessment linked"}">${b.assessments ? "" : `<span class="pg-noas" aria-label="no assessment linked">⚠ </span>`}${esc(b.title.slice(0, 24))}</th>`).join("")}<th>Over the year</th></tr></thead>
       <tbody>${rows.map((x) => `<tr><td><b>${esc(x.s.name)}</b></td>${x.lv.map((c, i) => {
         const b = P.briefs[i];
-        return `<td>${c ? `<span class="pg-cell"><a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}"></a><button type="button" class="pg-copy" data-pgcopy="${b.id}" data-who="${esc(c.who)}" data-sid="${esc(x.s.discord_id)}" data-name="${esc(x.s.name)} · ${esc(b.title)}" title="Copy the comment" aria-label="Copy the comment of ${esc(x.s.name)} for ${esc(b.title)}">📋</button></span>`
-          : `<span class="pg-sq" title="${esc(b.title)}: no debrief"></span>`}</td>`;
+        const am = pgAssess(P, b, x.s.discord_id);
+        return `<td>${c ? `<span class="pg-cell"><a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}${am.tip}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}${am.tip}"></a>${am.html}<button type="button" class="pg-copy" data-pgcopy="${b.id}" data-who="${esc(c.who)}" data-sid="${esc(x.s.discord_id)}" data-name="${esc(x.s.name)} · ${esc(b.title)}" title="Copy the comment" aria-label="Copy the comment of ${esc(x.s.name)} for ${esc(b.title)}">📋</button></span>`
+          : `<span class="pg-cell"><a class="pg-sq" href="#/debrief/${b.id}~${encodeURIComponent((P.squadOfMember || {})[`${b.id}:${x.s.discord_id}`] || `u:${x.s.discord_id}`)}" title="${esc(b.title)}: no debrief yet, click to debrief${am.tip}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: debrief${am.tip}"></a>${am.html}</span>`}</td>`;
       }).join("")}<td><span class="pg-year">${W_LV.filter(([v]) => x.count[v]).map(([v, l]) => `<span title="${l}"><i class="pg-dot pgc-${v}"></i>${x.count[v]}</span>`).join("")}</span></td></tr>`).join("")}</tbody></table></div>
-      <p class="muted small" style="margin:10px 0 0">${legend}</p></section>`}`;
+      <p class="muted small" style="margin:10px 0 0">${legend}</p>
+      <p class="muted small" style="margin:4px 0 0">Assessment of the brief: <span style="margin-right:12px"><i class="pg-as ok"></i>graded</span><span style="margin-right:12px"><i class="pg-as open"></i>not graded yet</span><span style="margin-right:12px"><i class="pg-as miss"></i>not taken</span>no mark (<span class="pg-noas">⚠</span> on the brief): no assessment linked to it.</p></section>`}`;
   // the comment of that debrief (a squad member's own comment, else the squad's)
   $$("[data-pgcopy]").forEach((btn) => btn.onclick = () => busy(btn, async () => {
     const R = await api(`/briefs/${btn.dataset.pgcopy}/review?who=${encodeURIComponent(btn.dataset.who)}`);

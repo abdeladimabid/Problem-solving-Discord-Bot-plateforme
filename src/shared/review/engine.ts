@@ -328,7 +328,7 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     const lines = graded.map((a) => {
       const ok = Object.entries(a.comps || {}).filter(([, v]) => v.ok).map(([k]) => skillDisplay(k));
       const ko = Object.entries(a.comps || {}).filter(([, v]) => !v.ok).map(([k]) => skillDisplay(k));
-      return `« ${a.title} » : ${a.score} %${ok.length ? ` (validé : ${ok.join(', ')}` : ''}${ko.length ? `${ok.length ? ' ; ' : ' ('}à retravailler : ${ko.join(', ')}` : ''}${ok.length || ko.length ? ')' : ''}.`;
+      return `« ${a.title} » : ${a.score} %, niveau ${LEVEL_FR[scoreLevel(a.score)]}${ok.length ? ` (validé : ${ok.join(', ')}` : ''}${ko.length ? `${ok.length ? ' ; ' : ' ('}à retravailler : ${ko.join(', ')}` : ''}${ok.length || ko.length ? ')' : ''}.`;
     });
     parts.push(`-Évaluation :\n${lines.join('\n')}`);
   }
@@ -348,10 +348,13 @@ export function reviewStates(rec) {
   for (const x of (rec && rec.checks) || []) if (!x.info && (x.ok === true || x.ok === false)) ck[x.id] = typeof (saved.ck || {})[x.id] === 'boolean' ? saved.ck[x.id] : x.ok;
   const ex = (r.exigences || []).map((e, i) => (isBound(e) && e.check in ck ? ck[e.check] : typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : itemValid(e)));
   const co = {};
-  // an assessment linked to the brief that didn't validate a competency: it starts "not validated"
-  const baseCode = (c) => String(c).toUpperCase().replace(/N\d$/, '').replace(/^CT/, 'T');
-  const assessKo = new Set(((rec && rec.assess) || []).flatMap((a) => Object.entries(a.comps || {}).filter(([, v]) => v && v.ok === false).map(([k]) => baseCode(k))));
-  for (const x of r.competences || []) co[x.code] = typeof (saved.co || {})[x.code] === 'boolean' ? saved.co[x.code] : x.avis === 'validable' && !assessKo.has(baseCode(x.code));
+  // the assessment linked to the brief comes first: a competency it tested starts as the assessment says (validated
+  // only if every assessment validated it), whatever the project shows; the others start as the project shows
+  const fromAssess = assessVerdicts(rec);
+  for (const x of r.competences || []) {
+    const a = fromAssess[assessBase(x.code)];
+    co[x.code] = typeof (saved.co || {})[x.code] === 'boolean' ? saved.co[x.code] : typeof a === 'boolean' ? a : x.avis === 'validable';
+  }
   const ch = (rec && rec.challenge) || null;
   const mes = { r: (saved.mes && CH_RESULTS.includes(saved.mes.r) ? saved.mes.r : ch && ch.result) || '', note: String((saved.mes && typeof saved.mes.note === 'string' ? saved.mes.note : ch && ch.note) || '') };
   // oral questions: each one starts Not valid, the teacher switches it after the answer
@@ -359,9 +362,25 @@ export function reviewStates(rec) {
   return { ck, ex, co, mes, oral };
 }
 export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
+// C3N2 / CT5 / T5 → C3 / T5: how the assessments' competency results are keyed
+export const assessBase = (c) => String(c).toUpperCase().replace(/N\d$/, '').replace(/^CT/, 'T');
+/** What the graded assessments of the brief say of each competency: true (all validated it), false, absent = not tested. */
+export function assessVerdicts(rec) {
+  const out = {};
+  for (const a of (rec && rec.assess) || []) for (const [k, v] of Object.entries(a.comps || {})) {
+    if (!v || typeof v.ok !== 'boolean') continue;
+    const b = assessBase(k);
+    out[b] = b in out ? out[b] && v.ok : v.ok;
+  }
+  return out;
+}
+// The level of a score (an assessment's %), with the same steps as the debrief level
+export const scoreLevel = (pct) => (pct >= 90 ? 'excellent' : pct >= 75 ? 'bon' : pct >= 55 ? 'moyen' : pct >= 35 ? 'faible' : 'critique');
+export const LEVEL_FR = { excellent: 'Excellent', bon: 'Bon', moyen: 'Moyen', faible: 'Faible', critique: 'Critique' };
 export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'];
-// The level proposed after the debrief, from the switches: brief (40 %), competencies (30 %), oral questions and
-// mise en situation (15 % each), only the parts that were evaluated. The teacher chooses the level, and can change it.
+// The level proposed after the debrief, from the switches: brief (40 %), competencies (30 %), the assessment linked to
+// the brief (30 %), oral questions and mise en situation (15 % each), only the parts that were evaluated. The teacher
+// chooses the level, and can change it.
 export function debriefLevel(rec, st) {
   const ex = ((rec && rec.result) || {}).exigences || [];
   const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'oral');
@@ -373,6 +392,8 @@ export function debriefLevel(rec, st) {
   if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
   const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
   if (m !== undefined) parts.push([0.15, m]);
+  const as = ((rec && rec.assess) || []).filter((a) => a.score != null);
+  if (as.length) parts.push([0.3, as.reduce((t, a) => t + a.score, 0) / as.length / 100]);
   if (!parts.length) return '';
   const sc = parts.reduce((a, p) => a + p[0] * p[1], 0) / parts.reduce((a, p) => a + p[0], 0);
   return sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique';
