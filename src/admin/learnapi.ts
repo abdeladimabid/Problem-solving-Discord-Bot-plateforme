@@ -11,24 +11,17 @@ import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrie
 import type { Section } from "../shared/briefs.ts";
 import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
-<<<<<<< HEAD
 import { activityOf, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
-=======
-import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
->>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
-<<<<<<< HEAD
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
-=======
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
->>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
 import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
 
@@ -39,11 +32,7 @@ const bad = (msg: string) => { throw new ApiError(400, msg); };
 const techList = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\n]+/)).map((x) => String(x).trim().slice(0, 40)).filter(Boolean))].slice(0, 20);
 
 export async function learningApi(env: Env, ctx: Ctx, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
-<<<<<<< HEAD
-  if (!/^\/(programs?|briefs|github|assessments|competencies)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/(competency|github(\/sync|\/summary)?)$/.test(path)) return null;
-=======
-  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints|progress)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
->>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
+  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints|progress)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/(competency|github(\/sync|\/summary)?)$/.test(path)) return null;
   try {
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
