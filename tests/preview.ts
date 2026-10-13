@@ -241,6 +241,33 @@ env.ASSETS = {
       act.run(G, String(100 + i), "d" + dl++, new Date(t * 1000).toISOString().slice(0, 10), t, `${login}/${d > 6 ? "hammam-andalous" : "tailwind-landing"}`, c, Math.max(0, c - (rnd() < 0.2 ? 1 : 0)), rnd() < 0.2 ? 1 : 0, i === 7 && d === 2 ? 1 : 0, rnd() < 0.15 ? 1 : 0, 20 + Math.floor(rnd() * 300), rnd() < 0.15 ? 1 : 0, 0);
     }
   });
+  // each commit (the student page's GitHub tab)
+  const MSGS = ["feat: header with logo and navigation", "update", "add hero section with background image", "fix", "style: responsive grid for the services cards", "wip", "feat: contact form with validation", "aaa",
+    "docs: README with screenshots", "refactor: CSS variables for the colors", "add footer links", "fix: burger menu not closing on mobile", "Update index.html", "feat: tarifs page with table", "commit", "add images", "feat: smooth scroll and active link"];
+  const glog = db.prepare("INSERT OR IGNORE INTO gh_log (guild_id, id, discord_id, kind, repo, branch, t, title, size, bad, flags, adds, dels, files, action, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  ghNames.forEach((login, i) => {
+    for (let d = 0; d < 34; d++) {
+      if (i === 9 || rnd() < 0.35) continue;
+      const n = 1 + Math.floor(rnd() * 4);
+      for (let k = 0; k < n; k++) {
+        const t = now - d * DAY - Math.floor(rnd() * 50000), msg = MSGS[Math.floor(rnd() * MSGS.length)];
+        const bad = /^(update|fix|wip|aaa|commit|Update index\.html)$/.test(msg) ? 1 : 0;
+        const huge = i === 7 && d === 2 && k === 0;
+        const adds = huge ? 4820 : bad && rnd() < 0.6 ? 1 : 5 + Math.floor(rnd() * 160), dels = huge ? 3 : Math.floor(rnd() * 30 * (adds > 2 ? 1 : 0));
+        const size = msg.startsWith("docs") ? "docs" : adds + dels <= 2 ? "tiny" : "real";
+        const sha = Array.from({ length: 40 }, () => "0123456789abcdef"[Math.floor(rnd() * 16)]).join("");
+        const repo = `${login}/${d > 12 ? "hammam-andalous" : "tailwind-landing"}`;
+        glog.run(G, sha, String(100 + i), "commit", repo, "main", t, huge ? "add project" : msg, size, bad, huge ? "huge" : null, adds, dels, 1 + Math.floor(rnd() * 4), null, `https://github.com/${repo}/commit/${sha}`);
+      }
+      if (rnd() < 0.12) glog.run(G, `pr:${login}/tailwind-landing#${d}:merged`, String(100 + i), "pr", `${login}/tailwind-landing`, "feature/contact", now - d * DAY, "Contact page", null, 0, null, 140, 12, 4, "merged", `https://github.com/${login}/tailwind-landing/pull/${d}`);
+    }
+  });
+  db.prepare("INSERT OR REPLACE INTO gh_summaries (guild_id, discord_id, data, at) VALUES (?, ?, ?, ?)").run(G, "100", JSON.stringify({
+    overview: "Yasmine worked on two sites: the Hammam showcase, then a Tailwind landing page. Steady pushes most days, mostly real steps, but about a quarter of the messages say nothing.",
+    repos: [{ repo: "yasmine-dev/hammam-andalous", features: [{ title: "Header with logo and navigation", commits: [], status: "done" }, { title: "Responsive services grid", commits: [], status: "done" }, { title: "Tarifs page with a price table", commits: [], status: "in progress" }] },
+      { repo: "yasmine-dev/tailwind-landing", features: [{ title: "Contact form with validation", commits: [], status: "done" }, { title: "Burger menu on mobile", commits: [], status: "done" }, { title: "Smooth scroll with the active link", commits: [], status: "done" }] }],
+    brief: [{ brief: "Hammam Al Andalous", requirement: "Une page Tarifs avec les prestations et leurs prix", status: "partial", evidence: "“feat: tarifs page with table”, then nothing" }, { brief: "Hammam Al Andalous", requirement: "Formulaire de réservation", status: "done", evidence: "contact form commits" }, { brief: "Hammam Al Andalous", requirement: "Mise en ligne sur GitHub Pages", status: "no sign", evidence: "no deploy commit" }],
+    habits: { good: ["Pushes most working days", "Separates features into their own commits"], improve: ["Write what changed: “fix: burger menu not closing” instead of “fix”", "Avoid “wip” commits on main"] }, days: 30, model: "preview" }), now - 3600);
   const { saveBrief } = await import("../src/shared/briefs.ts");
   const { finalizeReview } = await import("../src/shared/learning.ts");
   const { buildComment } = await import("../src/shared/review/engine.ts");

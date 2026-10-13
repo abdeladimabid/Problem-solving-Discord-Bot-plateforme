@@ -1347,13 +1347,13 @@ async function viewGithub() {
   const ready = su.app && su.oauth && su.webhook && su.key;
   const linked = new Set(act.students.map((s) => s.discord_id));
   const notLinked = (S.students || []).filter((s) => !linked.has(s.discord_id));
-  const rows = act.students.map((s) => ({ ...s, sum: s.days.reduce((t, d) => t + d[0], 0), week: s.days.slice(-7).reduce((t, d) => t + d[0] + d[2], 0) }));
+  const rows = act.students.map((s) => ({ ...s, sum: s.days.reduce((t, d) => t + (d[7] ?? d[0]), 0), week: s.days.slice(-7).reduce((t, d) => t + (d[7] ?? d[0]) + d[2], 0) }));
   const total = rows.reduce((t, s) => t + s.sum, 0);
   const activeWeek = rows.filter((s) => s.week > 0).length;
   const idle = rows.filter((s) => s.idle >= (c.inactiveDays || 3));
-  const max = Math.max(1, ...rows.flatMap((s) => s.days.map((d) => d[0] + d[2] + d[3])));
-  const heat = (d, day) => { const n = d[0] + d[2] + d[3]; const k = n ? Math.ceil((4 * n) / max) : 0;
-    return `<i class="h${k} ${d[5] || d[6] ? "flag" : ""}" title="${esc(day)}: ${d[0]} commit(s), ${d[1]} line(s), ${d[2]} PR(s)${d[3] ? `, ${d[3]} other` : ""}${d[4] ? `, ${d[4]} tiny` : ""}${d[5] ? `, ${d[5]} huge` : ""}${d[6] ? `, ${d[6]} vague message(s)` : ""}"></i>`; };
+  const max = Math.max(1, ...rows.flatMap((s) => s.days.map((d) => (d[7] ?? d[0]) + d[2] + d[3])));
+  const heat = (d, day) => { const n = (d[7] ?? d[0]) + d[2] + d[3]; const k = n ? Math.min(4, Math.ceil((4 * n) / max)) : 0;
+    return `<i class="h${k} ${d[5] || d[6] ? "flag" : ""}" title="${esc(day)}: ${d[7] ?? d[0]} commit(s) (${d[0]} real), ${d[1]} line(s), ${d[2]} PR(s)${d[3] ? `, ${d[3]} other` : ""}${d[4] ? `, ${d[4]} tiny` : ""}${d[5] ? `, ${d[5]} huge` : ""}${d[6] ? `, ${d[6]} vague message(s)` : ""}"></i>`; };
   const pctLinked = G.students ? Math.round((100 * G.linked) / G.students) : 0;
   view.innerHTML = `
     <div class="page-head"><div><h1>GitHub</h1><p class="sub">What each student pushes, every day. It feeds the reports, the brief reminders and the debriefs.</p></div>
@@ -1371,7 +1371,7 @@ async function viewGithub() {
         <span class="heat-legend small muted">less <i class="h0"></i><i class="h1"></i><i class="h2"></i><i class="h3"></i><i class="h4"></i> more · <i class="h2 flag"></i> huge or vague commits</span></div>
       ${rows.length ? table([
         { label: "Student", sort: "name", html: (s) => `<a class="gh-who" href="#/student/${s.discord_id}">${avatar(s.name, s.discord_id)}<span><b>${esc(s.name || s.login)}</b><small>@${esc(s.login)}</small></span></a>` },
-        { label: "Last 14 days", html: (s) => `<span class="gh-heat">${s.days.map((d, i) => heat(d, act.days[i])).join("")}</span>` },
+        { label: "Last 14 days", html: (s) => `<a href="#/student/${s.discord_id}?tab=github" class="gh-heat" title="All their activity">${s.days.map((d, i) => heat(d, act.days[i])).join("")}</a>` },
         { label: "Commits", num: true, sort: "sum", html: (s) => `<b>${s.sum}</b>` },
         { label: "Last push", sort: "last", html: (s) => `${s.idle >= (c.inactiveDays || 3) ? `<span class="lvl bad">${s.idle} days idle</span>` : `<span class="small">${s.last ? fmtAgo(s.last) : "never"}</span>`}` },
         { label: "Repos", html: (s) => `<span class="gh-repos">${s.repos.slice(0, 3).map(([r]) => `<a class="tag" href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r.split("/")[1] || r)}</a>`).join("") || `<span class="muted">—</span>`}</span>` },
@@ -1397,6 +1397,7 @@ async function githubSettings(root) {
   const [G] = await Promise.all([api("/github"), loadDiscord()]);
   const c = G.cfg, su = G.setup;
   const ready = su.app && su.oauth && su.webhook && su.key;
+  const chName = (id) => [...(S.discord?.channels || []), ...(S.discord?.forums || [])].find((x) => x.id === id)?.name || "";
   const chOpt = (sel, list) => `<option value="">—</option>` + (list || []).map((x) => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}># ${esc(x.name)}</option>`).join("");
   const item = (ok, label) => `<li class="${ok ? "ok" : "ko"}">${ok ? "✓" : "✗"} ${label}</li>`;
   const urls = su.own ? su.urls : su.ownUrls;
@@ -1432,9 +1433,16 @@ async function githubSettings(root) {
       ${su.own || !su.shared ? "" : `<p><button class="btn" id="ga-mine">Use my own GitHub App for this class</button></p>`}
     </div>
 
-    <div class="panel set-card"><h3>Reports and reminders</h3>
-      <div class="field-row"><div><label>Report channel</label><select id="gh-ch">${chOpt(c.channel, S.discord?.channels)}</select></div>
-        <div><label>Forum: one post per student <span class="muted">(optional)</span></label><select id="gh-fo">${chOpt(c.forum, S.discord?.forums)}</select></div></div>
+    <div class="panel set-card"><h3>Where GitHub messages go</h3>
+      ${!c.channel ? `<p class="gh-warn">⚠️ No report channel chosen: reports, reminders and connections go to <b>${chName(G.fallback) ? "#" + esc(chName(G.fallback)) : "the announcements channel"}</b> (often #arena). Choose your GitHub channel below.</p>` : ""}
+      ${c.forumError ? `<p class="gh-warn bad">🛑 The last forum post failed (${fmtAgo(c.forumError.at)}): ${esc(c.forumError.msg)}</p>` : ""}
+      <div class="gh-dest">
+        <div><span class="gh-dest-ic">📊</span><div><label for="gh-ch">Reports & brief reminders</label><select id="gh-ch">${chOpt(c.channel, S.discord?.channels)}</select><p class="small muted">Daily / weekly tables, idle students, deadlines.</p></div></div>
+        <div><span class="gh-dest-ic">🔗</span><div><label for="gh-lk">“X connected GitHub”</label><select id="gh-lk"><option value="">Same as the reports</option><option value="off" ${c.links === "off" ? "selected" : ""}>Don't announce</option>${(S.discord?.channels || []).map((x) => `<option value="${x.id}" ${x.id === c.links ? "selected" : ""}># ${esc(x.name)}</option>`).join("")}</select><p class="small muted">Posted once per new link.</p></div></div>
+        <div><span class="gh-dest-ic">🧵</span><div><label for="gh-fo">Activity forum <span class="muted">(one post per student)</span></label><select id="gh-fo">${chOpt(c.forum, S.discord?.forums)}</select><p class="small muted">Every push and pull request, in the student's post.</p></div></div>
+      </div>
+      <div class="toolbar" style="margin:4px 0 12px"><button class="btn small" id="gh-test">🧪 Save and send a test</button><span id="gh-test-out" class="small"></span></div>
+      <h3>Reports and reminders</h3>
       <label class="check"><input type="checkbox" id="gh-da" ${c.daily ? "checked" : ""}> Daily report at <input type="number" id="gh-h" min="0" max="23" value="${c.hour}" style="width:64px">:<input type="number" id="gh-m" min="0" max="59" value="${c.minute}" style="width:64px"> <span class="muted small">(UTC)</span></label>
       <label class="check"><input type="checkbox" id="gh-we" ${c.weekly ? "checked" : ""}> Weekly report on <select id="gh-wd">${WEEKDAYS.map((w, i) => `<option value="${i}" ${i === c.weeklyDay ? "selected" : ""}>${w}</option>`).join("")}</select></label>
       <label class="check"><input type="checkbox" id="gh-re" ${c.reminders ? "checked" : ""}> Brief reminders (3 days, 1 day, deadline)</label>
@@ -1476,13 +1484,17 @@ async function githubSettings(root) {
     toast(r.warn || `Connected to “${r.name}” (owner ${r.owner}${r.installs != null ? `, ${r.installs} installation(s)` : ""})`, !!r.warn);
   });
   if ($("#ga-del")) $("#ga-del").onclick = () => confirmDialog("Use the school's GitHub App?", "This class's own App details are deleted. Students linked with it will need to run /github again.", "Use the school's App", async () => { await api("/github/app", { method: "DELETE" }); reload(); }, true);
-  $("#gh-save").onclick = (e) => busy(e.currentTarget, async () => {
-    await api("/github", { method: "PUT", body: {
-      channel: $("#gh-ch").value, forum: $("#gh-fo").value, daily: $("#gh-da").checked, weekly: $("#gh-we").checked, reminders: $("#gh-re").checked,
+  const saveGh = () => api("/github", { method: "PUT", body: {
+      channel: $("#gh-ch").value, links: $("#gh-lk").value, forum: $("#gh-fo").value, daily: $("#gh-da").checked, weekly: $("#gh-we").checked, reminders: $("#gh-re").checked,
       hour: $("#gh-h").value, minute: $("#gh-m").value, weeklyDay: $("#gh-wd").value, inactiveDays: $("#gh-in").value, tiny: $("#gh-ti").value, huge: $("#gh-hu").value,
       skip: $$("[data-skip]:checked", root).map((x) => Number(x.dataset.skip)), hidden: $("#gh-hid").value,
       rewards: { comp: $("#gh-rc").value, coins: $("#gh-rk").value, bonus: $("#gh-rb").value } } });
-    toast("Saved");
+  $("#gh-save").onclick = (e) => busy(e.currentTarget, async () => { await saveGh(); toast("Saved"); });
+  $("#gh-test").onclick = (e) => busy(e.currentTarget, async () => {
+    await saveGh();
+    const r = await api("/github/test", { method: "POST", body: {} });
+    const LBL = { reports: "📊 Reports", connections: "🔗 Connections", forum: "🧵 Forum" };
+    $("#gh-test-out").innerHTML = r.results.map((x) => `<span class="gh-test ${x.ok ? "ok" : "ko"}">${x.ok ? "✓" : "✗"} ${LBL[x.target]}${x.channel ? ` (#${esc(chName(x.channel) || x.channel)})` : ""}: ${esc(x.msg)}</span>`).join("");
   });
   const done = (r) => toast(`Imported: ${r.students} students, ${r.briefs} briefs, ${r.handins} hand-ins, ${r.reviews} debriefs, ${r.threads ?? 0} forum posts`);
   if ($("#gw-bind")) $("#gw-bind").onclick = (e) => busy(e.currentTarget, async () => done(await api("/github/import", { method: "POST", body: {} })));
@@ -1702,28 +1714,21 @@ function learningPanel(d, sid) {
   const ok = comps.filter((c) => c.level > 0).length;
   const STC = { validated: "Validated", progress: "In progress", not_yet: "Not yet", none: "No result yet" };
   const nameOf = (code) => { const p = parseC(code); return comps.find((c) => c.code === p?.code)?.name || ""; };
-  const gh = L.github;
-  const act = gh.activity;
   const finals = L.briefs.filter((b) => b.review?.pct != null);
   const avgPct = finals.length ? Math.round(finals.reduce((s, b) => s + b.review.pct, 0) / finals.length) : null;
   return `<div id="learn-wrap" class="stack">
+    <section class="panel" id="learn-briefs">
+      <div class="panel-head"><h2>📄 Briefs: what they built</h2><span class="small muted">${L.briefs.length} brief(s)${avgPct != null ? ` · <b style="color:${masteryInk(avgPct)}">${avgPct}%</b> of requirements on average` : ""}</span></div>
+      ${L.briefs.length ? `<div class="sbx-stack">${L.briefs.slice(0, 12).map((b, i, arr) => studentBriefCard(b, arr.findIndex((x) => x.review) === i ? 0 : 1, nameOf)).join("")}</div>` : `<p class="muted small">No brief assigned yet.</p>`}
+    </section>
     <section class="panel" id="learn">
     <div class="panel-head"><h2>🎓 Competencies <span class="muted">${esc(L.program)}</span></h2><span class="small"><b>${ok}/${comps.length}</b> validated</span></div>
     <div class="comp-map">${comps.map((c) => `<button type="button" class="cm ${c.status}" data-cm="${c.code}" title="${esc(c.name)} · ${STC[c.status]}${c.manual ? " · your decision" : ""} · click to change">
       <b>${esc(c.label)}${c.manual ? ` <span class="cm-man" title="Your decision">✍️</span>` : ""}</b>${dots(c.level, L.levels.length)}<small>${esc(c.name)}</small></button>`).join("")}</div>
     <p class="muted small cm-legend"><span class="cm-key validated"></span> validated <span class="cm-key progress"></span> validated before, missed last time <span class="cm-key not_yet"></span> not validated yet <span class="cm-key none"></span> no result yet · ✍️ your decision · <b>click one to see its history or validate / invalidate it</b></p>
-    <div class="grid cols-2-even" style="margin-top:8px">
-      <div><h3>📝 Assessments</h3>${L.assessments.length ? `<ul class="lb-list">${L.assessments.slice(0, 6).map((a) => `<li class="lb"><div><a href="#/assessment/${a.id}"><b>${esc(a.title)}</b></a> ${status(a.status === "locked" ? "failed" : ["graded", "submitted"].includes(a.status) ? "solved" : "pending", STATUS[a.status] || a.status)}
-          ${a.score != null ? ` <b style="color:${masteryInk(a.score)}">${a.score}%</b>` : ""}</div>${a.summary ? `<div class="small muted">${esc(a.summary)}</div>` : ""}</li>`).join("")}</ul>` : `<p class="muted small">No assessment yet.</p>`}</div>
-      <div><h3>🐙 GitHub</h3>${gh.login ? `<p class="small"><a href="https://github.com/${esc(gh.login)}" target="_blank" rel="noopener">${esc(gh.login)}</a>${act ? ` · last push ${act.last ? fmtAgo(act.last) : "never"}${act.idle >= 3 ? ` <span class="lvl bad">${act.idle} days idle</span>` : ""}` : ""}</p>
-          ${act ? `<span class="gh-heat">${act.days.map((x, i) => `<i class="h${Math.min(4, x[0] + x[2])} ${x[5] || x[6] ? "flag" : ""}" title="${esc(gh.days[i])}: ${x[0]} commit(s), ${x[2]} PR(s)"></i>`).join("")}</span>
-          <p class="small muted">${act.repos.slice(0, 4).map(([r]) => `<a href="https://github.com/${esc(r)}" target="_blank" rel="noopener">${esc(r)}</a>`).join(" · ")}</p>` : ""}`
-          : `<p class="muted small">Not linked: they run <code>/github</code> in Discord.</p>`}</div>
-    </div></section>
-    <section class="panel" id="learn-briefs">
-      <div class="panel-head"><h2>📄 Briefs: what they built</h2><span class="small muted">${L.briefs.length} brief(s)${avgPct != null ? ` · <b style="color:${masteryInk(avgPct)}">${avgPct}%</b> of requirements on average` : ""}</span></div>
-      ${L.briefs.length ? `<div class="sbx-stack">${L.briefs.slice(0, 12).map((b, i, arr) => studentBriefCard(b, arr.findIndex((x) => x.review) === i ? 0 : 1, nameOf)).join("")}</div>` : `<p class="muted small">No brief assigned yet.</p>`}
-    </section></div>`;
+    </section>
+    <section class="panel"><div class="panel-head"><h2>📝 Assessments</h2><span class="small muted">${L.assessments.length} taken</span></div>${L.assessments.length ? `<ul class="lb-list">${L.assessments.slice(0, 10).map((a) => `<li class="lb"><div><a href="#/assessment/${a.id}"><b>${esc(a.title)}</b></a> ${status(a.status === "locked" ? "failed" : ["graded", "submitted"].includes(a.status) ? "solved" : "pending", STATUS[a.status] || a.status)}
+          ${a.score != null ? ` <b style="color:${masteryInk(a.score)}">${a.score}%</b>` : ""} <span class="small muted">${a.submitted_at ? fmtDate(a.submitted_at) : ""}</span></div>${a.summary ? `<div class="small muted">${esc(a.summary)}</div>` : ""}</li>`).join("")}</ul>` : `<p class="muted small">No assessment yet.</p>`}</section></div>`;
 }
 function wireLearning(d, sid) {
   const L = d.learning;

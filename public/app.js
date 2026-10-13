@@ -596,7 +596,26 @@ function wireWorkOn(sid, name) {
   });
 }
 
-async function viewStudent(id) {
+/** Overview: the brief they're on (or the last one), at a glance. */
+function latestBriefHtml(L, sid) {
+  const b = L.briefs.find((x) => !x.review || x.review.status !== "final") || L.briefs[0];
+  if (!b) return `<section class="panel"><h2>📄 Brief</h2><p class="muted small">No brief assigned yet.</p></section>`;
+  const rv = b.review, reqs = rv?.reqs || [], main = reqs.filter((r) => r.type !== "bonus");
+  const left = b.due ? b.due - Date.now() / 1000 : null;
+  const due = left == null ? "" : left > 0 ? `due ${fmtDate(b.due)} · ${left > 86400 ? `${Math.round(left / 86400)} day(s) left` : `${Math.max(1, Math.round(left / 3600))} hour(s) left`}` : `ended ${fmtDate(b.due)}`;
+  return `<section class="panel stu-brief"><div class="panel-head"><h2>📄 ${esc(b.title)}</h2><a class="btn small" href="#/student/${esc(sid)}?tab=learning">All briefs →</a></div>
+    <p class="small muted" style="margin-top:0">${esc(due)}${b.squad ? ` · squad ${esc(b.squad.name)}` : ""}${b.handin ? ` · handed in: <a href="https://github.com/${esc(b.handin.repo)}" target="_blank" rel="noopener">${esc(b.handin.repo)}</a>` : " · not handed in yet"}</p>
+    ${rv?.pct != null ? `<div class="stu-comp-bar"><i style="width:${rv.pct}%;background:${typeof masteryInk === "function" ? masteryInk(rv.pct) : "var(--blue)"}"></i></div>
+      <p class="small"><b>${rv.pct}%</b> · ${main.filter((r) => r.done).length}/${main.length} required features done${(rv.ok || []).length ? ` · ${rv.ok.length} competencies validated` : ""}</p>
+      ${reqs.filter((r) => !r.done).length ? `<p class="small" style="margin:0"><b>Missing:</b> ${reqs.filter((r) => !r.done).slice(0, 4).map((r) => esc(r.t)).join(" · ")}${reqs.filter((r) => !r.done).length > 4 ? " …" : ""}</p>` : ""}`
+      : `<p class="small muted">No debrief yet${b.handin ? `: <a href="#/debrief/${b.id}~${encodeURIComponent(b.who)}">debrief it →</a>` : "."}</p>`}
+  </section>`;
+}
+
+async function viewStudent(arg) {
+  // #/student/<id>?tab=github opens a tab directly
+  const [id, qs] = String(arg || "").split("?");
+  let current = new URLSearchParams(qs || "").get("tab") || "overview";
   const [d, list] = await Promise.all([api(`/students/${id}`), loadStudents(), loadSkillDefs()]);
   const row = list.find((r) => r.discord_id === id) || { attention: [], trend: "flat" };
   const p = d.player;
@@ -616,46 +635,88 @@ async function viewStudent(id) {
     const r = Math.round((100 * m.solved) / (m.solved + m.failed));
     return `<td class="num" title="${m.solved} solved, ${m.failed} not solved"><b style="color:${r >= 70 ? "var(--up)" : r < 40 ? "var(--down)" : "inherit"}">${r}%</b> <span class="muted small">${m.solved}/${m.solved + m.failed}</span></td>`;
   };
+  const L = d.learning || null;
+  const comps = L?.competencies || [];
+  const compOk = comps.filter((c) => c.level > 0);
+  const finals = (L?.briefs || []).filter((b) => b.review?.pct != null);
+  const avgPct = finals.length ? Math.round(finals.reduce((s, b) => s + b.review.pct, 0) / finals.length) : null;
+  const gh = L?.github, act = gh?.activity;
+  const intOpen = intRows.filter((a) => a.level && !a.reviewed).length;
+  const TABS = [["overview", "Overview"], ["learning", `Briefs & competencies`], ["github", "GitHub"], ["challenges", "Challenges"], ["points", "Points & history"]];
   view.innerHTML = `
-    <div class="page-head"><div>
-      <h1>${row.attention.length ? `<span class="mark">${esc(p.name || id)}</span>` : esc(p.name || id)}</h1>
-      <p class="sub">Level ${d.level.level} · ${esc(d.level.title)} · ${p.hr_display ? `HackerRank <a href="https://www.hackerrank.com/profile/${encodeURIComponent(p.hr_display)}" target="_blank" rel="noopener">${esc(p.hr_display)}</a> ${p.hr_verified ? '<span class="status solved">verified</span>' : `<span class="status expired">not verified</span>${p.hr_code ? ` <span class="muted small">(code ${esc(p.hr_code)})</span>` : ""}`}` : "HackerRank not linked"}${d.team ? ` · Team ${esc(d.team.name)}` : ""} · ${trend(row.trend)}</p></div>
-      <div class="toolbar" style="margin:0">${p.hr_display && !p.hr_verified ? `<button class="btn" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}${p.hr_display ? `<button class="btn" id="hr-unlink">Unlink HackerRank</button>` : ""}<button class="btn" id="give">Give points</button><button class="btn primary" id="assign">Assign a challenge</button></div></div>
-    <div class="stack">
-      ${row.attention.length ? `<div class="notice"><b>Worth a check-in:</b> ${esc(row.attention.join(", "))}.</div>` : ""}
+    <div class="stu-hero">
+      <div class="stu-id"><span class="stu-av">${avatar(p.name, id)}</span><div>
+        <h1>${row.attention.length ? `<span class="mark">${esc(p.name || id)}</span>` : esc(p.name || id)}</h1>
+        <div class="stu-chips">
+          <span class="stu-chip">⭐ Level ${d.level.level} · ${esc(d.level.title)}</span>${trend(row.trend)}
+          ${d.team ? `<span class="stu-chip">👥 ${esc(d.team.name)}</span>` : ""}
+          ${gh?.login ? `<a class="stu-chip" href="https://github.com/${esc(gh.login)}" target="_blank" rel="noopener">🐙 ${esc(gh.login)}</a>` : `<span class="stu-chip off">🐙 GitHub not linked</span>`}
+          ${p.hr_display ? `<a class="stu-chip ${p.hr_verified ? "" : "off"}" href="https://www.hackerrank.com/profile/${encodeURIComponent(p.hr_display)}" target="_blank" rel="noopener">HackerRank ${esc(p.hr_display)}${p.hr_verified ? " ✓" : ` · not verified${p.hr_code ? ` (code ${esc(p.hr_code)})` : ""}`}</a>` : `<span class="stu-chip off">HackerRank not linked</span>`}
+        </div></div></div>
+      <div class="stu-actions">
+        <button class="btn primary" id="assign">Assign a challenge</button><button class="btn" id="give">Give points</button>
+        ${p.hr_display ? `<details class="menu"><summary class="btn">⋯</summary><div class="menu-list">${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button></div></details>` : ""}
+      </div>
+    </div>
+    ${row.attention.length ? `<div class="notice" style="margin-bottom:12px"><b>Worth a check-in:</b> ${esc(row.attention.join(", "))}.</div>` : ""}
+    <div class="stu-kpis">
+      <button type="button" data-go="points"><b>${d.seasonPoints}</b><span>season points${d.seasonRank ? ` · #${d.seasonRank} of ${d.seasonSize}` : ""}</span></button>
+      <button type="button" data-go="learning"><b>${compOk.length}<small>/${comps.length}</small></b><span>competencies validated</span></button>
+      <button type="button" data-go="learning"><b ${avgPct != null ? `style="color:${typeof masteryInk === "function" ? masteryInk(avgPct) : "inherit"}"` : ""}>${avgPct != null ? avgPct + "%" : "—"}</b><span>brief requirements met${finals.length ? ` · ${finals.length} debriefed` : ""}</span></button>
+      <button type="button" data-go="github"><b>${act?.last ? fmtAgo(act.last).replace(/ ago$/, "") : gh?.login ? "—" : "off"}</b><span>${act?.last ? "since the last push" : gh?.login ? "no push yet" : "GitHub not linked"}${act?.idle >= 3 ? ` · <span style="color:var(--down)">${act.idle} days idle</span>` : ""}</span></button>
+      <button type="button" data-go="challenges"><b>${d.solved.total}</b><span>challenges solved · ${pct(d.accuracy)} accuracy</span></button>
+      <button type="button" data-go="challenges"><b>${p.daily_streak}</b><span>day daily streak</span></button>
+    </div>
+    <nav class="stu-tabs" role="tablist">${TABS.map(([k, l]) => `<button role="tab" data-stab="${k}">${l}${k === "challenges" && intOpen ? ` <span class="pill">${intOpen}</span>` : ""}</button>`).join("")}</nav>
+    <div id="stu-pane" class="stack"></div>`;
+
+  const panes = {
+    overview: () => `
+      <div class="stu-ov">
+        <div class="stack">
+          ${typeof githubSnapshot === "function" ? githubSnapshot(d, id) : ""}
+          ${L ? latestBriefHtml(L, id) : ""}
+          <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
+        </div>
+        <div class="stack">
+          ${L ? `<section class="panel"><div class="panel-head"><h2>🎓 Competencies</h2><a class="btn small" href="#/student/${esc(id)}?tab=learning">Details →</a></div>
+            <div class="stu-comp-bar"><i style="width:${comps.length ? Math.round((100 * compOk.length) / comps.length) : 0}%"></i></div>
+            <p class="small"><b>${compOk.length}</b> of ${comps.length} validated${comps.filter((c) => c.status === "not_yet").length ? ` · <span style="color:var(--down)">${comps.filter((c) => c.status === "not_yet").length} not yet</span>` : ""}</p>
+            <div class="stu-comp-mini">${comps.map((c) => `<span class="cmm ${c.status}" title="${esc(c.name)}">${esc(c.label)}</span>`).join("")}</div></section>` : ""}
+          ${workOnPanel(d.coach, id)}
+        </div>
+      </div>
+      ${coachPanel(d.coach)}`,
+    learning: () => (typeof learningPanel === "function" ? learningPanel(d, id) : `<p class="muted">—</p>`),
+    github: () => `<div id="gh-tab"></div>`,
+    challenges: () => `
       <div class="figures">
-        <div class="figure"><b>${d.seasonPoints}</b><span>season points${d.seasonRank ? ` · #${d.seasonRank} of ${d.seasonSize}` : ""}</span></div>
         <div class="figure"><b>${d.solved.total}</b><span>solved · ${d.solved.easy} easy, ${d.solved.medium} medium, ${d.solved.hard} hard</span></div>
         <div class="figure"><b>${pct(d.accuracy)}</b><span>accuracy (${d.failed} not solved)</span></div>
         <div class="figure"><b>${d.duels.w}–${d.duels.l}</b><span>duels won–lost · rating ${p.rating}</span></div>
-        <div class="figure"><b>${p.daily_streak}</b><span>day daily streak</span></div>
         <div class="figure"><b>${d.contests.played}</b><span>contests · ${d.contests.wins} won · ${d.contests.podiums} podiums</span></div>
       </div>
-      ${typeof learningPanel === "function" ? learningPanel(d, id) : ""}
-      ${workOnPanel(d.coach, id)}
-      ${coachPanel(d.coach)}
       <div class="grid cols-2-even">
-        <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
+        <section class="panel"><h2>Strengths and gaps</h2><p class="muted small">Success rate by challenge type and difficulty.</p>
+          <div class="table-wrap"><table><thead><tr><th></th>${kinds.map((k) => `<th class="num">${esc(KIND[k])}</th>`).join("")}</tr></thead>
+          <tbody>${["easy", "medium", "hard"].map((dif) => `<tr><td>${diffTag(dif)}</td>${kinds.map((k) => cell(dif, k)).join("")}</tr>`).join("")}</tbody></table></div></section>
         <section class="panel"><h2>Contest results</h2>${d.contestList.length > 0
           ? lineChart(contestLabels, [{ name: "Beat % of the class", color: "var(--s3)", values: beat }], { yMax: 100, ySuffix: "%" }) + `<p class="muted small">Higher is better: 100% means first place.</p>`
           : `<p class="empty">No contests yet.</p>`}</section>
       </div>
-      <section class="panel"><h2>Strengths and gaps</h2><p class="muted small">Success rate by challenge type and difficulty.</p>
-        <div class="table-wrap"><table><thead><tr><th></th>${kinds.map((k) => `<th class="num">${esc(KIND[k])}</th>`).join("")}</tr></thead>
-        <tbody>${["easy", "medium", "hard"].map((dif) => `<tr><td>${diffTag(dif)}</td>${kinds.map((k) => cell(dif, k)).join("")}</tr>`).join("")}</tbody></table></div></section>
       <section class="panel">
         <div class="tabs" role="tablist">
           <button role="tab" data-tab="solved" aria-selected="true">Solved (${solvedRows.length})</button>
           <button role="tab" data-tab="not">Not solved (${notRows.length})</button>
           <button role="tab" data-tab="asg">Assignments (${d.assignments.length})</button>
           <button role="tab" data-tab="duels">Duels (${d.duelList.length})</button>
-          <button role="tab" data-tab="points">Points log</button>
-          <button role="tab" data-tab="integ">Integrity${intRows.filter((a) => a.level && !a.reviewed).length ? ` <span class="pill">${intRows.filter((a) => a.level && !a.reviewed).length}</span>` : ` (${intRows.length})`}</button>
+          <button role="tab" data-tab="integ">Integrity${intOpen ? ` <span class="pill">${intOpen}</span>` : ` (${intRows.length})`}</button>
         </div>
         <div id="tab"></div>
-      </section>
-    </div>`;
-
+      </section>`,
+    points: () => `<section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
+      <section class="panel"><h2>Points this season</h2><div id="tab-points"></div></section>`,
+  };
   const titleCell = (a) => `${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}<div class="muted small">${esc(KIND[a.kind] || a.kind)}</div>`;
   const tabs = {
     solved: () => table([
@@ -704,19 +765,32 @@ async function viewStudent(id) {
   const showTab = (k) => {
     $$("[data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === k)));
     $("#tab").innerHTML = tabs[k]();
-    if (k === "integ") wireIntegrity($("#tab"), intRows, () => { S.students = null; viewStudent(id); });
+    if (k === "integ") wireIntegrity($("#tab"), intRows, () => { S.students = null; viewStudent(`${id}?tab=${current}`); });
     setTimeout(() => $$("#tab [data-review]").forEach((b) => b.onclick = () => busy(b, async () => {
       await api(`/attempts/${b.dataset.review}/review`, { method: "POST", body: { approve: b.dataset.ok === "1" } });
       toast("Saved");
-      viewStudent(id);
+      viewStudent(`${id}?tab=${current}`);
     })), 0);
   };
-  $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab));
-  showTab("solved");
+  const showPane = (k) => {
+    if (!panes[k]) k = "overview";
+    current = k;
+    $$("[data-stab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.stab === k)));
+    const pane = $("#stu-pane");
+    pane.innerHTML = panes[k]();
+    try { history.replaceState(null, "", `#/student/${id}${k === "overview" ? "" : `?tab=${k}`}`); } catch { /* ignore */ }
+    if (k === "overview") { wireWorkOn(id, p.name); }
+    if (k === "learning" && typeof wireLearning === "function") wireLearning(d, id);
+    if (k === "github" && typeof studentGithubTab === "function") studentGithubTab($("#gh-tab"), id, d);
+    if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); }
+    if (k === "points") $("#tab-points").innerHTML = tabs.points();
+    $$("#stu-pane a[href^='#/student/" + id + "?tab=']").forEach((a) => a.onclick = (e) => { e.preventDefault(); showPane(new URL(a.href).hash.split("tab=")[1]); });
+  };
+  $$("[data-stab]").forEach((b) => b.onclick = () => showPane(b.dataset.stab));
+  $$("[data-go]").forEach((b) => b.onclick = () => { showPane(b.dataset.go); $(".stu-tabs").scrollIntoView({ behavior: "smooth", block: "start" }); });
+  showPane(current);
   $("#assign").onclick = () => assignDialog([id]);
-  wireWorkOn(id, p.name);
-  if (typeof wireLearning === "function") wireLearning(d, id);
-  const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(id); };
+  const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(`${id}?tab=${current}`); };
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);
   $("#give").onclick = () => openDialog(`Give points to ${p.name || id}`, `
@@ -728,7 +802,7 @@ async function viewStudent(id) {
       dlg.close();
       toast("Points given");
       S.students = null;
-      viewStudent(id);
+      viewStudent(`${id}?tab=${current}`);
     } }]);
 }
 

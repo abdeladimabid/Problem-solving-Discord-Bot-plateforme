@@ -11,12 +11,13 @@ import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrie
 import type { Section } from "../shared/briefs.ts";
 import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, parseGrid, saveCommentText, saveMembers, saveStates, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
-import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
+import { activityOf, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
+import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
 
@@ -27,7 +28,7 @@ const bad = (msg: string) => { throw new ApiError(400, msg); };
 const techList = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\n]+/)).map((x) => String(x).trim().slice(0, 40)).filter(Boolean))].slice(0, 20);
 
 export async function learningApi(env: Env, ctx: Ctx, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
-  if (!/^\/(programs?|briefs|github|assessments|competencies)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
+  if (!/^\/(programs?|briefs|github|assessments|competencies)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/(competency|github(\/sync|\/summary)?)$/.test(path)) return null;
   try {
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
@@ -294,6 +295,16 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok({ referential: p.referential.map((c) => ({ ...c, label: compLabel(c.code) })), levels: p.levels, students, cells: await classCompetencies(env, g) });
   }
 
+  // the GitHub tab of a student page: commits, pull requests, repos and briefs, AI summary of the features
+  if ((m = path.match(/^\/students\/([\w-]{1,30})\/github(\/sync|\/summary)?$/))) {
+    const g = await guild();
+    const days = Number(url.searchParams.get("days") || body?.days || 30);
+    try {
+      if (!m[2] && method === "GET") return ok(await studentGithub(env, g, m[1], days));
+      if (m[2] === "/sync" && method === "POST") { const r = await syncStudentGithub(env, g, m[1], Math.min(120, Math.max(7, days || 30))); return ok({ ...r, ...(await studentGithub(env, g, m[1], days)) }); }
+      if (m[2] === "/summary" && method === "POST") return ok({ summary: await summarizeStudentGithub(env, g, m[1], days) });
+    } catch (e) { if (e instanceof GhDetailError) bad(e.message); throw e; }
+  }
   // a teacher's decision on one student's competency: validate at a level, invalidate, or back to automatic
   if ((m = path.match(/^\/students\/([\w-]{1,30})\/competency$/)) && method === "POST") {
     const g = await guild();
@@ -308,12 +319,12 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   // ------------------------------------------------------------ GitHub
   if (path === "/github" && method === "GET") {
     const g = await guild();
-    const cfg = githubCfg(g);
+    const cfg = await ensureGithubChannels(env, g);
     const linked = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
     const total = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM players WHERE guild_id = ?", g.id);
     const app = await ghAppOf(env, g.id);
     return ok({
-      cfg, rewards: rewardsOf(g), linked: linked?.n ?? 0, students: total?.n ?? 0,
+      cfg, fallback: g.announce_channel || g.daily_channel || null, rewards: rewardsOf(g), linked: linked?.n ?? 0, students: total?.n ?? 0,
       setup: {
         // own: this class has its own GitHub App; shared: the Worker's secrets have one the class can use instead
         own: app.own, shared: !!(env.GITHUB_CLIENT_ID && env.GITHUB_APP_SLUG),
@@ -355,14 +366,17 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const g = await guild();
     const patch: any = {};
     for (const k of ["channel", "forum"]) if (k in body) patch[k] = body[k] ? String(body[k]).replace(/\D/g, "") || null : null;
+    if ("links" in body) patch.links = body.links === "off" ? "off" : body.links ? String(body.links).replace(/\D/g, "") || null : null;
+    if ("channel" in body || "forum" in body) { patch.auto = true; patch.forumError = null; }
     for (const k of ["daily", "weekly", "reminders"]) if (k in body) patch[k] = !!body[k];
     for (const k of ["hour", "minute", "inactiveDays", "weeklyDay", "tiny", "huge"]) if (k in body) patch[k] = Number(body[k]);
     if ("skip" in body) patch.skip = (Array.isArray(body.skip) ? body.skip : []).map(Number).filter((d: number) => d >= 0 && d <= 6);
     if ("hidden" in body) patch.hidden = (Array.isArray(body.hidden) ? body.hidden : String(body.hidden || "").split(/[\s,]+/)).map((r: string) => parseRepo(r)?.toLowerCase()).filter(Boolean);
     if ("rewards" in body) patch.rewards = { comp: Number(body.rewards?.comp), coins: Number(body.rewards?.coins), bonus: Number(body.rewards?.bonus) };
     const cfg = await saveGithubCfg(env, g, patch);
-    return ok({ cfg, rewards: rewardsOf({ ...g, github: JSON.stringify(cfg) } as any) });
+    return ok({ cfg, rewards: rewardsOf(g) });
   }
+  if (path === "/github/test" && method === "POST") return ok(await testGithubChannels(env, await guild()));
   if (path === "/github/activity" && method === "GET") return ok(await activityOf(env, await guild(), 14));
   if (path === "/github/report" && method === "POST") {
     const g = await guild();
