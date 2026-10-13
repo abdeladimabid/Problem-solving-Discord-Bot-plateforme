@@ -2,7 +2,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { access, ai, clock, d1, discordCalls, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
@@ -2850,6 +2850,88 @@ section("GitHub: a student who connects the same account again isn't announced t
   await linkGithub(env, G, U.bob.id, { id: "77001", login: "bobby-gh", inst: "5501" });
   const posts = discordCalls.slice(n0).filter((c) => c.method === "POST" && JSON.stringify(c.body ?? {}).includes("bobby-gh"));
   check(posts.length === 1, `one message for a new link (${posts.length})`);
+}
+
+section("GitHub: where the messages go (connections, reports, forum) and the forum keeps working");
+{
+  const { linkGithub, postActivity, githubCfg } = await import("../src/shared/github.ts");
+  const { getGuild } = await import("../src/shared/db.ts");
+  // nothing chosen yet: the class's own #github channel and forum are found and used
+  run1("UPDATE guilds SET github = ? WHERE id = ?", JSON.stringify({ rewards: { comp: 7, coins: 1, bonus: 0 } }), G);
+  discordFake.channels = [{ id: "5001", name: "github", type: 0, position: 5 }, { id: "5002", name: "github-activity", type: 15, position: 6 }];
+  let n0 = discordCalls.length;
+  await linkGithub(env, G, U.bob.id, { id: "88001", login: "dave-gh", inst: "6601" });
+  const posted = discordCalls.slice(n0).filter((c) => c.method === "POST" && /\/messages$/.test(c.path));
+  check(posted.length === 1 && posted[0].path === "/channels/5001/messages", `a new link is announced in the #github channel, not #arena (${posted.map((c) => c.path).join(",")})`);
+  const cfg0 = githubCfg(q1("SELECT github FROM guilds WHERE id = ?", G));
+  check(cfg0.channel === "5001" && cfg0.forum === "5002" && cfg0.auto, "…the channel and the forum found are saved");
+  check(JSON.parse(q1("SELECT github FROM guilds WHERE id = ?", G).github).rewards?.comp === 7, "…without losing the other GitHub settings");
+  // the teacher picks a separate channel for connections, or none
+  await api("PUT", "/api/github", { g: G, channel: "6002", links: "6001", forum: "5002" });
+  n0 = discordCalls.length;
+  await linkGithub(env, G, U.bob.id, { id: "88002", login: "dave-gh2", inst: "6602" });
+  check(discordCalls.slice(n0).some((c) => c.method === "POST" && c.path === "/channels/6001/messages"), "connections go to their own channel");
+  await api("PUT", "/api/github", { g: G, links: "off" });
+  n0 = discordCalls.length;
+  await linkGithub(env, G, U.bob.id, { id: "88003", login: "dave-gh3", inst: "6603" });
+  check(!discordCalls.slice(n0).some((c) => c.method === "POST" && /\/messages$/.test(c.path)), "…or aren't announced at all");
+  // forum: an archived post is opened again, a forum asking for tags gets one
+  run1("UPDATE players SET gh_thread = 'th-old' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  discordFake.fail.push({ method: "POST", path: "/channels/th-old/messages", status: 400, code: 50083, n: 1 });
+  let g = await getGuild(env, G);
+  n0 = discordCalls.length;
+  await postActivity(env, g, githubCfg(g), q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id), { embeds: [{ title: "push" }] });
+  const after = discordCalls.slice(n0);
+  check(after.some((c) => c.method === "PATCH" && c.path === "/channels/th-old" && c.body?.archived === false) && after.filter((c) => c.path === "/channels/th-old/messages").length === 2, "an archived forum post is opened again, then the activity is posted");
+  run1("UPDATE players SET gh_thread = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  discordFake.fail.push({ method: "POST", path: "/channels/5002/threads", status: 400, code: 40067, n: 1 });
+  discordFake.chan["/channels/5002"] = { id: "5002", type: 15, flags: 16, available_tags: [{ id: "tag1", name: "students" }] };
+  g = await getGuild(env, G);
+  n0 = discordCalls.length;
+  await postActivity(env, g, githubCfg(g), q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id), { embeds: [{ title: "push" }] });
+  const th = discordCalls.slice(n0).filter((c) => c.method === "POST" && c.path === "/channels/5002/threads");
+  check(th.length === 2 && th[1].body.applied_tags?.[0] === "tag1" && /^th-/.test(q1("SELECT gh_thread FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).gh_thread), "a forum that asks for a tag gets its first tag, and the post is remembered");
+  // a forum ClassBot can't write in: the reason is shown in the settings
+  run1("UPDATE players SET gh_thread = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  discordFake.fail.push({ method: "POST", path: "/channels/5002/threads", status: 403, code: 50001, n: 1 });
+  g = await getGuild(env, G);
+  await postActivity(env, g, githubCfg(g), q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id), { embeds: [{ title: "push" }] });
+  const st = await api("GET", `/api/github?g=${G}`);
+  check(/can't see or write/.test(st.data.cfg.forumError?.msg || ""), "a forum error is kept for the settings page");
+  const tst = await api("POST", "/api/github/test", { g: G });
+  check(tst.status === 200 && tst.data.results.find((r: any) => r.target === "reports").ok && tst.data.results.find((r: any) => r.target === "forum").ok, "the settings' test posts in the channels and checks the forum");
+  discordFake.channels = []; discordFake.chan = {};
+}
+
+section("GitHub: every commit on the student page, history from GitHub, AI summary of what they built");
+{
+  const alice = q("SELECT * FROM gh_log WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  check(alice.length >= 1 && alice[0].kind === "commit" && alice[0].title.includes("contact form") && alice[0].repo === "alice-gh/hammam", "the webhook keeps each commit with its message");
+  const a = await api("GET", `/api/students/${U.alice.id}/github?g=${G}&days=30`);
+  check(a.status === 200 && a.data.totals.commits >= 1 && a.data.repos[0].repo === "alice-gh/hammam" && a.data.everSynced, "the student's GitHub tab: totals, repos");
+  // older work, read from GitHub (needs the App's private key)
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";
+  await api("PUT", "/api/github/app", { g: G, appId: "99", slug: "classbot-b", clientId: "Iv23abc", clientSecret: "cs", webhookSecret: "own_secret", privateKey: pem });
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", Math.floor(Date.now() / 1000) + 3000);
+  run1("UPDATE players SET github_id = '9003', github_login = 'carol-gh', gh_inst = '777' WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  const iso = (h: number) => new Date(Date.now() - h * 3600000).toISOString();
+  const c = (sha: string, msg: string, h: number, parents = 1) => ({ sha: sha.repeat(40).slice(0, 40), html_url: `https://github.com/carol/site/commit/${sha}`, author: { login: "carol-gh" }, parents: Array(parents).fill({}), commit: { message: msg, author: { date: iso(h) } } });
+  github.commits["carol/site"] = [c("1", "update", 5), c("2", "feat: contact form with validation", 30), c("3", "Merge branch 'dev'", 40, 2), { ...c("4", "someone else", 3), author: { login: "zed" } }];
+  github.sizes["1".repeat(40)] = { additions: 1, deletions: 0 };
+  github.sizes["2".repeat(40)] = { additions: 120, deletions: 4 };
+  github.sizes["3".repeat(40)] = { additions: 0, deletions: 0, parents: 2 };
+  const sy = await api("POST", `/api/students/${U.carol.id}/github/sync`, { g: G, days: 30 });
+  check(sy.status === 200 && sy.data.added === 3 && sy.data.repoCount === 1, `history read from GitHub: only their commits (${sy.data.added}, ${sy.data.error ?? ""})`);
+  const T = sy.data.totals;
+  check(T.commits === 3 && T.real === 2 && T.tiny === 1 && T.bad === 1 && T.merges === 1 && T.adds === 121, `…classified: real, tiny, vague, merge (${JSON.stringify(T)})`);
+  const again = await api("POST", `/api/students/${U.carol.id}/github/sync`, { g: G, days: 30 });
+  check(again.data.added === 0, "…reading again adds nothing twice");
+  const sm = await api("POST", `/api/students/${U.carol.id}/github/summary`, { g: G, days: 30 });
+  check(sm.status === 200 && sm.data.summary.repos[0].features[0].title.includes("Contact form") && sm.data.summary.brief[0].status === "done", "the AI lists the features they built and the brief requirements seen");
+  check((await api("GET", `/api/students/${U.carol.id}/github?g=${G}`)).data.summary?.overview, "…and the summary is kept");
+  const nob = await api("POST", `/api/students/${"424242"}/github/sync`, { g: G });
+  check(nob.status === 400, "a student without GitHub gets a clear message");
+  await api("DELETE", `/api/github/app?g=${G}`);
 }
 
 section("i18n: every key exists in English and French");

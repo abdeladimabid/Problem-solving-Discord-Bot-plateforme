@@ -72,7 +72,7 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]> };
+export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -124,6 +124,8 @@ function execLocal(id: string, source: string, stdin: string) {
   }
 }
 export const access = { jwks: null as any };
+/** Discord answers to fake: extra guild channels, and calls that fail (n times) with a Discord error code. */
+export const discordFake = { channels: [] as any[], fail: [] as { method: string; path: string; status: number; code: number; n: number }[], chan: {} as Record<string, any> };
 export const discordRoles = { forbidden: false, list: [{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }] as any[] };
 let msgId = 1000;
 
@@ -135,9 +137,13 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "discord.com") {
     const path = url.pathname.replace("/api/v10", "");
     discordCalls.push({ method, path, body });
+    const f = discordFake.fail.find((x) => x.n > 0 && x.method === method && x.path === path);
+    if (f) { f.n--; return new Response(JSON.stringify({ message: "fake error", code: f.code }), { status: f.status }); }
+    if (method === "GET" && discordFake.chan[path]) return Response.json(discordFake.chan[path]);
+    if (/^\/channels\/[^/]+\/threads$/.test(path) && method === "POST") return Response.json({ id: `th-${msgId++}` });
     if (path === "/users/@me/channels") return Response.json({ id: `dm-${body.recipient_id}` });
     if (/^\/channels\/[^/]+\/messages$/.test(path)) return Response.json({ id: String(msgId++) });
-    if (/^\/guilds\/[^/]+\/channels$/.test(path)) return Response.json([{ id: "c1", name: "general", type: 0, position: 0 }, { id: "c2", name: "contests", type: 0, position: 1 }, { id: "arena1", name: "⚔️-arena", type: 0, position: 2 }, { id: "v1", name: "voice", type: 2, position: 3 }]);
+    if (/^\/guilds\/[^/]+\/channels$/.test(path)) return Response.json([{ id: "c1", name: "general", type: 0, position: 0 }, { id: "c2", name: "contests", type: 0, position: 1 }, { id: "arena1", name: "⚔️-arena", type: 0, position: 2 }, { id: "v1", name: "voice", type: 2, position: 3 }, ...discordFake.channels]);
     if (/^\/guilds\/[^/]+\/roles$/.test(path)) {
       if (discordRoles.forbidden) return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403 });
       if (method === "POST") { const r = { id: `role-${discordRoles.list.length}`, position: 1, ...body }; discordRoles.list.push(r); return Response.json(r); }
@@ -211,6 +217,17 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const page = Number(url.searchParams.get("page") || 1), per = Number(url.searchParams.get("per_page") || 30);
     return Response.json({ total_count: all.length, repositories: all.slice((page - 1) * per, page * per) });
   }
+  if (url.hostname === "api.github.com" && /^\/repos\/[^/]+\/[^/]+\/commits$/.test(url.pathname)) {
+    const repo = url.pathname.split("/").slice(2, 4).join("/");
+    const author = url.searchParams.get("author");
+    return Response.json((github.commits[repo] ?? []).filter((c) => !author || c.author?.login === author));
+  }
+  if (url.hostname === "api.github.com" && url.pathname === "/graphql") {
+    const shas = [...String(body.query).matchAll(/c(\d+): object\(oid: "([0-9a-f]{40})"\)/g)];
+    const repository: any = {};
+    for (const [, i, sha] of shas) { const z = github.sizes[sha]; if (z) repository[`c${i}`] = { additions: z.additions, deletions: z.deletions, parents: { totalCount: z.parents ?? 1 } }; }
+    return Response.json({ data: { repository } });
+  }
   if (url.hostname.endsWith("cloudflareaccess.com")) return Response.json(access.jwks ?? { keys: [] });
   throw new Error("unexpected fetch to " + url.href);
 }) as typeof fetch;
@@ -247,6 +264,11 @@ function fakeAI() {
       ai.users.push(user);
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
+      if (sys.includes("see what a student really built")) {
+        const sha = (user.match(/^([0-9a-f]{7}) \|/m) || [])[1] || "abc1234";
+        return { response: JSON.stringify({ overview: "Built the contact page step by step.", repos: [{ repo: "carol/site", features: [{ title: "Contact form with validation", commits: [sha], status: "done" }] }],
+          brief: [{ brief: "Hammam", requirement: "Formulaire de contact", status: "done", evidence: sha }], habits: { good: ["Small steps"], improve: ["Write what changed instead of “update”"] } }) };
+      }
       if (sys.includes("interpreter")) {
         const n = (user.match(/print\((\d+) \+ (\d+)\)/) ?? []).slice(1).map(Number);
         const out = n.length ? String(n[0] + n[1]) : "?";

@@ -12,11 +12,15 @@ import { installationToken, commitSizes, githubGet, validSignature, GH_WEB } fro
 import { classifyCommit } from "./review/engine.ts";
 import { countAction, formatWebhook, postStatsTable } from "./review/format.ts";
 import { t } from "./i18n.ts";
+import { logPr, logPush } from "./ghdetail.ts";
 
 // ------------------------------------------------------------- settings
 export interface GithubCfg {
-  channel: string | null;      // where reports, reminders and "connected" messages go (default: #arena)
+  channel: string | null;      // where reports and reminders go (none chosen: a #github channel if there is one, else announcements)
+  links: string | null;        // where "X connected GitHub" goes: a channel id, "off", or null = the report channel
   forum: string | null;        // a forum channel: one thread per student with their activity (optional)
+  forumError?: { msg: string; at: number } | null; // the last time posting in the forum failed (shown in the settings)
+  auto?: boolean;              // the #github channel / forum were looked for once
   daily: boolean; weekly: boolean; hour: number; minute: number; skip: number[]; weeklyDay: number;
   inactiveDays: number; reminders: boolean; tiny: number; huge: number; hidden: string[]; ignore: string[];
   lastDaily?: string; lastWeekly?: string;
@@ -27,6 +31,7 @@ export function githubCfg(g: Pick<GuildRow, "github"> | null | undefined): Githu
   const n = (v: unknown, d: number, a: number, b: number) => { const x = Math.round(Number(v)); return Number.isFinite(x) && v !== "" && v != null ? Math.min(b, Math.max(a, x)) : d; };
   return {
     channel: o.channel ? String(o.channel) : null, forum: o.forum ? String(o.forum) : null,
+    links: o.links === "off" ? "off" : o.links ? String(o.links) : null, forumError: o.forumError ?? null, auto: !!o.auto,
     daily: o.daily !== false, weekly: o.weekly !== false, hour: n(o.hour, 17, 0, 23), minute: n(o.minute, 15, 0, 59),
     skip: Array.isArray(o.skip) ? o.skip.map(Number).filter((d: number) => d >= 0 && d <= 6) : [6, 0], weeklyDay: n(o.weeklyDay, 5, 0, 6),
     inactiveDays: n(o.inactiveDays, 3, 0, 14), reminders: o.reminders !== false, tiny: n(o.tiny, 2, 0, 50), huge: n(o.huge, 2000, 100, 100000),
@@ -35,10 +40,16 @@ export function githubCfg(g: Pick<GuildRow, "github"> | null | undefined): Githu
     lastDaily: o.lastDaily, lastWeekly: o.lastWeekly,
   };
 }
-export async function saveGithubCfg(env: Env, g: GuildRow, patch: Partial<GithubCfg>) {
-  const cfg = { ...githubCfg(g), ...patch };
-  await run(env, "UPDATE guilds SET github = ? WHERE id = ?", JSON.stringify(cfg), g.id);
-  return cfg;
+export async function saveGithubCfg(env: Env, g: GuildRow, patch: Partial<GithubCfg> & Record<string, unknown>) {
+  // read the saved settings again: other fields (rewards, hidden repos…) and changes made meanwhile are kept
+  const fresh = await one<{ github: string | null }>(env, "SELECT github FROM guilds WHERE id = ?", g.id);
+  let raw: any = {};
+  try { raw = JSON.parse(fresh?.github ?? (g as any).github ?? "{}") ?? {}; } catch { raw = {}; }
+  const merged = { ...raw, ...patch };
+  const json = JSON.stringify(merged);
+  await run(env, "UPDATE guilds SET github = ? WHERE id = ?", json, g.id);
+  (g as any).github = json;
+  return githubCfg({ github: json });
 }
 // ------------------------------------------------------ the GitHub App
 /** The GitHub App of a class: its own (saved from the dashboard), else the one in the Worker's secrets. */
@@ -76,6 +87,33 @@ export function githubUrls(env: Env, a: GhApp) {
   return { webhook: `${base}/github/webhook${sfx}`, callback: `${base}/github/callback`, setup: `${base}/github/setup` };
 }
 const reportChannel = (g: GuildRow, cfg: GithubCfg) => cfg.channel || g.announce_channel || g.daily_channel || null;
+const linksChannel = (g: GuildRow, cfg: GithubCfg) => (cfg.links === "off" ? null : cfg.links || reportChannel(g, cfg));
+const discordCode = (e: unknown) => Number((String((e as Error)?.message ?? "").match(/"code":\s*(\d+)/) || [])[1] || 0);
+
+/**
+ * Nothing chosen in the settings yet: use the class's own GitHub channels if it has some (a text channel and a forum
+ * named like "github"), or the forum the imported Watcher posts live in. Looked for once, then saved.
+ */
+export async function ensureGithubChannels(env: Env, g: GuildRow): Promise<GithubCfg> {
+  let cfg = githubCfg(g);
+  if (cfg.auto || (cfg.channel && cfg.forum)) return cfg;
+  const patch: Record<string, unknown> = { auto: true };
+  try {
+    const list = await dapi<any[]>(env, "GET", `/guilds/${g.id}/channels`);
+    const named = (types: number[], rx: RegExp) => (list || []).filter((c) => types.includes(c.type) && rx.test(String(c.name || "")))
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))[0]?.id ?? null;
+    if (!cfg.channel) patch.channel = named([0, 5], /git-?hub/i) ?? named([0, 5], /commit|push|deadline/i);
+    if (!cfg.forum) patch.forum = named([15], /git-?hub|activit|commit/i);
+  } catch (e) { console.error("github channels", e); }
+  if (!cfg.forum && !patch.forum) {
+    // a student's thread imported from the Watcher: its forum is the activity forum
+    const th = await one<{ gh_thread: string }>(env, "SELECT gh_thread FROM players WHERE guild_id = ? AND gh_thread IS NOT NULL LIMIT 1", g.id);
+    if (th) { try { const c = await dapi<any>(env, "GET", `/channels/${th.gh_thread}`); if (c?.parent_id) patch.forum = String(c.parent_id); } catch { /* deleted */ } }
+  }
+  for (const k of ["channel", "forum"]) if (!patch[k]) delete patch[k];
+  cfg = await saveGithubCfg(env, g, patch);
+  return cfg;
+}
 
 // -------------------------------------------------------- linking (/github)
 const STATE_TTL = 1800;
@@ -171,8 +209,8 @@ export async function linkGithub(env: Env, guildId: string, discordId: string, g
   // connecting the same account again (a new /github) is not news: one message per new link
   const g = before?.github_id === gh.id ? null : await getGuild(env, guildId);
   if (g) {
-    const ch = reportChannel(g, githubCfg(g));
-    if (ch) await send(env, ch, { content: t(g.lang, "gh.connected", { user: `<@${discordId}>`, login: gh.login, url: `${GH_WEB}/${gh.login}` }) }).catch(() => {});
+    const ch = linksChannel(g, await ensureGithubChannels(env, g));
+    if (ch) await send(env, ch, { allowed_mentions: { parse: [] }, content: t(g.lang, "gh.connected", { user: `<@${discordId}>`, login: gh.login, url: `${GH_WEB}/${gh.login}` }) }).catch(() => {});
   }
 }
 
@@ -202,8 +240,8 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
     await run(env, "UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE gh_inst = ?", inst);
     for (const o of owners) {
       const g = await getGuild(env, o.guild_id);
-      const ch = g && reportChannel(g, githubCfg(g));
-      if (g && ch) await send(env, ch, { content: t(g.lang, "gh.disconnected", { user: `<@${o.discord_id}>`, login: o.github_login ?? "" }) }).catch(() => {});
+      const ch = g && linksChannel(g, await ensureGithubChannels(env, g));
+      if (g && ch) await send(env, ch, { allowed_mentions: { parse: [] }, content: t(g.lang, "gh.disconnected", { user: `<@${o.discord_id}>`, login: o.github_login ?? "" }) }).catch(() => {});
     }
     return;
   }
@@ -219,7 +257,7 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
   for (const owner of owners) {
     const g = await getGuild(env, owner.guild_id);
     if (!g) continue;
-    const cfg = githubCfg(g);
+    const cfg = await ensureGithubChannels(env, g);
     if (cfg.ignore.includes(event) || (repoName && cfg.hidden.includes(repoName))) continue;
     // the person who acted (a squad mate pushing to this repo is counted for themselves)
     const sender = p.sender && String(p.sender.id) !== String(owner.github_id)
@@ -235,8 +273,11 @@ export async function handleEvent(env: Env, event: string, p: any, delivery: str
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, g.id, sender.discord_id, delivery, dayOf(t0), t0, p.repository?.full_name?.slice(0, 120) ?? null,
           c.commits || 0, c.real || 0, c.tiny || 0, c.flagged || 0, c.bad || 0, c.lines || 0, c.prs || 0, c.other || 0);
       }
+      // the details (each commit, each pull request) for the student page
+      if (pushCommits.length) await logPush(env, g, sender.discord_id, p, pushCommits, analysis).catch((e) => console.error("gh log", e));
+      if (event === "pull_request") await logPr(env, g, sender.discord_id, p).catch((e) => console.error("gh log", e));
     }
-    if (cfg.forum) await postActivity(env, g, cfg, owner, { embeds: [cleanEmbed(embed)] }).catch((e) => console.error("activity post", e));
+    if (cfg.forum || owner.gh_thread) await postActivity(env, g, cfg, owner, { embeds: [cleanEmbed(embed)] });
   }
 }
 
@@ -249,14 +290,74 @@ function cleanEmbed(obj: any) {
   return out;
 }
 
-/** One forum thread per student ("Name (login)"); a new one if it was deleted. */
-async function postActivity(env: Env, g: GuildRow, cfg: GithubCfg, owner: PlayerRow, payload: Record<string, unknown>) {
-  if (owner.gh_thread) {
-    try { await send(env, owner.gh_thread, payload); return; } catch { /* deleted or locked: start a new thread */ }
+/**
+ * One forum post per student ("Name (login)"), the bot keeps writing in it: an archived post (Discord archives them
+ * after a few quiet days) is opened again, a deleted one is started again. Errors are kept for the settings page.
+ */
+export async function postActivity(env: Env, g: GuildRow, cfg: GithubCfg, owner: PlayerRow, payload: Record<string, unknown>) {
+  const body = { ...payload, allowed_mentions: { parse: [] } };
+  let err: unknown = null;
+  try {
+    if (owner.gh_thread) {
+      try { await send(env, owner.gh_thread, body); return await forumOk(env, g, cfg); } catch (e) {
+        err = e;
+        // archived (50083): open it again and post
+        if (discordCode(e) === 50083 || /archived/i.test(String((e as Error).message))) {
+          try { await dapi(env, "PATCH", `/channels/${owner.gh_thread}`, { archived: false }); await send(env, owner.gh_thread, body); return await forumOk(env, g, cfg); } catch (e2) { err = e2; }
+        }
+      }
+    }
+    if (!cfg.forum) throw err ?? new Error("no forum");
+    const name = (owner.name && owner.name !== owner.github_login ? `${owner.name} (${owner.github_login})` : String(owner.github_login || owner.name || "student")).slice(0, 100);
+    let th: { id: string };
+    try { th = await dapi<{ id: string }>(env, "POST", `/channels/${cfg.forum}/threads`, { name, message: body }); } catch (e) {
+      // the forum asks for a tag on every post (40067): use its first tag
+      if (discordCode(e) !== 40067) throw e;
+      const f = await dapi<any>(env, "GET", `/channels/${cfg.forum}`);
+      const tag = f?.available_tags?.[0]?.id;
+      if (!tag) throw e;
+      th = await dapi<{ id: string }>(env, "POST", `/channels/${cfg.forum}/threads`, { name, message: body, applied_tags: [tag] });
+    }
+    await run(env, "UPDATE players SET gh_thread = ? WHERE guild_id = ? AND discord_id = ?", th.id, g.id, owner.discord_id);
+    await forumOk(env, g, cfg);
+  } catch (e) {
+    console.error("activity post", e);
+    const code = discordCode(e), status = (e as any)?.status;
+    const msg = code === 50001 || status === 403 ? "ClassBot can't see or write in the forum: give its role “View channel”, “Send messages in threads” and “Create posts” there."
+      : code === 50013 ? "ClassBot is missing a permission in the forum (“Send messages in threads”, “Create posts” or “Manage threads”)."
+      : code === 10003 || status === 404 ? "The forum (or the student's post) was deleted: choose the forum again in the settings."
+      : String((e as Error)?.message ?? e).slice(0, 200);
+    if (cfg.forumError?.msg !== msg) await saveGithubCfg(env, g, { forumError: { msg, at: now() } }).catch(() => {});
   }
-  const name = (owner.name && owner.name !== owner.github_login ? `${owner.name} (${owner.github_login})` : String(owner.github_login || owner.name || "student")).slice(0, 100);
-  const th = await dapi<{ id: string }>(env, "POST", `/channels/${cfg.forum}/threads`, { name, message: { ...payload, allowed_mentions: { parse: [] } } });
-  await run(env, "UPDATE players SET gh_thread = ? WHERE guild_id = ? AND discord_id = ?", th.id, g.id, owner.discord_id);
+}
+async function forumOk(env: Env, g: GuildRow, cfg: GithubCfg) { if (cfg.forumError) await saveGithubCfg(env, g, { forumError: null }); }
+
+/** Settings → "Send a test": a message in each chosen channel, and a look at the forum, to see what works. */
+export async function testGithubChannels(env: Env, g: GuildRow) {
+  const cfg = githubCfg(g);
+  const out: { target: string; channel: string | null; ok: boolean; msg: string }[] = [];
+  const tryPost = async (target: string, ch: string | null, text: string) => {
+    if (!ch) { out.push({ target, channel: null, ok: false, msg: "no channel" }); return; }
+    try { await send(env, ch, { content: text, allowed_mentions: { parse: [] } }); out.push({ target, channel: ch, ok: true, msg: "test message posted" }); }
+    catch (e) { out.push({ target, channel: ch, ok: false, msg: discordCode(e) === 50001 || (e as any)?.status === 403 ? "ClassBot can't write there (channel permissions)" : String((e as Error).message).slice(0, 160) }); }
+  };
+  const rep = reportChannel(g, cfg), lk = linksChannel(g, cfg);
+  await tryPost("reports", rep, "🧪 ClassBot test: GitHub reports and brief reminders will be posted here.");
+  if (cfg.links === "off") out.push({ target: "connections", channel: null, ok: true, msg: "not announced (off)" });
+  else if (lk && lk !== rep) await tryPost("connections", lk, "🧪 ClassBot test: “X connected GitHub” messages will be posted here.");
+  else out.push({ target: "connections", channel: lk, ok: !!lk, msg: lk ? "same channel as the reports" : "no channel" });
+  if (!cfg.forum) out.push({ target: "forum", channel: null, ok: false, msg: "no forum chosen: activity isn't posted" });
+  else {
+    try {
+      const f = await dapi<any>(env, "GET", `/channels/${cfg.forum}`);
+      if (f?.type !== 15) out.push({ target: "forum", channel: cfg.forum, ok: false, msg: "this channel isn't a forum" });
+      else {
+        const posts = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM players WHERE guild_id = ? AND gh_thread IS NOT NULL", g.id);
+        out.push({ target: "forum", channel: cfg.forum, ok: true, msg: `ClassBot can see the forum · ${posts?.n ?? 0} student post(s) known${f.flags & 16 ? " · it asks for a tag: the first one is used" : ""}` });
+      }
+    } catch (e) { out.push({ target: "forum", channel: cfg.forum, ok: false, msg: discordCode(e) === 50001 || (e as any)?.status === 403 ? "ClassBot can't see the forum: give its role access to it" : "the forum can't be read (deleted?)" }); }
+  }
+  return { results: out, forumError: cfg.forumError ?? null };
 }
 
 // ------------------------------------------------------------- activity
@@ -264,14 +365,14 @@ export const dayOf = (ts: number) => new Date(ts * 1000).toISOString().slice(0, 
 const shiftDay = (day: string, n: number) => new Date(Date.parse(day + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
 const weekday = (day: string) => new Date(day + "T00:00:00Z").getUTCDay();
 
-/** 14 days of activity per linked student: [commits, lines, PRs, other, tiny, huge, vague] per day, repos, idle working days. */
+/** 14 days of activity per linked student: [real commits, lines, PRs, other, tiny, huge, vague, all commits] per day, repos, idle working days. */
 export async function activityOf(env: Env, g: GuildRow, days = 14) {
   const today = dayOf(now());
   const list = Array.from({ length: days }, (_, i) => shiftDay(today, i - days + 1));
   const linked = await all<{ discord_id: string; name: string | null; github_login: string; gh_linked_at: number | null }>(env,
     "SELECT discord_id, name, github_login, gh_linked_at FROM players WHERE guild_id = ? AND github_id IS NOT NULL", g.id);
-  const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
-    "SELECT discord_id, day, t, repo, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
+  const rows = await all<{ discord_id: string; day: string; t: number; repo: string | null; commits: number; real: number; lines: number; prs: number; other: number; tiny: number; flagged: number; bad: number }>(env,
+    "SELECT discord_id, day, t, repo, commits, real, lines, prs, other, tiny, flagged, bad FROM gh_activity WHERE guild_id = ? AND day >= ?", g.id, shiftDay(today, -30));
   const cfg = githubCfg(g), skip = new Set(cfg.skip);
   const ix = new Map(list.map((d, i) => [d, i]));
   const by = new Map<string, typeof rows>();
@@ -280,7 +381,7 @@ export async function activityOf(env: Env, g: GuildRow, days = 14) {
     days: list,
     students: linked.map((s) => {
       const mine = by.get(s.discord_id) ?? [];
-      const grid = list.map(() => [0, 0, 0, 0, 0, 0, 0]);
+      const grid = list.map(() => [0, 0, 0, 0, 0, 0, 0, 0]);
       const repos: Record<string, [number, number]> = {};
       let last = 0;
       for (const r of mine) {
@@ -289,7 +390,7 @@ export async function activityOf(env: Env, g: GuildRow, days = 14) {
         const i = ix.get(r.day);
         if (i === undefined) continue;
         const a = grid[i];
-        a[0] += r.real; a[1] += r.lines; a[2] += r.prs; a[3] += r.other; a[4] += r.tiny; a[5] += r.flagged; a[6] += r.bad;
+        a[0] += r.real; a[1] += r.lines; a[2] += r.prs; a[3] += r.other; a[4] += r.tiny; a[5] += r.flagged; a[6] += r.bad; a[7] += r.commits || 0;
       }
       // working days in a row without any activity (never before they connected)
       const active = new Set(mine.map((r) => r.day));
@@ -333,7 +434,7 @@ export async function githubCron(env: Env, at = now()) {
         await sendDaily(env, g, cfg, today).catch((e) => console.error("gh daily", e));
       }
       if (cfg.weekly && cfg.lastWeekly !== today && weekday(today) === cfg.weeklyDay) {
-        await saveGithubCfg(env, (await getGuild(env, g.id))!, { lastWeekly: today });
+        await saveGithubCfg(env, g, { lastWeekly: today });
         await sendWeekly(env, g, today).catch((e) => console.error("gh weekly", e));
       }
     }
@@ -341,11 +442,13 @@ export async function githubCron(env: Env, at = now()) {
   }
   if (new Date(at * 1000).getUTCHours() === 3 && new Date(at * 1000).getUTCMinutes() === 0) {
     await run(env, "DELETE FROM gh_activity WHERE day < ?", shiftDay(dayOf(at), -60));
+    await run(env, "DELETE FROM gh_log WHERE t < ?", at - 200 * 86400);
     await run(env, "DELETE FROM gh_tokens WHERE exp < ?", at);
   }
 }
 
-export async function sendDaily(env: Env, g: GuildRow, cfg = githubCfg(g), today = dayOf(now())) {
+export async function sendDaily(env: Env, g: GuildRow, cfg?: GithubCfg, today = dayOf(now())) {
+  cfg = await ensureGithubChannels(env, g);
   const ch = reportChannel(g, cfg);
   if (!ch) return;
   // the first working day after skipped days (e.g. Monday) also covers them
@@ -365,7 +468,7 @@ export async function sendDaily(env: Env, g: GuildRow, cfg = githubCfg(g), today
   }
 }
 export async function sendWeekly(env: Env, g: GuildRow, today = dayOf(now())) {
-  const ch = reportChannel(g, githubCfg(g));
+  const ch = reportChannel(g, await ensureGithubChannels(env, g));
   if (!ch) return;
   const L = g.lang;
   const rows = await scoreRows(env, g, shiftDay(today, -6), today);
@@ -387,7 +490,7 @@ export async function pushStatus(env: Env, g: GuildRow, b: { start_at: number | 
 
 /** Reminders of assigned briefs: announced at the start, 3 days and 1 day before, then the final status. */
 export async function briefReminders(env: Env, g: GuildRow, at = now()) {
-  const ch = reportChannel(g, githubCfg(g));
+  const ch = reportChannel(g, await ensureGithubChannels(env, g));
   if (!ch) return;
   const L = g.lang;
   const briefs = await all<{ id: number; title: string; start_at: number | null; due_at: number | null; created_at: number; sent: string | null; kind: string; squads: string | null }>(env,
