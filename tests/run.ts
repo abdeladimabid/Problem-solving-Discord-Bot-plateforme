@@ -14,6 +14,7 @@ import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
 import { finish } from "../src/shared/challenges.ts";
 import { getGuild } from "../src/shared/db.ts";
+import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -2571,6 +2572,16 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check(st.status === 200 && st.data.states.co.T1 === true && /^Bonjour Alice/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
   const ch = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
   check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.observer.length === 2, "mise en situation drawn on a point of the brief");
+  {
+    const sys = ai.prompts[ai.prompts.length - 1], usr = ai.users[ai.users.length - 1];
+    check(sys.includes("Une seule chose à faire, sur le point tiré au sort") && sys.includes("Ne nomme aucune technique ou propriété que le brief ne cite pas") && !sys.includes("disposition d’une section sur mobile"), "…one thing on the drawn point, no technique the brief doesn't cite");
+    check(usr.includes("BRIEF :\n") && !usr.includes("CE QUE LE PROJET UTILISE"), "…the whole brief, not what the student's code uses");
+    ai.chTech = true; const n0 = ai.users.length;
+    const ct = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
+    ai.chTech = false;
+    const again = ai.users.slice(n0).filter((u) => u.includes("POINT DU BRIEF TIRÉ AU SORT"));
+    check(ct.status === 200 && again.length === 2 && /elle nomme [^)]*@media[^)]*, que le brief ne demande pas/.test(again[1]) && !/flexbox|@media/i.test(ct.data.review.challenge.consigne), "…a task naming Flexbox / @media is refused and asked again");
+  }
   await api("POST", `/api/briefs/${id}/review/comment`, { g: G, who, text: "Bonjour Alice, mon commentaire." });
   const keep = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { mes: { r: "valide", note: "" }, keepComment: true, comment: "Bonjour Alice, mon commentaire." } });
   check(keep.data.review.result.feedback === "Bonjour Alice, mon commentaire." && keep.data.states.mes.r === "valide", "an edited comment is kept when switches change");
@@ -2609,6 +2620,49 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   const back = await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C3", reset: true });
   check(back.data.competency.level === 1 && !back.data.competency.manual, "…and go back to the automatic results");
   check((await api("POST", `/api/students/${U.alice.id}/competency`, { g: G, code: "C99", ok: true })).status === 400, "unknown competency refused");
+}
+
+section("debriefs: oral questions (5 max, on the brief only), the level proposed then chosen, Progress");
+{
+  const id = (globalThis as any).__briefId as number;
+  const who = `u:${U.bob.id}`;
+  const rec = {
+    at: Date.now(), first: "Bob", model: "test", brief: "Hammam", repos: ["bob-gh/hammam"], count: 8, files: true, skills: ["C3", "T1"],
+    checks: [{ id: "pages", label: "Site multipage", ok: true, detail: "3 pages" }],
+    result: { resume: "Bien.", commits: [], forts: [], ameliorer: [], feedback: "",
+      exigences: [{ type: "story", texte: "Page des soins", statut: "fait", preuve: "soins.html", check: "pages" }],
+      competences: [{ code: "C3", avis: "validable", raison: "ok" }] },
+    challenge: null,
+  };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(rec), clock.now());
+  const o1 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who });
+  const qs = o1.data.review?.oral || [];
+  check(o1.status === 200 && qs.length === 5 && !qs.some((q: any) => /Sass/.test(q.q) || !q.a) && o1.data.states.oral.every((v: boolean) => v === false), "at most 5 questions, on the brief only, each Not valid first");
+  const sys = ai.prompts[ai.prompts.length - 1];
+  check(sys.includes("au plus 5 questions courtes") && sys.includes("aucune technique que le brief ne cite pas"), "…the brief's notions and technologies only");
+  const o2 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, del: 1, states: { oral: [true, false, false, true, false] } });
+  check(o2.data.review.oral.length === 4 && JSON.stringify(o2.data.states.oral) === "[true,false,true,false]", "a question removed, the other switches kept");
+  const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
+  const fb = s1.data.review.result.feedback;
+  check(/-Questions orales :\nTu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Notions à revoir : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
+  check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
+  const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
+  const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
+  check(l1.data.review.level.lvl === "moyen" && l2.data.review.level.lvl === "bon" && q1("SELECT level FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).level === "bon", "the teacher's level, changed at any time");
+  const P = await api("GET", `/api/progress?g=${G}`);
+  const cell = P.data.cells?.[`${id}:${U.bob.id}`];
+  check(P.status === 200 && P.data.briefs.some((b: any) => b.id === id) && cell?.lv === "bon" && cell.who === who, "Progress: the square of the debrief, with its level");
+  const ga = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true, states: { oral: [true, true, true, false] }, comment: "Bonjour Bob,\nTrès bon travail sur les pages." });
+  const asked = ai.users[ai.users.length - 1];
+  check(ga.status === 200 && ga.data.review.level.lvl === "bon" && ga.data.review.level.by === "ai" && /presque complet/.test(ga.data.review.level.why)
+    && asked.includes("QUESTIONS ORALES : 3/4 réussies") && asked.includes("COMMENTAIRE DU FORMATEUR :\n<<<\nTrès bon travail") && !asked.includes("Bob"), "✨ the level generated from the switches, the oral questions and the comment (no name sent)");
+  ai.levelAnswer = "génial";
+  const gb = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
+  ai.levelAnswer = "";
+  check(gb.data.review.level.by === "calc" && gb.data.review.level.lvl === gb.data.review.level.prop, "…no usable answer: the level from the validations");
+  check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" })).data.review.level.by === "you", "…still yours to change");
+  check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "nope" })).data.review.level.lvl === "", "unknown level: none");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who);
 }
 
 section("assessments: links, shuffled papers, full screen lock, teacher lets back in, AI grading, results on the record");
@@ -2825,6 +2879,246 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   const imp = await api("POST", "/api/github/import", { g: G, data });
   check(imp.status === 200 && imp.data.students === 1 && imp.data.briefs === 1 && imp.data.handins === 1, "Watcher import from its data (read in the dashboard through the Cloudflare API)");
   check(q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).github_login === "bob-gh", "…students linked");
+}
+
+section("brief steps: found in the brief, dated in working days, proposed from the repo at the date, the teacher decides, Suivi du projet in the comment");
+{
+  // found in the brief text, dated from the brief's first day (Saturday and Sunday skipped), at the due time
+  const raw = stepsFallback("Contexte\nPartie 1, fin du jour 1 : maquette et backlog.\nÉtape 2 - jour 3 : pages HTML\nrien ici");
+  check(raw.length === 2 && raw[0].nom === "Partie 1" && raw[1].jour === 3 && raw[0].attendu === "maquette et backlog", "\"Partie N, fin du jour N\" lines found without AI");
+  const fri = Date.parse("2026-10-09T09:00:00Z") / 1000, due = Date.parse("2026-10-15T23:59:00Z") / 1000;
+  check(new Date(dayDate(fri, due, 2) * 1000).toISOString() === "2026-10-12T23:59:00.000Z", "day 2 of a brief that starts on a Friday is the Monday, at the due time");
+  const st = stepsFrom(raw, fri, due);
+  check(st.length === 2 && st[0].day === 1 && st[1].n === 2, "dated steps");
+  const txt = stepsToText(st);
+  check(txt.split("\n")[0] === "Partie 1 | 2026-10-09 23:59 | maquette et backlog", "steps as text for the teacher");
+  check(parseSteps(txt).map((s) => s.due).join() === st.map((s) => s.due).join(), "…and read back the same");
+  check(parseSteps("Fin | 2026-10-09 | tout\nbad line").length === 1 && parseSteps("Fin | 2026-10-09 | tout")[0].day === null, "the teacher's lines (a wrong line is skipped)");
+  check(stepRhythm(st, ["2026-10-09T10:00:00Z", "2026-10-13T10:00:00Z", "2026-10-20T10:00:00Z", "junk"]).join() === "1,1,1", "commits per step period");
+
+  // a published brief: its steps come from its text, the teacher can change them, ✨ the AI finds them in another brief
+  const today = clock.now(), dayIso = (d: number) => new Date((today + d * 86400) * 1000).toISOString().slice(0, 10);
+  const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Site en étapes", summary: "Un site", context: "Partie 1, fin du jour 1 : maquette du site.\nPartie 2, fin du jour 3 : pages HTML.\nPartie 3, fin du jour 40 : déploiement.", competencies: ["C3N1"] } });
+  const sid = mk.data.brief.id;
+  check(mk.status === 200 && !mk.data.steps.length, "a draft has no steps yet");
+  const pub = await api("POST", `/api/briefs/${sid}/assign`, { g: G, start: dayIso(-10), due: dayIso(40) });
+  check(pub.status === 200 && pub.data.steps.length === 3 && pub.data.steps[0].name === "Partie 1" && /^Partie 1 \| /.test(pub.data.stepsText), "publishing finds the steps of the brief");
+  const ed = await api("PUT", `/api/briefs/${sid}/steps`, { g: G, text: pub.data.stepsText.replace("pages HTML", "pages HTML et CSS") });
+  check(ed.status === 200 && ed.data.steps[1].expected === "pages HTML et CSS", "the teacher changes a step");
+  check((await api("PUT", `/api/briefs/${sid}/steps`, { g: G, text: "no date here" })).status === 400, "a text without any step is refused");
+  const mk2 = await api("POST", "/api/briefs", { g: G, data: { title: "Autre", context: "Le projet se fait en trois temps : d'abord la maquette, puis les pages." } });
+  const ai2 = await api("POST", `/api/briefs/${mk2.data.brief.id}/steps`, { g: G });
+  check(ai2.status === 200 && ai2.data.steps.length === 2 && ai2.data.steps[1].name === "Pages", "✨ the AI finds steps that are not written \"Partie N\"");
+
+  // propose from the repo at the step's date, then the teacher's choice
+  const was = { key: env.GITHUB_PRIVATE_KEY, id: env.GITHUB_APP_ID };
+  env.GITHUB_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----"; env.GITHUB_APP_ID = "1";
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", clock.now() + 3000);
+  const who = `u:${U.carol.id}`;
+  await api("POST", `/api/briefs/${sid}/handin`, { g: G, who, repo: "carol/etapes" });
+  const s1 = ed.data.steps[0], s2 = ed.data.steps[1];
+  const at = (t: number) => new Date(t * 1000).toISOString();
+  const cm = (sha: string, t: number) => ({ sha: sha.repeat(40), commit: { message: "feat: " + sha, author: { date: at(t) } } });
+  github.commits["carol/etapes"] = [cm("d", s2.due + 3600), cm("c", s2.due + 1800), cm("b", s1.due - 3600)];
+  github.trees["carol/etapes@" + "b".repeat(40)] = ["maquette.png"];
+  github.trees["carol/etapes@HEAD"] = ["maquette.png", "index.html", "pages/contact.html"];
+  const p1 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 1 });
+  check(p1.status === 200 && p1.data.prop.statut === "a_temps" && p1.data.prop.before === 1 && p1.data.prop.after === 2 && p1.data.prop.files === 1 && p1.data.prop.added === 2, "step 1: proposed from the repo as it was at its date");
+  check(ai.users.some((u) => u.includes("ATTENDU : maquette du site") && u.includes("FICHIERS À LA DATE (1) :\nmaquette.png")), "the AI gets what was expected and the files at the date");
+  const p3 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 3 });
+  check(p3.data.prop.statut === "a_venir", "a step not due yet is not read");
+  await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 1, final: "a_temps" });
+  const sv = await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 2, final: "en_retard", note: "Les pages sont arrivées en retard." });
+  check(sv.status === 200 && sv.data.stepRecs[1].final === "a_temps" && sv.data.stepRecs[1].prop.statut === "a_temps" && sv.data.stepRecs[2].final === "en_retard", "the teacher's choice is saved with the proposal");
+  check((await api("POST", `/api/briefs/${sid}/review/step`, { g: G, who, n: 9, final: "a_temps" })).status === 400, "unknown step refused");
+  check((await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who: `u:${U.bob.id}`, n: 1 })).status === 400, "no repo yet: a clear message");
+
+  // the comment of the debrief: Suivi du projet (results, note, work done at the end) and the advice
+  const rec = { at: Date.now(), first: "Carol", model: "test", brief: "Site en étapes", repos: ["carol/etapes"], count: 6, files: true, skills: ["C3"],
+    checks: [{ id: "pages", label: "Site multipage", ok: true, detail: "3 pages" }], rhythm: [1, 0, 5, 0],
+    result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
+  const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
+  check(/-Suivi du projet :\nPartie 1 : validée à temps\.\nPartie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note");
+  check(fb.includes("La majorité de ton travail (83 % des commits) a été faite pendant la dernière étape") && fb.includes("terminer chaque partie à la date prévue"), "…work done at the end, and the advice");
+  check(!/Partie 3 :/.test(fb), "a step not decided is not written");
+  const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
+  check(rv.data.steps.length === 3 && rv.data.stepRecs[2].note === "Les pages sont arrivées en retard.", "the debrief page gets the steps and the results");
+  env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
+}
+
+section("sprints: competencies reached in the sprint's briefs, levels for the report (AI for the class, no names), decision, sprint comment");
+{
+  const O = await api("GET", `/api/sprints?g=${G}`);
+  check(O.status === 200 && O.data.sprints.length >= 2 && O.data.sprints.every((s: any) => s.start && s.end && s.codes.length), "the programme's sprints, with their dates and competencies");
+  const sp = O.data.sprints[0];
+  const P = (await api("GET", `/api/programs?g=${G}`)).data.current;
+  const wk = P.weeks.find((w: any) => w.sprint === sp.n).n;
+  const code = sp.codes.find((c: string) => c.startsWith("C")), soft = sp.codes.find((c: string) => c.startsWith("T"));
+  const [cc, cl] = [code.slice(0, -2), Number(code.slice(-1))];
+  // a brief of the sprint, debriefed: Alice reached the level asked, Bob only a lower one, Carol failed
+  const mk = await api("POST", "/api/briefs", { g: G, week: wk, data: { title: "Brief du sprint", context: "Un site.", competencies: [code] } });
+  const bid = mk.data.brief.id;
+  run1("UPDATE briefs SET status = 'assigned', week = ? WHERE id = ?", wk, bid);
+  const res = (uid: string, c: string, level: number, ok: number) => run1("INSERT INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, ?, ?, ?, 'brief', ?, 'x', ?)", G, uid, c, level, ok, bid, clock.now());
+  res(U.alice.id, cc, cl, 1); if (soft) res(U.alice.id, soft.slice(0, -2), Number(soft.slice(-1)), 1);
+  res(U.bob.id, cc, Math.max(1, cl - 1), 1); if (cl === 1) run1("UPDATE competency_results SET level = 0 WHERE discord_id = ? AND ref = ?", U.bob.id, bid);
+  res(U.carol.id, cc, cl, 0);
+  const rec = { first: "Alice", result: { exigences: [{ type: "story", texte: "A", statut: "fait" }, { type: "story", texte: "B", statut: "absent" }], competences: [] }, checks: [] };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bid, G, `u:${U.alice.id}`, JSON.stringify(rec), clock.now());
+  let V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  const row = (id: string) => V.data.rows.find((r: any) => r.discord_id === id);
+  check(V.status === 200 && V.data.briefs.some((b: any) => b.id === bid), "the brief belongs to the sprint of its week");
+  check(row(U.alice.id).cells[code].r === "ok" && row(U.bob.id).cells[code].r === "low" && row(U.carol.id).cells[code].r === "ko", "✓ at the level asked, lower level, ✗");
+  check(row(U.alice.id).pct === 50 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", "grid % of the finalized debrief, briefs evaluated, proposal");
+  // levels: one AI call for the class, without the names
+  const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });
+  check(lv.status === 200 && lv.data.by === "ai" && lv.data.rows.some((r: any) => r.plevel === "excellent" && r.why === "Tout est validé."), "levels proposed by the AI for the class");
+  check(lv.data.rows.filter((r: any) => r.plevel).length === 3 && lv.data.rows.every((r: any) => !r.plevel || ["excellent", "bon", "moyen", "faible", "critique"].includes(r.plevel)), "…an unknown AI level is replaced by the computed one");
+  check(!/Alice|Bob|Carol/.test(ai.users[ai.users.length - 1]), "no names sent to the AI");
+  // the teacher decides
+  await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.carol.id, level: "faible", decision: "non_valide", note: "C3 à revoir" });
+  await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.bob.id, level: "nope" });
+  V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  check(row(U.carol.id).level === "faible" && row(U.carol.id).decision === "non_valide" && row(U.carol.id).note === "C3 à revoir" && row(U.carol.id).plevel, "level, decision and note saved (the proposal is kept)");
+  check(row(U.bob.id).level === "", "an unknown level is not saved");
+  check((await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: "999", level: "bon" })).status === 400, "unknown student refused");
+  // the sprint comment
+  const cm = await api("POST", `/api/sprints/${sp.n}/comment`, { g: G });
+  check(cm.status === 200 && /^Les objectifs technologiques/.test(cm.data.comment) && ai.users[ai.users.length - 1].includes("Brief du sprint") && !/Alice|Bob|Carol/.test(ai.users[ai.users.length - 1]), "the sprint comment written from the briefs and the levels (no names)");
+  await api("PUT", `/api/sprints/${sp.n}/comment`, { g: G, text: "Mon texte.\r\n\r\nFin." });
+  check((await api("GET", `/api/sprints/${sp.n}?g=${G}`)).data.comment === "Mon texte.\n\nFin.", "the teacher's text is saved");
+  const Y = await api("GET", `/api/sprints?g=${G}`);
+  check(Y.data.year.find((y: any) => y.discord_id === U.carol.id).per[0].v === "non_valide" && Y.data.year.find((y: any) => y.discord_id === U.carol.id).per[0].final, "the year: the decision per sprint");
+  check((await api("GET", `/api/sprints/999?g=${G}`)).status === 400, "unknown sprint refused");
+  run1("DELETE FROM competency_results WHERE ref = ? AND source = 'brief'", bid);
+}
+
+section("watcher: the brief announced in French and its status posted in Discord; only the student's own recent commits count");
+{
+  const b = q1("SELECT id, title FROM briefs WHERE guild_id = ? AND status = 'assigned' AND due_at IS NOT NULL ORDER BY id DESC LIMIT 1", G);
+  run1("UPDATE briefs SET repo_hint = 'Site Été' WHERE id = ?", b.id);
+  const n0 = discordCalls.length;
+  const an = await api("POST", `/api/briefs/${b.id}/watcher/announce`, { g: G });
+  const sent = discordCalls.slice(n0).map((c) => JSON.stringify(c.body ?? {})).join("\n");
+  check(an.status === 200 && sent.includes("Nouveau brief") && sent.includes("**Rendu :** <t:") && sent.includes("/brief submit") && sent.includes("Nom du repo : **Site-Ete**"), "announcement in French: dates as Discord timestamps, how to hand in, the repo name");
+  const n1 = discordCalls.length;
+  const stt = await api("POST", `/api/briefs/${b.id}/watcher/status`, { g: G });
+  check(stt.status === 200 && typeof stt.data.none === "number" && discordCalls.slice(n1).some((c) => JSON.stringify(c.body ?? {}).includes(b.title)), "who pushed, posted in Discord");
+  check((await api("POST", "/api/briefs/999999/watcher/status", { g: G })).status === 400, "unknown brief refused");
+  // a pushed copy of a project: commits by someone else, or old ones, don't count for the pusher
+  const secret = env.GITHUB_WEBHOOK_SECRET = env.GITHUB_WEBHOOK_SECRET || "whsec_test";
+  run1("UPDATE players SET github_id = '9101', github_login = 'dora-gh', gh_inst = '9191' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  const push = async (commits: any[], id: string) => {
+    const body = JSON.stringify({ installation: { id: 9191 }, repository: { full_name: "dora-gh/copie" }, sender: { id: 9101, login: "dora-gh" }, ref: "refs/heads/main", commits, pusher: { name: "dora-gh" }, compare: "https://github.com/x" });
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sig = "sha256=" + Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body))).toString("hex");
+    const ctx = makeCtx();
+    await bot.fetch(new Request("https://bot.example.workers.dev/github/webhook", { method: "POST", headers: { "x-github-event": "push", "x-github-delivery": id, "x-hub-signature-256": sig }, body }), env, ctx);
+    await ctx.flush();
+  };
+  const nowIso = new Date(Date.now()).toISOString();
+  const cm = (sha: string, user: string, ts: string) => ({ id: sha.repeat(40), message: "feat: " + sha, distinct: true, added: ["a.html"], modified: [], removed: [], author: { username: user, name: user }, timestamp: ts, url: "https://github.com/x" });
+  const before = q("SELECT * FROM gh_activity WHERE discord_id = ?", U.bob.id).length;
+  await push([cm("a", "someone-else", nowIso), cm("b", "dora-gh", "2024-01-10T10:00:00Z")], "copy1");
+  check(q("SELECT * FROM gh_activity WHERE discord_id = ?", U.bob.id).length === before, "a push of other people's or old commits counts nothing");
+  await push([cm("c", "dora-gh", nowIso), cm("d", "someone-else", nowIso)], "copy2");
+  const rows = q("SELECT commits FROM gh_activity WHERE discord_id = ? AND delivery = 'copy2'", U.bob.id);
+  check(rows.length === 1 && rows[0].commits === 1, "…only their own recent commit counts");
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+}
+
+section("briefs: the sprint chosen by the teacher (or none, e.g. a cross defense), the due time, \"announced\" kept");
+{
+  const O = (await api("GET", `/api/sprints?g=${G}`)).data.sprints;
+  const [s0, s1] = O;
+  const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Soutenance croisée", context: "Présenter le projet." } });
+  const id = mk.data.brief.id;
+  const inSprint = async (n: number) => (await api("GET", `/api/sprints/${n}?g=${G}`)).data.briefs.some((b: any) => b.id === id);
+  let r = await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, time: "17:30", sprint: "none" });
+  check(r.status === 200 && r.data.brief.due_at === Date.parse(s0.end + "T17:30:00Z") / 1000, "the due time chosen (UTC)");
+  check(q1("SELECT sprint FROM briefs WHERE id = ?", id).sprint === 0 && !(await inSprint(s0.n)), "not in a sprint, though its due date is in one");
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, sprint: String(s1.n) });
+  check(await inSprint(s1.n) && !(await inSprint(s0.n)), "…in the sprint chosen");
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, sprint: "" });
+  check(await inSprint(s0.n), "…else by its due date");
+  const B = (await api("GET", `/api/briefs/${id}?g=${G}`)).data;
+  await api("PUT", `/api/briefs/${id}`, { g: G, data: B.brief.data });
+  check(q1("SELECT due_at FROM briefs WHERE id = ?", id).due_at === Date.parse(s0.end + "T17:30:00Z") / 1000, "saving the brief keeps its due time");
+  check(q1("SELECT announced_at FROM briefs WHERE id = ?", id).announced_at == null, "not announced yet");
+  await api("POST", `/api/briefs/${id}/watcher/announce`, { g: G });
+  const L = (await api("GET", `/api/briefs?g=${G}`)).data.items.find((b: any) => b.id === id);
+  check(!!L.announced_at && L.sprint === null, "announced: the list says so (the dashboard shows \"Announce again\")");
+  run1("UPDATE briefs SET announced_at = NULL WHERE id = ?", id);
+  await api("POST", `/api/briefs/${id}/assign`, { g: G, start: s0.start, due: s0.end, announce: true });
+  check(!!q1("SELECT announced_at FROM briefs WHERE id = ?", id).announced_at, "…also when announced on publishing");
+  run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
+section("briefs: an imported page is kept whole (many user stories) and its steps are read from it");
+{
+  const lines = Array.from({ length: 34 }, (_, i) => `Afficher l'élément ${i + 1} de la page.`);
+  const text = ["Contexte du projet", "Un site vitrine.", "En tant que visiteur, je vais voir le catalogue.", ...lines,
+    "Valider les 2 étapes du projet", "Etape 1, fin du jour 1 : maquette prête.", "Etape 2, fin du jour 3 : pages faites.", "Modalités pédagogiques", "Travail collectif (Squad) sur 5 jours."].join("\n");
+  const r = await api("POST", "/api/briefs/import", { g: G, text, title: "Site test", comps: [], start: "2026-10-12", due: "2026-10-16" });
+  const stories = r.data.brief.data.groups.reduce((n: number, g: any) => n + g.stories.length, 0);
+  check(r.status === 200 && stories >= 35 && r.data.text.includes("élément 34"), "every user story kept (more than 20)");
+  check(r.data.steps.length === 2 && new Date(r.data.steps[1].due * 1000).toISOString().slice(0, 10) === "2026-10-14" && r.data.steps[0].expected.startsWith("maquette"), "the steps written in the page, dated from the brief's days");
+  run1("DELETE FROM briefs WHERE id = ?", r.data.brief.id);
+}
+
+section("GitHub: students who let the App see only some repos (Only select repositories): flagged, checked, kept up to date");
+{
+  const { generateKeyPairSync } = await import("node:crypto");
+  const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }) as string;
+  const sv = await api("PUT", "/api/github/app", { g: G, appId: "77", slug: "classbot-sel", clientId: "Iv23sel", clientSecret: "cs", webhookSecret: "sel_secret", privateKey: pem });
+  check(sv.status === 200, "a class App with its key");
+  const keep = q("SELECT discord_id, github_id, github_login, gh_inst, gh_sel FROM players WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL, gh_sel = NULL WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  run1("UPDATE players SET github_id = '9201', github_login = 'alice-sel', gh_inst = '9301' WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  run1("UPDATE players SET github_id = '9202', github_login = 'bob-sel', gh_inst = '9302' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  github.sel = { "9301": "selected" };
+  const cr = await api("POST", "/api/github/check-repos", { g: G });
+  const alice = q1("SELECT name, gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  check(cr.status === 200 && cr.data.checked >= 2 && cr.data.some.length === 1 && alice.gh_sel === "selected" && q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).gh_sel === "all", "Check repos: the student on Only select repositories is named and kept");
+  const act = await api("GET", `/api/github/activity?g=${G}`);
+  check(act.data.students.find((s: any) => s.discord_id === U.alice.id)?.sel === "selected", "…and the dashboard knows it (flagged Some repos)");
+  const { linkGithub, handleEvent } = await import("../src/shared/github.ts");
+  await linkGithub(env, G, U.carol.id, { id: "9203", login: "carol-sel", inst: "9303", sel: "selected" });
+  check(q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.carol.id).gh_sel === "selected", "connecting keeps the choice");
+  await handleEvent(env, "installation_repositories", { action: "added", installation: { id: 9301, repository_selection: "all" }, repositories_added: [] }, "d-sel");
+  check(q1("SELECT gh_sel FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).gh_sel === "all", "the student chooses All repositories on GitHub: the webhook updates it");
+  github.sel = {};
+  run1("UPDATE players SET github_id = NULL, github_login = NULL, gh_inst = NULL, gh_sel = NULL WHERE guild_id = ? AND discord_id IN (?, ?, ?)", G, U.alice.id, U.bob.id, U.carol.id);
+  for (const k of keep) run1("UPDATE players SET github_id = ?, github_login = ?, gh_inst = ?, gh_sel = ? WHERE guild_id = ? AND discord_id = ?", k.github_id, k.github_login, k.gh_inst, k.gh_sel, G, k.discord_id);
+  await api("DELETE", `/api/github/app?g=${G}`);
+}
+
+section("GitHub: \"Create the GitHub App for me\" (GitHub's app manifest)");
+{
+  const was = env.PUBLIC_URL;
+  env.PUBLIC_URL = "https://bot.example.workers.dev";
+  const raw = async (p: string) => { const ctx = makeCtx(); const r = await admin.fetch(new Request("https://dash.example.workers.dev" + p), env, ctx); await ctx.flush(); return r; };
+  const mf = await api("POST", "/api/github/manifest", { g: G });
+  const st = String(mf.data.action || "").split("state=")[1];
+  check(mf.status === 200 && /^https:\/\/github\.com\/settings\/apps\/new\?state=[a-f0-9]{32}$/.test(mf.data.action), "a form to post to GitHub, with a one-time state");
+  const m = mf.data.manifest;
+  check(m.hook_attributes.url === `https://bot.example.workers.dev/github/webhook/${G}` && m.callback_urls[0] === "https://bot.example.workers.dev/github/callback" && m.setup_url === "https://bot.example.workers.dev/github/setup", "the class's three URLs are filled in");
+  check(m.public === true && m.default_permissions.contents === "read" && m.default_permissions.pull_requests === "read" && m.default_events.includes("push") && m.default_events.includes("pull_request_review") && m.name.length <= 34, "permissions and events filled in, students can install it");
+  check(/\/api\/github\/manifest\/done$/.test(m.redirect_url), "GitHub comes back to the dashboard");
+  const done = await raw(`/api/github/manifest/done?state=${st}&code=abc123`);
+  check(done.status === 303 && /gh=created&slug=classbot-cs-class#\/settings\/github$/.test(done.headers.get("location") || ""), "back from GitHub: the App is created");
+  const gh = await api("GET", `/api/github?g=${G}`);
+  check(gh.data.setup.own && gh.data.setup.slug === "classbot-cs-class" && gh.data.setup.key && gh.data.setup.oauth && gh.data.setup.webhook && !JSON.stringify(gh.data).includes("made_secret"), "…saved as the class's own App (secrets never sent back)");
+  const again = await raw(`/api/github/manifest/done?state=${st}&code=abc123`);
+  check(again.status === 303 && /gh=failed/.test(again.headers.get("location") || ""), "a state is used once");
+  const mf2 = await api("POST", "/api/github/manifest", { g: G });
+  const bad = await raw(`/api/github/manifest/done?state=${String(mf2.data.action).split("state=")[1]}&code=bad-x`);
+  check(bad.status === 303 && /gh=failed/.test(bad.headers.get("location") || ""), "GitHub refusing the code: a clear message");
+  env.PUBLIC_URL = "";
+  check((await api("POST", "/api/github/manifest", { g: G })).status === 400, "no bot address yet: refused");
+  env.PUBLIC_URL = was;
+  await api("DELETE", `/api/github/app?g=${G}`);
 }
 
 section("🤖 Settings → AI: each teacher sets their own Groq key from the dashboard");

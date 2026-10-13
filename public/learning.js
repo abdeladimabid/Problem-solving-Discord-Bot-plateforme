@@ -111,10 +111,11 @@ async function viewBriefs(tab = "list") {
   view.innerHTML = `
     <div class="page-head"><div><h1>Briefs</h1>
       <p class="sub">Projects of the class, following <b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}. Every debrief updates the competencies and skills of the student.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="br-import">📄 Import a brief page</button><button class="btn" id="br-blank">Blank brief</button><button class="btn" id="br-quick">+ Quick brief</button><button class="btn primary" id="br-new">✨ New brief</button></div></div>
     ${r.ai ? "" : `<div class="notice warn" style="margin-bottom:16px"><b>No AI is set up.</b> You can still write and import briefs; generating and analyzing need the Groq key or Workers AI.</div>`}
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
+      <button role="tab" data-t="follow">Follow-up</button>
       <button role="tab" data-t="plan">Planning</button>
       <button role="tab" data-t="prog">Programme &amp; competencies</button>
     </div>
@@ -127,6 +128,7 @@ async function viewBriefs(tab = "list") {
       { label: "Competencies", html: (b) => (b.competencies || "").split(",").filter(Boolean).map((c) => compChip(c)).join(" ") || `<span class="muted">—</span>` },
       { label: "Due", sort: "due_at", html: (b) => dueIn(b.due_at) },
     ], items, { onRow: (b) => (location.hash = `#/brief/${b.id}`), empty: "No brief yet: generate one from an idea, or import one from Simplonline." }),
+    follow: () => `<div id="w-follow"><p class="muted">Loading…</p></div>`,
     plan: () => planningHtml(P, pg),
     prog: () => `<section class="panel"><div class="panel-head"><h2>${esc(P.name)}</h2><a class="btn" href="#/settings/programme">${icon("gear")} Change it in Settings</a></div>
       <p class="muted small">To change the planning or the competencies (another year, another stack), download the Excel template in Settings → Programme, fill it and upload it.</p>
@@ -136,11 +138,13 @@ async function viewBriefs(tab = "list") {
     $$("[data-t]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.t === k)));
     $("#br-tab").innerHTML = tabs[k]();
     if (k === "plan") $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
+    if (k === "follow") wFollow($("#w-follow")).catch((e) => toast(e.message, true));
   };
   $$("[data-t]").forEach((b) => b.onclick = () => show(b.dataset.t));
   show(tab);
   $("#br-new").onclick = () => briefGenerator(P, null, pg.now, pg);
   $("#br-import").onclick = () => briefGenerator(P, null, pg.now, { ...pg, mode: "import" });
+  $("#br-quick").onclick = () => quickBrief();
   $("#br-blank").onclick = (e) => busy(e.currentTarget, async () => { const b = await api("/briefs", { method: "POST", body: { title: "Nouveau brief" } }); location.hash = `#/brief/${b.brief.id}`; });
 }
 
@@ -193,23 +197,21 @@ function weekInfo(P, n) {
 function briefGenerator(P, week, nowWeek, pg = {}) {
   const pick = week ?? nowWeek ?? null;
   openDialog(pg.mode === "import" ? "📄 Import a brief" : "✨ New brief", `
-    <p class="muted small" style="margin-top:12px">The AI writes the whole brief in the Simplonline format (context, user stories, modalities, evaluation, deliverables, criteria, competencies) and your product-owner notes. You edit everything after.</p>
     <label for="gb-week">Week of the planning</label><select id="gb-week">${weekOptions(P, pick)}</select>
     <div id="gb-winfo"></div>
-    <label>Technologies of the brief <span class="muted">(the brief asks for these and nothing else; pre-selected from the week)</span></label>
+    <label>Technologies</label>
     <div class="chips" id="gb-tech"></div>
-    <div class="toolbar" style="margin:6px 0 0"><input type="text" id="gb-tech-add" placeholder="Another technology (e.g. Alpine.js)" style="flex:1;max-width:320px"><button class="btn small" type="button" id="gb-tech-addb">Add</button></div>
+    <div class="toolbar" style="margin:6px 0 0"><input type="text" id="gb-tech-add" placeholder="Add a technology" style="flex:1;max-width:320px"><button class="btn small" type="button" id="gb-tech-addb">Add</button></div>
     <label>Start from</label>
     ${segHtml("gbm", [["idea", "My idea"], ["brain", "Brainstorm ideas"], ["client", "A real client"], ["similar", "🧬 Similar to a brief"], ["import", "📄 Import a page"]], pg.mode || "idea")}
-    <div data-p="idea"><label for="gb-idea">Your idea <span class="muted">(a sentence is enough; empty = the AI picks a credible fictional client)</span></label>
+    <div data-p="idea"><label for="gb-idea">Your idea <span class="muted">(optional)</span></label>
       <textarea id="gb-idea" placeholder="e.g. A booking site for a hammam in Safi, with a services page and a contact form"></textarea></div>
     <div data-p="brain" hidden><label for="gb-theme">Theme or sector <span class="muted">(optional)</span></label>
       <div class="toolbar" style="margin:0"><input type="text" id="gb-theme" placeholder="e.g. tourism in Morocco, sport, a cause" style="flex:1"><button class="btn" id="gb-brain" type="button">Find 5 ideas</button></div>
       <div id="gb-ideas" class="ideas"></div></div>
-    <div data-p="client" hidden><label for="gb-client">Notes from the meeting with the client <span class="muted">(the AI stays within them)</span></label>
+    <div data-p="client" hidden><label for="gb-client">Client meeting notes</label>
       <textarea id="gb-client" style="min-height:150px" placeholder="Who they are, what they need, pages, constraints, deadline…"></textarea></div>
     <div data-p="similar" hidden>
-      <p class="muted small" style="margin:8px 0">The AI writes a <b>new</b> brief like an existing one (last year's, a colleague's): same kind of project, size and difficulty, but another client, other names and other content. Nothing is copied word for word.</p>
       <label>Reference brief</label>
       ${segHtml("smsrc", [["file", "A page (.html)"], ["ours", "One of our briefs"], ["text", "Paste its text"]], "file")}
       <div data-sp="file" style="margin-top:8px"><label class="drop" id="sm-drop"><input type="file" id="sm-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label></div>
@@ -218,11 +220,11 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
       <div id="sm-pre"></div>
       <label style="margin-top:12px">How similar</label>
       ${segHtml("smhow", [["close", "Same project, another client"], ["twist", "Same skills, another subject"], ["loose", "Just the level and format"]], "close")}
-      <p class="muted small" id="sm-howtxt" style="margin:6px 0 0"></p>
-      <label for="sm-idea">New subject or client <span class="muted">(optional: empty = the AI picks one)</span></label>
+      <p class="muted small" id="sm-howtxt" style="margin:6px 0 0" hidden></p>
+      <label for="sm-idea">New subject or client <span class="muted">(optional)</span></label>
       <input type="text" id="sm-idea" style="width:100%" placeholder="e.g. A climbing gym in Marrakech instead of the fitness club"></div>
     <div data-p="import" hidden>
-      <p class="muted small" style="margin:8px 0">Takes an existing brief as it is (no AI): a Simplonline brief page saved as .html (Ctrl+S, “Web page, HTML only”), or its text. On Simplonline, click <b>“Afficher la totalité des compétences”</b> before saving, or the hidden competencies won't be in the file.</p>
+      <p class="muted small" style="margin:8px 0">On Simplonline, click <b>“Afficher la totalité des compétences”</b> before saving the page.</p>
       <label class="drop" id="gb-drop"><input type="file" id="gb-file" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label>
       <details class="small" style="margin-top:8px"><summary>…or paste its text</summary><textarea id="gb-itext" style="min-height:140px;margin-top:6px" placeholder="Paste the brief here"></textarea>
         <button class="btn small" type="button" id="gb-iread" style="margin-top:6px">Read the text</button></details>
@@ -296,8 +298,7 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
           <span><b>${(d.deliverables || []).length}</b> deliverables</span><span><b>${(d.criteria || []).length}</b> criteria</span><span><b>${(d.evaluation?.parts || []).length}</b> evaluation steps</span></div>
         <div class="small" style="margin-top:8px">Competencies: ${(d.competencies || []).map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}</div>
         ${r.hidden ? `<p class="small" style="color:var(--warn);margin:6px 0 0">⚠️ The page says ${r.hidden + d.competencies.length} competencies but only ${d.competencies.length} are in the file: on Simplonline click “Afficher la totalité des compétences”, save again, or add them after import.</p>` : ""}
-        ${r.detected?.length ? `<p class="muted small" style="margin:6px 0 0">Technologies found in the page are selected above: adjust them if needed.</p>` : ""}
-        <p class="muted small" style="margin:6px 0 0">The week, days, work mode and dates below replace the page's ones.</p></div>`;
+        </div>`;
     } catch (e) { imp = null; box.innerHTML = `<p class="small" style="color:var(--down)">${esc(e.message)}</p>`; }
   };
   const readFile = async (f) => {
@@ -323,8 +324,8 @@ function briefGenerator(P, week, nowWeek, pg = {}) {
   wireSeg(dlg, "smsrc", (v) => { $$("[data-sp]", dlg).forEach((p) => (p.hidden = p.dataset.sp !== v)); if (v === "ours") loadOurs(); });
   const simShow = (title, comps, tags, extra = "") => {
     $("#sm-pre").innerHTML = `<div class="imp-card"><div class="imp-head">🧬 <b>${esc(title || "Reference brief")}</b></div>
-      <div class="small" style="margin-top:6px">Competencies: ${comps.map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}${$("#gb-week").value ? ` <span class="muted">(the week's competencies are used; choose “No week” to keep these)</span>` : ""}</div>
-      ${tags.length ? `<p class="muted small" style="margin:6px 0 0">Its technologies are selected above: change them to move the brief to another stack.</p>` : ""}${extra}</div>`;
+      <div class="small" style="margin-top:6px">Competencies: ${comps.map((c) => compChip(c)).join(" ") || `<span class="muted">none found</span>`}${$("#gb-week").value ? ` <span class="muted">(the week's are used)</span>` : ""}</div>
+      ${extra}</div>`;
     if (tags.length) drawTech(tags);
   };
   const simFromText = async (src) => {
@@ -574,14 +575,14 @@ function rewriteDialog(sec) {
 function assignBriefDialog() {
   const b = BR.B.brief, d = b.data;
   openDialog(b.status === "assigned" ? "Dates and announcement" : "Publish to the class", `
-    <p class="muted small" style="margin-top:12px">Students see it in <code>/brief</code> and hand in their repo with <code>/brief submit</code>. Reminders go 3 days and 1 day before the deadline; the bot follows their pushes on GitHub.</p>
-    <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due (23:59)</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div></div>
-    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (the GitHub report channel, else the announcements channel)</label>
-    ${BR.B.grid ? "" : `<p class="muted small">The evaluation grid is written now from the brief (you can edit it after).</p>`}`,
+    <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
+    <div data-wsprint></div>
+    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord</label>`,
     [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
-      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, announce: $("#ab-a").checked } });
+      BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();
     } }]);
+  wSprintField(dlg, b.sprint ?? null, "#ab-d", b.week);
 }
 
 function reviewCell(rv) {
@@ -642,7 +643,15 @@ async function briefGridTab(root) {
       <textarea id="gr-t" class="code" style="min-height:360px" spellcheck="false">${esc(B.gridText)}</textarea>
       <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="gr-save">Save the grid</button></p>
       <details class="small"><summary>Automatic checks you can link</summary><div id="gr-ids" class="muted">Loading…</div></details>
-    </section></div>`;
+    </section></div>
+    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2>Steps</h2><button class="btn small" id="st-ai">✨ Find them</button></div>
+      ${B.steps?.length ? `<ol class="grid-items">${B.steps.map((s) => `<li><b>${esc(s.name)}</b> · ${fmtDateTime(s.due)}${s.expected ? ` · ${esc(s.expected)}` : ""}</li>`).join("")}</ol>`
+        : `<p class="empty">No steps.</p>`}
+      <textarea id="st-t" class="code" style="min-height:110px" spellcheck="false" placeholder="Partie 1 | 2026-10-05 23:59 | expected">${esc(B.stepsText || "")}</textarea>
+      <p class="toolbar" style="margin:10px 0 0"><button class="btn primary" id="st-save">Save the steps</button></p>
+    </section>`;
+  $("#st-ai").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/steps`, { method: "POST", body: {} }); toast(BR.B.steps.length ? `${BR.B.steps.length} step(s) found` : "No steps in this brief"); renderBrief(); });
+  $("#st-save").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/steps`, { method: "PUT", body: { text: $("#st-t").value } }); toast("Steps saved"); renderBrief(); });
   $("#gr-ai").onclick = (e) => busy(e.currentTarget, async () => { toast("⏳ Writing the grid…"); BR.B = await api(`/briefs/${B.brief.id}/grid`, { method: "POST", body: {} }); toast("Grid written"); renderBrief(); });
   $("#gr-save").onclick = (e) => busy(e.currentTarget, async () => { BR.B = await api(`/briefs/${B.brief.id}/grid`, { method: "PUT", body: { text: $("#gr-t").value } }); toast("Grid saved"); renderBrief(); });
   api("/github").then((x) => { $("#gr-ids").innerHTML = x.checks.map((c) => `<div><code>${esc(c.id)}</code> ${esc(c.label)}</div>`).join(""); }).catch(() => { $("#gr-ids").textContent = ""; });
@@ -757,10 +766,11 @@ function renderDebrief() {
   if ($("#db-an")) $("#db-an").onclick = () => analyzeDialog();
   const body = $("#db-body");
   if (!rec) {
-    body.innerHTML = `<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
+    body.innerHTML = `${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
       <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
       <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
     $("#db-an2").onclick = () => analyzeDialog();
+    renderSteps(false);
     return;
   }
   const r = rec.result || {};
@@ -804,10 +814,13 @@ function renderDebrief() {
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span> <span class="lvl ${a[0]}">${esc(a[1])}</span>
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
+      ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
+      <section class="panel" id="db-oral"></section>
       <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : "Written from your switches. Edit it freely: your text is kept."}</p></section>
+      <section class="panel" id="db-level"></section>
       <section class="panel">${final ? `<h2>✅ Finalized</h2>
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
@@ -817,6 +830,57 @@ function renderDebrief() {
     </aside></div>`;
   updateMeter();
   wireDebrief();
+  renderSteps(final);
+  if (typeof wDebriefExtras === "function") wDebriefExtras();
+}
+
+// Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
+const STEP_LBL = { a_temps: "On time", en_retard: "Late", non_fait: "Not validated", a_verifier: "To check", a_venir: "Not due yet" };
+function renderSteps(final) {
+  const box = $("#db-steps");
+  if (!box) return;
+  const { R, bid, who } = DB;
+  const recs = R.stepRecs || {};
+  box.innerHTML = `<h2>Steps</h2>
+    <div class="db-rows">${R.steps.map((s) => { const r = recs[s.n] || {}, p = r.prop;
+      return `<div class="db-step" data-step="${s.n}">
+        <div><b>${esc(s.name)}</b> <span class="muted small">· due ${fmtDateTime(s.due)}</span>${s.expected ? `<div class="small muted">${esc(s.expected)}</div>` : ""}</div>
+        <p class="small" style="margin:6px 0">${p ? `<b>Proposed: ${esc(STEP_LBL[p.statut] || p.statut)}</b>${p.raison ? ` · ${esc(p.raison)}` : ""}${p.before != null ? ` <span class="muted">· ${p.before} commits before, ${p.after} after</span>` : ""}` : ""}</p>
+        ${final ? `<b>${esc(STEP_LBL[r.final] || "—")}</b>${r.note ? ` · ${esc(r.note)}` : ""}`
+          : `<div class="toolbar" style="margin:0">${segHtml(`st${s.n}`, [["a_temps", "On time"], ["en_retard", "Late"], ["non_fait", "Not validated"]], r.final || "")}
+            <button class="btn small" data-stcheck="${s.n}">${p ? "↻ Propose" : "Propose"}</button></div>
+          <input type="text" data-stnote="${s.n}" value="${esc(r.note || "")}" placeholder="Note" style="width:100%;margin-top:8px">`}
+      </div>`; }).join("")}</div>`;
+  if (final) return;
+  const save = async (n) => {
+    const cur = $(`[data-seg="st${n}"] [aria-pressed="true"]`, box)?.dataset.v ?? "";
+    const R2 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: cur, note: $(`[data-stnote="${n}"]`, box).value } });
+    DB.R = { ...DB.R, stepRecs: R2.stepRecs };
+    if (DB.R.review && $("#db-c")) saveStatesSoon();
+  };
+  for (const s of R.steps) {
+    wireSeg(box, `st${s.n}`, (v) => {
+      // a second click on the chosen result clears it
+      const b = $(`[data-seg="st${s.n}"] [data-v="${v}"]`, box);
+      if ((recs[s.n] || {}).final === v) b.setAttribute("aria-pressed", "false");
+      save(s.n).catch((e) => toast(e.message, true));
+    });
+    $(`[data-stnote="${s.n}"]`, box).onchange = () => save(s.n).catch((e) => toast(e.message, true));
+  }
+  $$("[data-stcheck]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const n = Number(b.dataset.stcheck);
+    toast("⏳ Reading the repo at the step's date…");
+    const R2 = await api(`/briefs/${bid}/review/stepcheck`, { method: "POST", body: { who, n } });
+    DB.R = { ...DB.R, stepRecs: R2.stepRecs };
+    // nothing decided yet: the proposal becomes the choice (the teacher can change it)
+    const st = R2.prop?.statut;
+    if (!(DB.R.stepRecs[n] || {}).final && ["a_temps", "en_retard", "non_fait"].includes(st)) {
+      const R3 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: st, note: (DB.R.stepRecs[n] || {}).note || "" } });
+      DB.R = { ...DB.R, stepRecs: R3.stepRecs };
+      if (DB.R.review && $("#db-c")) saveStatesSoon();
+    }
+    renderSteps(false);
+  }));
 }
 
 function mesHtml(ch, mes, final, member = "") {
@@ -858,7 +922,8 @@ function currentStates() {
   $$("[data-ck]").forEach((c) => (ck[c.dataset.ck] = c.checked));
   $$("[data-ex]").forEach((c) => (ex[Number(c.dataset.ex)] = c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
-  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" } };
+  const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
+  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
 }
 function updateMeter() {
   const ex = DB.R.review?.result?.exigences || [];
@@ -1395,6 +1460,13 @@ async function viewGithub() {
 /** Settings → GitHub & Watcher: the class's GitHub App (or the school's), reports, rewards, import from GitHub Watcher. */
 async function githubSettings(root) {
   const [G] = await Promise.all([api("/github"), loadDiscord()]);
+  // back from GitHub after "Create the GitHub App for me"
+  const back = new URLSearchParams(location.search);
+  if (back.get("gh")) {
+    if (back.get("gh") === "created") toast(`GitHub App created${back.get("slug") ? `: ${back.get("slug")}` : ""}. Install it on your repos to test it.`);
+    else toast(back.get("why") || "GitHub didn't create the App.", true);
+    history.replaceState(null, "", location.pathname + location.hash);
+  }
   const c = G.cfg, su = G.setup;
   const ready = su.app && su.oauth && su.webhook && su.key;
   const chName = (id) => [...(S.discord?.channels || []), ...(S.discord?.forums || [])].find((x) => x.id === id)?.name || "";
@@ -1407,7 +1479,8 @@ async function githubSettings(root) {
       <p class="small">${su.own ? "This class uses <b>its own GitHub App</b> (saved here)." : su.shared ? "This class uses <b>the school's GitHub App</b> (set when ClassBot was installed): nothing to do. Use your own only if you want this class separate." : "No GitHub App yet. Create one (free) and fill in its details below."}</p>
       <ul class="bchecks">${item(su.app, "App slug")}${item(su.key, "Private key (to read the repos)")}${item(su.oauth, "Client ID and secret (students sign in)")}${item(su.webhook, "Webhook secret (pushes arrive)")}${item(!!su.ai, `AI for the debriefs${su.ai ? ` (${su.ai === "groq" ? "Groq" : "Workers AI"})` : ""}`)}</ul>
       <div id="gh-own" ${su.own || !su.shared ? "" : "hidden"}>
-        <details class="howto" ${ready ? "" : "open"}><summary><b>How to create the GitHub App</b> (5 minutes)</summary>
+        ${ready ? "" : `<p><button class="btn primary" id="ga-auto">✨ Create the GitHub App for me</button> <span class="muted small">2 clicks on GitHub</span></p>`}
+        <details class="howto"><summary><b>Or create it by hand</b></summary>
           <ol class="small">
             <li>On GitHub: your picture → <b>Settings → Developer settings → GitHub Apps → New GitHub App</b> (or edit your Watcher's App).</li>
             <li>Paste the three URLs below. Tick <b>Redirect on update</b> under Setup URL. Leave <i>Request user authorization during installation</i> unticked.</li>
@@ -1474,6 +1547,15 @@ async function githubSettings(root) {
     </div>`;
   $$("[data-copy]", root).forEach((b) => b.onclick = () => copyText(b.dataset.copy, "Copied"));
   if ($("#ga-mine")) $("#ga-mine").onclick = (e) => { $("#gh-own").hidden = false; e.currentTarget.remove(); };
+  // GitHub's app manifest: a form posted to GitHub, which creates the App and comes back with its credentials
+  if ($("#ga-auto")) $("#ga-auto").onclick = (e) => busy(e.currentTarget, async () => {
+    const m = await api("/github/manifest", { method: "POST", body: {} });
+    const f = document.createElement("form");
+    f.method = "post"; f.action = m.action;
+    const i = document.createElement("input");
+    i.type = "hidden"; i.name = "manifest"; i.value = JSON.stringify(m.manifest);
+    f.append(i); document.body.append(f); f.submit();
+  });
   const reload = () => githubSettings(root);
   $("#ga-save").onclick = (e) => busy(e.currentTarget, async () => {
     await api("/github/app", { method: "PUT", body: { appId: $("#ga-id").value, slug: $("#ga-slug").value, clientId: $("#ga-cid").value, clientSecret: $("#ga-cs").value, webhookSecret: $("#ga-ws").value, privateKey: $("#ga-pk").value } });

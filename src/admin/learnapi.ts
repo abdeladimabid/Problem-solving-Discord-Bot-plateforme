@@ -9,15 +9,26 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, studentRepos, cleanSquads, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, parseGrid, saveCommentText, saveMembers, saveStates, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
+<<<<<<< HEAD
 import { activityOf, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
+=======
+import { activityOf, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly } from "../shared/github.ts";
+import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
+import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
+import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
+>>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
 import { appJwt, GH_API } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
+<<<<<<< HEAD
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
+=======
+import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
+>>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
 import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
 
@@ -28,12 +39,16 @@ const bad = (msg: string) => { throw new ApiError(400, msg); };
 const techList = (v: unknown): string[] => [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\n]+/)).map((x) => String(x).trim().slice(0, 40)).filter(Boolean))].slice(0, 20);
 
 export async function learningApi(env: Env, ctx: Ctx, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
+<<<<<<< HEAD
   if (!/^\/(programs?|briefs|github|assessments|competencies)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/(competency|github(\/sync|\/summary)?)$/.test(path)) return null;
+=======
+  if (!/^\/(programs?|briefs|github|assessments|competencies|sprints|progress)(\/|$)/.test(path) && !/^\/students\/[\w-]+\/competency$/.test(path)) return null;
+>>>>>>> 26cba2e79016457e1e2029fd1c836f4d2e658d8c
   try {
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
     if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError || e instanceof WatcherMsgError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -147,6 +162,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (/^\d{4}-\d{2}-\d{2}$/.test(String(body.due || ""))) md.due = String(body.due);
     const w = body.week ? p.weeks.find((x) => x.n === Number(body.week)) ?? null : null;
     const id = await saveBrief(env, g, null, { data, program: p.id, week: w?.n ?? null, source: "import" });
+    // the steps written in the page ("Etape 1, fin du jour 1 : …"), dated from the brief's days (publishing dates them again)
+    const fb = stepsFallback(text);
+    if (fb.length) {
+      const nb = (await getBrief(env, g, id))!;
+      const start = nb.start_at ?? now(), steps = stepsFrom(fb, start, nb.due_at ?? start + 5 * 86400);
+      if (steps.length) await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", JSON.stringify(steps), id);
+    }
     return ok(await briefView(env, g, id));
   }
   if (path === "/briefs" && method === "POST") {
@@ -196,6 +218,22 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(grid), id);
     return ok(await briefView(env, g, id));
   }
+  // Watcher: the brief's announcement in French, and who pushed, posted in Discord when the teacher clicks
+  if ((m = path.match(/^\/briefs\/(\d+)\/watcher\/(announce|status)$/)) && method === "POST") {
+    const g = await guild();
+    return ok(m[2] === "announce" ? await announceFr(env, g, Number(m[1])) : await postStatus(env, g, Number(m[1])));
+  }
+  if ((m = path.match(/^\/briefs\/(\d+)\/steps$/)) && (method === "PUT" || method === "POST")) {
+    const g = await guild();
+    const id = Number(m[1]);
+    const cur = await getBrief(env, g, id);
+    if (!cur) throw new ApiError(404, "This brief doesn't exist anymore.");
+    const start = cur.start_at ?? now(), due = cur.due_at ?? start + 5 * 86400;
+    const steps = method === "PUT" ? parseSteps(String(body.text || "").slice(0, 6000)) : await makeSteps(env, simplonText(cur.data, await programOf(env, g)), start, due);
+    if (method === "PUT" && String(body.text || "").trim() && !steps.length) bad("One step per line: name | YYYY-MM-DD HH:MM | what is expected.");
+    await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", steps.length ? JSON.stringify(steps) : null, id);
+    return ok(await briefView(env, g, id));
+  }
   if ((m = path.match(/^\/briefs\/(\d+)\/assign$/)) && method === "POST") {
     // publish: dates, grid, and the announcement in Discord
     const g = await guild();
@@ -204,8 +242,18 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!cur) throw new ApiError(404, "This brief doesn't exist anymore.");
     const data = { ...cur.data, modalities: { ...cur.data.modalities, start: String(body.start || cur.data.modalities.start || ""), due: String(body.due || cur.data.modalities.due || "") } };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(data.modalities.due)) bad("Choose the due date first.");
+    if ("time" in body) { if (/^\d\d:\d\d$/.test(String(body.time))) data.modalities.time = String(body.time); else delete data.modalities.time; }
     await saveBrief(env, g, id, { data, internal: cur.internal, status: "assigned" });
+    // its sprint: "" = by its week or due date, "none" = not in a sprint (e.g. a cross defense), n = sprint n
+    if ("sprint" in body) await run(env, "UPDATE briefs SET sprint = ? WHERE id = ?", body.sprint === "none" ? 0 : Number(body.sprint) > 0 ? Number(body.sprint) : null, id);
     if (!(cur as any).grid) await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(await makeGrid(env, data)), id);
+    {
+      const nb = (await getBrief(env, g, id))!;
+      const start = nb.start_at ?? now(), due = nb.due_at ?? start + 5 * 86400;
+      const had = stepsOf((nb as any).steps);
+      const steps = had.length ? redate(had, start, due) : stepsFrom(stepsFallback(simplonText(nb.data, await programOf(env, g))), start, due);
+      if (steps.length) await run(env, "UPDATE briefs SET steps = ? WHERE id = ?", JSON.stringify(steps), id);
+    }
     if (body.announce) {
       const p = await programOf(env, g);
       const ch = githubCfg(g).channel || g.announce_channel || g.daily_channel;
@@ -213,11 +261,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const f = simplonFields(b.data, p);
       let squads: any[] = [];
       try { squads = JSON.parse((b as any).squads || "[]"); } catch { squads = []; }
-      if (ch) await send(env, ch, { embeds: [{ color: 0x2563eb, title: t(g.lang, "brief.announce_title", { title: b.data.title }),
+      if (ch && await send(env, ch, { embeds: [{ color: 0x2563eb, title: t(g.lang, "brief.announce_title", { title: b.data.title }),
         description: [b.data.summary, b.due_at ? t(g.lang, "brief.due_line", { when: `<t:${b.due_at}:F>` }) : "",
           b.data.competencies.length ? `🎯 ${f.competencies.split("\n").map((l) => l.split(".")[0]).join(", ")}` : "",
           squads.length ? squads.map((s) => `• **${s.name}** : ${s.members.map((x: string) => `<@${x}>`).join(" ")}${s.sm ? ` (SM <@${s.sm}>)` : ""}`).join("\n") : "",
-          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }] }).catch(() => {});
+          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }] }).then(() => true, () => false)) await run(env, "UPDATE briefs SET announced_at = ? WHERE id = ?", now(), id);
     }
     return ok(await briefView(env, g, id));
   }
@@ -236,7 +284,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck|oral|level))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -277,6 +325,17 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "states") { await saveStates(env, g, id, who, body.states ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || "")); return ok(await reviewView(env, g, id, who)); }
+    // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
+    if (act === "oral" && method === "POST") {
+      if (body.del != null) await delOral(env, g, id, who, Number(body.del), body.states?.oral);
+      else await makeOral(env, g, b, who);
+      return ok(await reviewView(env, g, id, who));
+    }
+    if (act === "level" && method === "POST") {
+      if (body.ai) await makeReviewLevel(env, g, id, who, body.states ?? null, String(body.comment || "").slice(0, 6000));
+      else await setReviewLevel(env, g, id, who, String(body.level || ""));
+      return ok(await reviewView(env, g, id, who));
+    }
     if (act === "members") { await saveMembers(env, g, id, who, body.members ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);
@@ -285,6 +344,27 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, ...(await reviewView(env, g, id, who)) });
     }
     if (act === "reopen") { await reopenReview(env, g, id, who); return ok(await reviewView(env, g, id, who)); }
+    // steps: the bot proposes from the repo at the step's date, the teacher decides
+    if (act === "stepcheck" && method === "POST") { const prop = await proposeStep(env, g, b, who, Number(body.n)); return ok({ prop, ...(await reviewView(env, g, id, who)) }); }
+    if (act === "step" && method === "POST") { await saveStep(env, g, b, who, Number(body.n), String(body.final || ""), String(body.note || "")); return ok(await reviewView(env, g, id, who)); }
+  }
+
+  // ------------------------------------------------------------ progress: the level of each debrief, brief by brief
+  if (path === "/progress" && method === "GET") return ok(await progressView(env, await guild()));
+
+  // ------------------------------------------------------------ sprints (the sprint review for the administration's report)
+  if (path === "/sprints" && method === "GET") return ok(await sprintsOverview(env, await guild()));
+  if ((m = path.match(/^\/sprints\/(\d+)(?:\/(levels|decide|comment))?$/))) {
+    const g = await guild();
+    const n = Number(m[1]), act = m[2];
+    if (!act && method === "GET") return ok(await sprintView(env, g, n));
+    if (act === "levels" && method === "POST") { const r = await proposeLevels(env, g, n); return ok({ ...r, ...(await sprintView(env, g, n)) }); }
+    if (act === "decide" && method === "POST") {
+      await saveDecision(env, g, n, String(body.discord_id || ""), { level: body.level, decision: body.decision, note: body.note });
+      return ok({ ok: true });
+    }
+    if (act === "comment" && method === "POST") return ok(await sprintComment(env, g, n));
+    if (act === "comment" && method === "PUT") return ok(await saveSprintComment(env, g, n, String(body.text ?? "")));
   }
 
   // ------------------------------------------------------------ competencies (class view)
@@ -342,6 +422,20 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     try { await saveGhApp(env, g.id, body); } catch (e) { bad((e as Error).message); }
     return ok({ ok: true });
   }
+  // "Create the GitHub App for me": the dashboard posts the manifest to GitHub, which comes back here with a code
+  if (path === "/github/manifest" && method === "POST") {
+    try { return ok(await githubManifest(env, await guild(), url.origin)); } catch (e) { if (e instanceof ManifestError) bad(e.message); throw e; }
+  }
+  if (path === "/github/manifest/done" && method === "GET") {
+    const back = (q: string) => new Response(null, { status: 303, headers: { location: `/?${q}#/settings/github` } });
+    try {
+      const r = await finishManifest(env, String(url.searchParams.get("state") || ""), String(url.searchParams.get("code") || ""));
+      return back(`gh=created&slug=${encodeURIComponent(r.slug)}`);
+    } catch (e) {
+      if (e instanceof ManifestError) return back(`gh=failed&why=${encodeURIComponent(e.message)}`);
+      throw e;
+    }
+  }
   if (path === "/github/app" && method === "DELETE") {
     const g = await guild();
     await run(env, "DELETE FROM gh_apps WHERE guild_id = ?", g.id);
@@ -378,6 +472,26 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   }
   if (path === "/github/test" && method === "POST") return ok(await testGithubChannels(env, await guild()));
   if (path === "/github/activity" && method === "GET") return ok(await activityOf(env, await guild(), 14));
+  // which students let the App see only some repos: their new projects are not counted until they add them
+  if (path === "/github/check-repos" && method === "POST") {
+    const g = await guild();
+    const app = await ghAppOf(env, g.id);
+    if (!githubCanRead(app)) bad("Save the App ID and the private key first.");
+    const rows = (await all<{ discord_id: string; name: string | null; github_login: string; gh_inst: string; gh_sel: string | null }>(env,
+      "SELECT discord_id, name, github_login, gh_inst, gh_sel FROM players WHERE guild_id = ? AND gh_inst IS NOT NULL", g.id)).slice(0, 45);
+    const jwt = await appJwt(app);
+    const some: string[] = [];
+    let checked = 0;
+    for (const r of rows) {
+      const res = await fetch(`${GH_API}/app/installations/${r.gh_inst}`, { headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json", "User-Agent": "classbot" } }).catch(() => null);
+      if (!res || !res.ok) continue;
+      const sel = String(((await res.json().catch(() => ({}))) as any).repository_selection || "");
+      checked++;
+      if (sel && sel !== r.gh_sel) await run(env, "UPDATE players SET gh_sel = ? WHERE gh_inst = ?", sel, r.gh_inst);
+      if (sel === "selected") some.push(r.name || r.github_login);
+    }
+    return ok({ checked, some });
+  }
   if (path === "/github/report" && method === "POST") {
     const g = await guild();
     if (body.kind === "weekly") await sendWeekly(env, g); else await sendDaily(env, g);
@@ -508,7 +622,8 @@ async function briefView(env: Env, g: GuildRow, id: number) {
     return { status: r.status, final_at: r.final_at, sent_at: r.sent_at, pct, ok, ko };
   };
   return {
-    brief: { ...b, grid: undefined, squads: undefined }, grid, gridText: grid ? gridToText(grid) : "", squads, kind: row.kind === "squad" ? "squad" : "solo", repo_hint: row.repo_hint ?? "",
+    brief: { ...b, grid: undefined, squads: undefined, steps: undefined }, grid, gridText: grid ? gridToText(grid) : "", squads, kind: row.kind === "squad" ? "squad" : "solo", repo_hint: row.repo_hint ?? "",
+    steps: stepsOf(row.steps), stepsText: stepsToText(stepsOf(row.steps)),
     fields: simplonFields(b.data, p), text: simplonText(b.data, p), checks: briefChecks(b.data, w), week: w,
     referential: p.referential.map((c) => ({ ...c, label: compLabel(c.code) })), levels: p.levels,
     students: students.map((s) => ({ ...s, push: push.get(s.discord_id) ?? null, handin: handins.find((h) => h.who === `u:${s.discord_id}`) ?? null, review: reviewOf(`u:${s.discord_id}`), squad: squadOf(squads, s.discord_id)?.id ?? null })),
@@ -518,10 +633,12 @@ async function briefView(env: Env, g: GuildRow, id: number) {
 }
 
 async function reviewView(env: Env, g: GuildRow, briefId: number, who: string) {
+  const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
+  const stepRes = steps.length ? await stepRecs(env, briefId, who) : {};
   const r = await getReview(env, briefId, who);
-  if (!r) return { review: null, status: null };
+  if (!r) return { review: null, status: null, steps, stepRecs: stepRes };
   const states = statesOf(r.rec);
-  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at };
+  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at, steps, stepRecs: stepRes };
 }
 
 async function assessView(env: Env, g: GuildRow, id: number) {
