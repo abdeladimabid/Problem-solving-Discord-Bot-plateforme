@@ -262,6 +262,10 @@ env.ASSETS = {
       if (rnd() < 0.12) glog.run(G, `pr:${login}/tailwind-landing#${d}:merged`, String(100 + i), "pr", `${login}/tailwind-landing`, "feature/contact", now - d * DAY, "Contact page", null, 0, null, 140, 12, 4, "merged", `https://github.com/${login}/tailwind-landing/pull/${d}`);
     }
   });
+  // Settings → AI keys: two AIs for this class, the first one hit its limit an hour ago
+  db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`ai:${G}`, JSON.stringify({ providers: [
+    { id: "p1", type: "groq", key: "gsk_preview" + "x".repeat(40), model: "openai/gpt-oss-120b" }, { id: "p2", type: "gemini", key: "AIza-preview-" + "y".repeat(28), model: "gemini-2.5-flash" }] }), now);
+  db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`aist:${G}`, JSON.stringify({ p1: { err: "limit reached (429): Rate limit reached for model openai/gpt-oss-120b, tokens per day", errAt: now - 3600 }, p2: { err: null, okAt: now - 600 } }), now);
   db.prepare("INSERT OR REPLACE INTO gh_summaries (guild_id, discord_id, data, at) VALUES (?, ?, ?, ?)").run(G, "100", JSON.stringify({
     overview: "Yasmine worked on two sites: the Hammam showcase, then a Tailwind landing page. Steady pushes most days, mostly real steps, but about a quarter of the messages say nothing.",
     repos: [{ repo: "yasmine-dev/hammam-andalous", features: [{ title: "Header with logo and navigation", commits: [], status: "done" }, { title: "Responsive services grid", commits: [], status: "done" }, { title: "Tarifs page with a price table", commits: [], status: "in progress" }] },

@@ -1,4 +1,5 @@
 // Database helpers shared by the bot and the dashboard.
+import { classOf, hasOwnAi } from "./aictx.ts";
 import type { Env, GuildRow, PlayerRow } from "./types.ts";
 import { RULES, levelInfo } from "./game.ts";
 
@@ -222,18 +223,28 @@ export async function checkBadges(env: Env, guild: GuildRow, discordId: string):
 }
 
 // ------------------------------------------------------------ AI budget
+// Protects Cloudflare's free AI (about 10,000 "neurons" a day for the whole account). Each class has its own
+// daily budget, and the whole ClassBot a bigger one. A class with AI keys of its own (Settings → AI) has no
+// ClassBot limit: its providers have their own.
+const aiDay = () => new Date().toISOString().slice(0, 10);
+const aiLimit = (env: Env) => Number(env.AI_DAILY_LIMIT || RULES.aiDailyLimit);
 export async function aiBudgetOk(env: Env, cost = 1): Promise<boolean> {
-  const day = new Date().toISOString().slice(0, 10);
-  const r = await one<{ count: number }>(env, "SELECT count FROM ai_usage WHERE day = ?", day);
-  const limit = Number(env.AI_DAILY_LIMIT || RULES.aiDailyLimit);
-  return (r?.count ?? 0) + cost <= limit;
+  if (await hasOwnAi(env)) return true;
+  const day = aiDay(), gid = classOf(env), limit = aiLimit(env);
+  const all = await one<{ count: number }>(env, "SELECT count FROM ai_usage WHERE day = ?", day);
+  if ((all?.count ?? 0) + cost > limit * 3) return false;
+  if (!gid) return (all?.count ?? 0) + cost <= limit;
+  const mine = await one<{ count: number }>(env, "SELECT count FROM ai_usage WHERE day = ?", `${day}|${gid}`);
+  return (mine?.count ?? 0) + cost <= limit;
 }
 export async function aiBudgetUse(env: Env, n = 1) {
-  const day = new Date().toISOString().slice(0, 10);
-  await run(env, "INSERT INTO ai_usage (day, count) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET count = count + ?", day, n, n);
+  const day = aiDay(), gid = classOf(env);
+  const add = (k: string) => run(env, "INSERT INTO ai_usage (day, count) VALUES (?, ?) ON CONFLICT (day) DO UPDATE SET count = count + ?", k, n, n);
+  if (gid) await add(`${day}|${gid}`);
+  if (!(await hasOwnAi(env))) await add(day);   // the ClassBot-wide counter only counts the free AI
 }
-export async function aiBudgetLeft(env: Env): Promise<{ used: number; limit: number }> {
-  const day = new Date().toISOString().slice(0, 10);
-  const r = await one<{ count: number }>(env, "SELECT count FROM ai_usage WHERE day = ?", day);
-  return { used: r?.count ?? 0, limit: Number(env.AI_DAILY_LIMIT || RULES.aiDailyLimit) };
+export async function aiBudgetLeft(env: Env): Promise<{ used: number; limit: number; own?: boolean }> {
+  const gid = classOf(env);
+  const r = await one<{ count: number }>(env, "SELECT count FROM ai_usage WHERE day = ?", gid ? `${aiDay()}|${gid}` : aiDay());
+  return { used: r?.count ?? 0, limit: aiLimit(env), own: await hasOwnAi(env) };
 }

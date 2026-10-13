@@ -161,7 +161,7 @@ const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.t
 
 // Comment in the teacher's style, built only from the checklist (checks + brief requirements + competencies).
 // Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
-export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null) {
+export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null, assess = null) {
   const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
   const ok = (id) => !!c[id] && c[id].ok === true;
   const ko = (id) => !!c[id] && c[id].ok === false;
@@ -322,6 +322,16 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   if (more.length === 1) parts.push(`Pour progresser, tu peux aussi essayer ce bonus : ${more[0]}.`);
   else if (more.length) parts.push(`Pour progresser, tu peux aussi essayer ces bonus :\n${more.map((t) => `- ${t}`).join('\n')}`);
   if (toReview.length) parts.push(`Notions à revoir : ${toReview.join(', ')}.`);
+  // the assessments linked to the brief
+  const graded = (assess || []).filter((a) => a.score != null);
+  if (graded.length) {
+    const lines = graded.map((a) => {
+      const ok = Object.entries(a.comps || {}).filter(([, v]) => v.ok).map(([k]) => skillDisplay(k));
+      const ko = Object.entries(a.comps || {}).filter(([, v]) => !v.ok).map(([k]) => skillDisplay(k));
+      return `« ${a.title} » : ${a.score} %${ok.length ? ` (validé : ${ok.join(', ')}` : ''}${ko.length ? `${ok.length ? ' ; ' : ' ('}à retravailler : ${ko.join(', ')}` : ''}${ok.length || ko.length ? ')' : ''}.`;
+    });
+    parts.push(`-Évaluation :\n${lines.join('\n')}`);
+  }
   const compOk = competences.filter((x) => x.ok === true).map((x) => skillDisplay(x.code));
   const compKo = competences.filter((x) => x.ok === false).map((x) => skillDisplay(x.code));
   if (compOk.length || compKo.length) parts.push([compOk.length ? `Compétences validées : ${compOk.join(', ')}.` : '', compKo.length ? `Compétences non validées : ${compKo.join(', ')}.` : ''].filter(Boolean).join('\n'));
@@ -338,7 +348,10 @@ export function reviewStates(rec) {
   for (const x of (rec && rec.checks) || []) if (!x.info && (x.ok === true || x.ok === false)) ck[x.id] = typeof (saved.ck || {})[x.id] === 'boolean' ? saved.ck[x.id] : x.ok;
   const ex = (r.exigences || []).map((e, i) => (isBound(e) && e.check in ck ? ck[e.check] : typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : itemValid(e)));
   const co = {};
-  for (const x of r.competences || []) co[x.code] = typeof (saved.co || {})[x.code] === 'boolean' ? saved.co[x.code] : x.avis === 'validable';
+  // an assessment linked to the brief that didn't validate a competency: it starts "not validated"
+  const baseCode = (c) => String(c).toUpperCase().replace(/N\d$/, '').replace(/^CT/, 'T');
+  const assessKo = new Set(((rec && rec.assess) || []).flatMap((a) => Object.entries(a.comps || {}).filter(([, v]) => v && v.ok === false).map(([k]) => baseCode(k))));
+  for (const x of r.competences || []) co[x.code] = typeof (saved.co || {})[x.code] === 'boolean' ? saved.co[x.code] : x.avis === 'validable' && !assessKo.has(baseCode(x.code));
   const ch = (rec && rec.challenge) || null;
   const mes = { r: (saved.mes && CH_RESULTS.includes(saved.mes.r) ? saved.mes.r : ch && ch.result) || '', note: String((saved.mes && typeof saved.mes.note === 'string' ? saved.mes.note : ch && ch.note) || '') };
   // oral questions: each one starts Not valid, the teacher switches it after the answer
@@ -377,7 +390,7 @@ export function buildComment(firstName, rec, states) {
   const comps = (r.competences || []).map((x) => ({ code: x.code, ok: st.co[x.code] }));
   const ch = rec.challenge ? { ...rec.challenge, result: st.mes.r, note: st.mes.note } : null;
   const oral = (rec.oral || []).map((q, i) => ({ notion: q.notion || q.q, ok: !!st.oral[i] }));
-  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral);
+  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral, rec.assess || null);
 }
 
 // The sure checks win over the AI: a requirement that a check proves (or disproves) gets the check's answer

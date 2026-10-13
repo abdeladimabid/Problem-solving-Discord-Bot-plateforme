@@ -125,6 +125,8 @@ function execLocal(id: string, source: string, stdin: string) {
 }
 export const access = { jwks: null as any };
 /** Discord answers to fake: extra guild channels, and calls that fail (n times) with a Discord error code. */
+/** Other AI providers (Gemini, Claude): keys containing "good" work; a host in `down` answers 429. */
+export const aiFake = { calls: [] as string[], down: [] as string[] };
 export const discordFake = { channels: [] as any[], fail: [] as { method: string; path: string; status: number; code: number; n: number }[], chan: {} as Record<string, any> };
 export const discordRoles = { forbidden: false, list: [{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }] as any[] };
 let msgId = 1000;
@@ -195,6 +197,15 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const key = decodeURIComponent(url.pathname.slice(1));
     const f = github.files[key];
     return f === undefined ? new Response("404: Not Found", { status: 404 }) : new Response(f, { status: 200 });
+  }
+  if (url.hostname === "generativelanguage.googleapis.com" || url.hostname === "api.anthropic.com") {
+    const h = new Headers(init.headers || {});
+    const key = (h.get("authorization") || "").replace(/^Bearer /, "") || h.get("x-api-key") || "";
+    aiFake.calls.push(`${url.hostname}:${body?.model}`);
+    if (!/good/.test(key)) return new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 401 });
+    if (aiFake.down.includes(url.hostname)) return new Response(JSON.stringify({ error: { message: "Resource exhausted" } }), { status: 429 });
+    if (url.hostname === "api.anthropic.com") return Response.json({ content: [{ type: "text", text: "claude-answer" }] });
+    return Response.json({ choices: [{ message: { content: "gemini-answer" } }] });
   }
   if (url.hostname === "api.groq.com") {
     const auth = new Headers(init.headers || {}).get("authorization") || "";

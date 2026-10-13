@@ -769,9 +769,7 @@ function wApplySimple() {
 (() => {
   const st = document.createElement("style");
   st.textContent = `
-.cb-simple #nav a:not(.cb-keep), .cb-simple #nav .nav-label { display: none; }
-.cb-simple #nav a[href="#/github"] { order: -6; } .cb-simple #nav a[href="#/briefs"] { order: -5; } .cb-simple #nav a[href="#/sprints"] { order: -4; }
-.cb-simple #nav a[href="#/progress"] { order: -4; } .cb-simple #nav a[href="#/competencies"] { order: -3; } .cb-simple #nav a[href="#/teams"] { order: -2; } .cb-simple #nav a[href="#/settings"] { order: -1; }
+/* the menu itself is in sections (nav.js): in simple mode only one section is open at a time, every page stays reachable */
 .cb-simple-sw { display: flex; gap: 8px; align-items: center; padding: 8px 10px; margin-top: 8px; color: var(--ink-soft); font-size: 13px; cursor: pointer; border-top: 1px solid var(--line); }
 .cb-more { position: relative; display: inline-block; } .cb-more > summary { list-style: none; } .cb-more > summary::-webkit-details-marker { display: none; }
 .cb-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; display: flex; flex-direction: column; gap: 4px; min-width: 190px;

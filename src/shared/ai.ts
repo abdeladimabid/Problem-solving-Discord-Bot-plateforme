@@ -1,8 +1,7 @@
 // AI: challenge generation, code feedback, and a fallback judge.
 //
-// Provider: Cloudflare Workers AI (free 10,000 neurons/day) with a strong
-// reasoning model, OR any OpenAI-compatible endpoint if LLM_BASE_URL is set
-// (Ollama exposed through a tunnel, Groq, OpenRouter, a local LM Studio…).
+// Provider: each class's own AIs (Settings → AI: Groq, Gemini, OpenRouter, OpenAI, Claude…, each one the backup
+// of the one before: see aikeys.ts), then Cloudflare Workers AI (free 10,000 neurons/day).
 //
 // Nothing the AI writes is trusted blindly:
 //  - "predict the output" answers come from actually running the code,
@@ -11,6 +10,7 @@
 //  - multiple-choice answers are re-solved by an independent second pass.
 import type { Difficulty, Env } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
+import { aiChainLabel, keyedChat, keyedSteps, workersAllowed } from "./aikeys.ts";
 import { isCorrectOutput } from "./game.ts";
 import { LANGS, RunnerUnavailable, isCodeLang, normOut, runOnce, runPythonTests } from "./runner.ts";
 import type { CodeLang, Judgement } from "./runner.ts";
@@ -88,47 +88,24 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 export const GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"];
 
-export function aiProviderLabel(env: Env): string {
-  if (env.GROQ_API_KEY) return `Groq · ${(env.GROQ_MODEL || GROQ_MODELS[0]).split("/").pop()} (Workers AI as backup)`;
-  if (env.LLM_BASE_URL) return `${env.LLM_MODEL || "model"} @ ${env.LLM_BASE_URL.replace(/^https?:\/\//, "").split("/")[0]}`;
-  return `Workers AI · ${(env.AI_MODEL || DEFAULT_MODELS[0]).replace("@cf/", "")}`;
-}
+/** What answers for the class of this call: its AIs in order, then Cloudflare's (for the diagnostics page). */
+export async function aiProviderLabel(env: Env): Promise<string> { return aiChainLabel(env); }
 
-/** Groq only (needs GROQ_API_KEY). Tries the models in turn; throws when none answers. */
+/**
+ * The class's own AIs in order (Settings → AI), then the ClassBot's key if this class may use it. The first good
+ * answer wins; throws when none answers. (Named groqChat for history: any provider can answer now.)
+ */
 export async function groqChat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number; json?: boolean }): Promise<{ text: string; model: string }> {
-  if (!env.GROQ_API_KEY) throw new Error("no Groq key");
-  const models = env.GROQ_MODEL ? [env.GROQ_MODEL, ...GROQ_MODELS.filter((m) => m !== env.GROQ_MODEL)] : GROQ_MODELS;
-  let last = "Groq unavailable";
-  for (const model of models) {
-    try {
-      const body = (json: boolean) => JSON.stringify({ model, messages, max_tokens: o.maxTokens, temperature: o.temperature,
-        ...(model.startsWith("openai/gpt-oss") ? { reasoning_effort: "low" } : {}), ...(json ? { response_format: { type: "json_object" } } : {}) });
-      let res = await withTimeout(fetch(GROQ_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.GROQ_API_KEY}` }, body: body(!!o.json) }), o.timeoutMs ?? 90000);
-      if (res.status === 400 && o.json) res = await withTimeout(fetch(GROQ_URL, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.GROQ_API_KEY}` }, body: body(false) }), o.timeoutMs ?? 90000);
-      if (res.status === 401) throw new Error("Groq refused the key (GROQ_API_KEY)");
-      if (!res.ok) { last = `Groq ${res.status} (${model})`; continue; }
-      const text = pickText(await res.json());
-      if (text.trim()) return { text, model };
-    } catch (e) {
-      last = String((e as Error)?.message ?? e);
-      if (/refused the key/.test(last)) throw e;
-    }
-  }
-  throw new Error(last);
+  const r = await keyedChat(env, messages, o);
+  return { text: r.text, model: r.model };
 }
+/** Is there at least one keyed AI for this call? (Long documents are written better by them.) */
+export async function hasKeyedAi(env: Env): Promise<boolean> { return (await keyedSteps(env)).length > 0; }
 
-/** Workers AI (or the OpenAI-compatible endpoint in LLM_BASE_URL). Throws on failure. */
+/** Cloudflare Workers AI (free, built in), unless this class turned it off. Throws on failure. */
 export async function workersChat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number }): Promise<{ text: string; model: string }> {
   const timeout = o.timeoutMs ?? 90000;
-  if (env.LLM_BASE_URL) {
-    const res = await withTimeout(fetch(env.LLM_BASE_URL.replace(/\/$/, "") + "/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(env.LLM_API_KEY ? { Authorization: `Bearer ${env.LLM_API_KEY}` } : {}) },
-      body: JSON.stringify({ model: env.LLM_MODEL, messages, max_tokens: o.maxTokens, temperature: o.temperature }),
-    }), timeout);
-    if (!res.ok) throw new Error(`AI provider answered ${res.status}`);
-    return { text: pickText(await res.json()), model: env.LLM_MODEL || "llm" };
-  }
+  if (!(await workersAllowed(env))) throw new Error(env.AI ? "Cloudflare's AI is turned off for this class" : "AI unavailable");
   const models = env.AI_MODEL ? [env.AI_MODEL, ...DEFAULT_MODELS.filter((m) => m !== env.AI_MODEL)] : DEFAULT_MODELS;
   let last: unknown;
   for (const model of models) {
@@ -145,13 +122,11 @@ export async function workersChat(env: Env, messages: Msg[], o: { maxTokens: num
 
 /**
  * One chat completion. Returns the raw text. Throws on failure.
- * Groq first when a key is set (a big model, fast, good at long French documents); if it fails
- * (limit reached, busy, timeout), Workers AI answers instead.
+ * The class's AIs first, each one the backup of the one before (limit reached, key refused, busy, timeout),
+ * then Cloudflare's free AI.
  */
 export async function chat(env: Env, messages: Msg[], o: { maxTokens: number; temperature: number; timeoutMs?: number; json?: boolean }): Promise<string> {
-  if (env.GROQ_API_KEY) {
-    try { return (await groqChat(env, messages, o)).text; } catch (e) { console.error("groq", e); }
-  }
+  try { return (await keyedChat(env, messages, o)).text; } catch (e) { if (!/no AI key/.test(String((e as Error)?.message))) console.error("AI keys", e); }
   return (await workersChat(env, messages, o)).text;
 }
 
@@ -417,9 +392,9 @@ export async function aiHealth(env: Env): Promise<{ ok: boolean; ms: number; det
   try {
     const text = await chat(env, [{ role: "user", content: 'Reply with only this JSON: {"ok": true}' }], { maxTokens: 300, temperature: 0, timeoutMs: 30000 });
     const j = extractJson(text);
-    return { ok: !!j?.ok, ms: Date.now() - t, detail: aiProviderLabel(env) + (j?.ok ? "" : ` · unexpected answer: ${text.slice(0, 120)}`) };
+    return { ok: !!j?.ok, ms: Date.now() - t, detail: (await aiProviderLabel(env)) + (j?.ok ? "" : ` · unexpected answer: ${text.slice(0, 120)}`) };
   } catch (e) {
-    return { ok: false, ms: Date.now() - t, detail: `${aiProviderLabel(env)} · ${(e as Error).message}` };
+    return { ok: false, ms: Date.now() - t, detail: `${await aiProviderLabel(env)} · ${(e as Error).message}` };
   }
 }
 

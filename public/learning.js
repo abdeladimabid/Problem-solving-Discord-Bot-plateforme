@@ -809,9 +809,15 @@ function renderDebrief() {
     </div>
     <aside class="stack db-side">
       <section class="panel"><h2>Competencies</h2>
+        ${(rec.assess || []).length ? `<div class="db-assess">${rec.assess.map((x) => `<a class="db-as" href="#/assessment/${x.id}"><span>📝</span><div><b>${esc(x.title)}</b>
+          <div class="small">${x.score != null ? `<b style="color:${masteryInk(x.score)}">${x.score}%</b>${x.of > 1 ? ` · ${x.done}/${x.of} graded` : ""}` : `<span class="muted">${x.of ? "not graded yet" : "not taken"}</span>`}</div></div></a>`).join("")}
+          <p class="small muted" style="margin:0">Assessment linked to this brief: a competency it didn't validate starts “not validated”, and the comment says how it went. Your switches decide.</p></div>` : ""}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
+          const base = (parseC(c.code) || {}).code;
+          const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
           return `<div class="db-row">${sw(`data-co="${esc(c.code)}"`, st.co[c.code], final)}
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span> <span class="lvl ${a[0]}">${esc(a[1])}</span>
+            ${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
@@ -1043,12 +1049,50 @@ const QTYPE = { code: "Write code", explain: "Explain", mcq: "Multiple choice" }
 const LOCK = { fullscreen: "left full screen", hidden: "switched tab or app", blur: "left the window", reload: "reloaded the page", paste: "pasted" };
 const CODE_LANGS = ["javascript", "php", "python", "java", "c", "cpp", "sql", "html", "css", "typescript", "text"];
 
+/** Another teacher shared an assessment: paste the link, see what's in it, get a draft copy in this class. */
+function importAssessmentDialog() {
+  let previewed = "";
+  openDialog("🔗 Import an assessment from a link", `
+    <p class="small muted" style="margin-top:0">A teacher clicked <b>Share</b> on one of their assessments and sent you the link. You get a <b>draft copy</b> in this class: change anything, then invite your students. Their students' papers are never shared.</p>
+    <label for="im-url">Link</label><input type="url" id="im-url" placeholder="https://…/share/assessment/12.Ab3…" style="width:100%">
+    <div id="im-prev"></div>`,
+  [{ label: "Preview", primary: true, action: async () => {
+    const url = $("#im-url", dlg).value.trim();
+    if (previewed && previewed === url) {
+      const r = await api("/assessments/import", { method: "POST", body: { url, import: true } });
+      dlg.close(); toast("Imported as a draft ✅"); location.hash = `#/assessment/${r.id}`; return;
+    }
+    const r = await api("/assessments/import", { method: "POST", body: { url } });
+    const p = r.preview;
+    previewed = url;
+    $("#im-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>${p.from ? ` <span class="small muted">· from ${esc(p.from)}</span>` : ""}
+      <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points${p.minutes ? ` · ${p.minutes} min` : ""}</p>
+      ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : ""}
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
+    $(".dlg-foot .btn.primary", dlg).textContent = "Import as a draft";
+    return;
+  } }]);
+  $("#im-url", dlg).oninput = () => { previewed = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Preview"; };
+}
+
+/** Share: a link for other teachers (questions only). */
+async function shareAssessmentDialog(id) {
+  const r = await api(`/assessments/${id}/share`);
+  openDialog("🔗 Share with other teachers", `
+    <p class="small" style="margin-top:0">Send this link to other teachers. In their ClassBot (yours or their own) they open <b>Assessments → Import from a link</b> and get a copy of the questions, with their competencies and skills. Your students' papers and results are never shared.</p>
+    <div class="url-list"><div><b>Link</b><code id="sh-url">${esc(r.url)}</code><button class="btn small" id="sh-copy">Copy</button></div></div>
+    <p class="small muted">Opened in a browser, it shows the title and the questions' first lines. Shared it with the wrong person? Make a new link: the old one stops working.</p>`,
+  [{ label: "New link (the old one stops working)", action: async () => { const n = await api(`/assessments/${id}/share`, { method: "DELETE" }); $("#sh-url", dlg).textContent = n.url; toast("New link: the old one doesn't work anymore"); } },
+   { label: "Done", primary: true, action: async () => dlg.close() }]);
+  $("#sh-copy", dlg).onclick = () => copyText($("#sh-url", dlg).textContent, "Link copied");
+}
+
 async function viewAssessments() {
   const r = await api("/assessments");
   const locked = r.items.reduce((s, a) => s + (a.status === "open" ? a.locked : 0), 0);
   view.innerHTML = `
     <div class="page-head"><div><h1>Assessments</h1><p class="sub">Web tests in full screen: each student gets their own link, questions in their own order. Leaving full screen stops them until you let them back in. Results go to their competencies and skills.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="as-imp">🔗 Import from a link</button><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">📝</span><div><b>${r.items.filter((a) => a.status === "open").length}</b><span>open now</span></div></div>
       <div class="figure ${locked ? "cs-attn" : ""}"><span class="ico">⛔</span><div><b>${locked}</b><span>student(s) stopped, waiting for you</span></div></div>
@@ -1063,6 +1107,7 @@ async function viewAssessments() {
       { label: "Created", sort: "created_at", html: (a) => `<span class="small">${fmtDate(a.created_at)}</span>` },
     ], r.items, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: "No assessment yet." })}</section>`;
   $("#as-gen").onclick = () => generateQuestionsDialog(null);
+  $("#as-imp").onclick = () => importAssessmentDialog();
   $("#as-blank").onclick = (e) => busy(e.currentTarget, async () => {
     const a = await api("/assessments", { method: "POST", body: { title: "New assessment", questions: [], settings: { minutes: 45 } } });
     location.hash = `#/assessment/${a.assessment.id}`;
@@ -1110,8 +1155,8 @@ async function generateQuestionsDialog(onDone) {
 
 let AS = null;
 async function viewAssessment(id, keepTab = null) {
-  const [A] = await Promise.all([api(`/assessments/${id}`), loadSkillDefs(), loadRef()]);
-  AS = { A, tab: keepTab || (AS?.A?.assessment.id === A.assessment.id ? AS.tab : A.takers.length ? "live" : "questions"), dirty: false, links: AS?.links };
+  const [A, BR] = await Promise.all([api(`/assessments/${id}`), api("/briefs").catch(() => ({ items: [] })), loadSkillDefs(), loadRef()]);
+  AS = { briefs: BR.items || [], A, tab: keepTab || (AS?.A?.assessment.id === A.assessment.id ? AS.tab : A.takers.length ? "live" : "questions"), dirty: false, links: AS?.links };
   renderAssessment();
 }
 function renderAssessment() {
@@ -1123,6 +1168,7 @@ function renderAssessment() {
       <div class="toolbar" style="margin:0">
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
+        <button class="btn" id="aa-share">🔗 Share</button>
         <button class="btn danger" id="aa-del">Delete</button></div></div>
     <div class="tabs" role="tablist">
       <button role="tab" data-at="questions">Questions (${a.questions.length})</button>
@@ -1141,6 +1187,7 @@ function renderAssessment() {
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
+  $("#aa-share").onclick = () => shareAssessmentDialog(a.id);
   if ($("#aa-close")) $("#aa-close").onclick = () => confirmDialog("Close this assessment?", "Students still working are handed in automatically within a minute.", "Close", async () => { AS.A = await api(`/assessments/${a.id}/close`, { method: "POST", body: {} }); renderAssessment(); });
   if ($("#aa-open")) $("#aa-open").onclick = (e) => busy(e.currentTarget, async () => { AS.A = await api(`/assessments/${a.id}/reopen`, { method: "POST", body: {} }); toast("Open again for 24 h"); renderAssessment(); });
   $("#aa-del").onclick = () => confirmDialog("Delete this assessment?", "The papers are deleted too. Results already sent to the record stay.", "Delete", async () => { await api(`/assessments/${a.id}`, { method: "DELETE" }); location.hash = "#/assessments"; }, true);
@@ -1157,6 +1204,8 @@ function assessQuestionsTab(root) {
         <div><label>Passed at (%)</label><input type="number" id="aq-pass" min="1" max="100" value="${s.passAt}"></div>
         <div><label>Points for 100%</label><input type="number" id="aq-pts" min="0" max="200" value="${s.points}"></div>
       </div>
+      <label for="aq-brief">Linked brief <span class="muted">(its results count in that brief's debrief: competencies and comment)</span></label>
+      <select id="aq-brief" style="max-width:560px"><option value="">— none —</option>${(AS.briefs || []).map((b) => `<option value="${b.id}" ${b.id === a.brief_id ? "selected" : ""}>${esc(b.title)}${b.status === "assigned" ? "" : ` (${esc(b.status)})`}</option>`).join("")}</select>
       <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results</label>
     </section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
@@ -1187,7 +1236,7 @@ function assessQuestionsTab(root) {
     const qs = readQuestions();
     const bad = qs.findIndex((q) => q.prompt.trim().length < 5 || (q.type === "mcq" && (q.choices.filter(Boolean).length < 2 || !q.answer.length)));
     if (bad >= 0) throw new Error(`Question ${bad + 1}: write the question${qs[bad].type === "mcq" ? ", at least 2 choices and tick the right one(s)" : ""}.`);
-    AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, brief_id: a.brief_id, questions: qs,
+    AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, brief_id: $("#aq-brief").value || null, questions: qs,
       settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked } } });
     AS.dirty = false; toast("Saved"); renderAssessment();
   });
@@ -1217,8 +1266,11 @@ function questionCard(q, i, n, locked) {
     </div></article>`;
 }
 const skillChip = (k) => { const sk = (S.skillDefs || []).find((x) => x.key === k); return `<button type="button" class="chip" data-sk="${esc(k)}" aria-pressed="true" title="Click to remove">${esc(sk ? `${sk.emoji} ${sk.en}` : k)} ×</button>`; };
-const compRow = (c, ref) => `<span class="qe-comp"><select data-qcomp><option value="">—</option>${ref.map((r) => `<option value="${r.code}" ${c.code === r.code ? "selected" : ""}>${esc(r.label)} · ${esc(r.name.slice(0, 50))}</option>`).join("")}</select>
-  <select data-qlvl>${LV_NAMES.map((l, k) => `<option value="${k + 1}" ${(c.level || 1) === k + 1 ? "selected" : ""}>N${k + 1}</option>`).join("")}</select><button type="button" class="btn small" data-delcomp title="Remove">×</button></span>`;
+/** A question's competency row. A code that isn't in this class's programme stays selectable (and saved). */
+const compRow = (c, ref) => { if (typeof c === "string") { const p = parseC(c); c = p ? { code: p.code, level: p.level || 1 } : { code: "", level: 1 }; }
+  const known = !c.code || ref.some((r) => r.code === c.code);
+  return `<span class="qe-comp"><select data-qcomp><option value="">—</option>${known ? "" : `<option value="${esc(c.code)}" selected>${esc(cLabel(c.code))} · (not in this programme)</option>`}${ref.map((r) => `<option value="${r.code}" ${c.code === r.code ? "selected" : ""}>${esc(r.label)} · ${esc(r.name.slice(0, 50))}</option>`).join("")}</select>
+  <select data-qlvl>${LV_NAMES.map((l, k) => `<option value="${k + 1}" ${(c.level || 1) === k + 1 ? "selected" : ""}>N${k + 1}</option>`).join("")}</select><button type="button" class="btn small" data-delcomp title="Remove">×</button></span>`; };
 function readQuestions() {
   return $$(".qe").map((card) => {
     const type = $("[data-qt]", card).value;
@@ -1477,7 +1529,7 @@ async function githubSettings(root) {
   root.innerHTML = `
     <div class="panel set-card"><div class="panel-head"><h3 style="margin:0">GitHub App</h3>${ready ? `<span class="status solved">Ready</span>` : `<span class="status failed">Not ready</span>`}</div>
       <p class="small">${su.own ? "This class uses <b>its own GitHub App</b> (saved here)." : su.shared ? "This class uses <b>the school's GitHub App</b> (set when ClassBot was installed): nothing to do. Use your own only if you want this class separate." : "No GitHub App yet. Create one (free) and fill in its details below."}</p>
-      <ul class="bchecks">${item(su.app, "App slug")}${item(su.key, "Private key (to read the repos)")}${item(su.oauth, "Client ID and secret (students sign in)")}${item(su.webhook, "Webhook secret (pushes arrive)")}${item(!!su.ai, `AI for the debriefs${su.ai ? ` (${su.ai === "groq" ? "Groq" : "Workers AI"})` : ""}`)}</ul>
+      <ul class="bchecks">${item(su.app, "App slug")}${item(su.key, "Private key (to read the repos)")}${item(su.oauth, "Client ID and secret (students sign in)")}${item(su.webhook, "Webhook secret (pushes arrive)")}${item(!!su.ai, `AI for the debriefs${su.ai ? ` (${su.ai === "keys" ? "your AI keys" : "Cloudflare AI"})` : ""}`)}</ul>
       <div id="gh-own" ${su.own || !su.shared ? "" : "hidden"}>
         ${ready ? "" : `<p><button class="btn primary" id="ga-auto">✨ Create the GitHub App for me</button> <span class="muted small">2 clicks on GitHub</span></p>`}
         <details class="howto"><summary><b>Or create it by hand</b></summary>
@@ -1512,6 +1564,7 @@ async function githubSettings(root) {
       <div class="gh-dest">
         <div><span class="gh-dest-ic">📊</span><div><label for="gh-ch">Reports & brief reminders</label><select id="gh-ch">${chOpt(c.channel, S.discord?.channels)}</select><p class="small muted">Daily / weekly tables, idle students, deadlines.</p></div></div>
         <div><span class="gh-dest-ic">🔗</span><div><label for="gh-lk">“X connected GitHub”</label><select id="gh-lk"><option value="">Same as the reports</option><option value="off" ${c.links === "off" ? "selected" : ""}>Don't announce</option>${(S.discord?.channels || []).map((x) => `<option value="${x.id}" ${x.id === c.links ? "selected" : ""}># ${esc(x.name)}</option>`).join("")}</select><p class="small muted">Posted once per new link.</p></div></div>
+        <div><span class="gh-dest-ic">📢</span><div><label for="gh-br">New briefs announced in</label><select id="gh-br"><option value="">${c.briefs ? "—" : "#general (found automatically)"}</option>${(S.discord?.channels || []).map((x) => `<option value="${x.id}" ${x.id === c.briefs ? "selected" : ""}># ${esc(x.name)}</option>`).join("")}</select><p class="small muted">The announcement when you assign a brief.</p></div></div>
         <div><span class="gh-dest-ic">🧵</span><div><label for="gh-fo">Activity forum <span class="muted">(one post per student)</span></label><select id="gh-fo">${chOpt(c.forum, S.discord?.forums)}</select><p class="small muted">Every push and pull request, in the student's post.</p></div></div>
       </div>
       <div class="toolbar" style="margin:4px 0 12px"><button class="btn small" id="gh-test">🧪 Save and send a test</button><span id="gh-test-out" class="small"></span></div>
@@ -1567,7 +1620,7 @@ async function githubSettings(root) {
   });
   if ($("#ga-del")) $("#ga-del").onclick = () => confirmDialog("Use the school's GitHub App?", "This class's own App details are deleted. Students linked with it will need to run /github again.", "Use the school's App", async () => { await api("/github/app", { method: "DELETE" }); reload(); }, true);
   const saveGh = () => api("/github", { method: "PUT", body: {
-      channel: $("#gh-ch").value, links: $("#gh-lk").value, forum: $("#gh-fo").value, daily: $("#gh-da").checked, weekly: $("#gh-we").checked, reminders: $("#gh-re").checked,
+      channel: $("#gh-ch").value, links: $("#gh-lk").value, forum: $("#gh-fo").value, briefs: $("#gh-br").value, daily: $("#gh-da").checked, weekly: $("#gh-we").checked, reminders: $("#gh-re").checked,
       hour: $("#gh-h").value, minute: $("#gh-m").value, weeklyDay: $("#gh-wd").value, inactiveDays: $("#gh-in").value, tiny: $("#gh-ti").value, huge: $("#gh-hu").value,
       skip: $$("[data-skip]:checked", root).map((x) => Number(x.dataset.skip)), hidden: $("#gh-hid").value,
       rewards: { comp: $("#gh-rc").value, coins: $("#gh-rk").value, bonus: $("#gh-rb").value } } });
@@ -1766,7 +1819,7 @@ function studentBriefCard(b, i, compNameOf) {
         <div class="small muted">${b.due ? `due ${fmtDate(b.due)}` : ""}${repos.length ? ` · ${repos.map((r) => esc(r)).join(", ")}` : ""}${b.pushed === "late" ? ` · <span style="color:var(--down)">pushed late</span>` : b.pushed === "on" ? " · pushed on time" : ""}</div></div>
       <div class="sbx-right">${rv?.pct != null ? `<div class="sbx-pct"><b style="color:${masteryInk(rv.pct)}">${rv.pct}%</b><span class="small muted">${main.filter((r) => r.done).length}/${main.length} required</span></div>` : ""}
         ${(rv?.ok || []).length || (rv?.ko || []).length ? `<div class="sbx-comps">${(rv.ok || []).map((c) => compChip(c, "ok")).join("")}${(rv.ko || []).map((c) => compChip(c, "ko")).join("")}</div>` : ""}
-        ${status(stc, stl)}</div>
+        ${levelChip(rv?.level, rv?.levelProposed)}${status(stc, stl)}</div>
     </summary>
     <div class="sbx-body">
       ${rv ? `
@@ -1789,28 +1842,69 @@ function studentBriefCard(b, i, compNameOf) {
     </div></details>`;
 }
 
-function learningPanel(d, sid) {
+const LEVEL_UI = { excellent: ["Excellent", "lv-ex"], bon: ["Bon", "lv-good"], moyen: ["Moyen", "lv-mid"], faible: ["Faible", "lv-low"], critique: ["Critique", "lv-crit"] };
+const levelChip = (l, proposed = false) => (l && LEVEL_UI[l] ? `<span class="lvchip ${LEVEL_UI[l][1]}" title="${proposed ? "proposed, not decided yet" : "level"}">${LEVEL_UI[l][0]}${proposed ? " ?" : ""}</span>` : "");
+
+/** The student page, part by part: "briefs" (debriefs and sprint reviews), "comps" (competency map), "assess" (assessments). */
+function learningPanel(d, sid, part = "comps") {
   const L = d.learning;
   if (!L) return "";
   const comps = L.competencies;
+  const nameOf = (code) => { const p = parseC(code); return comps.find((c) => c.code === p?.code)?.name || ""; };
+  if (part === "briefs") {
+    const finals = L.briefs.filter((b) => b.review?.pct != null);
+    const avgPct = finals.length ? Math.round(finals.reduce((s, b) => s + b.review.pct, 0) / finals.length) : null;
+    const debriefed = L.briefs.filter((b) => b.review);
+    return `<div class="stack">
+      <div class="stu-mini-figs">
+        <div><b>${L.briefs.length}</b><span>brief(s)</span></div>
+        <div><b>${debriefed.filter((b) => b.review.status === "final").length}</b><span>debriefs finalized</span></div>
+        <div><b>${debriefed.filter((b) => b.review.status !== "final").length}</b><span>debriefs in draft</span></div>
+        <div><b ${avgPct != null ? `style="color:${masteryInk(avgPct)}"` : ""}>${avgPct != null ? avgPct + "%" : "—"}</b><span>requirements met on average</span></div>
+      </div>
+      ${(L.sprints || []).length ? `<section class="panel"><div class="panel-head"><h2>🏁 Sprint reviews</h2><a class="btn small" href="#/sprints">Sprints →</a></div>
+        <div class="spr-list">${L.sprints.map((x) => `<div class="spr"><b>Sprint ${x.sprint}</b><span class="small muted">${esc(x.title || "")}</span>
+          <div>${levelChip(x.level || x.plevel, !x.level && !!x.plevel)} ${x.decision ? `<span class="lvl ${x.decision === "valide" ? "ok" : "bad"}">${x.decision === "valide" ? "✓ validated" : "✗ not validated"}</span>` : `<span class="muted small">no decision yet</span>`}</div>
+          ${x.note ? `<div class="small">${esc(x.note)}</div>` : ""}</div>`).join("")}</div></section>` : ""}
+      <section class="panel" id="learn-briefs">
+        <div class="panel-head"><h2>📄 Briefs and their debriefs</h2><span class="small muted">open one to see what they built, the competencies and the comment</span></div>
+        ${L.briefs.length ? `<div class="sbx-stack">${L.briefs.slice(0, 12).map((b, i, arr) => studentBriefCard(b, arr.findIndex((x) => x.review) === i ? 0 : 1, nameOf)).join("")}</div>` : `<p class="muted small">No brief assigned yet.</p>`}
+      </section></div>`;
+  }
+  if (part === "assess") {
+    const done = L.assessments.filter((a) => a.score != null);
+    const avg = done.length ? Math.round(done.reduce((s, a) => s + a.score, 0) / done.length) : null;
+    const VD = { correct: ["ok", "✓"], partial: ["warn", "½"], wrong: ["bad", "✗"], empty: ["bad", "—"] };
+    return `<div class="stack">
+      <div class="stu-mini-figs">
+        <div><b>${L.assessments.length}</b><span>assessment(s)</span></div>
+        <div><b>${done.length}</b><span>graded</span></div>
+        <div><b ${avg != null ? `style="color:${masteryInk(avg)}"` : ""}>${avg != null ? avg + "%" : "—"}</b><span>average score</span></div>
+      </div>
+      ${L.assessments.length ? L.assessments.map((a) => `<section class="panel asx">
+        <div class="asx-head">
+          <div class="asx-ring" style="--p:${a.score ?? 0};--c:${a.score != null ? masteryInk(a.score) : "var(--line-strong)"}"><b>${a.score != null ? a.score + "%" : "—"}</b></div>
+          <div class="asx-title"><a href="#/assessment/${a.id}"><b>${esc(a.title)}</b></a>
+            <div class="small muted">${status(a.status === "locked" ? "failed" : ["graded", "submitted"].includes(a.status) ? "solved" : "pending", STATUS[a.status] || a.status)}
+              ${a.submitted_at ? ` · handed in ${fmtDate(a.submitted_at)}` : ""}${a.score != null ? ` · ${a.score >= a.passAt ? "passed" : `below ${a.passAt}%`}` : ""}${a.brief ? ` · brief <a href="#/brief/${a.brief.id}">${esc(a.brief.title)}</a>` : ""}</div></div>
+          <a class="btn small" href="#/assessment/${a.id}">Open →</a>
+        </div>
+        ${a.comps.length ? `<div class="asx-comps">${a.comps.map((c) => `<span class="tag comp ${c.ok ? "ok" : "ko"}" title="${esc(c.note || "")}">${c.ok ? "✓" : "✗"} ${esc(cText(c.code + (c.level ? "N" + c.level : "")))} <span class="muted">${esc(nameOf(c.code).slice(0, 40))}</span></span>`).join("")}</div>` : ""}
+        ${a.questions.some((q) => q.verdict) ? `<div class="asx-qs">${a.questions.map((q) => { const v = VD[q.verdict] || ["", "·"];
+          return `<div class="asx-q ${v[0]}" title="Q${q.n} · ${esc(q.prompt)}${q.score != null ? ` · ${q.score}/100` : ""}"><b>Q${q.n}</b><span>${v[1]}</span></div>`; }).join("")}</div>` : ""}
+        ${a.summary ? `<p class="small asx-sum">${esc(a.summary)}</p>` : ""}
+      </section>`).join("") : `<div class="empty-state"><div style="font-size:40px">📝</div><p class="muted">No assessment yet for this student.</p><a class="btn" href="#/assessments">Assessments →</a></div>`}
+    </div>`;
+  }
   const ok = comps.filter((c) => c.level > 0).length;
   const STC = { validated: "Validated", progress: "In progress", not_yet: "Not yet", none: "No result yet" };
-  const nameOf = (code) => { const p = parseC(code); return comps.find((c) => c.code === p?.code)?.name || ""; };
-  const finals = L.briefs.filter((b) => b.review?.pct != null);
-  const avgPct = finals.length ? Math.round(finals.reduce((s, b) => s + b.review.pct, 0) / finals.length) : null;
   return `<div id="learn-wrap" class="stack">
-    <section class="panel" id="learn-briefs">
-      <div class="panel-head"><h2>📄 Briefs: what they built</h2><span class="small muted">${L.briefs.length} brief(s)${avgPct != null ? ` · <b style="color:${masteryInk(avgPct)}">${avgPct}%</b> of requirements on average` : ""}</span></div>
-      ${L.briefs.length ? `<div class="sbx-stack">${L.briefs.slice(0, 12).map((b, i, arr) => studentBriefCard(b, arr.findIndex((x) => x.review) === i ? 0 : 1, nameOf)).join("")}</div>` : `<p class="muted small">No brief assigned yet.</p>`}
-    </section>
     <section class="panel" id="learn">
     <div class="panel-head"><h2>🎓 Competencies <span class="muted">${esc(L.program)}</span></h2><span class="small"><b>${ok}/${comps.length}</b> validated</span></div>
     <div class="comp-map">${comps.map((c) => `<button type="button" class="cm ${c.status}" data-cm="${c.code}" title="${esc(c.name)} · ${STC[c.status]}${c.manual ? " · your decision" : ""} · click to change">
       <b>${esc(c.label)}${c.manual ? ` <span class="cm-man" title="Your decision">✍️</span>` : ""}</b>${dots(c.level, L.levels.length)}<small>${esc(c.name)}</small></button>`).join("")}</div>
-    <p class="muted small cm-legend"><span class="cm-key validated"></span> validated <span class="cm-key progress"></span> validated before, missed last time <span class="cm-key not_yet"></span> not validated yet <span class="cm-key none"></span> no result yet · ✍️ your decision · <b>click one to see its history or validate / invalidate it</b></p>
-    </section>
-    <section class="panel"><div class="panel-head"><h2>📝 Assessments</h2><span class="small muted">${L.assessments.length} taken</span></div>${L.assessments.length ? `<ul class="lb-list">${L.assessments.slice(0, 10).map((a) => `<li class="lb"><div><a href="#/assessment/${a.id}"><b>${esc(a.title)}</b></a> ${status(a.status === "locked" ? "failed" : ["graded", "submitted"].includes(a.status) ? "solved" : "pending", STATUS[a.status] || a.status)}
-          ${a.score != null ? ` <b style="color:${masteryInk(a.score)}">${a.score}%</b>` : ""} <span class="small muted">${a.submitted_at ? fmtDate(a.submitted_at) : ""}</span></div>${a.summary ? `<div class="small muted">${esc(a.summary)}</div>` : ""}</li>`).join("")}</ul>` : `<p class="muted small">No assessment yet.</p>`}</section></div>`;
+    <p class="muted small cm-legend"><span class="cm-key validated"></span> validated <span class="cm-key progress"></span> validated before, missed last time <span class="cm-key not_yet"></span> not validated yet <span class="cm-key none"></span> no result yet · ✍️ your decision · <b>click one to see its history (briefs, assessments) or validate / invalidate it</b></p>
+    </section></div>`;
 }
 function wireLearning(d, sid) {
   const L = d.learning;
@@ -1820,7 +1914,7 @@ function wireLearning(d, sid) {
     const c = L.competencies.find((x) => x.code === b.dataset.cm);
     compDecisionDialog({ sid, code: c.code, label: c.label, name: c.name, level: c.level, manual: c.manual, history: c.history, levels: L.levels }, (nc) => {
       if (nc) Object.assign(c, nc);
-      $("#learn-wrap").outerHTML = learningPanel(d, sid);
+      $("#learn-wrap").outerHTML = learningPanel(d, sid, "comps");
       wireLearning(d, sid);
     });
   });

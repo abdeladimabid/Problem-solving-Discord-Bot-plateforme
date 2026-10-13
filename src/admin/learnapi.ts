@@ -11,7 +11,7 @@ import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrie
 import type { Section } from "../shared/briefs.ts";
 import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
-import { activityOf, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
+import { activityOf, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
@@ -20,6 +20,8 @@ import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewards
 import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
+import { aiStatus } from "../shared/aikeys.ts";
+import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
 import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
@@ -96,7 +98,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const g = await guild();
     const p = await programOf(env, g);
     const app = await ghAppOf(env, g.id);
-    return ok({ items: await listBriefs(env, g), program: { id: p.id, name: p.name }, ai: !!(env.GROQ_API_KEY || env.AI), github: { ready: githubReady(app), read: githubCanRead(app) } });
+    return ok({ items: await listBriefs(env, g), program: { id: p.id, name: p.name }, ai: !!(await aiStatus(env)), github: { ready: githubReady(app), read: githubCanRead(app) } });
   }
   if (path === "/briefs/brainstorm" && method === "POST") {
     const g = await guild();
@@ -245,7 +247,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     }
     if (body.announce) {
       const p = await programOf(env, g);
-      const ch = githubCfg(g).channel || g.announce_channel || g.daily_channel;
+      const ch = await briefChannel(env, g);   // #general unless the teacher chose another channel
       const b = (await getBrief(env, g, id))!;
       const f = simplonFields(b.data, p);
       let squads: any[] = [];
@@ -398,7 +400,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
         // own: this class has its own GitHub App; shared: the Worker's secrets have one the class can use instead
         own: app.own, shared: !!(env.GITHUB_CLIENT_ID && env.GITHUB_APP_SLUG),
         app: !!app.slug, oauth: !!(app.clientId && app.clientSecret), webhook: !!app.webhookSecret, key: !!app.privateKey,
-        ai: env.GROQ_API_KEY ? "groq" : env.AI ? "workers" : null, watcher: !!env.WATCHER_KV, slug: app.slug || null,
+        ai: await aiStatus(env), watcher: !!env.WATCHER_KV, slug: app.slug || null,
         appId: app.appId || "", clientId: app.clientId || "",          // never the secrets
         urls: githubUrls(env, app), ownUrls: githubUrls(env, { ...app, own: true, guildId: g.id }),
       },
@@ -448,7 +450,8 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   if (path === "/github" && method === "PUT") {
     const g = await guild();
     const patch: any = {};
-    for (const k of ["channel", "forum"]) if (k in body) patch[k] = body[k] ? String(body[k]).replace(/\D/g, "") || null : null;
+    for (const k of ["channel", "forum", "briefs"]) if (k in body) patch[k] = body[k] ? String(body[k]).replace(/\D/g, "") || null : null;
+    if ("briefs" in body) patch.autoGeneral = !!patch.briefs;   // left empty: #general is looked for again
     if ("links" in body) patch.links = body.links === "off" ? "off" : body.links ? String(body.links).replace(/\D/g, "") || null : null;
     if ("channel" in body || "forum" in body) { patch.auto = true; patch.forumError = null; }
     for (const k of ["daily", "weekly", "reminders"]) if (k in body) patch[k] = !!body[k];
@@ -537,12 +540,17 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context });
     return ok({ questions: qs });
   }
+  if (path === "/assessments/import" && method === "POST") {
+    // a link shared by another teacher (this ClassBot or another one): preview first, then a draft copy
+    const g = await guild();
+    try { return ok(await importShared(env, g, String(body.url || ""), !!body.import)); } catch (e) { if (e instanceof ShareError) bad(e.message); throw e; }
+  }
   if (path === "/assessments" && method === "POST") {
     const g = await guild();
     const id = await saveAssessment(env, g, null, body);
     return ok(await assessView(env, g, id));
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -575,6 +583,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "reopen") { await run(env, "UPDATE assessments SET status = 'open', closes_at = MAX(COALESCE(closes_at, 0), ?) WHERE id = ?", now() + 86400, id); return ok(await assessView(env, g, id)); }
     if (act === "results") return ok({ sent: await sendResults(env, g, a) });
     if (act === "links") return ok({ links: await takerLinks(env, a) });
+    if (act === "share") return ok({ url: method === "DELETE" ? await renewShareLink(env, id) : await shareLink(env, id) });
   }
   return null;
 }
