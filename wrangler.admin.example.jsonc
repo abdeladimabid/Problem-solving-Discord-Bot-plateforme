@@ -1,3 +1,6 @@
+// EXAMPLE. Your own settings are in wrangler.admin.jsonc (made from this file by `npm run setup`, or copy it
+// yourself). That file is yours: it isn't in git, so `git pull` never changes it and each teacher deploys to
+// their own Cloudflare account. When this example gets a new setting, `npm run update` tells you.
 // The teacher dashboard Worker, protected by Cloudflare Access.
 // Uses the SAME database as the bot (same database_id).
 {
@@ -15,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "classbot-db",
-      "database_id": "ebd8fce7-7393-403c-a38b-f6edbb5dbc94",
+      "database_id": "PASTE_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],
@@ -23,8 +26,8 @@
   "ai": { "binding": "AI" },
 
   "vars": {
-    "DISCORD_APP_ID": "1557727693561266187",
-    "PUBLIC_URL": "https://classbot.abdeladim-abid.workers.dev",
+    "DISCORD_APP_ID": "PASTE_DISCORD_APP_ID",
+    "PUBLIC_URL": "https://classbot.YOUR-SUBDOMAIN.workers.dev",
     "AI_DAILY_LIMIT": "60",
     // filled in at step 9 (Cloudflare Access). Until then the dashboard stays locked.
     "TEAM_DOMAIN": "",

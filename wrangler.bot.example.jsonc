@@ -1,3 +1,6 @@
+// EXAMPLE. Your own settings are in wrangler.bot.jsonc (made from this file by `npm run setup`, or copy it
+// yourself). That file is yours: it isn't in git, so `git pull` never changes it and each teacher deploys to
+// their own Cloudflare account. When this example gets a new setting, `npm run update` tells you.
 // The public bot Worker: Discord interactions, cron jobs, race replays.
 // Fill in the 4 values marked PASTE (see README, steps 3–5).
 {
@@ -15,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "classbot-db",
-      "database_id": "ebd8fce7-7393-403c-a38b-f6edbb5dbc94",
+      "database_id": "PASTE_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],
@@ -23,10 +26,10 @@
   "ai": { "binding": "AI" },
 
   "vars": {
-    "DISCORD_APP_ID": "1557727693561266187",
-    "DISCORD_PUBLIC_KEY": "5aa789238c844cfefd0a1eb83997947f00d1ea8d9c1b34deb1454e5787372eba",
-    "PUBLIC_URL": "https://classbot.abdeladim-abid.workers.dev",
-    "DASHBOARD_URL": "https://classbot-admin.abdeladim-abid.workers.dev",
+    "DISCORD_APP_ID": "PASTE_DISCORD_APP_ID",
+    "DISCORD_PUBLIC_KEY": "PASTE_DISCORD_PUBLIC_KEY",
+    "PUBLIC_URL": "https://classbot.YOUR-SUBDOMAIN.workers.dev",
+    "DASHBOARD_URL": "https://classbot-admin.YOUR-SUBDOMAIN.workers.dev",
     // max new AI challenges per day (free tier: 10,000 neurons ≈ 80 checked challenges)
     "AI_DAILY_LIMIT": "60"
   }

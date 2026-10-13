@@ -5,7 +5,7 @@
 //
 // You only need: a Discord application with a bot token, and a Cloudflare account.
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
@@ -14,6 +14,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_FILE = join(ROOT, ".setup.json");
 const BOT_CFG = join(ROOT, "wrangler.bot.jsonc");
 const ADMIN_CFG = join(ROOT, "wrangler.admin.jsonc");
+// your own settings are made once from the examples (they aren't in git: a pull never changes them)
+for (const n of ["bot", "admin"]) {
+  const mine = join(ROOT, `wrangler.${n}.jsonc`), ex = join(ROOT, `wrangler.${n}.example.jsonc`);
+  if (!existsSync(mine) && existsSync(ex)) copyFileSync(ex, mine);
+}
 const DISCORD = process.env.CLASSBOT_DISCORD_API || "https://discord.com/api/v10";
 // View Channels, Send Messages, Embed Links, Read Message History, Manage Roles
 const BOT_PERMISSIONS = 1024 + 2048 + 16384 + 65536 + 268435456;
