@@ -346,7 +346,7 @@ const routes = {
 async function route() {
   const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const fn = routes[name] || viewOverview;
-  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "briefs", assessment: "assessments", battle: "battles" }[name] || name;
+  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", assessment: "assessments", battle: "battles" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
