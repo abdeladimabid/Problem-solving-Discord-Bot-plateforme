@@ -823,6 +823,10 @@ const W_LV_NAME = Object.fromEntries(W_LV);
 .pg-table th.pg-b { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; color: var(--ink-soft); max-height: 130px; overflow: hidden; }
 .pg-sq { display: inline-block; width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong); vertical-align: middle; }
 .pg-sq.has { background: var(--c); border-color: var(--c); } .pg-sq.ev { border-style: dashed; border-color: var(--ink-soft); }
+.pg-cell { position: relative; display: inline-block; }
+.pg-copy { display: none; position: absolute; left: 24px; top: -3px; z-index: 5; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: var(--shadow-m); font-size: 14px; }
+.pg-cell:hover .pg-copy, .pg-cell:focus-within .pg-copy { display: inline-flex; align-items: center; justify-content: center; }
 .pg-year { display: inline-flex; gap: 10px; font-size: 13px; font-weight: 700; } .pg-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; background: var(--c); }`;
   document.head.append(st);
 })();
@@ -931,10 +935,18 @@ async function viewProgress() {
       <thead><tr><th></th>${P.briefs.map((b) => `<th class="pg-b" title="${esc(b.title)}">${esc(b.title.slice(0, 24))}</th>`).join("")}<th>Over the year</th></tr></thead>
       <tbody>${rows.map((x) => `<tr><td><b>${esc(x.s.name)}</b></td>${x.lv.map((c, i) => {
         const b = P.briefs[i];
-        return `<td>${c ? `<a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}"></a>`
+        return `<td>${c ? `<span class="pg-cell"><a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}"></a><button type="button" class="pg-copy" data-pgcopy="${b.id}" data-who="${esc(c.who)}" data-sid="${esc(x.s.discord_id)}" data-name="${esc(x.s.name)} · ${esc(b.title)}" title="Copy the comment" aria-label="Copy the comment of ${esc(x.s.name)} for ${esc(b.title)}">📋</button></span>`
           : `<span class="pg-sq" title="${esc(b.title)}: no debrief"></span>`}</td>`;
       }).join("")}<td><span class="pg-year">${W_LV.filter(([v]) => x.count[v]).map(([v, l]) => `<span title="${l}"><i class="pg-dot pgc-${v}"></i>${x.count[v]}</span>`).join("")}</span></td></tr>`).join("")}</tbody></table></div>
       <p class="muted small" style="margin:10px 0 0">${legend}</p></section>`}`;
+  // the comment of that debrief (a squad member's own comment, else the squad's)
+  $$("[data-pgcopy]").forEach((btn) => btn.onclick = () => busy(btn, async () => {
+    const R = await api(`/briefs/${btn.dataset.pgcopy}/review?who=${encodeURIComponent(btn.dataset.who)}`);
+    const own = R.review?.members?.[btn.dataset.sid]?.comment;
+    const text = String(own || R.review?.result?.feedback || "").trim();
+    if (!text) { toast("No comment for this debrief yet", true); return; }
+    copyText(text, `Comment copied: ${btn.dataset.name}`);
+  }));
   $("#pg-f").onchange = (e) => { W_PG.filter = e.target.value; viewProgress(); };
   $("#pg-s").onchange = (e) => { W_PG.sort = e.target.value; viewProgress(); };
 }
