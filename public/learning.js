@@ -431,12 +431,12 @@ function renderBrief() {
         ${b.due_at ? ` · due ${fmtDateTime(b.due_at)}` : ""} · ${d.competencies.map((c) => compChip(c)).join(" ")}</p></div>
       <div class="toolbar" style="margin:0">
         <button class="btn" id="bb-copy">Copy for Simplonline</button>
-        ${b.status === "assigned" ? `<button class="btn" id="bb-assign">${B.kind === "squad" ? "Dates, squads &amp; announce" : "Dates &amp; announce"}</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Assign to the class</button>`}
+        ${b.status === "assigned" ? `<button class="btn ${debriefQueue().length ? "primary" : ""}" id="bb-anall" title="Analyze every hand-in not analyzed yet">🔍 Analyze all${debriefQueue().length ? ` (${debriefQueue().length})` : ""}</button><button class="btn" id="bb-assign">${B.kind === "squad" ? "Dates, squads &amp; announce" : "Dates &amp; announce"}</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Assign to the class</button>`}
         <button class="btn danger" id="bb-del">Delete</button></div></div>
     ${b.status === "assigned" ? `<div class="figures cs-figs">
       <div class="figure"><span class="ico">📥</span><div><b>${handed}/${total}</b><span>handed in</span></div></div>
       <div class="figure"><span class="ico">🐙</span><div><b>${B.students.filter((s) => s.push).length}/${B.students.length}</b><span>pushed code since the start</span></div></div>
-      <div class="figure"><span class="ico">✅</span><div><b>${finals}/${total}</b><span>debriefs finalized</span></div></div>
+      <div class="figure"><span class="ico">✅</span><div><b>${finals}/${total}</b><span>debriefs finalized${(B.kind === "squad" ? B.squadRows : B.students).filter((s) => s.review && s.review.status !== "final").length ? ` · ${(B.kind === "squad" ? B.squadRows : B.students).filter((s) => s.review && s.review.status !== "final").length} analyzed` : ""}</span></div></div>
       <div class="figure"><span class="ico">⏳</span><div><b>${b.due_at ? (b.due_at > Date.now() / 1000 ? Math.ceil((b.due_at - Date.now() / 1000) / 86400) + " d" : "passed") : "—"}</b><span>until the deadline</span></div></div>
     </div>` : ""}
     <div class="tabs" role="tablist">
@@ -458,6 +458,7 @@ function renderBrief() {
   show(BR.tab);
   $("#bb-copy").onclick = () => copyText(B.text, "The whole brief is copied");
   $("#bb-assign").onclick = () => assignBriefDialog();
+  if ($("#bb-anall")) $("#bb-anall").onclick = () => { if (BR.tab !== "students") show("students"); if (BR.tab === "students") analyzeAllDialog($("#bb-tab")); };
   if ($("#bb-archive")) $("#bb-archive").onclick = () => confirmDialog("Archive this brief?", "It leaves /brief for the students. Debriefs and results stay.", "Archive", async () => { BR.B = await api(`/briefs/${b.id}`, { method: "PUT", body: { status: "archived" } }); renderBrief(); });
   $("#bb-del").onclick = () => confirmDialog("Delete this brief?", "Hand-ins and debriefs not finalized are deleted too. Competencies already recorded stay on the students' records.", "Delete", async () => { await api(`/briefs/${b.id}`, { method: "DELETE" }); location.hash = "#/briefs"; }, true);
 }
@@ -647,6 +648,98 @@ function reviewCell(rv) {
 const handinCell = (h) => (h ? `<a href="https://github.com/${esc(h.repo)}" target="_blank" rel="noopener">${esc(h.repo)}</a>${h.plan ? ` · <a href="${esc(h.plan)}" target="_blank" rel="noopener">board</a>` : ""}
   <div class="muted small">${fmtDateTime(h.at)}${h.by === "teacher" ? " · set by you" : ""}</div>` : `<span class="muted small">not handed in</span>`);
 
+// ---- the debriefs of the whole class: the brief's assessment, and "Analyze all"
+/** Who can be analyzed: the students (or squads) not finalized, with what they handed in. */
+function debriefQueue(withAnalyzed = false, withoutHandin = false) {
+  const { B } = BR;
+  const rows = B.kind === "squad"
+    ? B.squadRows.filter((s) => s.members.length).map((s) => ({ who: `s:${s.id}`, name: s.name, handin: s.handin, review: s.review }))
+    : B.students.map((s) => ({ who: `u:${s.discord_id}`, name: s.name || s.discord_id, handin: s.handin, review: s.review }));
+  return rows.filter((r) => r.review?.status !== "final" && (withAnalyzed || !r.review) && (withoutHandin || r.handin));
+}
+function debriefToolsHtml() {
+  const { B } = BR, list = B.assessments || [];
+  const waiting = debriefQueue().length, all = debriefQueue(true, true).length;
+  const asHtml = list.length
+    ? list.map((a) => `<a class="dbt-as" href="#/assessment/${a.id}"><b>${esc(a.title)}</b><span>${a.takers ? `${a.done}/${a.takers} handed in · ${a.graded} graded` : "nobody invited yet: open it to invite the class"}</span></a>`).join("")
+    : `<div class="dbt-none"><span>No assessment linked. Link one and it counts in <b>every</b> student's debrief.</span>
+        <div class="dbt-link"><select id="dbt-sel" aria-label="Assessment to link"><option value="">Loading…</option></select><button class="btn small" id="dbt-link">Link to this brief</button><button class="btn small" id="dbt-ai">✨ Generate one</button></div></div>`;
+  return `<section class="panel dbt"><div class="dbt-col"><span class="dbt-h">Assessment of the brief</span>${asHtml}
+      ${list.length ? `<p class="small muted" style="margin:6px 0 0">Linked once for the whole class: each debrief reads each student's own result. Students must be invited to it (Assessment → Invite).</p>` : ""}</div>
+    <div class="dbt-col dbt-run"><span class="dbt-h">Debriefs</span>
+      <p class="small" style="margin:0 0 8px">${waiting ? `<b>${waiting}</b> ${B.kind === "squad" ? "squad(s)" : "student(s)"} handed in and not analyzed yet.` : debriefQueue(true).length ? "Every hand-in is analyzed." : all ? "Nothing handed in yet: Analyze all can use the repos they pushed to during the brief." : "Every debrief is finalized."}</p>
+      <button class="btn ${waiting ? "primary" : ""}" id="dbt-all" ${all ? "" : "disabled"}>🔍 Analyze all…</button></div></section>`;
+}
+function wireDebriefTools(root) {
+  const { B } = BR, id = B.brief.id;
+  if ($("#dbt-sel", root)) {
+    api("/assessments").then((r) => {
+      const sel = $("#dbt-sel", root); if (!sel) return;
+      const list = (r.items || []).filter((a) => String(a.brief_id || "") !== String(id));
+      sel.innerHTML = list.length ? `<option value="">Choose an assessment…</option>` + list.map((a) => `<option value="${a.id}">${esc(a.title)}${a.brief_id ? " (linked to another brief)" : ""}</option>`).join("") : `<option value="">No assessment yet</option>`;
+    }).catch(() => {});
+    $("#dbt-link", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const v = $("#dbt-sel", root).value;
+      if (!v) throw new Error("Choose the assessment to link");
+      await api(`/assessments/${v}/link`, { method: "POST", body: { brief_id: id } });
+      BR.B = await api(`/briefs/${id}`);
+      toast(debriefQueue(true).length < debriefQueue(true, true).length ? "Linked. Debriefs already analyzed: analyze them again to use it" : "Linked to the whole brief");
+      renderBrief();
+    });
+    $("#dbt-ai", root).onclick = () => generateQuestionsDialog(null, { brief: id, title: B.brief.data.title });
+  }
+  $("#dbt-all", root).onclick = () => analyzeAllDialog(root);
+}
+/** Analyze the debriefs one after the other (2 at a time), with the progress; it can be stopped. */
+function analyzeAllDialog(root) {
+  const { B } = BR, id = B.brief.id;
+  const unit = B.kind === "squad" ? "squads" : "students";
+  const count = (a, h) => debriefQueue(a, h).length;
+  openDialog("Analyze all the debriefs", `
+    <p style="margin-top:4px">The bot analyzes each ${B.kind === "squad" ? "squad's" : "student's"} repo, one after the other (about 30 s to a minute each). Keep this page open: you can stop at any time, what's done stays done. Finalized debriefs are never touched.</p>
+    <label class="check"><input type="checkbox" id="aa-again"> Also analyze again the ${unit} already analyzed (not finalized): their switches and comment start over</label>
+    <label class="check"><input type="checkbox" id="aa-noh"> Also the ${unit} who didn't hand in (the repo they pushed to during the brief)</label>
+    <p class="small" id="aa-n"></p>
+    <div id="aa-prog" class="aa-prog" hidden><div class="aa-bar"><span></span></div><p class="small" id="aa-st"></p><ul id="aa-list" class="aa-list"></ul></div>`,
+    [{ label: "Start", primary: true, action: async (d) => {
+      const q = debriefQueue($("#aa-again", d).checked, $("#aa-noh", d).checked);
+      if (!q.length) throw new Error("Nothing to analyze with these options");
+      const btn = $(".dlg-foot .btn.primary", d);
+      btn.hidden = true;
+      $$(".check input", d).forEach((x) => { x.disabled = true; });
+      $("#aa-prog", d).hidden = false;
+      $("#aa-list", d).innerHTML = q.map((r, i) => `<li data-i="${i}"><span class="aa-dot"></span>${esc(r.name)}<small>${r.handin ? esc(r.handin.repo) : "no hand-in"}</small></li>`).join("");
+      let done = 0, failed = 0, stop = false, next = 0;
+      const foot = $(".dlg-foot", d);
+      foot.insertAdjacentHTML("afterbegin", `<button class="btn" id="aa-stop">Stop</button>`);
+      $("#aa-stop", d).onclick = () => { stop = true; $("#aa-stop", d).disabled = true; $("#aa-st", d).textContent = "Stopping after the ones running…"; };
+      const draw = () => { $(".aa-bar span", d).style.width = `${Math.round(((done + failed) / q.length) * 100)}%`; if (!stop) $("#aa-st", d).textContent = `${done + failed}/${q.length} · ${done} analyzed${failed ? ` · ${failed} failed` : ""}`; };
+      const worker = async () => {
+        while (!stop && next < q.length) {
+          const i = next++, r = q[i], li = $(`[data-i="${i}"]`, d);
+          li.className = "run"; li.scrollIntoView({ block: "nearest" });
+          try {
+            await api(`/briefs/${id}/review/analyze`, { method: "POST", body: { who: r.who } });
+            li.className = "ok"; done++;
+          } catch (e) { li.className = "ko"; li.title = e.message; li.querySelector("small").textContent = e.message.slice(0, 120); failed++; }
+          draw();
+        }
+      };
+      draw();
+      await Promise.all([worker(), worker()]);
+      $("#aa-st", d).textContent = `${stop ? "Stopped" : "Done"}: ${done} analyzed${failed ? `, ${failed} failed (hover to see why, or open their debrief)` : ""}.`;
+      $("#aa-stop", d)?.remove();
+      btn.hidden = false; btn.textContent = "Close"; btn.onclick = () => d.close();
+      BR.B = await api(`/briefs/${id}`);
+      if (location.hash === `#/brief/${id}`) renderBrief();
+      toast(`${done} debrief(s) analyzed${failed ? ` · ${failed} failed` : ""}`, !!failed && !done);
+    } }]);
+  const d = dlg;
+  const upd = () => { const n = count($("#aa-again", d).checked, $("#aa-noh", d).checked); $("#aa-n", d).innerHTML = n ? `<b>${n}</b> ${unit} to analyze.` : `Nothing to analyze with these options.`; };
+  $$(".check input", d).forEach((x) => { x.onchange = upd; });
+  upd();
+}
+
 function briefStudentsTab(root) {
   const { B } = BR, id = B.brief.id;
   const pushCell = (p) => (p === "on" ? `<span class="status solved">pushed</span>` : p === "late" ? `<span class="status late">after the deadline</span>` : `<span class="muted small">—</span>`);
@@ -673,7 +766,8 @@ function briefStudentsTab(root) {
       { label: "", html: (s) => actions(`u:${s.discord_id}`, s.handin) },
     ], B.students, { empty: "No students yet." });
   }
-  root.innerHTML = `<section class="panel"><p class="muted small" style="margin-top:0">After the deadline, open each debrief: the bot reads the repo, checks the requirements and the competencies, proposes a mise en situation and writes the comment. Finalizing records the competencies on the student's profile.</p>${html}</section>`;
+  root.innerHTML = `${debriefToolsHtml()}<section class="panel"><p class="muted small" style="margin-top:0">After the deadline, open each debrief: the bot reads the repo, checks the requirements and the competencies, proposes a mise en situation and writes the comment. Finalizing records the competencies on the student's profile.</p>${html}</section>`;
+  wireDebriefTools(root);
   $$("[data-hi]", root).forEach((x) => x.onclick = () => openDialog("Repo handed in", `
       <label for="hi-r">GitHub repo <span class="muted">(owner/repo or its link; empty = remove)</span></label><input type="text" id="hi-r" style="width:100%" value="${esc(x.dataset.repo)}">
       <label for="hi-p">Planning board <span class="muted">(Trello, Jira or GitHub Project, optional)</span></label><input type="url" id="hi-p" style="width:100%" value="${esc(x.dataset.plan)}">`,

@@ -3577,6 +3577,8 @@ section("debrief: link an existing assessment to the brief from the debrief");
   const aid = q1("SELECT id FROM assessments WHERE title = 'Quiz to link'").id;
   const r = await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: bid });
   check(r.status === 200 && q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === bid, "linked: its results count in the brief's debriefs");
+  const bv = await api("GET", `/api/briefs/${bid}?g=${G}`);
+  check(bv.data.assessments?.length === 1 && bv.data.assessments[0].title === "Quiz to link" && bv.data.assessments[0].takers === 0, "the brief shows its assessment (for the whole class) and where the class is with it");
   check((await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: 999999 })).status === 404, "…an unknown brief: refused");
   run1("DELETE FROM assessments WHERE id = ?", aid); run1("DELETE FROM briefs WHERE id = ?", bid);
 }
