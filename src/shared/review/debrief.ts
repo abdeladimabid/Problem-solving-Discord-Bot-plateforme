@@ -15,7 +15,7 @@ import { cleanBrief, simplonText } from "../briefs.ts";
 import type { Program } from "../program.ts";
 import { programOf } from "../program.ts";
 import {
-  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, checkLabel, checkList,
+  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, conceptsOf, checkLabel, checkList,
   DEBRIEF_LEVELS, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, memberComment, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
@@ -171,26 +171,29 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
   }
   return out;
 }
-/** The questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong: what to work on. */
+/** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
+ *  what to study, grouped (the most missed first), never the list of questions. */
 function gapsOf(questions: string | null, takers: { grades: string | null; answers: string | null }[]): string[] {
   let qs: any[] = [];
   try { qs = JSON.parse(questions || "[]"); } catch { return []; }
-  const out: string[] = [];
+  const count = new Map<string, number>();
   for (const q of qs) {
-    let worst = "";
+    let missed = false;
     for (const t of takers) {
       let g: any = {}, an: any = {};
       try { g = JSON.parse(t.grades || "{}")[q.id]; an = JSON.parse(t.answers || "{}"); } catch { /* old row */ }
       const a = an?.[q.id];
       const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
       const v = g?.verdict || (empty ? "empty" : "");
-      if (v === "empty" || (v === "wrong" && worst !== "empty") || (v === "partial" && !worst)) worst = v;
+      if (v && v !== "correct") missed = true;
     }
-    if (!worst || worst === "correct") continue;
-    const what = worst === "empty" ? "non traitée" : worst === "wrong" ? "réponse incorrecte" : "réponse incomplète";
-    out.push(`${oneLine(String(q.prompt || ""), 140).replace(/[\s.:;]+$/, "")} (${what})`);
+    if (!missed) continue;
+    // the question's own notion first (its prompt), then its expected answer when the prompt says nothing
+    let cs = conceptsOf(String(q.prompt || ""));
+    if (!cs.length) cs = conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`);
+    for (const c of cs.slice(0, 3)) count.set(c, (count.get(c) || 0) + 1);
   }
-  return out.slice(0, 10);
+  return [...count.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c).slice(0, 8);
 }
 /** The graded assessments of the brief, for the AI: what the learner showed in class, without help (never a name). */
 export function assessForAi(assess: any[] | null | undefined): string {
