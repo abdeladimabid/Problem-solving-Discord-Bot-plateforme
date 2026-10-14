@@ -1721,7 +1721,8 @@ function assessResultsTab(root) {
       <button class="btn small" id="rs-grade" title="The AI grades the papers not graded yet (or all again); grades you changed and finalized debriefs stay">↻ Grade with AI</button><button class="btn small primary" id="rs-send">Send results by DM</button></span></div>
     <p class="muted small" style="margin-top:0">Click a <b>student</b> to read their whole paper (each answer, what was right, what was wrong, the mistakes in their code), or a <b>score</b> for one question. ✎ = changed by you.</p>
     ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Student</th><th>Score</th>${qs.map((q, i) => `<th class="ctr" title="${esc(q.prompt.slice(0, 200))}"><span class="qh">${QI[q.type]} Q${i + 1}</span><small>${q.points} pt</small></th>`).join("")}</tr></thead>
-      <tbody>${done.map((t) => `<tr><td><button class="res-who" data-paper="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b><small>${t.status === "submitted" ? "to grade" : "open the paper →"}</small></span></button></td>
+      <tbody>${done.map((t) => `<tr><td><button class="res-who" data-paper="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b><small>${t.status === "submitted" ? "to grade" : "open the paper →"}</small></span></button>
+          <button class="btn small res-ai" data-gradeone="${t.id}" title="${t.status === "submitted" ? "Grade this student with AI" : "Grade this student again with AI (your changes stay)"}">✨ ${t.status === "submitted" ? "Grade" : "Regrade"}</button></td>
         <td>${t.score == null ? `<span class="muted">—</span>` : `<div class="res-score"><b style="color:${masteryInk(t.score)}">${t.score}%</b>${meter(t.score)}</div>`}</td>${qs.map((q) => cell(t, q)).join("")}</tr>`).join("")}
       <tr class="avg"><td class="small"><b>Average per question</b></td><td></td>${avgQ.map((v) => `<td class="ctr"><b class="small" style="color:${masteryInk(v)}">${v ?? "—"}</b></td>`).join("")}</tr></tbody></table></div>
       <p class="muted small" style="margin:10px 0 0"><span class="lvl none" style="padding:0 8px">—</span> not attempted (no answer, or the starter code left as it was): it counts 0 but isn't a wrong answer, and the student is told so.</p>`
@@ -1737,6 +1738,7 @@ function assessResultsTab(root) {
     const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: {} }); toast(`Sent to ${r.sent} student(s)`);
   });
   $$("[data-paper]", root).forEach((b) => b.onclick = () => paperDialog(A.takers.find((t) => String(t.id) === b.dataset.paper)));
+  $$("[data-gradeone]", root).forEach((b) => b.onclick = () => busy(b, () => gradeOne(A.takers.find((t) => String(t.id) === b.dataset.gradeone), false)));
   $$("[data-g]", root).forEach((b) => b.onclick = () => gradeDialog(A.takers.find((t) => String(t.id) === b.dataset.g), qs.find((q) => q.id === b.dataset.q)));
 }
 
@@ -1818,6 +1820,21 @@ function gradeAllDialog(a) {
       if (location.hash.startsWith(`#/assessment/${a.id}`)) renderAssessment();
     } }]);
 }
+/** One student's paper graded by the AI (the grades you changed stay); the paper opens again with the new grades. */
+async function gradeOne(t, reopen = true) {
+  const a = AS.A.assessment;
+  toast(`⏳ The AI grades ${t.name || "this paper"}…`);
+  try {
+    AS.A = await api(`/assessments/${a.id}/grade`, { method: "POST", body: { taker: t.id } });
+  } catch (e) {
+    const w = perMinuteWait(e.message);
+    throw new Error(w ? `The AI's per-minute limit is reached: try again in ${w} s.` : e.message);
+  }
+  const nt = AS.A.takers.find((x) => x.id === t.id);
+  toast(nt && nt.score != null && nt.status === "graded" ? `${nt.name || "Graded"}: ${nt.score}%` : "Graded");
+  renderAssessment();
+  if (reopen && nt) paperDialog(nt);
+}
 function paperDialog(t) {
   const qs = AS.A.assessment.questions;
   const stops = t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length, pastes = t.events.filter((e) => e[1] === "paste").length;
@@ -1830,7 +1847,8 @@ function paperDialog(t) {
       <p style="white-space:pre-wrap;margin:6px 0">${esc(q.prompt)}</p>${q.code ? `<pre class="code-view">${esc(q.code)}</pre>` : ""}
       <h3>Their answer</h3>${answerHtml(q, t.answers[q.id], t.grades[q.id]?.marks)}
       ${q.expected ? `<details class="small"><summary>Expected answer</summary><pre class="code-view" style="white-space:pre-wrap">${esc(q.expected)}</pre></details>` : ""}
-      <h3>Grade</h3>${gradeWhy(t.grades[q.id])}</section>`).join("")}`);
+      <h3>Grade</h3>${gradeWhy(t.grades[q.id])}</section>`).join("")}`,
+    [{ label: t.status === "graded" && !paperPending(t) ? "✨ Grade this paper again with AI" : "✨ Grade this paper with AI", primary: t.status !== "graded" || paperPending(t), action: () => gradeOne(t) }]);
   dlg.classList.add("wide");
   $$("[data-regrade]", dlg).forEach((b) => b.onclick = () => gradeDialog(t, qs.find((q) => q.id === b.dataset.regrade), true));
 }

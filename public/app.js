@@ -1429,7 +1429,7 @@ async function aiSettings(root, flash = null) {
   for (const p of d.providers) { const m = String(p.err || "").match(/organization `?(org_[\w]+)/); if (m) (orgs[m[1]] ??= []).push(p.label); }
   const shared = Object.values(orgs).filter((x) => x.length > 1);
   root.innerHTML = `
-    ${flash ? `<div class="notice small" style="margin-bottom:12px">${esc(flash)}</div>` : ""}
+    ${flash ? `<div class="notice small" style="margin-bottom:12px;white-space:pre-line">${esc(flash)}</div>` : ""}
     ${shared.length ? `<div class="notice warn small" style="margin-bottom:12px"><b>${shared[0].length} of these keys come from the same account</b> (same organization): they share one limit, so when one is used up they all are. For real backups, use keys from different accounts, or add another provider (Google Gemini or Cerebras: free, with higher limits).</div>` : ""}
     <div class="panel set-card ai-status ${status[0]}"><div><b>${status[1]}</b><div class="small muted">${status[2]}</div>
       <div class="ai-chain small">${chain.length ? chain.map((c, i) => `<span>${i ? "→ " : ""}${esc(c)}</span>`).join(" ") : "<span>nothing</span>"}</div></div></div>
@@ -1438,7 +1438,7 @@ async function aiSettings(root, flash = null) {
       <div class="panel-head"><h3 style="margin:0">This class's AIs</h3><span class="small muted">${d.usage.today} AI calls today</span></div>
       ${d.providers.length ? `<ol class="ai-list">${d.providers.map((p, i) => `<li class="ai-item ${p.off ? "off" : ""} ${p.err ? "bad" : ""}" data-pid="${p.id}">
           <span class="ai-n">${i + 1}</span>
-          <div class="ai-main"><b>${esc(p.label)}</b> <span class="small muted">${i === 0 ? "first choice" : "backup"}</span>
+          <div class="ai-main"><b>${esc(p.label)}</b> <span class="small muted">${d.rotate && !p.off && d.providers.filter((x) => x.type === p.type && !x.off).length > 1 ? `takes turns with the other ${esc(p.label)} key${d.providers.filter((x) => x.type === p.type && !x.off).length > 2 ? "s" : ""}` : i === 0 ? "first choice" : "backup"}</span>
             <div class="small"><code>${esc(p.masked)}</code> · model <input class="ai-model" data-model="${p.id}" value="${esc(p.model)}" list="ai-ml-${p.id}" aria-label="Model"><datalist id="ai-ml-${p.id}">${(P[p.type]?.models || []).map((m) => `<option value="${esc(m)}">`).join("")}</datalist>${p.base ? ` · <span class="muted">${esc(p.base)}</span>` : ""}</div>
             <div class="small ${p.err ? "ai-err" : "muted"}">${p.err ? `⚠️ Last problem ${ago(p.errAt)}: ${esc(p.err)}` : p.okAt ? `✓ answered ${ago(p.okAt)}` : "not used yet"}</div></div>
           <div class="ai-act">
@@ -1449,6 +1449,7 @@ async function aiSettings(root, flash = null) {
         </li>`).join("")}</ol>` : `<p class="muted small">No AI key yet for this class.</p>`}
       ${d.server ? `<label class="check ai-row"><input type="checkbox" id="ai-server" ${d.server.allowed ? "checked" : ""}> Also use the <b>ClassBot's key</b> (${esc(d.server.label)}, ${esc(d.server.masked)}) after this class's AIs
         <span class="small muted">· it's the Cloudflare secret of this ClassBot: leave it off for other teachers' classes, so they use their own keys</span></label>` : ""}
+      <label class="check ai-row"><input type="checkbox" id="ai-rotate" ${d.rotate ? "checked" : ""}> <b>Keys of the same provider take turns</b> <span class="small muted">· each AI request uses the next key, so their per-minute limits add up (only with keys from <b>different accounts</b>); a key at its limit rests a minute. Off: the first key, the others only as backups.</span></label>
       ${d.hasWorkers ? `<label class="check ai-row"><input type="checkbox" id="ai-workers" ${d.workers ? "checked" : ""}> <b>Cloudflare's free AI</b> as the last backup <span class="small muted">· slower and simpler; ${d.usage.own ? "no limit counted while this class has its own keys" : `daily limit for this class: ${d.usage.today}/${d.usage.limit} used today`}</span></label>` : ""}
       ${d.legacy ? `<p class="small notice">An old Groq key (${esc(d.legacy)}) is saved for <b>all classes</b> of this ClassBot. Keys are per class now: <button class="btn small danger" id="ai-legacy">Delete the old shared key</button></p>` : ""}
     </div>
@@ -1474,16 +1475,47 @@ async function aiSettings(root, flash = null) {
         <li>Create an API key${v.keyHint ? ` (it starts with <code>${esc(v.keyHint)}</code>)` : ""} and copy it.</li>`}
         <li>Paste it here: ClassBot tests it before saving.</li></ol>
       ${v.custom ? `<label for="ai-base">API address</label><input type="url" id="ai-base" placeholder="https://api.together.xyz/v1" style="width:100%;max-width:520px">` : ""}
-      <label for="ai-key">${esc(v.label)} API key</label>
-      <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="${esc(v.keyHint || "paste the key")}" style="width:100%;max-width:520px;font-family:var(--mono, monospace)">
+      <label>${esc(v.label)} API key(s) <span class="muted">(one or several: each one is added as a backup of the one before)</span></label>
+      <div id="ai-keys" class="ai-keys"></div>
+      <button type="button" class="ap-link" id="ai-more" style="margin-top:4px">+ another ${esc(v.label)} key</button>
       <label for="ai-m">Model</label>
       <input id="ai-m" list="ai-mlist" value="${esc(v.models[0] || "")}" placeholder="model name" style="width:100%;max-width:520px"><datalist id="ai-mlist">${v.models.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
       <p class="small muted" style="margin:6px 0 0">${v.models.length ? `Suggested: ${v.models.map((m) => `<code>${esc(m)}</code>`).join(", ")}. ${type === "openrouter" ? "Free models change often on OpenRouter: if this one isn't free anymore, ClassBot picks one that is free today, by itself." : "Model names change: if the test says “model not found”, copy the exact name from the provider's site."}` : ""}</p>
       <div class="set-foot"><button class="btn primary" id="ai-addbtn">Test and add</button></div>`;
+    // several keys at once: one field each (a pasted list with one key per line is split too)
+    const addField = (val = "") => {
+      const row = document.createElement("div");
+      row.className = "ai-keyrow";
+      row.innerHTML = `<input type="password" class="ai-key" autocomplete="off" spellcheck="false" placeholder="${esc(v.keyHint || "paste the key")}"><button type="button" class="btn small ai-krm" title="Remove this field" aria-label="Remove this field">✕</button>`;
+      $("#ai-keys", root).append(row);
+      const inp = $("input", row);
+      inp.value = val;
+      inp.addEventListener("paste", (e) => {
+        const txt = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+        const many = txt.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+        if (many.length > 1) { e.preventDefault(); inp.value = many[0]; many.slice(1).forEach((k) => addField(k)); }
+      });
+      $(".ai-krm", row).onclick = () => { if ($$(".ai-keyrow", root).length > 1) row.remove(); else inp.value = ""; };
+      return inp;
+    };
+    addField();
+    $("#ai-more", root).onclick = () => addField().focus();
     $("#ai-addbtn", root).onclick = (e) => busy(e.currentTarget, async () => {
-      const r = await api("/settings/ai/providers", { method: "POST", body: { type, key: $("#ai-key", root).value.trim(), model: $("#ai-m", root).value.trim(), base: $("#ai-base", root)?.value.trim() } });
-      toast(r.warn ? "Added (see the note)" : `${v.label} added: it works ✅`);
-      aiSettings(root, r.warn);
+      const keys = [...new Set($$(".ai-key", root).map((x) => x.value.trim()).filter(Boolean))];
+      if (!keys.length && !v.custom) throw new Error("Paste the API key.");
+      const notes = [], failed = [];
+      let added = 0;
+      for (const [i, key] of (keys.length ? keys : [""]).entries()) {
+        if (keys.length > 1) toast(`⏳ Testing key ${i + 1}/${keys.length}…`);
+        try {
+          const r = await api("/settings/ai/providers", { method: "POST", body: { type, key, model: $("#ai-m", root).value.trim(), base: $("#ai-base", root)?.value.trim() } });
+          added++;
+          if (r.warn) notes.push(`Key ${i + 1}: ${r.warn}`);
+        } catch (err) { failed.push(`Key ${i + 1} (…${key.slice(-4)}): ${err.message}`); }
+      }
+      if (!added) throw new Error(failed.join(" · "));
+      toast(failed.length ? `${added} key(s) added, ${failed.length} refused (see the note)` : added > 1 ? `${added} ${v.label} keys added ✅` : notes.length ? "Added (see the note)" : `${v.label} added: it works ✅`, !!failed.length);
+      aiSettings(root, [...notes, ...failed].join("\n") || null);
     });
   };
   $$(".ai-pv", root).forEach((b) => b.onclick = () => { $$(".ai-pv", root).forEach((x) => x.setAttribute("aria-pressed", String(x === b))); form(b.dataset.type); });
@@ -1492,6 +1524,7 @@ async function aiSettings(root, flash = null) {
   const ids = d.providers.map((p) => p.id);
   $$("[data-up]", root).forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]]; put({ order: ids }, "Order saved"); });
   $$("[data-down]", root).forEach((b) => b.onclick = () => { const i = Number(b.dataset.down); [ids[i + 1], ids[i]] = [ids[i], ids[i + 1]]; put({ order: ids }, "Order saved"); });
+  if ($("#ai-rotate", root)) $("#ai-rotate", root).onchange = (e) => put({ rotate: e.target.checked }, e.target.checked ? "The keys take turns" : "The first key first, the others as backups");
   $$("[data-on]", root).forEach((c) => c.onchange = () => put({ off: { [c.dataset.on]: !c.checked } }, c.checked ? "Turned on" : "Turned off: it's skipped"));
   $$("[data-model]", root).forEach((inp) => inp.onchange = () => put({ models: { [inp.dataset.model]: inp.value.trim() } }, "Model saved"));
   $$("[data-test]", root).forEach((b) => b.onclick = () => busy(b, async () => {

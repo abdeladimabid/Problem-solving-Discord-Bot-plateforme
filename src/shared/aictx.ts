@@ -20,6 +20,7 @@ export interface ClassAi {
   providers: AiProvider[];
   workers?: boolean;   // Cloudflare's free AI as the last backup (default: on)
   server?: boolean;    // may use the ClassBot's own key (Cloudflare secret): default only when the ClassBot has one class
+  rotate?: boolean;    // several keys of the same provider take turns (default: on)
 }
 
 const CACHE_MS = 30_000;

@@ -3732,6 +3732,20 @@ section("AI keys: a Gemini model overloaded (503): the reason shown, another mod
   if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
 }
 
+section("AI keys: keys of the same provider take turns; a key at its per-minute limit rests");
+{
+  const { rotateSteps } = await import("../src/shared/aikeys.ts");
+  const st = (id: string, type: string) => ({ id, type, key: id, model: "m", base: "", label: id, source: "class" }) as any;
+  const list = [st("g1", "groq"), st("g2", "groq"), st("ge", "gemini"), st("g3", "groq")];
+  const a = rotateSteps(list, "rotT").map((x: any) => x.id).join(), b = rotateSteps(list, "rotT").map((x: any) => x.id).join(), c = rotateSteps(list, "rotT").map((x: any) => x.id).join();
+  check(a === "g1,g2,g3,ge" && b === "g2,g3,g1,ge" && c === "g3,g1,g2,ge", "each call starts with the next Groq key; Gemini stays the backup after them");
+  const one = rotateSteps([st("x1", "groq"), st("y1", "gemini")], "rotT2").map((x: any) => x.id).join();
+  check(one === "x1,y1", "one key per provider: the teacher's order");
+  const put = await api("PUT", "/api/settings/ai", { g: G, rotate: false });
+  check(put.status === 200 && put.data.rotate === false, "the teacher can turn it off");
+  await api("PUT", "/api/settings/ai", { g: G, rotate: true });
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
