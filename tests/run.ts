@@ -3655,6 +3655,28 @@ section("assessments: graded by objectives, in lots that resume after an AI fail
   check(l2.data.batch.graded === 1 && l2.data.batch.left === 0 && rows().every((r: any) => r.status === "graded"), "…the next run continues with the one left (not from the start)");
   check(gq.score === 50 && gq.verdict === "partial" && gq.parts?.length === 3, "the score is the sum of the objectives reached (40 + half of 20), not 0 for a missing part");
   check((await api("POST", `/api/assessments/${aid}/grade`, { g: G })).data.batch.graded === 0, "nothing left to grade: nothing is graded again");
+  {
+    // a first grade that says "nothing done" while the selector is right there: checked again, objective by objective
+    const mk2 = await api("POST", "/api/assessments", { g: G, title: "Recheck", questions: [{ type: "code", lang: "css", prompt: "Mets les <p> en rouge.", expected: "p{color:red;}", points: 1 }], settings: { minutes: 0 } });
+    const aid2 = mk2.data.assessment.id;
+    await api("POST", `/api/assessments/${aid2}/invite`, { g: G, students: [U.bob.id, U.carol.id], send: false });
+    const links2 = (await api("GET", `/api/assessments/${aid2}/links?g=${G}`)).data.links;
+    for (const [who, sid, txt] of [[U.bob.id, "sessionRCHKBBBBBBBBBBBB1", "/* MEHDI-TEST */\np{\ncouleur = rouge ;\n}"], [U.carol.id, "sessionRCHKCCCCCCCCCCCC1", "/* UNSURE-TEST */\np{\ncouleur = rouge ;\n}"]]) {
+      const tok = links2[who].split("/quiz/")[1];
+      const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return r.json() as any; };
+      const st = await quiz("start", { sid });
+      await quiz("answer", { sid, qid: st.paper[0].id, answer: txt });
+      await quiz("submit", { sid });
+    }
+    await api("POST", `/api/assessments/${aid2}/grade`, { g: G, lot: 5 });
+    const r2 = q("SELECT * FROM assessment_takers WHERE assessment_id = ? ORDER BY id", aid2);
+    const gb = Object.values(JSON.parse(r2[0].grades))[0] as any, gc = Object.values(JSON.parse(r2[1].grades))[0] as any;
+    check(r2[0].status === "graded" && gb.parts.find((x: any) => x.goal === "sélecteur p").got === "yes" && gb.score === 38 && gb.verdict === "partial", "the AI said the selector p was missing while it's written: checked again, the selector counts (no wrong 0)");
+    check(r2[1].status === "submitted" && gc.pending && /grade it yourself/.test(gc.wrong), "still unsure after the check: the question is left to the teacher, not given a 0");
+    const asc = await import("../src/shared/assess.ts");
+    check(asc.seenInAnswer("balise <form> avec action", '<form action="#">') && asc.seenInAnswer("sélecteur div", "div{ width:200px }") && !asc.seenInAnswer("balise <head>", "<html><body>"), "a tag or a selector the student wrote is seen in the answer");
+    run1("DELETE FROM ai_usage");
+  }
   // Carol's debrief of the linked brief is finalized: her grade doesn't move anymore
   run1(`INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Obj brief', 'assigned', '{}', ?)`, G, clock.now());
   const bid = q1("SELECT id FROM briefs WHERE title = 'Obj brief'").id;
