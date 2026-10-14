@@ -423,6 +423,7 @@ function fakeAI() {
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
       if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {
         const ids = [...user.matchAll(/### Question (\w+)/g)].map((m) => m[1]);
+        if (user.includes("OBJ-TEST")) return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: "wrong", score: 0, objectifs: [{ objectif: "une balise <a>", poids: 40, atteint: "oui" }, { objectif: "target=_blank", poids: 40, atteint: "non" }, { objectif: "syntaxe correcte", poids: 20, atteint: "partiel" }], commentaire: "Le lien est là, il manque target." })), bilan: "Bien." }) };
         return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {

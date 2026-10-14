@@ -17,7 +17,7 @@ import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_disco
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
-import { AssessError, generateQuestions, gradeTaker, invite, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, invite, needsGrading, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { aiStatus } from "../shared/aikeys.ts";
@@ -300,6 +300,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok(await studentRepos(env, g, b, who, members));
     }
     if (act === "analyze") {
+      if ((await getReview(env, id, who))?.status === "final") bad("This debrief is finalized: reopen it first to analyze the repo again.");
       if (!b.grid) { const grid = await makeGrid(env, b.data); await run(env, "UPDATE briefs SET grid = ? WHERE id = ?", JSON.stringify(grid), id); b.grid = grid as any; }
       let r;
       if (who.startsWith("s:")) {
@@ -603,9 +604,30 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "unlock") { await letBackIn(env, g, Number(body.taker), Number(body.minutes) || 0); return ok(await assessView(env, g, id)); }
     if (act === "grade" && method === "PUT") { await setGrade(env, g, Number(body.taker), String(body.qid), body); return ok(await assessView(env, g, id)); }
     if (act === "grade" && method === "POST") {
-      const takers = body.taker ? [Number(body.taker)] : (await all<{ id: number }>(env, "SELECT id FROM assessment_takers WHERE assessment_id = ? AND status IN ('submitted', 'graded')", id)).map((x) => x.id);
-      for (const tk of takers.slice(0, 8)) await gradeTaker(env, tk, false);
-      return ok(await assessView(env, g, id));
+      // the students whose debrief of the linked brief is finalized: their grade doesn't move anymore
+      const locked = await finalizedIn(env, a.brief_id);
+      const rows = await all<{ id: number; discord_id: string; status: string; grades: string | null }>(env,
+        "SELECT id, discord_id, status, grades FROM assessment_takers WHERE assessment_id = ? AND status IN ('submitted', 'graded') ORDER BY id", id);
+      if (body.taker) {
+        const t = rows.find((x) => x.id === Number(body.taker));
+        if (!t) bad("This paper isn't handed in.");
+        if (locked.has(t!.discord_id)) bad("This student's debrief is finalized: reopen it before grading again.");
+        const r = await gradeTaker(env, t!.id, false);
+        if (!r.ok) bad(`The AI couldn't grade it: ${r.error}. Try again in a minute.`);
+        return ok(await assessView(env, g, id));
+      }
+      // in lots: the papers still to grade (or, asked, every paper again), never the finalized ones; it stops at the
+      // first AI failure (its limit reached): the next run continues from there
+      const after = Number(body.after) || 0;   // every paper again: in lots, after the last one done
+      const todo = rows.filter((t) => !locked.has(t.discord_id) && t.id > after && (body.all ? true : needsGrading(t)));
+      const lot = todo.slice(0, Math.max(1, Math.min(5, Number(body.lot) || 3)));
+      let graded = 0, error = "";
+      for (const t of lot) {
+        const r = await gradeTaker(env, t.id, false);
+        if (!r.ok) { error = r.error || "The AI didn't answer"; break; }
+        graded++;
+      }
+      return ok({ ...(await assessView(env, g, id)), batch: { graded, left: todo.length - graded, error, last: graded ? lot[graded - 1].id : after, skipped: rows.filter((t) => locked.has(t.discord_id)).length } });
     }
     if (act === "close") { await run(env, "UPDATE assessments SET status = 'closed' WHERE id = ?", id); return ok(await assessView(env, g, id)); }
     if (act === "reopen") { await run(env, "UPDATE assessments SET status = 'open', closes_at = MAX(COALESCE(closes_at, 0), ?) WHERE id = ?", now() + 86400, id); return ok(await assessView(env, g, id)); }
@@ -617,6 +639,21 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
 }
 
 // ------------------------------------------------------------ views
+/** The students whose debrief of this brief is finalized (alone, or in a finalized squad). */
+async function finalizedIn(env: Env, briefId: number | null): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (!briefId) return out;
+  const rows = await all<{ who: string }>(env, "SELECT who FROM brief_reviews WHERE brief_id = ? AND status = 'final'", briefId).catch(() => []);
+  if (!rows.length) return out;
+  const b = await one<{ squads: string | null }>(env, "SELECT squads FROM briefs WHERE id = ?", briefId);
+  const squads = cleanSquads(b?.squads || "[]");
+  for (const r of rows) {
+    if (r.who.startsWith("u:")) out.add(r.who.slice(2));
+    else for (const m of squads.find((x) => `s:${x.id}` === r.who)?.members ?? []) out.add(String(m));
+  }
+  return out;
+}
+
 async function briefView(env: Env, g: GuildRow, id: number) {
   const b = await getBrief(env, g, id);
   if (!b) throw new ApiError(404, "This brief doesn't exist anymore.");

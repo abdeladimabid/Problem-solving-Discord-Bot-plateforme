@@ -3596,6 +3596,47 @@ section("AI keys: an OpenRouter model that isn't free anymore is replaced by one
   if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
 }
 
+section("assessments: graded by objectives, in lots that resume after an AI failure, finalized debriefs left alone");
+{
+  const qs = [{ type: "explain", prompt: "Ajoute un lien qui s'ouvre dans un nouvel onglet.", expected: "<a href target=_blank>", points: 1 }];
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Objectifs", questions: qs, settings: { minutes: 0 } });
+  const aid = mk.data.assessment.id;
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id, U.carol.id], send: false });
+  const links = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links;
+  ai.mode = "broken";
+  for (const [who, sid] of [[U.bob.id, "sessionOBJBBBBBBBBBBBBB1"], [U.carol.id, "sessionOBJCCCCCCCCCCCCC1"]]) {
+    const tok = links[who].split("/quiz/")[1];
+    const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return r.json() as any; };
+    const st = await quiz("start", { sid });
+    await quiz("answer", { sid, qid: st.paper[0].id, answer: "OBJ-TEST <a href=\"https://example.com\">Visiter le site</a>" });
+    await quiz("submit", { sid });
+  }
+  const rows = () => q("SELECT * FROM assessment_takers WHERE assessment_id = ? ORDER BY id", aid);
+  check(rows().every((r: any) => r.status === "submitted" && r.score == null), "the AI didn't answer: the papers stay to grade, nobody gets a 0");
+  const f1 = await api("POST", `/api/assessments/${aid}/grade`, { g: G, lot: 3 });
+  check(f1.status === 200 && f1.data.batch.graded === 0 && /./.test(f1.data.batch.error) && rows().every((r: any) => r.status === "submitted"), "Grade with AI while the AI is down: it stops at once and says why");
+  ai.mode = "good";
+  const l1 = await api("POST", `/api/assessments/${aid}/grade`, { g: G, lot: 1 });
+  check(l1.data.batch.graded === 1 && l1.data.batch.left === 1, "in lots: one paper graded, one left");
+  const l2 = await api("POST", `/api/assessments/${aid}/grade`, { g: G, lot: 1 });
+  const g1 = JSON.parse(rows()[0].grades);
+  const gq = Object.values(g1)[0] as any;
+  check(l2.data.batch.graded === 1 && l2.data.batch.left === 0 && rows().every((r: any) => r.status === "graded"), "…the next run continues with the one left (not from the start)");
+  check(gq.score === 50 && gq.verdict === "partial" && gq.parts?.length === 3, "the score is the sum of the objectives reached (40 + half of 20), not 0 for a missing part");
+  check((await api("POST", `/api/assessments/${aid}/grade`, { g: G })).data.batch.graded === 0, "nothing left to grade: nothing is graded again");
+  // Carol's debrief of the linked brief is finalized: her grade doesn't move anymore
+  run1(`INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Obj brief', 'assigned', '{}', ?)`, G, clock.now());
+  const bid = q1("SELECT id FROM briefs WHERE title = 'Obj brief'").id;
+  await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: bid });
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${U.carol.id}`, clock.now());
+  const carolRow = rows().find((r: any) => r.discord_id === U.carol.id);
+  const again = await api("POST", `/api/assessments/${aid}/grade`, { g: G, all: true, lot: 5 });
+  check(again.data.batch.graded === 1 && again.data.batch.skipped === 1, "every paper again: the finalized student is left as she is");
+  check((await api("POST", `/api/assessments/${aid}/grade`, { g: G, taker: carolRow.id })).status === 400, "…and can't be graded again alone either");
+  check((await api("POST", `/api/briefs/${bid}/review/analyze`, { g: G, who: `u:${U.carol.id}` })).status === 400, "a finalized debrief isn't analyzed again");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id = ?", bid);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
