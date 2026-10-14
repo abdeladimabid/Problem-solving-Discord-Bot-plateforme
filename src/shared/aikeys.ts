@@ -71,11 +71,34 @@ function serverSteps(env: Env): Step[] {
 export const stepOf = (p: AiProvider): Step => ({ id: p.id, type: p.type, key: p.key, model: p.model || PRESETS[p.type]?.models[0] || "",
   base: (p.type === "custom" ? p.base || "" : PRESETS[p.type]?.base || "").replace(/\/$/, ""), label: `${PRESETS[p.type]?.label || p.type}${p.model ? ` · ${p.model}` : ""}`, source: "class" });
 
+// Several keys of the same provider take turns (round robin): each call starts with the next key, so the per-minute
+// limits of all of them add up (keys of different accounts). A key that just hit its per-minute limit waits at the end
+// of its turn until its cooldown is over. The providers keep the teacher's order (the others stay backups).
+const turn = new Map<string, number>();
+const cooling = new Map<string, number>();   // key id → ms epoch until which it's resting (per-minute limit)
+export function rotateSteps(list: Step[], gid: string, now = Date.now()): Step[] {
+  const groups = new Map<string, Step[]>();
+  for (const s of list) { if (!groups.has(s.type)) groups.set(s.type, []); groups.get(s.type)!.push(s); }
+  const out: Step[] = [], done = new Set<string>();
+  for (const s of list) {
+    if (done.has(s.type)) continue;
+    done.add(s.type);
+    const g = groups.get(s.type)!;
+    if (g.length < 2) { out.push(...g); continue; }
+    const k = `${gid}|${s.type}`, i = (turn.get(k) ?? 0) % g.length;
+    turn.set(k, i + 1);
+    const rot = [...g.slice(i), ...g.slice(0, i)];
+    const ready = rot.filter((x) => (cooling.get(x.id) ?? 0) <= now), resting = rot.filter((x) => (cooling.get(x.id) ?? 0) > now);
+    out.push(...ready, ...resting);
+  }
+  return out;
+}
 /** The keyed AIs to try, in order, for the class of this call (Cloudflare's AI is separate: see workersAllowed). */
 export async function keyedSteps(env: Env): Promise<Step[]> {
   const gid = classOf(env);
   const cfg = gid ? await classAi(env, gid) : null;
-  const mine = (cfg?.providers ?? []).filter((p) => !p.off && (p.key || p.type === "custom")).map(stepOf);
+  let mine = (cfg?.providers ?? []).filter((p) => !p.off && (p.key || p.type === "custom")).map(stepOf);
+  if (gid && cfg?.rotate !== false) mine = rotateSteps(mine, gid);
   return [...mine, ...((await serverAllowed(env, cfg)) ? serverSteps(env) : [])];
 }
 export async function workersAllowed(env: Env): Promise<boolean> {
@@ -213,12 +236,16 @@ export async function keyedChat(env: Env, messages: Msg[], o: ChatOpts): Promise
       } catch (e) {
         err = String((e as Error)?.message ?? e);
         if (e instanceof AiCallError && (e.status === 401 || e.status === 403) && !modelProblem(e)) break;   // a refused key: the other models won't help
+        // its per-minute limit, and another key of the same provider is there: go to that key instead of this key's other models
+        if (perMinuteWait(err) && steps.filter((x) => x.type === s.type).length > 1) break;
         // OpenRouter: this model isn't free anymore (or is gone): try the ones free right now
         if (!swapped && orGone(s, e)) { swapped = true; models.push(...(await openRouterFree(true)).filter((m) => !models.includes(m)).slice(0, 3)); }
       }
     }
     errors.push(`${s.label}: ${err}`);
     await note(env, s, err);
+    const w = perMinuteWait(err);
+    if (w) cooling.set(s.id, Date.now() + w * 1000);   // this key rests a moment: the next calls start with the others
   }
   throw new AiCallError(errors.join(" · ").slice(0, 400));
 }
@@ -273,7 +300,7 @@ export async function classAiView(env: Env, gid: string) {
   return {
     providers: cfg.providers.map((p) => ({ id: p.id, type: p.type, label: PRESETS[p.type]?.label || p.type, model: p.model, base: p.type === "custom" ? p.base || "" : "",
       masked: mask(p.key), off: !!p.off, err: stats[p.id]?.err ?? null, errAt: stats[p.id]?.errAt ?? null, okAt: stats[p.id]?.okAt ?? null })),
-    workers: cfg.workers !== false, hasWorkers: !!env.AI,
+    workers: cfg.workers !== false, hasWorkers: !!env.AI, rotate: cfg.rotate !== false,
     server: server.length ? { label: server.map((s) => s.label).join(" + "), masked: mask(server[0].key), allowed: await serverAllowed(env, cfg), choice: cfg.server ?? null } : null,
     usage: { today: used?.count ?? 0, limit: Number(env.AI_DAILY_LIMIT || 80), own: cfg.providers.some((p) => !p.off) },
     presets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [k, { label: v.label, models: v.models, keyUrl: v.keyUrl, keyHint: v.keyHint, free: v.free, custom: !!v.custom }])),
@@ -325,7 +352,7 @@ export async function addProvider(env: Env, gid: string, b: { type?: string; key
   return { view: await classAiView(env, gid), warn: t.warn || null };
 }
 /** Order, switches, model of a provider. */
-export async function updateClassAi(env: Env, gid: string, b: { order?: string[]; workers?: boolean; server?: boolean | null; off?: Record<string, boolean>; models?: Record<string, string> }) {
+export async function updateClassAi(env: Env, gid: string, b: { order?: string[]; workers?: boolean; rotate?: boolean; server?: boolean | null; off?: Record<string, boolean>; models?: Record<string, string> }) {
   const cfg = await classAi(env, gid, true);
   if (Array.isArray(b.order)) {
     const by = new Map(cfg.providers.map((p) => [p.id, p]));
@@ -333,6 +360,7 @@ export async function updateClassAi(env: Env, gid: string, b: { order?: string[]
     cfg.providers = [...sorted, ...cfg.providers.filter((p) => !sorted.includes(p))];
   }
   if (typeof b.workers === "boolean") cfg.workers = b.workers;
+  if (typeof b.rotate === "boolean") cfg.rotate = b.rotate;
   if (b.server === null) delete cfg.server; else if (typeof b.server === "boolean") cfg.server = b.server;
   for (const p of cfg.providers) {
     if (b.off && p.id in b.off) p.off = !!b.off[p.id] || undefined;
