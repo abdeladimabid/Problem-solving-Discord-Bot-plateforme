@@ -930,7 +930,8 @@ function assessPanelHtml(assess) {
     <div class="db-rows">${list.map((x) => {
       const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
       const lv = x.score != null ? SC_LVL(x.score) : "";
-      return `<div class="db-row"><span class="db-i">📝</span><div><a href="#/assessment/${x.id}"><b>${esc(x.title)}</b></a>
+      const who = String(DB?.who || "").startsWith("u:") ? DB.who.slice(2) : "";
+      return `<div class="db-row"><span class="db-i">📝</span><div><a href="#/assessment/${x.id}${who ? `~${who}` : ""}" title="${who ? "Open their paper: answers, grades and comments" : "Open the assessment"}"><b>${esc(x.title)}</b></a>
         ${x.score != null ? ` <b style="color:${masteryInk(x.score)}">${x.score}%</b> <span class="lvl"><i class="pg-dot pgc-${lv}"></i>${SC_LVL_NAME[lv]}</span>${x.of > 1 ? ` <span class="small muted">${x.done}/${x.of} graded</span>` : ""}`
           : ` <span class="lvl warn">${x.of ? "Not graded yet" : "Not taken"}</span>`}
         ${ok.length || ko.length ? `<div style="margin-top:6px">${ok.map(([k]) => `<span class="lvl good">✓ ${esc(k)}</span>`).join(" ")} ${ko.map(([k, v]) => `<span class="lvl bad" title="${esc(v.note || "")}">✗ ${esc(k)}</span>`).join(" ")}</div>` : ""}
@@ -1417,10 +1418,16 @@ async function generateQuestionsDialog(onDone, preset = null) {
 }
 
 let AS = null;
-async function viewAssessment(id, keepTab = null) {
+async function viewAssessment(arg, keepTab = null) {
+  // #/assessment/12~<student id>: straight to that student's paper (from a debrief)
+  const [id, who] = String(arg).split("~");
   const [A, BR] = await Promise.all([api(`/assessments/${id}`), api("/briefs").catch(() => ({ items: [] })), loadSkillDefs(), loadRef()]);
-  AS = { briefs: BR.items || [], A, tab: keepTab || (AS?.A?.assessment.id === A.assessment.id ? AS.tab : A.takers.length ? "live" : "questions"), dirty: false, links: AS?.links };
+  const paper = who ? A.takers.find((t) => String(t.discord_id) === who) : null;
+  const handed = paper && ["submitted", "graded"].includes(paper.status);
+  AS = { briefs: BR.items || [], A, tab: keepTab || (handed ? "results" : who && A.takers.length ? "live" : AS?.A?.assessment.id === A.assessment.id ? AS.tab : A.takers.length ? "live" : "questions"), dirty: false, links: AS?.links };
   renderAssessment();
+  if (handed) paperDialog(paper);
+  else if (who) toast(paper ? `${paper.name || "This student"} hasn't handed it in yet` : "This student wasn't invited to this assessment", true);
 }
 function renderAssessment() {
   const { A } = AS, a = A.assessment;
@@ -2160,10 +2167,10 @@ function learningPanel(d, sid, part = "comps") {
       ${L.assessments.length ? L.assessments.map((a) => `<section class="panel asx">
         <div class="asx-head">
           <div class="asx-ring" style="--p:${a.score ?? 0};--c:${a.score != null ? masteryInk(a.score) : "var(--line-strong)"}"><b>${a.score != null ? a.score + "%" : "—"}</b></div>
-          <div class="asx-title"><a href="#/assessment/${a.id}"><b>${esc(a.title)}</b></a>
+          <div class="asx-title"><a href="#/assessment/${a.id}~${sid}"><b>${esc(a.title)}</b></a>
             <div class="small muted">${status(a.status === "locked" ? "failed" : ["graded", "submitted"].includes(a.status) ? "solved" : "pending", STATUS[a.status] || a.status)}
               ${a.submitted_at ? ` · handed in ${fmtDate(a.submitted_at)}` : ""}${a.score != null ? ` · ${a.score >= a.passAt ? "passed" : `below ${a.passAt}%`}` : ""}${a.brief ? ` · brief <a href="#/brief/${a.brief.id}">${esc(a.brief.title)}</a>` : ""}</div></div>
-          <a class="btn small" href="#/assessment/${a.id}">Open →</a>
+          <a class="btn small" href="#/assessment/${a.id}~${sid}" title="Their paper: answers, grades and comments">Open their paper →</a>
         </div>
         ${a.comps.length ? `<div class="asx-comps">${a.comps.map((c) => `<span class="tag comp ${c.ok ? "ok" : "ko"}" title="${esc(c.note || "")}">${c.ok ? "✓" : "✗"} ${esc(cText(c.code + (c.level ? "N" + c.level : "")))} <span class="muted">${esc(nameOf(c.code).slice(0, 40))}</span></span>`).join("")}</div>` : ""}
         ${a.questions.some((q) => q.verdict) ? `<div class="asx-qs">${a.questions.map((q) => { const v = VD[q.verdict] || ["", "·"];
