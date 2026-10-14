@@ -26,7 +26,7 @@ import { challengeMistakes, classHeatmap, difficultyCheck, practiceSet, teacherS
 import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
-import { PlanError, aiPlanNote, planView, savePlan } from "../shared/actionplan.ts";
+import { PlanError, aiPlanNote, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -264,7 +264,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/points/bulk" && method === "POST") return ok(await bulkPoints(env, await guild(), body, ctx));
 
     // ----------------------------------------------------------- students
-    if (path === "/students") return ok(await students(env, await guild()));
+    if (path === "/students") {
+      const g = await guild();
+      const [list, lv] = await Promise.all([students(env, g), niveaux(env, g).catch(() => ({} as Record<string, any>))]);
+      return ok(list.map((r) => ({ ...r, niveau: lv[r.discord_id] ?? null })));
+    }
     let m = path.match(/^\/students\/(\d+)$/);
     if (m && method === "GET") return ok(await studentDetail(env, await guild(), m[1]));
     // the teacher's name for the student (kept: the Discord nickname no longer replaces it); empty = the Discord name again

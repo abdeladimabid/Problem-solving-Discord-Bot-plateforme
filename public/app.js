@@ -489,29 +489,46 @@ async function loadStudents(force = false) {
   return S.students;
 }
 
+// the niveau of a student (from their debriefs and sprints): Excellent … Critique
+const NIV = [["excellent", "Excellent"], ["bon", "Bon"], ["moyen", "Moyen"], ["faible", "Faible"], ["critique", "Critique"]];
+const NIV_RANK = { excellent: 5, bon: 4, moyen: 3, faible: 2, critique: 1 };
+const nivPill = (n) => (n ? `<span class="niv pgc-${esc(n.lv)}" title="${esc(`Last level: ${n.from}${n.history.length > 1 ? ` · before: ${n.history.slice(0, -1).map((l) => NIV.find((x) => x[0] === l)?.[1] || l).join(", ")}` : ""}`)}"><i></i>${esc(NIV.find((x) => x[0] === n.lv)?.[1] || n.lv)}${n.trend === "up" ? `<b class="up" aria-label="improving">↑</b>` : n.trend === "down" ? `<b class="down" aria-label="slipping">↓</b>` : ""}</span>`
+  : `<span class="niv none" title="No debrief or sprint level yet">—</span>`);
 async function viewStudents() {
-  const rows = await loadStudents(true);
+  const rows = (await loadStudents(true)).map((r) => ({ ...r, niv_rank: r.niveau ? NIV_RANK[r.niveau.lv] || 0 : 0 }));
   const teams = [...new Set(rows.map((r) => r.team).filter(Boolean))];
+  const count = Object.fromEntries(NIV.map(([v]) => [v, rows.filter((r) => r.niveau?.lv === v).length]));
+  const none = rows.filter((r) => !r.niveau).length, attn = rows.filter((r) => r.attention.length).length;
   view.innerHTML = `
     <div class="page-head"><div><h1>Students</h1><p class="sub">${rows.length} student${rows.length === 1 ? "" : "s"} · points for ${esc(S.guild?.season || "this season")}</p></div>
       <a class="btn" href="/api/export.csv?g=${encodeURIComponent(S.g)}" download>Export CSV</a></div>
+    <section class="panel niv-sum"><div class="niv-bar" aria-hidden="true">${NIV.map(([v]) => (count[v] ? `<span class="pgc-${v}" style="flex:${count[v]}"></span>` : "")).join("")}${none ? `<span class="nolv" style="flex:${none}"></span>` : ""}</div>
+      <div class="niv-keys">${NIV.map(([v, l]) => `<button class="niv-k" data-nf="niv:${v}"><i class="pgc-${v}"></i><b>${count[v]}</b> ${l}</button>`).join("")}
+        <button class="niv-k" data-nf="niv:none"><i class="nolv"></i><b>${none}</b> no level yet</button>
+        ${attn ? `<button class="niv-k attn" data-nf="attention"><span class="attn-dot"></span><b>${attn}</b> need attention</button>` : ""}</div>
+      <p class="muted small" style="margin:8px 0 0">Niveau: the level of their last debrief (B1, B2…), else of their last sprint. ↑ ↓ when it moves from the levels before.</p></section>
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search by name or HackerRank username" aria-label="Search students" style="flex:1;min-width:220px">
       <select id="filter" aria-label="Filter students">
-        <option value="">All students</option><option value="attention">Needs attention</option><option value="up">Improving</option>
-        <option value="down">Slipping</option><option value="inactive">Inactive</option>
-        ${teams.map((t) => `<option value="team:${esc(t)}">Team ${esc(t)}</option>`).join("")}
+        <option value="">All students</option><option value="attention">Needs attention</option>
+        <optgroup label="Niveau">${NIV.map(([v, l]) => `<option value="niv:${v}">${l}</option>`).join("")}<option value="niv:none">No level yet</option></optgroup>
+        <optgroup label="Activity"><option value="up">Improving</option><option value="down">Slipping</option><option value="inactive">Inactive</option></optgroup>
+        ${teams.length ? `<optgroup label="Team">${teams.map((t) => `<option value="team:${esc(t)}">Team ${esc(t)}</option>`).join("")}</optgroup>` : ""}
       </select>
     </div>
     <section class="panel" id="list"></section>`;
+  const keep = (r, f) => !f || (f === "attention" ? r.attention.length : f.startsWith("team:") ? r.team === f.slice(5) : f.startsWith("niv:") ? (f === "niv:none" ? !r.niveau : r.niveau?.lv === f.slice(4)) : r.trend === f);
   const draw = () => {
     const q = $("#q").value.toLowerCase(), f = $("#filter").value;
-    const shown = rows.filter((r) => (!q || `${r.name} ${r.hr_display}`.toLowerCase().includes(q))
-      && (!f || (f === "attention" ? r.attention.length : f.startsWith("team:") ? r.team === f.slice(5) : r.trend === f)));
+    const shown = rows.filter((r) => (!q || `${r.name} ${r.hr_display}`.toLowerCase().includes(q)) && keep(r, f));
+    $$(".niv-k").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.nf === f)));
     $("#list").innerHTML = table([
-      { label: "Student", sort: "name", html: (r) => `${r.attention.length ? `<span class="mark" title="${esc(r.attention.join(", "))}">${esc(r.name || r.discord_id)}</span>` : esc(r.name || r.discord_id)}<div class="muted small">${r.hr_display ? `${esc(r.hr_display)}${r.hr_verified ? " ✓" : " (unverified)"}` : "not linked"}</div>` },
+      { label: "Student", sort: "name", html: (r) => `<div class="stu-cell">${avatar(r.name, r.discord_id)}<div><b>${esc(r.name || r.discord_id)}</b>
+          <div class="muted small">${r.hr_display ? `${esc(r.hr_display)}${r.hr_verified ? " ✓" : " (unverified)"}` : "not linked"}</div>
+          ${r.attention.length ? `<span class="attn" title="Needs attention: ${esc(r.attention.join(", "))}"><span class="attn-dot"></span>${esc(r.attention[0])}${r.attention.length > 1 ? ` +${r.attention.length - 1}` : ""}</span>` : ""}</div></div>` },
+      { label: "Niveau", sort: "niv_rank", html: (r) => nivPill(r.niveau) },
       { label: "Team", sort: "team", html: (r) => esc(r.team || "—") },
-      { label: "Level", sort: "level", num: true, html: (r) => `${r.level}` },
+      { label: "XP lvl", sort: "level", num: true, html: (r) => `<span title="Game level, from the points">${r.level}</span>` },
       { label: "Season pts", sort: "season_pts", num: true, html: (r) => `${r.season_pts}` },
       { label: "Solved", sort: "solved", num: true, html: (r) => `${r.solved}` },
       { label: "Accuracy", sort: "accuracy", num: true, html: (r) => pct(r.accuracy) },
@@ -523,6 +540,7 @@ async function viewStudents() {
   };
   $("#q").oninput = draw;
   $("#filter").onchange = draw;
+  $$(".niv-k").forEach((b) => b.onclick = () => { $("#filter").value = $("#filter").value === b.dataset.nf ? "" : b.dataset.nf; draw(); });
   draw();
 }
 
@@ -1178,32 +1196,32 @@ function apCard(r) {
   const tr = AP_TREND[r.trend] || AP_TREND.unknown, en = AP_ENG[r.engagement.state] || AP_ENG.none, e = r.engagement;
   const seg = (n, c, t) => (n ? `<span style="flex:${n};background:${c}" title="${n} ${t}"></span>` : "");
   const hist = [...r.sprints.map((x) => ({ k: `S${x.sprint}`, lv: x.lv, t: `Sprint ${x.sprint}` })), ...r.debriefs.map((d) => ({ k: `B${d.b}`, lv: d.lv, t: d.title, href: `#/debrief/${d.bid}~u:${r.discord_id}` }))];
-  return `<article class="ap-card sev-${r.severity}" data-sid="${esc(r.discord_id)}">
-    <header class="ap-head">${avatar(r.name, r.discord_id)}<div class="ap-who"><a href="#/student/${esc(r.discord_id)}"><b>${esc(r.name)}</b></a>
-      <span class="muted small">${r.team ? `Team ${esc(r.team)} · ` : ""}active ${esc(fmtAgo(r.lastActive))}</span></div>
-      ${r.current ? `<span class="ap-lv pgc-${esc(r.current)}">${esc(AP_LV[r.current] || r.current)}</span>` : `<span class="ap-lv none">No level yet</span>`}</header>
-    <div class="ap-ind">
-      <div class="ap-i"><span class="ap-il">Progress</span><span class="ap-tr ${tr[0]}"><b>${tr[1]}</b> ${tr[2]}</span></div>
-      <div class="ap-i"><span class="ap-il">Engagement</span><span class="ap-tr ${en[0]}">${en[1]}${e.pct != null ? ` · ${e.pct}%` : ""}</span></div>
-      ${r.avgScore != null ? `<div class="ap-i"><span class="ap-il">Assessments</span><span class="ap-tr ${r.avgScore >= 60 ? "up" : r.avgScore >= 45 ? "warn" : "down"}">${r.avgScore}% avg</span></div>` : ""}
-    </div>
-    ${hist.length ? `<div class="ap-hist" aria-label="Levels over time">${hist.map((h) => `<${h.href ? `a href="${h.href}"` : "span"} class="ap-h pgc-${esc(h.lv)}" data-tip="${esc(h.k)} · ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}" aria-label="${esc(h.k)} ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}">${esc(h.k)}</${h.href ? "a" : "span"}>`).join("")}</div>` : ""}
-    <div class="ap-work"><div class="ap-bar">${e.total ? seg(e.done, "var(--up)", "done") + seg(e.late, "var(--warn)", "late") + seg(e.failed + e.missed, "var(--down)", "not solved / missed") + seg(e.open, "var(--line-strong)", "open") : ""}</div>
-      <span class="small muted">${e.total ? `${e.done + e.late}/${e.total} done${e.missed ? ` · ${e.missed} missed` : ""}${e.overdue ? ` · ${e.overdue} overdue` : ""}${e.open - e.overdue > 0 ? ` · ${e.open - e.overdue} open` : ""}` : "Nothing given yet"}</span></div>
+  const id = esc(r.discord_id);
+  // one metric: a label, a value (coloured), a small line under it
+  const metric = (label, value, cls, sub) => `<div class="ap-m"><span class="ap-ml">${label}</span><b class="ap-mv ${cls}">${value}</b><span class="ap-ms">${sub}</span></div>`;
+  const progress = r.trend === "unknown" ? metric("Progress", "—", "none", "not enough levels yet") : metric("Progress", `${tr[1]} ${tr[2]}`, tr[0], r.debriefs.length >= 2 ? "from the last debriefs" : "from the last 2 weeks");
+  const engage = e.total ? metric("Engagement", e.pct != null ? `${e.pct}%` : "…", en[0], en[1].toLowerCase()) : metric("Engagement", "—", "none", "no work given yet");
+  const work = metric("Work", e.total ? `${e.done + e.late}/${e.total}` : "0", e.missed || e.overdue ? "down" : e.total ? "" : "none",
+    e.total ? [e.missed ? `${e.missed} missed` : "", e.overdue ? `${e.overdue} overdue` : "", e.open - e.overdue > 0 ? `${e.open - e.overdue} open` : ""].filter(Boolean).join(" · ") || "all done" : "nothing given");
+  return `<article class="ap-card sev-${r.severity}" data-sid="${id}">
+    <header class="ap-head">${avatar(r.name, r.discord_id)}<div class="ap-who"><a href="#/student/${id}"><b>${esc(r.name)}</b></a>
+      <span class="ap-sub">${r.team ? `Team ${esc(r.team)} · ` : ""}active ${esc(fmtAgo(r.lastActive))}</span></div>
+      ${r.current ? `<span class="ap-lv pgc-${esc(r.current)}">${esc(AP_LV[r.current] || r.current)}</span>` : ""}
+      <button class="ap-icon" data-ap-out="${id}" title="Take out of the plan" aria-label="Take ${esc(r.name)} out of the plan"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></header>
     ${r.why.length ? `<div class="ap-why">${r.why.slice(0, 4).map((w) => `<span>${esc(w)}</span>`).join("")}</div>` : ""}
-    <div class="ap-note ${r.note ? "" : "empty"}">${r.note ? `<p>${esc(r.note.text)}</p><span class="small muted">${r.note.by === "ai" ? "✨ Written by the AI" : "Your comment"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}</span>` : `<p class="muted small">No comment yet: write one, or let the AI sum up this student.</p>`}</div>
-    <footer class="ap-foot">
-      <button class="btn small primary" data-ap-give="${esc(r.discord_id)}">${icon("clipboard")}Give work</button>
-      <button class="btn small" data-ap-edit="${esc(r.discord_id)}">${r.note ? "Edit the comment" : "Write a comment"}</button>
-      <button class="btn small" data-ap-ai="${esc(r.discord_id)}">✨ ${r.note?.by === "ai" ? "Rewrite" : "AI comment"}</button>
-      <button class="btn small ghost ap-out" data-ap-out="${esc(r.discord_id)}" title="Take out of the plan">Out of the plan</button>
-    </footer></article>`;
+    <div class="ap-ms3">${progress}${engage}${work}</div>
+    ${e.total ? `<div class="ap-bar" aria-hidden="true">${seg(e.done, "var(--up)", "done") + seg(e.late, "var(--warn)", "late") + seg(e.failed + e.missed, "var(--down)", "not solved / missed") + seg(e.open, "var(--line-strong)", "open")}</div>` : ""}
+    ${hist.length ? `<div class="ap-hist"><span class="ap-ml">Levels</span>${hist.map((h) => `<${h.href ? `a href="${h.href}"` : "span"} class="ap-h pgc-${esc(h.lv)}" data-tip="${esc(h.k)} · ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}" aria-label="${esc(h.k)} ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}">${esc(h.k)}</${h.href ? "a" : "span"}>`).join("")}</div>` : ""}
+    ${r.note ? `<blockquote class="ap-note"><p>${esc(r.note.text)}</p><footer>${r.note.by === "ai" ? "✨ AI" : "You"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}
+        <button class="ap-link" data-ap-edit="${id}">Edit</button><button class="ap-link" data-ap-ai="${id}">${r.note.by === "ai" ? "Rewrite" : "✨ AI version"}</button></footer></blockquote>`
+      : `<div class="ap-note empty"><button class="ap-link" data-ap-edit="${id}">${icon("plus")}Write a comment</button><span class="muted">or</span><button class="ap-link" data-ap-ai="${id}">✨ let the AI sum up</button></div>`}
+    <footer class="ap-foot"><button class="btn small primary" data-ap-give="${id}">${icon("clipboard")}Give work</button><a class="btn small" href="#/student/${id}">Profile</a></footer></article>`;
 }
 async function viewAssignments() {
   const [P, rows] = await Promise.all([api("/plan"), api("/assignments")]);
   const S2 = P.summary;
-  const FILTERS = [["all", "All", S2.total], ["critique", "Critique", S2.critique], ["faible", "Faible", S2.faible], ["down", "Slipping", S2.slipping], ["not", "Not engaged", S2.notEngaged], ["none", "No work yet", S2.noWork]];
-  const pass = (r) => AP.filter === "all" || (AP.filter === "critique" || AP.filter === "faible" ? r.current === AP.filter : AP.filter === "down" ? r.trend === "down" : AP.filter === "not" ? r.engagement.state === "not" : r.engagement.state === "none");
+  const FILTERS = [["all", "In the plan", S2.total, ""], ["critique", "Critique", S2.critique, "down"], ["faible", "Faible", S2.faible, "warn"], ["down", "Slipping", S2.slipping, "down"], ["up", "Improving", S2.improving, "up"], ["not", "Not engaged", S2.notEngaged, "down"], ["none", "No work yet", S2.noWork, "flat"]];
+  const pass = (r) => AP.filter === "all" || (AP.filter === "critique" || AP.filter === "faible" ? r.current === AP.filter : AP.filter === "down" || AP.filter === "up" ? r.trend === AP.filter : AP.filter === "not" ? r.engagement.state === "not" : r.engagement.state === "none");
   const shown = P.plan.filter(pass);
   const groups = new Map();
   for (const r of rows) {
@@ -1212,13 +1230,11 @@ async function viewAssignments() {
     groups.get(k).items.push(r);
   }
   const COLORS = { done: "var(--up)", late: "var(--warn)", failed: "var(--down)", missed: "var(--down)", open: "var(--line)" };
-  const stat = (n, l, cls = "") => `<div class="ap-stat ${cls}"><b>${n}</b><span>${l}</span></div>`;
   view.innerHTML = `
     <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students at a weak or critical level (or showing warning signs), whether they improve, whether they do the work you give them, and your comment on each one.</p></div>
       <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
-    <div class="ap-stats">${stat(S2.total, "in the plan")}${stat(S2.critique, "critique", "down")}${stat(S2.faible, "faible", "warn")}${stat(S2.improving, "improving", "up")}${stat(S2.slipping, "slipping", "down")}${stat(S2.engaged, "engaged", "up")}${stat(S2.notEngaged, "not engaged", "down")}</div>
-    <section class="panel"><div class="panel-head"><h2>Students who need help</h2>
-      <div class="ap-filters" role="group" aria-label="Filter">${FILTERS.map(([v, l, n]) => `<button class="chip" data-apf="${v}" aria-pressed="${AP.filter === v}">${l}${n ? ` · ${n}` : ""}</button>`).join("")}</div></div>
+    <div class="ap-stats" role="group" aria-label="Show">${FILTERS.map(([v, l, n, c]) => `<button class="ap-stat ${c} ${n ? "" : "zero"}" data-apf="${v}" aria-pressed="${AP.filter === v}"><b>${n}</b><span>${l}</span></button>`).join("")}</div>
+    <section class="panel ap-panel"><div class="panel-head"><h2>${AP.filter === "all" ? "Students who need help" : `${esc(FILTERS.find((f) => f[0] === AP.filter)[1])} <span class="muted">· ${shown.length}</span> <button class="ap-link" data-apf="all">show all</button>`}</h2></div>
       ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map(apCard).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
         : `<div class="empty-state"><p><b>Nobody needs help right now.</b></p><p class="muted">Students land here by themselves when a debrief or a sprint gives them Faible or Critique, an assessment is under 50 %, or they show warning signs (inactive, points dropping, missed work). You can also add a student by hand.</p></div>`}
       <p class="muted small" style="margin:12px 0 0">Progress compares the last levels (debriefs B1, B2… and sprints) with the ones before; with fewer than two levels, the points of the last two weeks. Engagement is the share of the work given that was done (late counts).</p>
