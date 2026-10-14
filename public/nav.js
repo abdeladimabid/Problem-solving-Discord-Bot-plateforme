@@ -3,7 +3,7 @@
 /* global $, $$ */
 const NAV_GROUPS = [
   { key: "class", icon: "🏫", label: "Class", items: ["#/students", "#/teams", "#/hands", "#/questions", "#/assignments"] },
-  { key: "projects", icon: "📄", label: "Projects", items: ["#/briefs", "#/github"] },
+  { key: "projects", icon: "📄", label: "Projects", items: ["#/briefs", "#/activities", "#/github"] },
   { key: "eval", icon: "🎓", label: "Evaluation", items: ["#/sprints", "#/progress", "#/assessments", "#/competencies", "#/integrity", "#/interviews"] },
   { key: "practice", icon: "🧩", label: "Practice", items: ["#/challenges", "#/daily", "#/path", "#/sessions"] },
   { key: "games", icon: "🎮", label: "Games & rewards", items: ["#/battles", "#/contests", "#/events", "#/points", "#/coins", "#/skills"] },
