@@ -207,6 +207,19 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.hostname === "api.anthropic.com") return Response.json({ content: [{ type: "text", text: "claude-answer" }] });
     return Response.json({ choices: [{ message: { content: "gemini-answer" } }] });
   }
+  if (url.hostname === "openrouter.ai") {
+    // the models list (public), and chat: only the models free today answer for free
+    if (url.pathname === "/api/v1/models") return Response.json({ data: [
+      { id: "paid/big-model", pricing: { prompt: "0.000001", completion: "0.000002" }, context_length: 100000 },
+      { id: "some/small-model:free", pricing: { prompt: "0", completion: "0" }, context_length: 8000 },
+      { id: "meta-llama/llama-3.3-70b-instruct:free", pricing: { prompt: "0", completion: "0" }, context_length: 65000 },
+    ] });
+    const auth = new Headers(init.headers || {}).get("authorization") || "";
+    aiFake.calls.push(`openrouter:${body?.model}`);
+    if (!auth.includes("sk-or-good")) return new Response(JSON.stringify({ error: { message: "No auth credentials found" } }), { status: 401 });
+    if (!["meta-llama/llama-3.3-70b-instruct:free", "some/small-model:free"].includes(body?.model)) return new Response(JSON.stringify({ error: { message: "This model is unavailable for free. The paid version is available now" } }), { status: 404 });
+    return Response.json({ choices: [{ message: { content: "ok" } }] });
+  }
   if (url.hostname === "api.groq.com") {
     const auth = new Headers(init.headers || {}).get("authorization") || "";
     if (!auth.includes("gsk_good")) return new Response(JSON.stringify({ error: { message: "Invalid API Key" } }), { status: 401 });

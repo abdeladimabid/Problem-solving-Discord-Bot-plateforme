@@ -86,6 +86,32 @@ export async function workersAllowed(env: Env): Promise<boolean> {
   return !gid || (await classAi(env, gid)).workers !== false;
 }
 
+// ------------------------------------------------------------ OpenRouter: its free models change often
+// A ":free" model can stop being free (OpenRouter then answers 404 "This model is unavailable for free"). ClassBot asks
+// OpenRouter which models are free right now and uses the best one it finds.
+const OR_PREFER = [/gpt-oss-120b/i, /llama-3\.3-70b/i, /deepseek.*(v3|chat|r1)/i, /qwen.*(235b|72b|coder)/i, /gemma-3-27b/i, /mistral-(small|medium)/i, /llama-4/i, /glm/i, /kimi/i];
+let orCache: { at: number; ids: string[] } | null = null;
+export async function openRouterFree(fresh = false): Promise<string[]> {
+  if (!fresh && orCache && Date.now() - orCache.at < 3 * 3600_000) return orCache.ids;
+  try {
+    const res = await withTimeout(fetch("https://openrouter.ai/api/v1/models"), 15000);
+    if (!res.ok) return orCache?.ids ?? [];
+    const j: any = await res.json();
+    const free = (Array.isArray(j?.data) ? j.data : []).filter((m: any) => {
+      const id = String(m?.id || "");
+      const zero = (v: unknown) => v != null && Number(v) === 0;
+      const textOut = !m?.architecture?.output_modalities || (m.architecture.output_modalities as string[]).includes("text");
+      return id && textOut && (id.endsWith(":free") || (zero(m?.pricing?.prompt) && zero(m?.pricing?.completion))) && !/router|auto$/i.test(id);
+    });
+    const rank = (m: any) => { const i = OR_PREFER.findIndex((rx) => rx.test(m.id)); return i < 0 ? OR_PREFER.length : i; };
+    free.sort((a: any, b: any) => rank(a) - rank(b) || (Number(b.context_length) || 0) - (Number(a.context_length) || 0));
+    orCache = { at: Date.now(), ids: free.map((m: any) => String(m.id)).slice(0, 25) };
+    return orCache.ids;
+  } catch { return orCache?.ids ?? []; }
+}
+/** OpenRouter says this model isn't there (or isn't free anymore). */
+const orGone = (s: { type: string }, e: unknown) => s.type === "openrouter" && e instanceof AiCallError && (e.status === 404 || /unavailable for free|not a valid model|no endpoints found/i.test(e.message));
+
 // ------------------------------------------------------------ calling one AI
 export class AiCallError extends Error { status: number; constructor(msg: string, status = 0) { super(msg); this.status = status; } }
 
@@ -149,15 +175,22 @@ export async function keyedChat(env: Env, messages: Msg[], o: ChatOpts): Promise
   const errors: string[] = [];
   for (const s of steps) {
     const models = s.type === "groq" ? [...new Set([s.model || PRESETS.groq.models[0], ...PRESETS.groq.models])] : [s.model];
-    let err = "";
-    for (const model of models) {
+    let err = "", swapped = false;
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
       try {
         const text = await callStep(s, messages, o, model);
-        if (text.trim()) { await note(env, s, null); return { text, model, provider: s.label }; }
+        if (text.trim()) {
+          await note(env, s, null);
+          if (model !== s.model && s.type === "openrouter") await keepModel(env, s.id, model);
+          return { text, model, provider: s.label };
+        }
         err = "empty answer";
       } catch (e) {
         err = String((e as Error)?.message ?? e);
         if (e instanceof AiCallError && (e.status === 401 || e.status === 403)) break;   // a refused key: the other models won't help
+        // OpenRouter: this model isn't free anymore (or is gone): try the ones free right now
+        if (!swapped && orGone(s, e)) { swapped = true; models.push(...(await openRouterFree(true)).filter((m) => !models.includes(m)).slice(0, 3)); }
       }
     }
     errors.push(`${s.label}: ${err}`);
@@ -167,7 +200,7 @@ export async function keyedChat(env: Env, messages: Msg[], o: ChatOpts): Promise
 }
 
 /** A tiny request to check a provider before saving it. */
-export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?: string; error?: string; model: string }> {
+export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?: string; error?: string; model: string; gone?: boolean }> {
   const s = stepOf(p);
   if (!s.base) return { ok: false, error: "Give the address of the API (it ends with /v1).", model: s.model };
   if (!s.model) return { ok: false, error: "Choose a model.", model: s.model };
@@ -179,7 +212,7 @@ export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?:
     const msg = String((e as Error)?.message ?? e);
     if (status === 429) return { ok: true, warn: `The key works, but its limit is reached right now: ${msg}`, model: s.model };
     if (msg === "timeout") return { ok: false, error: "It didn't answer within 25 seconds.", model: s.model };
-    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model };
+    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model, gone: orGone(s, e) };
   }
 }
 
@@ -191,6 +224,17 @@ async function save(env: Env, gid: string, cfg: ClassAi) {
   await env.DB.prepare("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at")
     .bind(`ai:${gid}`, JSON.stringify(cfg), Math.floor(Date.now() / 1000)).run();
   dropClassAi(gid);
+}
+
+/** A provider's model changed by itself (OpenRouter's free model was gone): keep the one that answered. */
+async function keepModel(env: Env, providerId: string, model: string) {
+  const gid = classOf(env);
+  if (!gid) return;
+  try {
+    const cfg = await classAi(env, gid, true);
+    const p = cfg.providers.find((x) => x.id === providerId);
+    if (p && p.model !== model) { p.model = model; await save(env, gid, cfg); }
+  } catch { /* best effort */ }
 }
 
 /** What the dashboard shows for a class: never a key, only its first and last characters. */
@@ -226,7 +270,17 @@ export async function addProvider(env: Env, gid: string, b: { type?: string; key
   if (type === "custom" && !/^https:\/\/[^\s]+$/i.test(base)) throw new AiKeyError("The address must start with https:// (e.g. https://api.together.xyz/v1).");
   if (type !== "custom") base = "";
   const p: AiProvider = { id: crypto.randomUUID().slice(0, 8), type, key, model, ...(base ? { base } : {}) };
-  const t = await testProvider(p);
+  let t = await testProvider(p);
+  // OpenRouter: the model asked for isn't free (anymore): the free models of today, best first
+  if (!t.ok && type === "openrouter" && t.gone) {
+    const asked = p.model;
+    for (const m of (await openRouterFree(true)).filter((x) => x !== asked).slice(0, 5)) {
+      const r = await testProvider({ ...p, model: m });
+      if (r.ok) { p.model = m; t = { ...r, warn: [`“${asked}” isn't free on OpenRouter anymore: ClassBot uses “${m}”, free today (you can change it in the list).`, r.warn].filter(Boolean).join(" ") }; break; }
+      if (r.error && /key refused/.test(r.error)) { t = r; break; }
+    }
+    if (!t.ok && t.gone) t.error = `${t.error} · No free OpenRouter model answered right now: try again later, or choose a paid model (your account needs credits).`;
+  }
   if (!t.ok) throw new AiKeyError(t.error || "This AI didn't answer.");
   const cfg = await classAi(env, gid, true);
   if (cfg.providers.length >= 8) throw new AiKeyError("8 AIs at most: remove one first.");
