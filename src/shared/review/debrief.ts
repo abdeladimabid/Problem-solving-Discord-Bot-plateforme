@@ -157,7 +157,7 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     const takers = await all<{ discord_id: string; score: number | null; status: string }>(env,
       `SELECT discord_id, score, status FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const graded = takers.filter((t) => t.status === "graded");
-    if (!graded.length) { if (takers.length) out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
+    if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
     const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
       `SELECT discord_id, code, ok, level, note FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const comps: Record<string, { ok: boolean; level: number | null; note: string | null }> = {};
@@ -169,6 +169,15 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps });
   }
   return out;
+}
+/** The graded assessments of the brief, for the AI: what the learner showed in class, without help (never a name). */
+export function assessForAi(assess: any[] | null | undefined): string {
+  const graded = (assess || []).filter((a) => a && a.score != null);
+  return graded.map((a) => {
+    const ok = Object.entries(a.comps || {}).filter(([, v]: any) => v && v.ok).map(([k]) => k);
+    const ko = Object.entries(a.comps || {}).filter(([, v]: any) => v && v.ok === false).map(([k]) => k);
+    return `« ${oneLine(a.title, 80)} » : ${a.score} %${ok.length ? ` ; compétences validées : ${ok.join(", ")}` : ""}${ko.length ? ` ; non validées : ${ko.join(", ")}` : ""}`;
+  }).join("\n");
 }
 async function putReview(env: Env, g: GuildRow, briefId: number, who: string, rec: any, status: string | null = null) {
   await run(env, `INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -353,6 +362,9 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   };
   const safe = (t: string) => fence(noUrl(t));
   const problems = checks.filter((c: any) => c.ok === false);
+  // the assessment linked to the brief (done in class, without help): the AI compares the project with it
+  const assess = await briefAssessments(env, b.id, who, squad ? { squad: { members: members.map((m) => ({ gid: m.discord_id })) } } : null);
+  const assessText = assessForAi(assess);
   const system = [
     "Tu es l’assistant d’un formateur (titre Développeur Web et Web Mobile, approche par compétences, niveaux 1 imiter, 2 adapter, 3 transposer). Réponds en français, simplement.",
     "Tu reçois : le brief" + (items.length ? " et une CHECKLIST numérotée tirée du brief" : "") + ", les compétences visées avec leurs preuves, l’état actuel du dépôt GitHub (VÉRIFICATIONS AUTOMATIQUES, liste des fichiers, contenu des fichiers principaux) et les derniers commits.",
@@ -363,6 +375,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     "- Les bonus sont facultatifs : un bonus non fait n’est pas un défaut.",
     "- Ce que le code ne peut pas montrer (analyse, réunion, maquette sans lien, oral, présentation) : \"non_verifiable\".",
     "- Compétences transversales (codes CT…) : sans preuve claire dans le dépôt, \"a_verifier\" (jamais \"non_visible\").",
+    assessText ? "- L’ÉVALUATION a été faite en classe, sans aide : c’est la preuve la plus sûre de ce que l’apprenant maîtrise. Ton \"avis\" reste celui du projet, mais dans \"raison\" dis si le projet confirme ou contredit l’évaluation (ex. « le projet le montre mais l’évaluation ne l’a pas validée : code copié ou fait avec une IA ? à vérifier à l’oral »)." : "",
     "- " + DATA,
     "- Ton avis aide le formateur, il ne remplace pas son évaluation.",
     "Réponds UNIQUEMENT avec ce JSON :",
@@ -378,6 +391,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     grid && (grid.contexte || grid.tech) ? `PROJET « ${b.title} » : ${grid.contexte}${grid.tech ? `\nTECHNOLOGIES DEMANDÉES : ${grid.tech}` : ""}` : "",
     `BRIEF « ${b.title} »${items.length ? " (contexte)" : ""} :\n${brief.slice(0, items.length ? (compact ? 900 : 2500) : compact ? 3500 : 6000)}`,
     items.length ? `\nCHECKLIST À REMPLIR (${items.length} points) :\n${items.map((i) => `${i.n}. [${GRID_TYPES[i.type] || i.type}] ${compact ? i.texte.slice(0, 150) : i.texte}`).join("\n")}` : "",
+    assessText ? `\nÉVALUATION LIÉE AU BRIEF (faite en classe, sans aide) :\n${assessText}` : "",
     skills.length ? `\nCOMPÉTENCES VISÉES :\n${skills.map((c) => (compact ? skillText(c, names).slice(0, c.startsWith("T") ? 700 : 330) : skillText(c, names)) + evidence(c)).join("\n")}` : '\nCOMPÉTENCES VISÉES : non précisées, "competences" doit être [].',
     `\n##### ÉTAT ACTUEL DU DÉPÔT ${snap.repo}`,
     `VÉRIFICATIONS AUTOMATIQUES (exactes) :\n${checks.map((c: any) => `${sign(c)} ${c.label} : ${safe(c.detail)}`).join("\n")}`,
@@ -418,7 +432,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     for (const m of rec.contrib || []) m.perStep = stepRhythm(b.steps, inRepo.filter((c) => String(c.author || "").toLowerCase() === String(m.login || "").toLowerCase()).map((c) => c.date));
     rec.suivi = await suiviFor(env, b.id, who, b.steps, rec.rhythm);
   }
-  rec.assess = await briefAssessments(env, b.id, who, rec);
+  rec.assess = squad ? await briefAssessments(env, b.id, who, rec) : assess;
   result.feedback = buildComment(first, rec, undefined);
   if (squad) result.feedback = await groupComment(env, result.feedback, squad.name);
   await putReview(env, g, b.id, who, rec, "draft");
@@ -509,10 +523,11 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
     "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
-    "Base-toi sur les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
+    "Base-toi sur l’évaluation faite en classe (la preuve la plus sûre de ce que l’apprenant maîtrise), les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
     'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
   ].join("\n");
   const user = [
+    assessForAi(rec.assess) ? `ÉVALUATION (en classe, sans aide) :\n${assessForAi(rec.assess)}` : "ÉVALUATION : aucune évaluation liée à ce brief.",
     `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
     co.length ? `COMPÉTENCES : validées ${co.filter((c) => st.co[c]).map(skillText).join(", ") || "aucune"} ; non validées ${co.filter((c) => !st.co[c]).map(skillText).join(", ") || "aucune"}` : "",
     oral.length ? `QUESTIONS ORALES : ${st.oral.filter(Boolean).length}/${oral.length} réussies${st.oral.some((v: boolean) => !v) ? ` ; notions à revoir : ${oral.filter((q: any, i: number) => !st.oral[i]).map((q: any) => q.notion || q.q).join(", ")}` : ""}` : "",
@@ -575,8 +590,8 @@ export async function delOral(env: Env, g: GuildRow, briefId: number, who: strin
 
 /** Progress: one column per brief, one square per debrief (its level); a squad's debrief counts for each member. */
 export async function progressView(env: Env, g: GuildRow) {
-  const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null }>(env,
-    "SELECT id, title, due_at, squads FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
+  const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null; kind: string | null }>(env,
+    "SELECT id, title, due_at, squads, kind FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
   const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string }>(env,
     "SELECT brief_id, who, level, plevel, status FROM brief_reviews WHERE guild_id = ?", g.id);
   const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
@@ -587,10 +602,27 @@ export async function progressView(env: Env, g: GuildRow) {
     if (r.who.startsWith("u:")) cells[`${r.brief_id}:${r.who.slice(2)}`] = c;
     else for (const m of (squadsOf.get(r.brief_id) || []).find((s) => `s:${s.id}` === r.who)?.members || []) cells[`${r.brief_id}:${m}`] = c;
   }
-  const used = new Set(Object.keys(cells).map((k) => Number(k.split(":")[0])));
+  // every published brief gets a column; in a squad brief, a student's square opens their squad's debrief
+  const squadOfMember: Record<string, string> = {};
+  for (const b of briefs) if (b.kind === "squad") for (const s of squadsOf.get(b.id) || []) for (const m of s.members) squadOfMember[`${b.id}:${m}`] = `s:${s.id}`;
+  // the assessments linked to each brief, and where each student is with them (graded: the average score)
+  const linked = await all<{ id: number; brief_id: number }>(env, "SELECT id, brief_id FROM assessments WHERE guild_id = ? AND brief_id IS NOT NULL", g.id).catch(() => []);
+  const takers = linked.length ? await all<{ assessment_id: number; discord_id: string; status: string; score: number | null }>(env,
+    `SELECT assessment_id, discord_id, status, score FROM assessment_takers WHERE assessment_id IN (${linked.map(() => "?").join(",")})`, ...linked.map((a) => a.id)) : [];
+  const briefOfAssess = new Map(linked.map((a) => [a.id, a.brief_id]));
+  const assessCount: Record<number, number> = {};
+  for (const a of linked) assessCount[a.brief_id] = (assessCount[a.brief_id] || 0) + 1;
+  const assess: Record<string, { st: "graded" | "open"; score: number | null; n: number }> = {};
+  for (const t of takers) {
+    const k = `${briefOfAssess.get(t.assessment_id)}:${t.discord_id}`;
+    const c = assess[k] ?? { st: "graded", score: null, n: 0 };
+    if (t.status === "graded") { c.score = Math.round(((c.score ?? 0) * c.n + (t.score ?? 0)) / (c.n + 1)); c.n++; } else c.st = "open";
+    assess[k] = c;
+  }
+  for (const c of Object.values(assess)) if (!c.n) c.st = "open";
   return {
-    briefs: briefs.filter((b) => used.has(b.id)).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at })),
-    students: students.map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id })), cells,
+    briefs: briefs.map((b) => ({ id: b.id, title: b.title, due_at: b.due_at, assessments: assessCount[b.id] || 0 })),
+    students: students.map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id })), cells, squadOfMember, assess,
   };
 }
 
