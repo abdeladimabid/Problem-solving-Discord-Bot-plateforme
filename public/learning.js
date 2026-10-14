@@ -877,7 +877,7 @@ function renderDebrief() {
           <button class="btn" id="db-reopen">Reopen</button>`
         : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
           <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
-          <p class="toolbar" style="margin:12px 0 0"><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
+          <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
   updateMeter();
   wireDebrief();
@@ -1030,6 +1030,16 @@ function wireDebrief() {
     DB.R = { ...DB.R, ...R };
   };
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+  // everything as it is now (switches, mise en situation, oral questions, your comment), right away: a draft to finish later
+  if ($("#db-save")) $("#db-save").onclick = (e) => busy(e.currentTarget, async () => {
+    clearTimeout(DB.timer);
+    const keep = DB.commentEdited;
+    const R = await api(`/briefs/${bid}/review/states`, { method: "POST", body: { who, states: { ...currentStates(), keepComment: keep, comment: keep ? c.value : undefined } } });
+    DB.R = { ...DB.R, ...R };
+    if (!keep) c.value = R.review?.result?.feedback ?? c.value;
+    $("#db-cst").textContent = "Draft saved";
+    toast("Draft saved · finalize it when you're ready");
+  });
   if ($("#db-fin")) $("#db-fin").onclick = (e) => busy(e.currentTarget, async () => {
     if ($(".member")) await saveMembers();
     const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
