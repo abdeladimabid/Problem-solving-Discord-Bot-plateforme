@@ -576,7 +576,8 @@ export function itemView(r: ActivityRow) {
   const d = r.kind === "week" ? parse(r.data, {}) : null;
   return {
     id: r.id, day: r.day, kind: r.kind, week: r.week, title: r.title, md: r.md, warnings: parse(r.warnings, []), edited: !!r.edited, model: r.model, updated_at: r.updated_at ?? r.created_at,
-    ...(d ? { live: Array.isArray(d.live) ? d.live : [], planned: Array.isArray(d.plan?.jours) ? d.plan.jours.map((j: any) => j.date) : [] } : {}),
+    // a week: its live coding days, and the titles planned for each day (shown while the items are written)
+    ...(d ? { live: Array.isArray(d.live) ? d.live : [], plan: Array.isArray(d.plan?.jours) ? d.plan.jours.map((j: any) => ({ date: j.date, veille: j.veille, live: j.live })) : [] } : {}),
   };
 }
 async function saveRow(env: Env, gid: string, o: { program: string; day: string; kind: string; week: number | null; title: string; data: unknown; md: string; warnings: string[]; model: string }) {
