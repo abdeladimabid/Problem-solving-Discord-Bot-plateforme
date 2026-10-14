@@ -26,6 +26,7 @@ import { challengeMistakes, classHeatmap, difficultyCheck, practiceSet, teacherS
 import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
+import { PlanError, aiPlanNote, planView, savePlan } from "../shared/actionplan.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -367,6 +368,19 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/reports") return ok(await reports(env, await guild()));
     if (path === "/reports/resolve" && method === "POST") return ok(await resolveReports(env, await guild(), body));
 
+    // -------------------------------------------------------- plan d'action (the students who need help)
+    if (path === "/plan" && method === "GET") { const g = await guild(); return ok(await planView(env, g, await students(env, g))); }
+    m = path.match(/^\/plan\/(\d+)$/);
+    if (m && method === "PUT") return ok(await savePlan(env, await guild(), m[1], body));
+    m = path.match(/^\/plan\/(\d+)\/ai$/);
+    if (m && method === "POST") {
+      const g = await guild();
+      const v = await planView(env, g, await students(env, g));
+      const row = [...v.plan, ...v.others].find((r) => r.discord_id === m![1]);
+      if (!row) throw new HttpError(404, "unknown student");
+      return ok(await aiPlanNote(env, g, row));
+    }
+
     // -------------------------------------------------------- assignments
     if (path === "/assignments" && method === "GET") return ok(await assignments(env, await guild()));
     if (path === "/assignments" && method === "POST") return ok(await assign(env, await guild(), body));
@@ -678,7 +692,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof HandError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof HandError || e instanceof PlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });
