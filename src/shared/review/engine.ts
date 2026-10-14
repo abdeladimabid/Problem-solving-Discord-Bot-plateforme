@@ -275,8 +275,16 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   // Not valid requirement: advice, unless a not valid check already gives it
   const own = (e) => !itemValid(e) && !isBound(e) && !(e.check && ko(e.check));
   const advice = [];
-  for (const e of stories.filter(own)) advice.push(`de ${e.statut === 'absent' ? 'réaliser' : 'terminer'} cette partie du brief : ${part(e.texte)}`);
-  for (const e of exigences.filter((x) => x.type === 'technique' && own(x))) advice.push(`de respecter cette demande technique du brief : ${String(e.texte).replace(/\.$/, '')}`);
+  // what to work on, said as an action ("appliquer les bonnes pratiques UX/UI…"), never "réaliser cette partie du brief"
+  const de = (t) => (/^[aeiouyhéèêàâîôû]/i.test(t) ? `d’${t}` : `de ${t}`);
+  const action = (t, started) => {
+    const p = part(t).replace(/[\s:;,.]+$/, '');
+    const low = p.charAt(0).toLowerCase() + p.slice(1);
+    if (/^\S+(er|ir|re|oir)\b/i.test(p) && !/^(une?|les?|la|des?|mon|ma|mes|son|sa|ses|leur|page|carte|section)\b/i.test(p)) return de(started ? `finir ${de(low)}` : low);
+    return `de travailler sur ${/^(une?|les?|la|l’|l'|des?)\b/i.test(low) ? low : `ce point : ${low}`}`;
+  };
+  for (const e of stories.filter(own)) advice.push(action(e.texte, e.statut !== 'absent'));
+  for (const e of exigences.filter((x) => x.type === 'technique' && own(x))) advice.push(action(e.texte, false));
   const TWN = { 640: 'sm', 768: 'md', 1024: 'lg', 1280: 'xl', 1536: '2xl' };
   const bp = ((d('breakpoints').match(/manquants : (.+)$/) || [])[1] || '').trim();
   const bpText = bp && tw ? bp.split(/,\s*/).map((x) => (TWN[parseInt(x, 10)] ? `${TWN[parseInt(x, 10)]}: ${x}` : x)).join(', ') : bp;
