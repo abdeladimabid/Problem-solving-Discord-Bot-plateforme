@@ -892,13 +892,21 @@ function renderDebrief() {
         ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next →</a>` : ""}
         ${final ? "" : `<button class="btn ${rec ? "" : "primary"}" id="db-an">${rec ? "↻ Analyze again" : "🔍 Analyze the work"}</button>`}</div></div>
     <div id="db-body"></div>`;
-  if ($("#db-an")) $("#db-an").onclick = () => analyzeDialog();
+  if ($("#db-an")) $("#db-an").onclick = () => analyzeWork();
+  if ($("#db-other")) $("#db-other").onclick = () => analyzeDialog();
   const body = $("#db-body");
   if (!rec) {
     body.innerHTML = `<div style="margin-bottom:16px">${assessPanelHtml(R.assess)}</div>${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
-      <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
-      <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
-    $("#db-an2").onclick = () => analyzeDialog();
+      ${T.handin ? `<div class="db-repo"><span class="db-repo-ic" aria-hidden="true">🐙</span><div><span class="small muted">${T.squad ? "The squad handed in" : "Handed in"} ${fmtAgo(T.handin.at)}</span>
+          <a href="https://github.com/${esc(T.handin.repo)}" target="_blank" rel="noopener"><b>${esc(T.handin.repo)}</b> ↗</a>${T.handin.plan ? ` · <a class="small" href="${esc(T.handin.plan)}" target="_blank" rel="noopener">planning board</a>` : ""}</div></div>
+        <p class="muted">The bot reads this repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
+        <button class="btn primary" id="db-an2">🔍 Analyze ${esc(T.handin.repo.split("/")[1] || T.handin.repo)}</button>
+        <p style="margin:10px 0 0"><button class="ap-link" id="db-other2">Analyze another repo instead</button></p>`
+      : `<div class="notice warn" style="text-align:left;max-width:560px;margin:0 auto 12px">${T.squad ? "The squad" : "This student"} didn't hand in a repo. Pick the one to debrief: the bot lists their GitHub repos, the ones pushed during the brief first.</div>
+        <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
+        <button class="btn primary" id="db-an2">🔍 Find the repo and analyze</button>`}</div></section>`;
+    $("#db-an2").onclick = () => analyzeWork();
+    if ($("#db-other2")) $("#db-other2").onclick = () => analyzeDialog();
     wireAssessLink(body);
     renderSteps(false);
     return;
@@ -1127,20 +1135,29 @@ function wireDebrief() {
   });
 }
 
+/** Read the repo, run the checks, ask the AI (the handed-in repo when there's no other one given). */
+async function analyzeRun(repo, saveHandin = false) {
+  if ($("#db-wait")) return;
+  $$("#db-an, #db-an2").forEach((b) => { b.disabled = true; });
+  view.querySelector("#db-body").insertAdjacentHTML("afterbegin", `<div class="notice" id="db-wait">⏳ Reading ${esc(repo || debriefTarget().handin?.repo || "the repo")}, running the checks and asking the AI… (up to a minute)</div>`);
+  try {
+    const R = await api(`/briefs/${DB.bid}/review/analyze`, { method: "POST", body: { who: DB.who, repo: repo || undefined, saveHandin } });
+    DB.R = R; DB.commentEdited = false;
+    DB.B = await api(`/briefs/${DB.bid}`);
+    toast(R.msg || "Analyzed");
+    renderDebrief();
+  } catch (e) { $("#db-wait")?.remove(); $$("#db-an, #db-an2").forEach((b) => { b.disabled = false; }); toast(e.message, true); }
+}
+/** "Analyze the work": the repo handed in, straight away; nothing handed in: pick the repo first. */
+function analyzeWork() {
+  if (debriefTarget().handin) analyzeRun();
+  else analyzeDialog();
+}
 function analyzeDialog() {
   const T = debriefTarget();
-  const run = async (repo, saveHandin = false) => {
-    view.querySelector("#db-body").insertAdjacentHTML("afterbegin", `<div class="notice" id="db-wait">⏳ Reading the repo, running the checks and asking the AI… (up to a minute)</div>`);
-    try {
-      const R = await api(`/briefs/${DB.bid}/review/analyze`, { method: "POST", body: { who: DB.who, repo: repo || undefined, saveHandin } });
-      DB.R = R; DB.commentEdited = false;
-      DB.B = await api(`/briefs/${DB.bid}`);
-      toast(R.msg || "Analyzed");
-      renderDebrief();
-    } catch (e) { $("#db-wait")?.remove(); toast(e.message, true); }
-  };
+  const run = analyzeRun;
   openDialog(`Analyze the work · ${T.name}`, `
-    <p class="muted small" style="margin-top:12px">${T.handin ? `Handed in: <b>${esc(T.handin.repo)}</b>. Analyze it, or pick another repo.` : `Nothing was handed in. Pick the repo to debrief${DB.B.repo_hint ? ` (the brief's repos are named like <code>${esc(DB.B.repo_hint)}</code>)` : ""}.`}</p>
+    <p class="muted small" style="margin-top:12px">${T.handin ? `Handed in: <b>${esc(T.handin.repo)}</b>. Pick another repo to analyze instead of it.` : `Nothing was handed in. Pick the repo to debrief${DB.B.repo_hint ? ` (the brief's repos are named like <code>${esc(DB.B.repo_hint)}</code>)` : ""}.`}</p>
     <input type="search" id="an-q" placeholder="Filter the repos…" style="width:100%;margin-bottom:8px">
     <div class="repo-pick" id="an-list"><p class="muted small">⏳ Loading ${T.squad ? "the squad's" : "their"} GitHub repos…</p></div>
     <details class="small" style="margin-top:10px"><summary>Another repo (link or owner/repo)</summary><input type="text" id="an-r" style="width:100%;margin-top:6px" placeholder="https://github.com/owner/repo"></details>
