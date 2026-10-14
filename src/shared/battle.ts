@@ -354,15 +354,29 @@ export async function updateBattle(env: Env, g: GuildRow, id: number, b: any) {
     s(b.title ?? x.title, 80) || x.title, JSON.stringify(teams), JSON.stringify(settings), JSON.stringify(questions), JSON.stringify(state), now(), id);
   return getBattle(env, id, g.id);
 }
-async function saveState(env: Env, b: Battle, st: BState) {
-  await run(env, "UPDATE battles SET state = ?, status = ?, updated_at = ?, finished_at = ? WHERE id = ?",
-    JSON.stringify(st), st.phase === "over" ? "done" : st.phase === "lobby" ? "ready" : "live", now(), st.phase === "over" ? now() : null, b.id);
-  b.state = st;
+/**
+ * Saves the state only if nobody saved another one since we read it (compare-and-set on its seq). The TV, the judge's
+ * phone and the dashboard all read and write the same row: without this, a request that read the state a moment
+ * before the judge's tap could write the old question back (the TV and the judge then show different questions).
+ * Returns false when the row changed meanwhile (nothing written: read it again).
+ */
+async function saveState(env: Env, b: Battle, st: BState, readSeq: number): Promise<boolean> {
+  const r = await run(env, "UPDATE battles SET state = ?, status = ?, updated_at = ?, finished_at = ? WHERE id = ? AND json_extract(state, '$.seq') = ?",
+    JSON.stringify(st), st.phase === "over" ? "done" : st.phase === "lobby" ? "ready" : "live", now(), st.phase === "over" ? now() : null, b.id, readSeq);
+  const ok = Number(r?.meta?.changes ?? 1) > 0;
+  if (ok) b.state = st;
+  return ok;
 }
 /** Reads the state, lets the clocks run (countdown end, a clock at 0), saves and rewards when something changed. */
 export async function liveBattle(env: Env, b: Battle, at = Date.now()): Promise<Battle> {
+  const readSeq = b.state.seq;
   if (settle(b.state, at)) {
-    await saveState(env, b, b.state);
+    if (!(await saveState(env, b, b.state, readSeq))) {
+      // someone saved first (the judge's tap): use theirs
+      const fresh = await getBattle(env, b.id);
+      if (fresh) Object.assign(b, fresh);
+      return b;
+    }
     if (b.state.phase === "over") await finish(env, b);
   }
   return b;
@@ -378,8 +392,14 @@ export async function judgeAction(env: Env, b: Battle, x: BAction, at = Date.now
       await run(env, "UPDATE battles SET questions = ? WHERE id = ?", JSON.stringify(qs), b.id);
     }
   }
-  const st = act(b.state, x, at, { penaltyMs: b.settings.penalty * 1000, seconds: b.settings.seconds, answerOf: (i) => b.questions[i]?.answer ?? "" });
-  await saveState(env, b, st);
+  const readSeq = b.state.seq;
+  const st = act(structuredClone(b.state), x, at, { penaltyMs: b.settings.penalty * 1000, seconds: b.settings.seconds, answerOf: (i) => b.questions[i]?.answer ?? "" });
+  if (!(await saveState(env, b, st, readSeq))) {
+    // the state changed between reading it and saving (another tap, a clock at 0): nothing done, the judge sees the new one
+    const fresh = await getBattle(env, b.id);
+    if (fresh) Object.assign(b, fresh);
+    throw new BattleError("Already done (the screen changed).");
+  }
   if (st.phase === "over" && before !== "over") await finish(env, b);
   return b;
 }
@@ -388,7 +408,9 @@ async function finish(env: Env, b: Battle) {
   const st = b.state;
   if (st.rewarded || st.winner == null) return;
   st.rewarded = true;
-  await run(env, "UPDATE battles SET state = ? WHERE id = ?", JSON.stringify(st), b.id);
+  // same seq: only "rewarded" changes, and never over a newer state
+  const r = await run(env, "UPDATE battles SET state = ? WHERE id = ? AND json_extract(state, '$.seq') = ? AND COALESCE(json_extract(state, '$.rewarded'), 0) = 0", JSON.stringify(st), b.id, st.seq);
+  if (Number(r?.meta?.changes ?? 1) === 0) return;   // already rewarded by another request
   const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", b.guild_id);
   if (!g) return;
   const w = b.teams[st.winner], l = b.teams[other(st.winner)];

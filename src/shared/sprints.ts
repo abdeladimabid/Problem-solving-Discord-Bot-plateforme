@@ -88,7 +88,7 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
       if (!rv) continue;
       try {
         const rec = JSON.parse(rv.record), st = reviewStates(rec);
-        const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => e.type !== "bonus");
+        const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
         if (main.length) pcts.push(main.filter(([, v]: any) => v).length / main.length);
       } catch { /* old record */ }
     }

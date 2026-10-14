@@ -407,6 +407,7 @@ function fakeAI() {
       if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
       if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
       if (sys.includes("Donne le niveau de l’apprenant")) return { response: JSON.stringify({ niveau: ai.levelAnswer || "Bon", pourquoi: "Le brief est presque complet, une notion à revoir." }) };
+      if (sys.includes("remarques après un face-à-face")) return { response: JSON.stringify({ competences: [{ code: "C3", avis: "ko", raison: "Ne sait pas expliquer margin et padding." }, { code: "C99", avis: "ok", raison: "?" }], pour_apprenant: "Revois la différence entre margin et padding." }) };
       if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
         { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },
         { q: "Comment écrire une variable avec Sass ?", a: "Avec un $ devant le nom.", notion: "variables Sass" },

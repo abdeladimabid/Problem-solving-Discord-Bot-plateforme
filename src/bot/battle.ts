@@ -10,7 +10,7 @@ import type { Env } from "../shared/types.ts";
 import { BattleError, getBattle, judgeAction, judgeSeen, judgeUrl, liveBattle, tvView } from "../shared/battle.ts";
 import type { BAction, Battle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
-import { run } from "../shared/db.ts";
+import { one, run } from "../shared/db.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const html = (body: string) => new Response(body, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" } });
@@ -27,21 +27,29 @@ export async function handleBattle(request: Request, env: Env, who: "tv" | "judg
     if (!action) return html(TV(b));
     if (action === "state") {
       const since = Number(url.searchParams.get("seq") || 0);
-      // long poll: wait (up to ~6 s) for something to change, so the TV shows a judge's tap at once
+      // what the TV shows: the same seq is not enough (two writers could have made two different states with the same
+      // seq): the question number, whose turn and the phase must be the same too, else the TV gets the whole state
+      const fp = (st: { seq: number; shown: number; turn: number; phase: string }) => `${st.seq}.${st.shown}.${st.turn}.${st.phase}`;
+      const seen = String(url.searchParams.get("v") || "");
       let cur = b;
-      if (since && url.searchParams.get("wait") === "1") {
-        for (let i = 0; i < 24 && cur.state.seq === since && ["playing", "paused", "lobby"].includes(cur.state.phase); i++) {
+      // long poll: wait (up to ~5 s) for something to change, so the TV shows a judge's tap at once; it only reads a few
+      // fields while waiting (never writes), then reads the whole battle once
+      if (since && url.searchParams.get("wait") === "1" && ["playing", "paused", "lobby"].includes(cur.state.phase) && (!seen || seen === fp(cur.state))) {
+        for (let i = 0; i < 20; i++) {
           await new Promise((r) => setTimeout(r, 250));
-          const x = await getBattle(env, id);
+          const x = await one<{ v: string | null }>(env, "SELECT json_extract(state, '$.seq') || '.' || json_extract(state, '$.shown') || '.' || json_extract(state, '$.turn') || '.' || json_extract(state, '$.phase') AS v FROM battles WHERE id = ?", id);
           if (!x) return json({ error: "This battle doesn't exist anymore." }, 404);
-          cur = await liveBattle(env, x);
+          if (x.v !== fp(cur.state)) break;
           if (cur.state.phase === "lobby" && i >= 8) break;   // the lobby also shows when the judge connects
         }
+        const x = await getBattle(env, id);
+        if (!x) return json({ error: "This battle doesn't exist anymore." }, 404);
+        cur = await liveBattle(env, x);
       }
       const v = tvView(cur);
       // nothing new: a tiny answer (the clocks are computed on the screen)
-      if (since && since === v.seq && v.phase !== "countdown") return json({ seq: v.seq, same: true, judge: v.judge, left: v.left, running: v.running, phase: v.phase });
-      return json(v);
+      if (since && since === v.seq && seen === fp(cur.state) && v.phase !== "countdown") return json({ seq: v.seq, v: seen, same: true, judge: v.judge, left: v.left, running: v.running, phase: v.phase });
+      return json({ ...v, v: fp(cur.state) });
     }
     if (action === "qr.svg") return new Response(qrSvg(judgeUrl(env, b), { dark: "#0b1020" }), { headers: { "content-type": "image/svg+xml", "cache-control": "no-store" } });
     return json({ error: "unknown" }, 404);
@@ -206,7 +214,7 @@ const T = FR ? { turn: "À vous !", scan: "Scanne pour être l'arbitre", scanHin
 const BASE = location.pathname.replace(/\\/$/, "");
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-let S = null, base = { at: performance.now() }, lastEv = 0, lastQ = "", lastPhase = "", lastTick = -1;
+let S = null, base = { at: performance.now() }, lastEv = 0, lastQ = "", lastPhase = "", lastTick = -1, lastFull = 0;
 
 // ---------------------------------------------------------------- sound (made in the browser, no files)
 let AC = null, soundOn = false;
@@ -366,10 +374,13 @@ async function poll() {
   try {
     const ctl = new AbortController(); const kill = setTimeout(() => ctl.abort(), 12000);
     const live = S && ["playing", "paused", "lobby"].includes(S.phase);
-    const r = await fetch(BASE + "/state" + (S ? "?seq=" + S.seq + (live ? "&wait=1" : "") : ""), { cache: "no-store", signal: ctl.signal });
+    // every 15 s the whole state again, whatever happens: the screen can never stay on an old question
+    const full = !S || Date.now() - lastFull > 15000;
+    const r = await fetch(BASE + "/state" + (S && !full ? "?seq=" + S.seq + "&v=" + encodeURIComponent(S.v || "") + (live ? "&wait=1" : "") : ""), { cache: "no-store", signal: ctl.signal });
     clearTimeout(kill);
     if (r.status === 404) { document.body.innerHTML = '<div class="screen"><div class="paused">⚔️</div></div>'; return; }
     const d = await r.json();
+    if (full && !d.same) lastFull = Date.now();
     if (d.same && S) { S.left = d.left; S.running = d.running; S.phase = d.phase; base.at = performance.now(); if (d.judge !== S.judge) { S.judge = d.judge; lobby(); } wait = 0; }
     else if (!d.same) { show(d); wait = 0; }
   } catch { wait = 800; }
@@ -455,15 +466,19 @@ function pinScreen(err) {
   $("#pinb").onclick = async () => { const e = await claim($("#pin").value.trim()); if (e) pinScreen(e); else { view = ""; poll(); } };
 }
 /** A newer state from the server (never an older one: answers can arrive out of order). The buttons always belong to the question on screen. */
-function apply(d) {
-  if (!d || !d.seq || (S && d.seq < S.seq)) return;
+let epoch = 0;   // +1 at each tap: a poll that started before a tap can't undo what the tap shows
+function apply(d, fromPoll = null) {
+  if (!d || !d.seq) return;
+  // a poll that started after the last tap is the truth (even an "older" seq: the server is right, not this phone);
+  // an answer to a tap or an older poll only counts if it is newer
+  if (S && d.seq < S.seq && !(fromPoll !== null && fromPoll === epoch)) return;
   S = d; base = performance.now();
   const key = d.seq + "|" + d.phase + "|" + (d.q ? d.q.n + d.q.prompt : "");
   if (key !== lastKey) { lastKey = key; shown = d; render(); }
 }
 async function act(a, extra = {}) {
   if (busy) return;
-  busy = true; document.querySelectorAll("button").forEach((x) => (x.disabled = true));
+  busy = true; epoch++; document.querySelectorAll("button").forEach((x) => (x.disabled = true));
   buzz(a === "correct" ? [30, 40, 30] : 40);
   try {
     const r = await fetch(BASE + "/act", { method: "POST", headers: H, body: JSON.stringify({ a, seq: shown ? shown.seq : null, q: shown && shown.q ? shown.q.n : null, ...extra }) });
@@ -517,9 +532,10 @@ function render() {
 async function poll() {
   if (view === "pin") return;
   try {
+    const at = epoch;
     const r = await fetch(BASE + "/state", { headers: H, cache: "no-store" });
     if (r.status === 403) { const e = await claim(); if (e) { pinScreen(); return; } }
-    else if (r.ok) apply(await r.json());
+    else if (r.ok && !busy) apply(await r.json(), at);
   } catch {}
   setTimeout(poll, S && S.phase === "countdown" ? 400 : 1000);
 }

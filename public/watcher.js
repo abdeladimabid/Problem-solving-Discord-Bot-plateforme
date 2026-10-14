@@ -859,23 +859,26 @@ function wDebriefExtras() {
   const qs = rec.oral || [], st = DB.R.states?.oral || [];
   const head = () => `Oral questions${qs.length ? ` <span class="muted">${$$("[data-or]:checked", box).length}/${qs.length}</span>` : ""}`;
   box.innerHTML = `<div class="panel-head" style="margin:0"><h2 id="db-orh"></h2>
-      ${final ? "" : `<button class="btn small" id="db-ornew">${qs.length ? "Other questions" : "✨ Propose questions"}</button>`}</div>
+      ${final ? "" : `<button class="btn small" id="db-ornew">${qs.length ? "✨ 5 more questions" : "✨ Propose 5 questions"}</button>`}</div>
+    <p class="muted small" style="margin:6px 0 0">From their lacunes first: the assessment questions missed or not attempted, then the points of the project not reached. Switch on each question they answered well.</p>
     ${qs.length ? `<div class="db-rows">${qs.map((q, i) => `<div class="db-row w-or-row">${sw(`data-or="${i}"`, !!st[i], final)}
-      <div><b>${i + 1}. ${esc(q.q)}</b><div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}</div>` : ""}</div>
+      <div><b>${i + 1}. ${esc(q.q)}</b> ${q.src === "evaluation" ? `<span class="tag" title="A lacune of the assessment">📝 assessment</span>` : q.src === "projet" ? `<span class="tag" title="A point of the project not reached">📁 project</span>` : ""}<div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}</div>` : ""}</div>
       ${final ? "<span></span>" : `<button class="btn small" data-ordel="${i}" title="Remove" aria-label="Remove question ${i + 1}">✕</button>`}</div>`).join("")}</div>` : ""}`;
   $("#db-orh", box).innerHTML = head();
   $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); });
   if ($("#db-ornew", box)) $("#db-ornew", box).onclick = (e) => {
     const btn = e.currentTarget;
     const go = () => busy(btn, async () => {
-      toast("⏳ The AI writes the questions…");
+      toast(qs.length ? "⏳ The AI writes 5 more questions…" : "⏳ The AI writes 5 questions from their lacunes…");
       const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who } });
       DB.R = { ...DB.R, ...R };
       wDebriefExtras();
       saveStatesSoon();
     });
-    if (qs.length) confirmDialog("Replace these questions?", "Another set of questions is written.", "Replace", go); else go();
+    go();   // more questions are added after the ones there (their switches stay)
   };
+  // the first 5 questions are written by themselves when the debrief is opened
+  if (!final && !qs.length && !DB.oralAuto) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
   $$("[data-ordel]", box).forEach((b) => b.onclick = () => busy(b, async () => {
     const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who, del: Number(b.dataset.ordel), states: { oral: currentStates().oral } } });
     DB.R = { ...DB.R, ...R };

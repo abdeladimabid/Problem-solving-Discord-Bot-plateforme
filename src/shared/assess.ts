@@ -22,7 +22,12 @@ export interface Question {
   points: number; skills: string[]; comp?: string; level?: number;
   comps?: { code: string; level: number }[];      // every competency the question checks (comp/level = the first one)
 }
-export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string; showResults: boolean; points: number; passAt: number; target: string[] }
+export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string; showResults: boolean; points: number; passAt: number; target: string[];
+  noPaste: boolean;        // copy-paste blocked in the answers
+  lockScreen: boolean;     // full screen: leaving it (or the tab) stops the session until the teacher lets them back in
+  shuffle: boolean;        // each student gets the questions (and the choices) in their own order
+  nav: "free" | "forward"; // free: go back and change any answer; forward: one question at a time, no going back
+}
 export interface AssessRow { id: number; guild_id: string; title: string; brief_id: number | null; status: string; settings: string | null; questions: string; created_at: number; opened_at: number | null; closes_at: number | null }
 export interface Grade { verdict: "correct" | "partial" | "wrong" | "empty"; score: number; comment: string; teacher?: boolean; right?: string; wrong?: string;
   marks?: { line: number; text: string; issue: string; major: boolean }[];   // the mistakes in the code, line by line
@@ -80,6 +85,7 @@ export function cleanSettings(s: any): Settings {
     points: Math.max(0, Math.min(200, Math.round(Number(s?.points) || 0))), passAt: Math.max(1, Math.min(100, Math.round(Number(s?.passAt) || 60))),
     // the students it was written for (pre-selected when inviting)
     target: (Array.isArray(s?.target) ? s.target : []).map(String).filter((x: string) => /^\d{1,25}$/.test(x)).slice(0, 60),
+    noPaste: s?.noPaste !== false, lockScreen: s?.lockScreen !== false, shuffle: s?.shuffle !== false, nav: s?.nav === "forward" ? "forward" : "free",
   };
 }
 const parse = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
@@ -173,13 +179,13 @@ function shuffled<T>(list: T[], seed: number): T[] {
   return a;
 }
 /** The questions as this student sees them: their order, choices shuffled, never the answers. */
-export function paperFor(qs: Question[], seed: number) {
-  return shuffled(qs, seed).map((q, i) => {
+export function paperFor(qs: Question[], seed: number, shuffle = true) {
+  return (shuffle ? shuffled(qs, seed) : qs.slice()).map((q, i) => {
     const base: any = { id: q.id, n: i + 1, type: q.type, prompt: q.prompt, points: q.points };
     if (q.code) base.code = q.code;
     if (q.type === "code") { base.lang = q.lang; base.starter = q.starter ?? ""; }
     if (q.type === "mcq") {
-      const order = shuffled(q.choices!.map((_, k) => k), seed + i * 7919);
+      const order = shuffle ? shuffled(q.choices!.map((_, k) => k), seed + i * 7919) : q.choices!.map((_, k) => k);
       base.choices = order.map((k) => ({ k, text: q.choices![k] }));
       base.multi = q.answer!.length > 1;
     }
@@ -187,7 +193,7 @@ export function paperFor(qs: Question[], seed: number) {
   });
 }
 
-export interface SessionView { lang?: string; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null }
+export interface SessionView { lang?: string; rules?: { noPaste: boolean; lockScreen: boolean; nav: "free" | "forward" }; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null }
 async function loadTaker(env: Env, takerId: number) {
   const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE id = ?", takerId);
   if (!tk) return null;
@@ -204,7 +210,7 @@ export async function sessionInfo(env: Env, takerId: number): Promise<SessionVie
   const { tk, a } = x;
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", tk.guild_id, tk.discord_id);
   const st = settingsOf(a);
-  return { lang: st.lang, status: a.status === "closed" && ["invited", "active", "locked"].includes(tk.status) ? "closed" : tk.status, title: a.title, n: questionsOf(a).length, minutes: st.minutes,
+  return { lang: st.lang, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, status: a.status === "closed" && ["invited", "active", "locked"].includes(tk.status) ? "closed" : tk.status, title: a.title, n: questionsOf(a).length, minutes: st.minutes,
     deadline: tk.deadline, now: now(), pos: tk.pos, answers: {}, reason: tk.lock_reason, name: p?.name ?? null };
 }
 
@@ -218,23 +224,23 @@ export async function startSession(env: Env, takerId: number, sid: string): Prom
   if (!x) throw new AssessError("unknown");
   const { tk, a } = x;
   const st = settingsOf(a), qs = questionsOf(a), t0 = now();
-  const view = (status: string, extra: Partial<SessionView> = {}): SessionView => ({ status, title: a.title, n: qs.length, minutes: st.minutes, deadline: tk.deadline, now: t0, pos: tk.pos, answers: {}, reason: tk.lock_reason, ...extra });
+  const view = (status: string, extra: Partial<SessionView> = {}): SessionView => ({ status, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, title: a.title, n: qs.length, minutes: st.minutes, deadline: tk.deadline, now: t0, pos: tk.pos, answers: {}, reason: tk.lock_reason, ...extra });
   if (["submitted", "graded"].includes(tk.status)) return view(tk.status);
   if (a.status === "closed" || (a.closes_at && t0 > a.closes_at)) return view("closed");
   if (tk.status === "invited") {
     const deadline = st.minutes ? t0 + st.minutes * 60 : null;
     await run(env, "UPDATE assessment_takers SET status = 'active', sid = ?, started_at = ?, deadline = ?, events = ? WHERE id = ? AND status = 'invited'", sid, t0, deadline, pushEvent(tk, "start"), tk.id);
-    return view("active", { deadline, paper: paperFor(qs, tk.seed), answers: {} });
+    return view("active", { deadline, paper: paperFor(qs, tk.seed, st.shuffle), answers: {} });
   }
   const resume = tk.resume_ok === 1;
-  if (tk.sid === sid && tk.status === "active") return view("active", { paper: paperFor(qs, tk.seed), answers: parse(tk.answers, {}) });
+  if (tk.sid === sid && tk.status === "active") return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}) });
   if (!resume) {
     // a reload or another device while the session runs: it stops
     if (tk.status === "active") await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = 'reload', events = ? WHERE id = ?", t0, pushEvent(tk, "reload"), tk.id);
     return view("locked", { reason: tk.status === "active" ? "reload" : tk.lock_reason });
   }
   await run(env, "UPDATE assessment_takers SET status = 'active', sid = ?, resume_ok = 0, lock_reason = NULL, events = ? WHERE id = ?", sid, pushEvent(tk, "resume"), tk.id);
-  return view("active", { paper: paperFor(qs, tk.seed), answers: parse(tk.answers, {}), reason: null });
+  return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}), reason: null });
 }
 
 async function activeTaker(env: Env, takerId: number, sid: string) {
@@ -248,11 +254,19 @@ async function activeTaker(env: Env, takerId: number, sid: string) {
 /** Save one answer (autosave as they type, and when they move on). */
 export async function saveAnswer(env: Env, takerId: number, sid: string, qid: string, answer: unknown, pos: number) {
   const { tk, a } = await activeTaker(env, takerId, sid);
-  const q = questionsOf(a).find((x) => x.id === qid);
+  const qs = questionsOf(a), st = settingsOf(a);
+  const q = qs.find((x) => x.id === qid);
   if (!q) throw new AssessError("unknown question");
+  let newPos = Math.max(0, Math.min(200, Math.round(pos) || 0));
+  if (st.nav === "forward") {
+    // one question at a time: a question already passed can't be answered again, and the position never goes back
+    const idx = paperFor(qs, tk.seed, st.shuffle).findIndex((x: any) => x.id === qid);
+    if (idx < (tk.pos || 0)) throw new AssessError("passed");
+    newPos = Math.max(tk.pos || 0, newPos);
+  }
   const answers = parse<Record<string, unknown>>(tk.answers, {});
   answers[qid] = q.type === "mcq" ? (Array.isArray(answer) ? answer : [answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < 6).slice(0, 6) : str(answer, 8000);
-  await run(env, "UPDATE assessment_takers SET answers = ?, pos = ? WHERE id = ? AND sid = ?", JSON.stringify(answers), Math.max(0, Math.min(200, Math.round(pos) || 0)), tk.id, sid);
+  await run(env, "UPDATE assessment_takers SET answers = ?, pos = ? WHERE id = ? AND sid = ?", JSON.stringify(answers), newPos, tk.id, sid);
 }
 
 /** The page saw them leave (full screen closed, other tab, other window): the session stops. */
@@ -260,6 +274,10 @@ export async function leaveEvent(env: Env, takerId: number, sid: string, what: s
   const x = await loadTaker(env, takerId);
   if (!x || x.tk.sid !== sid || x.tk.status !== "active") return;
   const why = ["fullscreen", "hidden", "blur", "paste", "devtools"].includes(what) ? what : "left";
+  const st = settingsOf(x.a);
+  if (why === "paste" && !st.noPaste) return;
+  // no full screen lock for this assessment: leaving the page is only written down, the session goes on
+  if (!st.lockScreen && why !== "paste") { await run(env, "UPDATE assessment_takers SET events = ? WHERE id = ?", pushEvent(x.tk, why), x.tk.id); return; }
   if (why === "paste") { await run(env, "UPDATE assessment_takers SET events = ? WHERE id = ?", pushEvent(x.tk, "paste"), x.tk.id); return; }
   await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = ?, events = ? WHERE id = ? AND status = 'active'", now(), why, pushEvent(x.tk, why), x.tk.id);
 }
@@ -384,6 +402,11 @@ export async function gradeTaker(env: Env, takerId: number, force = false): Prom
       return { ok: false, error: (ask as any).msg || "The AI didn't answer" };
     }
   }
+  // "graded" only when every question has its grade: a question the AI forgot keeps the paper "to grade"
+  if (qs.some((q) => !grades[q.id] || grades[q.id].pending)) {
+    await run(env, "UPDATE assessment_takers SET grades = ?, summary = ? WHERE id = ?", JSON.stringify(grades), summary, tk.id);
+    return { ok: false, error: "The AI didn't grade every question" };
+  }
   const score = scoreOf(qs, grades);
   await run(env, "UPDATE assessment_takers SET grades = ?, score = ?, summary = ?, status = 'graded' WHERE id = ?", JSON.stringify(grades), score, summary, tk.id);
   await applyResults(env, a, tk.id);
@@ -471,13 +494,13 @@ export async function applyResults(env: Env, a: AssessRow, takerId: number) {
 
 /** Send each graded student their score and the comments (when the teacher is happy with the grades). */
 export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
-  const qs = questionsOf(a);
+  const qs = questionsOf(a), st = settingsOf(a);
   const takers = await all<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", a.id);
   const L = g.lang;
   let sent = 0;
   for (const tk of takers.filter((x) => !needsGrading(x)).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
     const grades = parse<Record<string, Grade>>(tk.grades, {});
-    const order = paperFor(qs, tk.seed);
+    const order = paperFor(qs, tk.seed, st.shuffle);
     const fr = L === "fr";
     const ICON: Record<string, string> = { correct: "✅", partial: "🟡", wrong: "❌", empty: "⚪" };
     const lines = order.map((p) => { const gr = grades[p.id]; return `${ICON[gr?.verdict ?? "partial"] ?? "🟡"} **${p.n}.** ${String(p.prompt).split("\n")[0].slice(0, 80)}\n${gr?.comment ?? ""}`; });
@@ -571,3 +594,17 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
   if (!qs.length) throw new AssessError("The AI didn't write usable questions. Try again.");
   return qs;
 }
+
+/** The options of an assessment (asked before inviting): copy-paste, full screen, shuffled order, going back. */
+export async function saveOptions(env: Env, g: GuildRow, id: number, b: any) {
+  const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!a) throw new AssessError("This assessment doesn't exist anymore.");
+  const cur = settingsOf(a);
+  const started = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status != 'invited'", id);
+  const next = cleanSettings({ ...cur, ...pick(b, ["noPaste", "lockScreen", "shuffle", "nav"]) });
+  // the order of the questions can't change once a student has started (their paper would change under them)
+  if ((started?.n ?? 0) > 0) { next.shuffle = cur.shuffle; next.nav = cur.nav; }
+  await run(env, "UPDATE assessments SET settings = ? WHERE id = ?", JSON.stringify(next), id);
+  return next;
+}
+const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));

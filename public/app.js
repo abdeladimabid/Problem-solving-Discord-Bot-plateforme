@@ -1215,7 +1215,26 @@ function apCard(r) {
     ${r.note ? `<blockquote class="ap-note"><p>${esc(r.note.text)}</p><footer>${r.note.by === "ai" ? "✨ AI" : "You"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}
         <button class="ap-link" data-ap-edit="${id}">Edit</button><button class="ap-link" data-ap-ai="${id}">${r.note.by === "ai" ? "Rewrite" : "✨ AI version"}</button></footer></blockquote>`
       : `<div class="ap-note empty"><button class="ap-link" data-ap-edit="${id}">${icon("plus")}Write a comment</button><span class="muted">or</span><button class="ap-link" data-ap-ai="${id}">✨ let the AI sum up</button></div>`}
-    <footer class="ap-foot"><button class="btn small primary" data-ap-give="${id}">${icon("clipboard")}Give work</button><a class="btn small" href="#/student/${id}">Profile</a></footer></article>`;
+    <footer class="ap-foot"><button class="btn small primary" data-ap-give="${id}">${icon("clipboard")}Give work</button><button class="btn small" data-ap-gaps="${id}">🔎 Weak points</button><a class="btn small" href="#/student/${id}">Profile</a></footer></article>`;
+}
+/** A student's weak points (lacunes): debrief by debrief, then the assessments. */
+async function gapsDialog(r) {
+  const G = await api(`/plan/${r.discord_id}/gaps`);
+  const MES = { partiel: "partly done", non_valide: "not done" };
+  const deb = G.debriefs.slice().reverse().map((d) => `<section class="gp-b">
+      <header><span class="ap-h pgc-${esc(d.lv || "none")}">B${d.b}</span><a href="#/debrief/${d.bid}~${encodeURIComponent(d.who)}"><b>${esc(d.title)}</b></a>
+        ${d.lv ? `<span class="ap-lv pgc-${esc(d.lv)}">${esc(AP_LV[d.lv] || d.lv)}</span>` : ""}${d.final ? `<span class="tag">finalized</span>` : ""}</header>
+      ${!d.analyzed ? `<p class="muted small">Not analyzed yet.</p>` : !(d.comps.length || d.req.length || d.oral.length || d.mes) ? `<p class="small" style="color:var(--up)">Nothing missing in this debrief.</p>` : `
+        ${d.comps.length ? `<div class="gp-k">Competencies not validated</div><div class="gp-chips">${d.comps.map((c) => `<span class="tag comp ko" title="${esc(c.why)}">✗ ${esc(c.code)}</span>`).join("")}</div>` : ""}
+        ${d.req.length ? `<div class="gp-k">Requirements not met (${d.req.length})</div><ul class="gp-l">${d.req.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+        ${d.oral.length ? `<div class="gp-k">Notions to review (oral questions)</div><div class="gp-chips">${d.oral.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div>` : ""}
+        ${d.mes ? `<div class="gp-k">Mise en situation</div><p class="small">${esc(d.mes.title)}: <b>${esc(MES[d.mes.r] || d.mes.r)}</b>${d.mes.note ? ` · ${esc(d.mes.note)}` : ""}</p>` : ""}`}
+      ${d.comment ? `<details class="small"><summary>The comment</summary><p style="white-space:pre-wrap">${esc(d.comment)}</p></details>` : ""}</section>`).join("");
+  const as = G.assess.slice().reverse().map((a) => `<section class="gp-b"><header><b>📝 ${esc(a.title)}</b><b style="color:${masteryInk(a.score)}">${a.score ?? "—"}%</b></header>
+      ${a.missed.length ? `<ul class="gp-l">${a.missed.map((m) => `<li><b>Q${m.n}</b> ${esc(m.prompt)} <span class="muted small">· ${m.verdict === "empty" ? "not attempted" : m.verdict === "wrong" ? "wrong" : `${m.score}%`}</span>${m.comment && m.verdict !== "empty" ? `<div class="small muted">${esc(m.comment)}</div>` : ""}</li>`).join("")}</ul>` : `<p class="small" style="color:var(--up)">Every question right.</p>`}</section>`).join("");
+  openDialog(`Weak points · ${r.name}`, `${deb || `<p class="muted">No debrief yet.</p>`}${as ? `<h3 class="gp-h">Assessments</h3>${as}` : ""}`,
+    [{ label: "✨ AI comment from these", action: async (d) => { await api(`/plan/${r.discord_id}/ai`, { method: "POST", body: {} }); d.close(); toast("Comment written by the AI"); viewAssignments(); } }]);
+  dlg.classList.add("wide");
 }
 async function viewAssignments() {
   const [P, rows] = await Promise.all([api("/plan"), api("/assignments")]);
@@ -1231,12 +1250,12 @@ async function viewAssignments() {
   }
   const COLORS = { done: "var(--up)", late: "var(--warn)", failed: "var(--down)", missed: "var(--down)", open: "var(--line)" };
   view.innerHTML = `
-    <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students at a weak or critical level (or showing warning signs), whether they improve, whether they do the work you give them, and your comment on each one.</p></div>
+    <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students whose last debrief is Faible or Critique (its level: the assessment, the repo analysis and your level), and the ones you add yourself. Their weak points, whether they improve, whether they do the work you give them, and your comment.</p></div>
       <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
     <div class="ap-stats" role="group" aria-label="Show">${FILTERS.map(([v, l, n, c]) => `<button class="ap-stat ${c} ${n ? "" : "zero"}" data-apf="${v}" aria-pressed="${AP.filter === v}"><b>${n}</b><span>${l}</span></button>`).join("")}</div>
     <section class="panel ap-panel"><div class="panel-head"><h2>${AP.filter === "all" ? "Students who need help" : `${esc(FILTERS.find((f) => f[0] === AP.filter)[1])} <span class="muted">· ${shown.length}</span> <button class="ap-link" data-apf="all">show all</button>`}</h2></div>
       ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map(apCard).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
-        : `<div class="empty-state"><p><b>Nobody needs help right now.</b></p><p class="muted">Students land here by themselves when a debrief or a sprint gives them Faible or Critique, an assessment is under 50 %, or they show warning signs (inactive, points dropping, missed work). You can also add a student by hand.</p></div>`}
+        : `<div class="empty-state"><p><b>Nobody needs help right now.</b></p><p class="muted">Students land here by themselves when their last debrief is Faible or Critique. You can also add a student by hand.</p></div>`}
       <p class="muted small" style="margin:12px 0 0">Progress compares the last levels (debriefs B1, B2… and sprints) with the ones before; with fewer than two levels, the points of the last two weeks. Engagement is the share of the work given that was done (late counts).</p>
     </section>
     <section class="panel"><div class="panel-head"><h2>Work given</h2><span class="muted small">${groups.size} assignment(s)</span></div>
@@ -1255,6 +1274,7 @@ async function viewAssignments() {
   $$("[data-apf]").forEach((b) => b.onclick = () => { AP.filter = b.dataset.apf; viewAssignments(); });
   $("#ap-new").onclick = () => assignDialog(P.plan.map((r) => r.discord_id));
   $$("[data-ap-give]").forEach((b) => b.onclick = () => assignDialog([b.dataset.apGive]));
+  $$("[data-ap-gaps]").forEach((b) => b.onclick = () => busy(b, () => gapsDialog(byId.get(b.dataset.apGaps))));
   $$("[data-ap-edit]").forEach((b) => b.onclick = () => {
     const r = byId.get(b.dataset.apEdit);
     openDialog(`Comment on ${r.name}`, `<label for="ap-t">What you see, what was agreed with the student, the next step</label>

@@ -4,7 +4,8 @@
 import type { Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, run } from "./db.ts";
 import { chat } from "./ai.ts";
-import { progressView } from "./review/debrief.ts";
+import { getReview, progressView, statesOf } from "./review/debrief.ts";
+import { compLabel } from "./program.ts";
 
 export class PlanError extends Error {}
 
@@ -85,19 +86,22 @@ export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
     const lowCount = levels.filter((l) => LOW.has(l)).length + sp.filter((x) => LOW.has(x.lv)).length;
     const n = noteOf.get(id);
     const eng = engagement(asgOf.get(id) || [], s.last_active);
+    // only the debriefs decide (their level: the assessment, the repo analysis and the teacher's level together):
+    // Faible or Critique on the last debrief puts a student in the plan; the teacher can add anyone by hand
+    const lastDeb = debriefs[debriefs.length - 1];
+    const debLevel = lastDeb?.lv || "";
     const why: string[] = [];
-    if (current === "critique") why.push("Critique on the last debrief");
-    else if (current === "faible") why.push("Faible on the last debrief");
-    else if (lowCount) why.push(`${lowCount} weak level(s) this year`);
+    if (LOW.has(debLevel)) why.push(`${debLevel === "critique" ? "Critique" : "Faible"} on B${lastDeb!.b} · ${lastDeb!.title}`);
+    const earlierLow = debriefs.slice(0, -1).filter((d) => LOW.has(d.lv)).length;
+    if (earlierLow) why.push(`${earlierLow} weak debrief(s) before`);
+    if (n?.flagged === 1 && !LOW.has(debLevel)) why.unshift("Added by you");
     const lastScore = scores[scores.length - 1];
-    if (lastScore != null && lastScore < 50) why.push(`assessment ${lastScore}%`);
-    why.push(...s.attention);
-    const auto = LOW.has(current) || lowCount > 0 || (lastScore != null && lastScore < 50) || s.attention.length > 0;
+    const auto = LOW.has(debLevel);
     const inPlan = n?.flagged === 1 || (auto && n?.flagged !== -1);
     // how worried to be: critical first
-    const severity = current === "critique" ? 0 : current === "faible" ? 1 : lowCount ? 2 : s.attention.length || (lastScore != null && lastScore < 50) ? 3 : 4;
+    const severity = debLevel === "critique" ? 0 : debLevel === "faible" ? 1 : 2;
     return {
-      discord_id: id, name: s.name || id, team: s.team ?? null, current, lowCount, severity,
+      discord_id: id, name: s.name || id, team: s.team ?? null, current: debLevel || current, lowCount, severity, manual: n?.flagged === 1,
       debriefs: debriefs.slice(-6), sprints: sp.slice(-4), lastScore: lastScore ?? null, avgScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
       trend: levelTrend(levels.length >= 2 ? levels : [...sp.map((x) => x.lv), ...levels], s.trend),
       activity: s.trend, lastActive: s.last_active, accuracy: s.accuracy, why, auto, inPlan, flagged: n?.flagged ?? 0,
@@ -155,9 +159,13 @@ export async function aiPlanNote(env: Env, g: GuildRow, row: Awaited<ReturnType<
     row.accuracy != null ? `Practice accuracy: ${row.accuracy}%` : "",
     row.why.length ? `Warning signs: ${row.why.join(", ")}` : "",
     row.note?.text && row.note.by === "you" ? `The teacher's earlier comment: ${row.note.text}` : "",
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n") + await gapsOf(env, g, row.discord_id).then((gp) => {
+    const d = gp.debriefs.filter((x: any) => x.analyzed).slice(-3).map((x: any) => `B${x.b} ${x.title}: ${[x.comps.length ? `competencies not validated ${x.comps.map((c: any) => c.code).join(", ")}` : "", x.req.length ? `requirements missed: ${x.req.slice(0, 5).join("; ")}` : "", x.oral.length ? `oral notions to review: ${x.oral.join(", ")}` : ""].filter(Boolean).join(" · ")}`);
+    const a = gp.assess.slice(-2).map((x: any) => `${x.title}: ${x.score}%, missed ${x.missed.slice(0, 5).map((m: any) => m.prompt.slice(0, 60)).join("; ")}`);
+    return d.length || a.length ? `\nWeak points (lacunes):\n${[...d, ...a].join("\n")}` : "";
+  }).catch(() => "");
   const text = await chat(env, [
-    { role: "system", content: `You help a programming teacher (web development bootcamp) follow a student in an action plan for weak students. Write, in ${fr ? "French" : "English"}, a short comment for the teacher (not for the student), 3 to 4 sentences: where the student stands, whether they improve and do the work given, and the one next step the teacher should take. Factual, from the data only, no invented facts, no headings, no lists, no greeting.` },
+    { role: "system", content: `You help a programming teacher (web development bootcamp) follow a student in an action plan for weak students. Write, in ${fr ? "French" : "English"}, a short comment for the teacher (not for the student), 3 to 4 sentences: where the student stands, their main weak points (lacunes), whether they improve and do the work given, and the one next step the teacher should take. Factual, from the data only, no invented facts, no headings, no lists, no greeting.` },
     { role: "user", content: `Student: ${row.name}\n${facts}` },
   ], { maxTokens: 900, temperature: 0.4, timeoutMs: 25000 }).catch(() => "");
   const t = text.trim().slice(0, 1200);
@@ -181,4 +189,38 @@ export async function niveaux(env: Env, g: GuildRow) {
     out[s.discord_id] = { lv: last.lv, from: last.from, trend: levelTrend(seq, ""), history: seq.slice(-6) };
   }
   return out;
+}
+
+/** All of a student's weak points (lacunes), debrief by debrief: requirements not met, competencies not validated,
+ *  oral notions to review, the mise en situation, and the assessment questions missed. */
+export async function gapsOf(env: Env, g: GuildRow, sid: string) {
+  const P = await progressView(env, g);
+  const out: any[] = [];
+  for (const [i, b] of P.briefs.entries()) {
+    const c = P.cells[`${b.id}:${sid}`];
+    if (!c) continue;
+    const r = await getReview(env, b.id, c.who).catch(() => null);
+    const rec = r?.rec;
+    if (!rec?.result) { out.push({ b: i + 1, bid: b.id, who: c.who, title: b.title, lv: c.lv || c.plv, final: c.final, analyzed: false }); continue; }
+    const st = statesOf(rec)!;
+    const ex = (rec.result.exigences || []) as any[];
+    const req = ex.map((e, k) => ({ e, ok: st.ex[k] })).filter((x) => !x.ok && x.e.type !== "bonus").map((x) => String(x.e.texte || "").replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim()).filter(Boolean);
+    const comps = ((rec.result.competences || []) as any[]).filter((x) => st.co[x.code] === false).map((x) => ({ code: compLabel(String(x.code)), why: String(x.preuve || x.justification || "").slice(0, 200) }));
+    const oral = ((rec.oral || []) as any[]).map((q, k) => ({ q, ok: st.oral[k] })).filter((x) => !x.ok).map((x) => String(x.q.notion || x.q.q || "")).filter(Boolean);
+    const mes = rec.challenge && st.mes.r && st.mes.r !== "valide" ? { title: String(rec.challenge.titre || rec.challenge.title || "Mise en situation"), r: st.mes.r, note: st.mes.note } : null;
+    const comment = String((rec.members || {})[sid]?.comment || rec.result.feedback || "").slice(0, 1500);
+    out.push({ b: i + 1, bid: b.id, who: c.who, title: b.title, lv: c.lv || c.plv, final: c.final, analyzed: true, req, comps, oral, mes, comment });
+  }
+  // the assessments: the questions missed or only partly right, the competencies they didn't validate
+  const papers = await all<{ id: number; title: string; grades: string | null; score: number | null; questions: string; brief_id: number | null }>(env,
+    `SELECT t.id, a.title, t.grades, t.score, a.questions, a.brief_id FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+      WHERE a.guild_id = ? AND t.discord_id = ? AND t.status = 'graded' ORDER BY t.id`, g.id, sid).catch(() => []);
+  const assess = papers.map((p) => {
+    let grades: Record<string, any> = {}, qs: any[] = [];
+    try { grades = JSON.parse(p.grades || "{}"); qs = JSON.parse(p.questions || "[]"); } catch { /* old row */ }
+    const missed = qs.map((q, k) => ({ n: k + 1, prompt: String(q.prompt || "").split("\n")[0].slice(0, 160), g: grades[q.id] })).filter((x) => x.g && x.g.verdict !== "correct")
+      .map((x) => ({ n: x.n, prompt: x.prompt, verdict: x.g.verdict, score: x.g.score, comment: String(x.g.comment || "").slice(0, 300) }));
+    return { id: p.id, title: p.title, score: p.score, missed };
+  });
+  return { debriefs: out, assess };
 }

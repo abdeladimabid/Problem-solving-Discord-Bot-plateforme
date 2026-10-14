@@ -231,7 +231,7 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
         const st = reviewStates(rec);
         const co = rec.members?.[uid]?.co ?? st.co;
         const ex = rec.result?.exigences || [];
-        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => e.type !== "bonus");
+        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
         summary = {
           pct: main.length ? Math.round((main.filter(([, v]: any) => v).length / main.length) * 100) : null,
           ok: Object.entries(co).filter(([, v]) => v).map(([c]) => c), ko: Object.entries(co).filter(([, v]) => !v).map(([c]) => c),
