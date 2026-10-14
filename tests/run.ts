@@ -2701,7 +2701,7 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
 {
   const gen = await api("POST", "/api/assessments/generate", { g: G, topic: "Flexbox", count: 3, for_student: U.alice.id });
   check(gen.status === 200 && gen.data.questions.length === 3 && gen.data.questions.some((x: any) => x.type === "mcq" && x.answer[0] === 1), "AI questions (code, explain, multiple choice)");
-  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox", questions: gen.data.questions, settings: { minutes: 30, passAt: 60, points: 10 } });
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox", questions: gen.data.questions, settings: { minutes: 30, passAt: 60, points: 10, nav: "free" } });
   const aid = mk.data.assessment.id;
   check(mk.status === 200 && mk.data.assessment.status === "draft" && mk.data.assessment.questions.every((x: any) => x.id), "assessment saved as a draft");
   const calls0 = discordCalls.length;
@@ -3681,7 +3681,7 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   const qs = [1, 2, 3].map((i) => ({ type: "explain", prompt: `Question numéro ${i}`, expected: "x", points: 1 }));
   const mk = await api("POST", "/api/assessments", { g: G, title: "Options", questions: qs, settings: { minutes: 0 } });
   const aid = mk.data.assessment.id;
-  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, free to go back");
+  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "forward", "by default: copy-paste blocked, full screen, shuffled, no going back");
   const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
