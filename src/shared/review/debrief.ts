@@ -30,22 +30,23 @@ export class DebriefError extends Error {}
 
 // ------------------------------------------------------------------ the AI
 /** Groq first with a compact prompt (its free tier is small), then Workers AI with the full one. */
-export async function askReview(env: Env, system: string, user: string | ((compact: boolean) => string), cost = 3): Promise<{ ok: true; data: any; model: string } | { ok: false; msg: string }> {
+export async function askReview(env: Env, system: string, user: string | ((compact: boolean) => string), cost = 3,
+  o: { maxTokens?: number; read?: (text: string) => any } = {}): Promise<{ ok: true; data: any; model: string } | { ok: false; msg: string }> {
   if (!(await aiBudgetOk(env, cost))) return { ok: false, msg: "ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow." };
   await aiBudgetUse(env, cost);
   const text = (compact: boolean) => (typeof user === "function" ? user(compact) : user);
   let why = "";
   if (await hasKeyedAi(env)) {
     try {
-      const r = await groqChat(env, [{ role: "system", content: system }, { role: "user", content: text(true) }], { maxTokens: 2500, temperature: 0.2, json: true, timeoutMs: 100000 });
-      const data = extractJson(r.text);
+      const r = await groqChat(env, [{ role: "system", content: system }, { role: "user", content: text(true) }], { maxTokens: o.maxTokens ?? 2500, temperature: 0.2, json: true, timeoutMs: 100000 });
+      const data = (o.read ?? extractJson)(r.text);
       if (data) return { ok: true, data, model: r.model };
       why = "Groq answer not usable";
     } catch (e) { why = String((e as Error)?.message ?? e); }
   }
   try {
-    const r = await workersChat(env, [{ role: "system", content: system }, { role: "user", content: text(false) }], { maxTokens: 3500, temperature: 0.2, timeoutMs: 120000 });
-    const data = extractJson(r.text);
+    const r = await workersChat(env, [{ role: "system", content: system }, { role: "user", content: text(false) }], { maxTokens: Math.max(3500, o.maxTokens ?? 0), temperature: 0.2, timeoutMs: 120000 });
+    const data = (o.read ?? extractJson)(r.text);
     if (data) return { ok: true, data, model: r.model };
     why = (why ? why + "; " : "") + "answer not usable";
   } catch (e) {

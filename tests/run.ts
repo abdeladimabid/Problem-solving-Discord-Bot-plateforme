@@ -3671,11 +3671,34 @@ section("assessments: graded by objectives, in lots that resume after an AI fail
     await api("POST", `/api/assessments/${aid2}/grade`, { g: G, lot: 5 });
     const r2 = q("SELECT * FROM assessment_takers WHERE assessment_id = ? ORDER BY id", aid2);
     const gb = Object.values(JSON.parse(r2[0].grades))[0] as any, gc = Object.values(JSON.parse(r2[1].grades))[0] as any;
-    check(r2[0].status === "graded" && gb.parts.find((x: any) => x.goal === "sélecteur p").got === "yes" && gb.score === 38 && gb.verdict === "partial", "the AI said the selector p was missing while it's written: checked again, the selector counts (no wrong 0)");
-    check(r2[1].status === "submitted" && gc.pending && /grade it yourself/.test(gc.wrong), "still unsure after the check: the question is left to the teacher, not given a 0");
+    check(r2[0].status === "graded" && gb.parts.find((x: any) => x.goal === "sélecteur p").got === "yes" && gb.score === 25 && gb.verdict === "partial" && /sélecteur p/.test(gb.right), "the AI said the selector p was missing while it's written: it counts, with no extra AI call (no wrong 0)");
+    check(r2[1].status === "submitted" && gc.pending && /couldn't judge/.test(gc.wrong), "a part the AI couldn't judge: the question is left to the teacher, not given a 0");
     const asc = await import("../src/shared/assess.ts");
     check(asc.seenInAnswer("balise <form> avec action", '<form action="#">') && asc.seenInAnswer("sélecteur div", "div{ width:200px }") && !asc.seenInAnswer("balise <head>", "<html><body>"), "a tag or a selector the student wrote is seen in the answer");
-    run1("DELETE FROM ai_usage");
+    // an AI answer cut in the middle: the complete notes are kept, the missing question is asked again alone
+    check(asc.readNotes('{"notes":[{"id":1,"score":100},{"id":2,"sc').notes.length === 1 && asc.readNotes('{"notes":[{"objectif":"x"}').notes.length === 1, "an answer cut in the middle: the complete notes are read");
+    const mk3 = await api("POST", "/api/assessments", { g: G, title: "Cut", questions: [
+      { type: "code", lang: "html", prompt: "Un titre h1 Bonjour.", expected: "<h1>Bonjour</h1>", points: 1 },
+      { type: "code", lang: "html", prompt: "Un titre h1 Salut.", expected: "<h1>Salut</h1>", points: 1 },
+      { type: "code", lang: "html", prompt: "Un paragraphe.", expected: "<p>Texte</p>", points: 1 }], settings: { minutes: 0, shuffle: false } });
+    const aid3 = mk3.data.assessment.id;
+    await api("POST", `/api/assessments/${aid3}/invite`, { g: G, students: [U.bob.id, U.carol.id], send: false });
+    const links3 = (await api("GET", `/api/assessments/${aid3}/links?g=${G}`)).data.links;
+    const calls: number[] = [];
+    for (const [who, sid] of [[U.bob.id, "sessionCUTBBBBBBBBBBBBB1"], [U.carol.id, "sessionCUTCCCCCCCCCCCCC1"]]) {
+      const tok = links3[who].split("/quiz/")[1];
+      const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return r.json() as any; };
+      const st = await quiz("start", { sid });
+      for (const pq of st.paper) await quiz("answer", { sid, qid: pq.id, answer: /Bonjour/.test(pq.prompt) ? "<h1>TRUNC-TEST Bonjour</h1>" : /Salut/.test(pq.prompt) ? "<h1>TRUNC-TEST Salut</h1>" : "<p>Texte</p>" });
+      const before = ai.calls;
+      await quiz("submit", { sid });   // graded when handed in
+      calls.push(ai.calls - before);
+    }
+    const r3 = q("SELECT * FROM assessment_takers WHERE assessment_id = ? ORDER BY id", aid3);
+    const g3 = Object.values(JSON.parse(r3[0].grades)) as any[];
+    check(r3[0].status === "graded" && g3.length === 3 && g3.every((x) => x.score === 100 && !x.pending), "the AI's answer was cut after one question: the second is asked again alone, nothing is left ungraded");
+    check(calls[0] === 2, "the answer that is the expected one is graded with no AI call (2 calls: the paper + the cut question)");
+    check(r3[1].status === "graded" && calls[1] === 0, "another student with the same answers: graded from the first one's grades, no AI call at all");
   }
   // Carol's debrief of the linked brief is finalized: her grade doesn't move anymore
   run1(`INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Obj brief', 'assigned', '{}', ?)`, G, clock.now());
