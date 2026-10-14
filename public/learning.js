@@ -431,7 +431,7 @@ function renderBrief() {
         ${b.due_at ? ` · due ${fmtDateTime(b.due_at)}` : ""} · ${d.competencies.map((c) => compChip(c)).join(" ")}</p></div>
       <div class="toolbar" style="margin:0">
         <button class="btn" id="bb-copy">Copy for Simplonline</button>
-        ${b.status === "assigned" ? `<button class="btn" id="bb-assign">Dates &amp; announce</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Publish to the class</button>`}
+        ${b.status === "assigned" ? `<button class="btn" id="bb-assign">${B.kind === "squad" ? "Dates, squads &amp; announce" : "Dates &amp; announce"}</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Assign to the class</button>`}
         <button class="btn danger" id="bb-del">Delete</button></div></div>
     ${b.status === "assigned" ? `<div class="figures cs-figs">
       <div class="figure"><span class="ico">📥</span><div><b>${handed}/${total}</b><span>handed in</span></div></div>
@@ -443,7 +443,6 @@ function renderBrief() {
       <button role="tab" data-bt="brief">Brief</button>
       <button role="tab" data-bt="students">${B.kind === "squad" ? "Squads" : "Students"} &amp; debriefs</button>
       <button role="tab" data-bt="grid">Evaluation grid</button>
-      <button role="tab" data-bt="team">Solo or squads</button>
       <button role="tab" data-bt="po">PO notes</button>
     </div>
     <div id="bb-tab"></div>`;
@@ -480,6 +479,10 @@ function wireDirty(root, id = "bb-save") {
   return mark;
 }
 
+// how the students work on a brief: alone, in pairs, in squads (the brief's "Work" field)
+const WORK_MODES = [["individuel", "Individuel (each student alone)"], ["binôme", "Binôme (pairs)"], ["groupe", "Groupe (squads)"]];
+const workMode = (m) => (/bin|pair/i.test(String(m || "")) ? "binôme" : /group|squad|[ée]quipe|team/i.test(String(m || "")) ? "groupe" : "individuel");
+
 function briefEditorTab(root) {
   const { B } = BR, d = B.brief.data;
   const card = (sec, body) => `<section class="bf" data-sec="${sec}"><header><b>${esc(SEC_LABEL[sec])}</b><span class="bf-act">
@@ -501,7 +504,7 @@ function briefEditorTab(root) {
       ${card("bonus", ta("bonus", d.bonus.join("\n"), "lines", 70))}
       ${card("modalities", `<div class="field-row">
           <div><label>Days</label><input type="number" min="1" max="30" data-f="modalities.days" data-k="num" value="${d.modalities.days}"></div>
-          <div><label>Work</label><input type="text" data-f="modalities.mode" value="${esc(d.modalities.mode)}"></div>
+          <div><label>Work</label><select data-f="modalities.mode">${WORK_MODES.map(([v, l]) => `<option value="${v}" ${workMode(d.modalities.mode) === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
           <div><label>Start</label><input type="date" data-f="modalities.start" value="${esc(d.modalities.start)}"></div>
           <div><label>Due</label><input type="date" data-f="modalities.due" value="${esc(d.modalities.due)}"></div></div>
         <label>Your own wording <span class="muted">(optional: else it's written from the fields above)</span></label>${ta("modalities.text", d.modalities.text, "", 60)}`)}
@@ -573,16 +576,67 @@ function rewriteDialog(sec) {
 }
 
 function assignBriefDialog() {
-  const b = BR.B.brief, d = b.data;
-  openDialog(b.status === "assigned" ? "Dates and announcement" : "Publish to the class", `
+  const B = BR.B, b = B.brief, d = b.data;
+  // the Work chosen in the editor counts even before it's saved
+  const live = $('#bb-tab select[data-f="modalities.mode"]')?.value || "";
+  const mode = workMode(live || d.modalities.mode), grouped = mode !== "individuel";
+  const students = B.students.map((s) => ({ id: s.discord_id, name: s.name || s.discord_id }));
+  const squads = JSON.parse(JSON.stringify(B.kind === "squad" ? B.squads : []));
+  openDialog(b.status === "assigned" ? "Dates, squads and announcement" : "Assign to the class", `
+    <p class="small muted" style="margin:4px 0 6px">Work: <b>${esc(WORK_MODES.find(([v]) => v === mode)[1])}</b> <span class="muted">(change it in the brief's modalities)</span></p>
     <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
     <div data-wsprint></div>
-    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord</label>`,
-    [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
+    <label for="ab-h">Expected repo name <span class="muted">(optional: finds their repo when they didn't hand it in, e.g. <code>portfolio</code>)</span></label>
+    <input type="text" id="ab-h" value="${esc(B.repo_hint || "")}" style="max-width:340px">
+    ${grouped ? `<div class="ab-sq">
+      <div class="ab-sq-head"><div><b>${mode === "binôme" ? "Pairs" : "Squads"}</b> <span class="small muted" id="ab-sq-n"></span>
+        <div class="small muted">The scrum master hands in the ${mode === "binôme" ? "pair's" : "squad's"} repo with <code>/brief submit</code>. Drag students between ${mode === "binôme" ? "pairs" : "squads"}.</div></div>
+        <div class="toolbar" style="margin:0"><select id="ab-from"><option value="">Class squads…</option></select>
+          ${mode === "binôme" ? `<button class="btn small" id="ab-rand" type="button">🎲 Random pairs</button>` : ""}</div></div>
+      <div id="ab-board" class="${mode === "binôme" ? "ab-pairs" : ""}"></div></div>` : ""}
+    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (in #general)</label>`,
+    [{ label: b.status === "assigned" ? "Save" : "Assign", primary: true, action: async () => {
+      const keep = squads.filter((x) => x.members.length);
+      if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Random squads, or load the class squads).");
+      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...(live && live !== d.modalities.mode ? { data: { ...d, modalities: { ...d.modalities, mode: live } } } : {}) } });
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
-      dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();
+      dlg.close(); toast(b.status === "assigned" ? "Saved" : "Assigned to the class"); renderBrief();
     } }]);
+  dlg.classList.add("wide");
   wSprintField(dlg, b.sprint ?? null, "#ab-d", b.week);
+  if (!grouped) return;
+  const count = () => { const n = squads.filter((x) => x.members.length).length, inSq = new Set(squads.flatMap((x) => x.members)); $("#ab-sq-n", dlg).textContent = `${n} ${mode === "binôme" ? "pair(s)" : "squad(s)"} · ${students.length - students.filter((x) => inSq.has(x.id)).length} student(s) left`; };
+  const board = squadBoard($("#ab-board", dlg), students, squads, count);
+  count();
+  const hex = () => Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
+  // random groups: everyone in one, sizes as even as possible (an odd student joins a pair as a trio)
+  const randomize = () => {
+    const size = mode === "binôme" ? 2 : 4;
+    const pool = students.map((x) => x.id).sort(() => Math.random() - 0.5);
+    const n = Math.max(1, Math.floor(pool.length / size));
+    const groups = Array.from({ length: n }, () => []);
+    pool.forEach((id, i) => groups[i % n].push(id));
+    squads.splice(0, squads.length, ...groups.map((m, i) => ({ id: hex(), name: `${mode === "binôme" ? "Binôme" : "Squad"} ${i + 1}`, members: m, sm: m[0] })));
+    board.redraw(); count();
+  };
+  if ($("#ab-rand", dlg)) $("#ab-rand", dlg).onclick = randomize;
+  api("/squads").then((r) => {
+    const sel = $("#ab-from", dlg);
+    if (!sel) return;
+    sel.innerHTML = `<option value="">${r.sets.length ? "Load the class squads…" : "No class squads yet"}</option>` + r.sets.map((x) => `<option value="${x.id}">${esc(x.name)}${x.active ? " · current" : ""} (${x.squads.length})</option>`).join("");
+    sel.onchange = () => {
+      const set = r.sets.find((x) => String(x.id) === sel.value);
+      if (!set) return;
+      const ok = new Set(students.map((x) => x.id));
+      squads.splice(0, squads.length, ...set.squads.map((x) => ({ ...x, members: x.members.filter((m) => ok.has(m)) })).filter((x) => x.members.length));
+      board.redraw(); count();
+    };
+    // nothing yet: the class's current squads (for groups) or random pairs
+    if (!squads.length) {
+      const cur = r.sets.find((x) => x.active) || r.sets[0];
+      if (cur && mode !== "binôme") { sel.value = String(cur.id); sel.onchange(); } else randomize();
+    }
+  }).catch(() => { if (!squads.length) randomize(); });
 }
 
 function reviewCell(rv) {
@@ -602,13 +656,13 @@ function briefStudentsTab(root) {
   if (B.kind === "squad") {
     const nameOf = (uid) => B.students.find((s) => s.discord_id === uid)?.name || uid;
     const alone = B.students.filter((s) => !s.squad);
-    html = (alone.length ? `<div class="notice warn" style="margin-bottom:12px">${alone.length} student(s) in no squad: ${alone.map((s) => esc(s.name || s.discord_id)).join(", ")}. Add them in “Solo or squads”.</div>` : "") + table([
+    html = (alone.length ? `<div class="notice warn" style="margin-bottom:12px">${alone.length} student(s) in no squad: ${alone.map((s) => esc(s.name || s.discord_id)).join(", ")}. Add them with “Dates, squads & announce”.</div>` : "") + table([
       { label: "Squad", sort: "name", html: (s) => `<b>${esc(s.name)}</b><div class="small">${s.members.map((m) => `${avatar(nameOf(m), m)} ${esc(nameOf(m))}${m === s.sm ? " <span class='tag'>SM</span>" : ""}`).join("<br>")}</div>` },
       { label: "Pushed", html: (s) => s.members.map((m) => pushCell(B.students.find((x) => x.discord_id === m)?.push)).join("<br>") },
       { label: "Handed in", html: (s) => handinCell(s.handin) },
       { label: "Debrief", html: (s) => reviewCell(s.review) },
       { label: "", html: (s) => actions(`s:${s.id}`, s.handin) },
-    ], B.squadRows, { empty: "No squads yet: make them in “Solo or squads”." });
+    ], B.squadRows, { empty: "No squads yet: make them with “Dates, squads & announce”." });
   } else {
     html = table([
       { label: "Student", sort: "name", html: (s) => `<a href="#/student/${s.discord_id}">${avatar(s.name, s.discord_id)} ${esc(s.name || s.discord_id)}</a>` },
@@ -1122,7 +1176,7 @@ async function shareAssessmentDialog(id) {
     <p class="small" style="margin-top:0">Send this link to other teachers. In their ClassBot (yours or their own) they open <b>Assessments → Import from a link</b> and get a copy of the questions, with their competencies and skills. Your students' papers and results are never shared.</p>
     <div class="url-list"><div><b>Link</b><code id="sh-url">${esc(r.url)}</code><button class="btn small" id="sh-copy">Copy</button></div></div>
     <p class="small muted">Opened in a browser, it shows the title and the questions' first lines. Shared it with the wrong person? Make a new link: the old one stops working.</p>`,
-  [{ label: "New link (the old one stops working)", action: async () => { const n = await api(`/assessments/${id}/share`, { method: "DELETE" }); $("#sh-url", dlg).textContent = n.url; toast("New link: the old one doesn't work anymore"); } },
+  [{ label: "New link (the old one stops working)", action: async () => { const n = await api(`/assessments/${id}/share`, { method: "DELETE", confirmed: true }); $("#sh-url", dlg).textContent = n.url; toast("New link: the old one doesn't work anymore"); } },
    { label: "Done", primary: true, action: async () => dlg.close() }]);
   $("#sh-copy", dlg).onclick = () => copyText($("#sh-url", dlg).textContent, "Link copied");
 }

@@ -10,7 +10,30 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+// Every delete asks first. The pages that already ask (confirmDialog) mark the moment, so it isn't asked twice.
+let confirmedAt = 0;
+const CANCELLED = "__cancelled__";
+function askConfirm(title, text, label = "Delete") {
+  return new Promise((resolve) => {
+    const d = document.createElement("dialog");
+    d.className = "confirm-dlg";
+    d.innerHTML = `<div class="dlg-body"><div class="cf-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></div>
+      <h2>${esc(title)}</h2><p>${esc(text)}</p></div>
+      <div class="dlg-foot"><button class="btn" data-no>Cancel</button><button class="btn danger" data-yes>${esc(label)}</button></div>`;
+    document.body.append(d);
+    const done = (v) => { d.close(); d.remove(); resolve(v); };
+    $("[data-no]", d).onclick = () => done(false);
+    $("[data-yes]", d).onclick = () => done(true);
+    d.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });
+    d.showModal();
+    $("[data-no]", d).focus();
+  });
+}
+
 async function api(path, opts = {}) {
+  if (opts.method === "DELETE" && !opts.confirmed && Date.now() - confirmedAt > 5000) {
+    if (!(await askConfirm(opts.confirmTitle || "Delete this?", opts.confirmText || "This can't be undone.", opts.confirmLabel || "Delete"))) throw new Error(CANCELLED);
+  }
   const sep = path.includes("?") ? "&" : "?";
   const url = `/api${path}${S.g ? `${sep}g=${encodeURIComponent(S.g)}` : ""}`;
   const res = await fetch(url, {
@@ -26,6 +49,7 @@ async function api(path, opts = {}) {
 
 let toastTimer;
 function toast(msg, error = false) {
+  if (msg === CANCELLED) return;
   $(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast" + (error ? " error" : "");
@@ -38,7 +62,7 @@ function toast(msg, error = false) {
 
 async function busy(btn, fn) {
   btn.disabled = true;
-  try { return await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; }
+  try { return await fn(); } catch (e) { if (e.message !== CANCELLED) toast(e.message, true); } finally { btn.disabled = false; }
 }
 
 const fmtDate = (u) => (u ? new Date(u * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—");
@@ -101,7 +125,7 @@ function openDialog(title, body, buttons = []) {
   return dlg;
 }
 function confirmDialog(title, text, label, action, danger = false) {
-  openDialog(title, `<p>${esc(text)}</p>`, [{ label, primary: !danger, danger, action: async () => { await action(); dlg.close(); } }]);
+  openDialog(title, `<p>${esc(text)}</p>`, [{ label, primary: !danger, danger, action: async () => { confirmedAt = Date.now(); await action(); dlg.close(); } }]);
 }
 
 // ============================================================ icons
@@ -340,7 +364,7 @@ const masteryInk = (m) => (m == null ? "var(--ink-faint)" : m >= 65 ? "var(--up)
 // ============================================================ router
 const routes = {
   overview: viewOverview, students: viewStudents, student: viewStudent, challenges: viewChallenges,
-  assignments: viewAssignments, contests: viewContests, contest: viewContest, teams: viewTeams, settings: viewSettings,
+  assignments: viewAssignments, plan: viewAssignments, contests: viewContests, contest: viewContest, teams: viewTeams, settings: viewSettings,
   daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
 async function route() {
@@ -390,7 +414,7 @@ async function viewOverview() {
         <div class="hero-main"><h1>${esc(d.guild.name || "Your class")}</h1>
           <p class="sub">${esc(d.guild.season)} · bot speaks ${d.guild.lang === "fr" ? "French" : "English"}</p>
           <div class="actions">
-            <a class="btn primary" href="#/assignments">${icon("clipboard")}Assign a challenge</a>
+            <a class="btn primary" href="#/assignments">${icon("clipboard")}Plan d'action</a>
             <a class="btn" href="#/challenges/new">${icon("plus")}New challenge</a>
             <a class="btn" href="/api/export.csv?g=${encodeURIComponent(S.g)}" download>${icon("download")}Export grades</a>
           </div></div>
@@ -440,7 +464,7 @@ async function viewOverview() {
       </div>
       <section class="panel"><h2>Quick actions</h2>
         <div class="quick">
-          <a href="#/assignments"><span class="ico">${icon("clipboard")}</span><span><b>Give an assignment</b><small>to everyone, a team or a few students</small></span></a>
+          <a href="#/assignments"><span class="ico">${icon("clipboard")}</span><span><b>Plan d'action</b><small>the students who need help, and the work given to them</small></span></a>
           <a href="#/challenges/new"><span class="ico">${icon("code")}</span><span><b>Write a code problem</b><small>tests computed from your solution</small></span></a>
           <a href="#/challenges/ai"><span class="ico">${icon("spark")}</span><span><b>Generate with AI</b><small>checked by running it</small></span></a>
           <a href="#/contests"><span class="ico">${icon("trophy")}</span><span><b>Follow a contest</b><small>live commentary in #arena</small></span></a>
@@ -1055,7 +1079,7 @@ async function editChallenge(id, fromReport = false) {
     <h3 style="margin-top:18px">Results (${c.results.length})</h3>
     ${c.results.length ? `<div class="table-wrap"><table>${c.results.map((r) => `<tr><td>${esc(r.name || r.discord_id)}</td><td>${status(r.status)}</td><td>${codeView({ ...r, kind: c.kind })}</td><td class="muted small">${esc(ORIGIN[r.origin] || r.origin)}</td></tr>`).join("")}</table></div>` : `<p class="empty">Nobody has tried it yet.</p>`}`,
   [
-    { label: "Remove from bank", danger: true, action: async () => { await api(`/challenges/${id}`, { method: "DELETE" }); dlg.close(); toast("Challenge removed"); viewChallenges(); } },
+    { label: "Remove from bank", danger: true, action: async () => { await api(`/challenges/${id}`, { method: "DELETE", confirmTitle: "Remove this challenge from the bank?", confirmText: "Students won't get it anymore. Their past solves and points stay.", confirmLabel: "Remove" }); dlg.close(); toast("Challenge removed"); viewChallenges(); } },
     { label: "Assign", action: async () => { dlg.close(); assignDialog([], id); } },
     ...(c.results.some((r) => r.status !== "solved") ? [{ label: "Why students fail", action: async () => mistakesDialog(c) }] : []),
     { label: "Save", primary: true, action: async (root) => {
@@ -1141,12 +1165,46 @@ async function submitAssign(root) {
 }
 async function assignDialog(preStudents = [], preChallenge = null) {
   const [students, challenges, teams] = await Promise.all([loadStudents(), loadChallenges(), api("/teams")]);
-  openDialog("Assign a challenge", assignForm(preStudents, preChallenge, students, challenges, teams), [{ label: "Assign", primary: true, action: async (root) => { await submitAssign(root); dlg.close(); } }]);
+  openDialog("Assign a challenge", assignForm(preStudents, preChallenge, students, challenges, teams), [{ label: "Assign", primary: true, action: async (root) => { await submitAssign(root); dlg.close(); if (/^#\/(assignments|plan)\b/.test(location.hash)) viewAssignments(); } }]);
   wireAssign(dlg, challenges, teams);
 }
 
+// ================================================= plan d'action: the students who need help, and the work given to them
+const AP_LV = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
+const AP_TREND = { up: ["up", "↑", "Improving"], down: ["down", "↓", "Slipping"], flat: ["flat", "→", "Steady"], unknown: ["unknown", "·", "Not enough data yet"] };
+const AP_ENG = { engaged: ["up", "Engaged"], partial: ["warn", "Partly engaged"], not: ["down", "Not engaged"], waiting: ["flat", "Work in progress"], none: ["flat", "No work given yet"] };
+const AP = { filter: "all" };
+function apCard(r) {
+  const tr = AP_TREND[r.trend] || AP_TREND.unknown, en = AP_ENG[r.engagement.state] || AP_ENG.none, e = r.engagement;
+  const seg = (n, c, t) => (n ? `<span style="flex:${n};background:${c}" title="${n} ${t}"></span>` : "");
+  const hist = [...r.sprints.map((x) => ({ k: `S${x.sprint}`, lv: x.lv, t: `Sprint ${x.sprint}` })), ...r.debriefs.map((d) => ({ k: `B${d.b}`, lv: d.lv, t: d.title, href: `#/debrief/${d.bid}~u:${r.discord_id}` }))];
+  return `<article class="ap-card sev-${r.severity}" data-sid="${esc(r.discord_id)}">
+    <header class="ap-head">${avatar(r.name, r.discord_id)}<div class="ap-who"><a href="#/student/${esc(r.discord_id)}"><b>${esc(r.name)}</b></a>
+      <span class="muted small">${r.team ? `Team ${esc(r.team)} · ` : ""}active ${esc(fmtAgo(r.lastActive))}</span></div>
+      ${r.current ? `<span class="ap-lv pgc-${esc(r.current)}">${esc(AP_LV[r.current] || r.current)}</span>` : `<span class="ap-lv none">No level yet</span>`}</header>
+    <div class="ap-ind">
+      <div class="ap-i"><span class="ap-il">Progress</span><span class="ap-tr ${tr[0]}"><b>${tr[1]}</b> ${tr[2]}</span></div>
+      <div class="ap-i"><span class="ap-il">Engagement</span><span class="ap-tr ${en[0]}">${en[1]}${e.pct != null ? ` · ${e.pct}%` : ""}</span></div>
+      ${r.avgScore != null ? `<div class="ap-i"><span class="ap-il">Assessments</span><span class="ap-tr ${r.avgScore >= 60 ? "up" : r.avgScore >= 45 ? "warn" : "down"}">${r.avgScore}% avg</span></div>` : ""}
+    </div>
+    ${hist.length ? `<div class="ap-hist" aria-label="Levels over time">${hist.map((h) => `<${h.href ? `a href="${h.href}"` : "span"} class="ap-h pgc-${esc(h.lv)}" data-tip="${esc(h.k)} · ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}" aria-label="${esc(h.k)} ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}">${esc(h.k)}</${h.href ? "a" : "span"}>`).join("")}</div>` : ""}
+    <div class="ap-work"><div class="ap-bar">${e.total ? seg(e.done, "var(--up)", "done") + seg(e.late, "var(--warn)", "late") + seg(e.failed + e.missed, "var(--down)", "not solved / missed") + seg(e.open, "var(--line-strong)", "open") : ""}</div>
+      <span class="small muted">${e.total ? `${e.done + e.late}/${e.total} done${e.missed ? ` · ${e.missed} missed` : ""}${e.overdue ? ` · ${e.overdue} overdue` : ""}${e.open - e.overdue > 0 ? ` · ${e.open - e.overdue} open` : ""}` : "Nothing given yet"}</span></div>
+    ${r.why.length ? `<div class="ap-why">${r.why.slice(0, 4).map((w) => `<span>${esc(w)}</span>`).join("")}</div>` : ""}
+    <div class="ap-note ${r.note ? "" : "empty"}">${r.note ? `<p>${esc(r.note.text)}</p><span class="small muted">${r.note.by === "ai" ? "✨ Written by the AI" : "Your comment"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}</span>` : `<p class="muted small">No comment yet: write one, or let the AI sum up this student.</p>`}</div>
+    <footer class="ap-foot">
+      <button class="btn small primary" data-ap-give="${esc(r.discord_id)}">${icon("clipboard")}Give work</button>
+      <button class="btn small" data-ap-edit="${esc(r.discord_id)}">${r.note ? "Edit the comment" : "Write a comment"}</button>
+      <button class="btn small" data-ap-ai="${esc(r.discord_id)}">✨ ${r.note?.by === "ai" ? "Rewrite" : "AI comment"}</button>
+      <button class="btn small ghost ap-out" data-ap-out="${esc(r.discord_id)}" title="Take out of the plan">Out of the plan</button>
+    </footer></article>`;
+}
 async function viewAssignments() {
-  const [rows, students, challenges, teams] = await Promise.all([api("/assignments"), loadStudents(true), loadChallenges(), api("/teams")]);
+  const [P, rows] = await Promise.all([api("/plan"), api("/assignments")]);
+  const S2 = P.summary;
+  const FILTERS = [["all", "All", S2.total], ["critique", "Critique", S2.critique], ["faible", "Faible", S2.faible], ["down", "Slipping", S2.slipping], ["not", "Not engaged", S2.notEngaged], ["none", "No work yet", S2.noWork]];
+  const pass = (r) => AP.filter === "all" || (AP.filter === "critique" || AP.filter === "faible" ? r.current === AP.filter : AP.filter === "down" ? r.trend === "down" : AP.filter === "not" ? r.engagement.state === "not" : r.engagement.state === "none");
+  const shown = P.plan.filter(pass);
   const groups = new Map();
   for (const r of rows) {
     const k = `${r.challenge_id}|${r.created_at}`;
@@ -1154,26 +1212,64 @@ async function viewAssignments() {
     groups.get(k).items.push(r);
   }
   const COLORS = { done: "var(--up)", late: "var(--warn)", failed: "var(--down)", missed: "var(--down)", open: "var(--line)" };
+  const stat = (n, l, cls = "") => `<div class="ap-stat ${cls}"><b>${n}</b><span>${l}</span></div>`;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Assignments</h1><p class="sub">Give specific challenges to specific students and follow who finished them.</p></div></div>
-    <div class="grid cols-2">
-      <section class="panel" id="list"><h2>Given so far</h2>
-        ${groups.size ? [...groups.values()].map((g, gi) => {
-          const n = g.items.length, c = (s) => g.items.filter((i) => i.status === s).length;
-          return `<details style="border-bottom:1px solid var(--line);padding:10px 0"><summary style="cursor:pointer;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-              <b style="flex:1;min-width:180px">${esc(g.title)}</b> ${diffTag(g.difficulty)}
-              <span class="bar-progress" title="${c("done")} done, ${c("late")} late, ${c("failed") + c("missed")} not solved, ${c("open")} open">${["done", "late", "failed", "missed", "open"].map((s) => c(s) ? `<span style="width:${(100 * c(s)) / n}%;background:${COLORS[s]}"></span>` : "").join("")}</span>
-              <span class="small muted">${c("done") + c("late")}/${n} done · ${g.due_at ? `due ${fmtDateTime(g.due_at)}` : "no due date"}</span></summary>
-            ${g.note ? `<p class="small">📝 ${esc(g.note)}</p>` : ""}
-            <table>${g.items.map((i) => `<tr><td><a href="#/student/${i.discord_id}">${esc(i.name || i.discord_id)}</a></td><td>${status(i.status)}</td><td class="small muted">${i.completed_at ? fmtDateTime(i.completed_at) : ""}</td><td class="num">${i.points ? `+${i.points}` : ""}</td>
-              <td>${i.status === "open" ? `<button class="btn small" data-cancel="${i.id}">Cancel</button>` : ""}</td></tr>`).join("")}</table></details>`;
-        }).join("") : `<p class="empty">Nothing assigned yet. Use the form to give your first challenge.</p>`}
-      </section>
-      <section class="panel"><h2>New assignment</h2>${assignForm([], null, students, challenges, teams)}<p><button class="btn primary" id="go">Assign</button></p></section>
-    </div>`;
-  wireAssign(view, challenges, teams);
-  $("#go").onclick = (e) => busy(e.currentTarget, async () => { await submitAssign(view); viewAssignments(); });
-  $$("[data-cancel]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/assignments/${b.dataset.cancel}`, { method: "DELETE" }); toast("Assignment cancelled"); viewAssignments(); }));
+    <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students at a weak or critical level (or showing warning signs), whether they improve, whether they do the work you give them, and your comment on each one.</p></div>
+      <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
+    <div class="ap-stats">${stat(S2.total, "in the plan")}${stat(S2.critique, "critique", "down")}${stat(S2.faible, "faible", "warn")}${stat(S2.improving, "improving", "up")}${stat(S2.slipping, "slipping", "down")}${stat(S2.engaged, "engaged", "up")}${stat(S2.notEngaged, "not engaged", "down")}</div>
+    <section class="panel"><div class="panel-head"><h2>Students who need help</h2>
+      <div class="ap-filters" role="group" aria-label="Filter">${FILTERS.map(([v, l, n]) => `<button class="chip" data-apf="${v}" aria-pressed="${AP.filter === v}">${l}${n ? ` · ${n}` : ""}</button>`).join("")}</div></div>
+      ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map(apCard).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
+        : `<div class="empty-state"><p><b>Nobody needs help right now.</b></p><p class="muted">Students land here by themselves when a debrief or a sprint gives them Faible or Critique, an assessment is under 50 %, or they show warning signs (inactive, points dropping, missed work). You can also add a student by hand.</p></div>`}
+      <p class="muted small" style="margin:12px 0 0">Progress compares the last levels (debriefs B1, B2… and sprints) with the ones before; with fewer than two levels, the points of the last two weeks. Engagement is the share of the work given that was done (late counts).</p>
+    </section>
+    <section class="panel"><div class="panel-head"><h2>Work given</h2><span class="muted small">${groups.size} assignment(s)</span></div>
+      ${groups.size ? [...groups.values()].map((g) => {
+        const n = g.items.length, c = (st) => g.items.filter((i) => i.status === st).length;
+        return `<details class="ap-asg"><summary>
+            <b style="flex:1;min-width:180px">${esc(g.title)}</b> ${diffTag(g.difficulty)}
+            <span class="bar-progress" title="${c("done")} done, ${c("late")} late, ${c("failed") + c("missed")} not solved, ${c("open")} open">${["done", "late", "failed", "missed", "open"].map((st) => c(st) ? `<span style="width:${(100 * c(st)) / n}%;background:${COLORS[st]}"></span>` : "").join("")}</span>
+            <span class="small muted">${c("done") + c("late")}/${n} done · ${g.due_at ? `due ${fmtDateTime(g.due_at)}` : "no due date"}</span></summary>
+          ${g.note ? `<p class="small">📝 ${esc(g.note)}</p>` : ""}
+          <table>${g.items.map((i) => `<tr><td><a href="#/student/${i.discord_id}">${esc(i.name || i.discord_id)}</a></td><td>${status(i.status)}</td><td class="small muted">${i.completed_at ? fmtDateTime(i.completed_at) : ""}</td><td class="num">${i.points ? `+${i.points}` : ""}</td>
+            <td>${i.status === "open" ? `<button class="btn small" data-cancel="${i.id}">Cancel</button>` : ""}</td></tr>`).join("")}</table></details>`;
+      }).join("") : `<p class="empty">Nothing given yet. Use <b>Give work</b> on a student, or the button at the top.</p>`}
+    </section>`;
+  const byId = new Map([...P.plan, ...P.others].map((r) => [r.discord_id, r]));
+  $$("[data-apf]").forEach((b) => b.onclick = () => { AP.filter = b.dataset.apf; viewAssignments(); });
+  $("#ap-new").onclick = () => assignDialog(P.plan.map((r) => r.discord_id));
+  $$("[data-ap-give]").forEach((b) => b.onclick = () => assignDialog([b.dataset.apGive]));
+  $$("[data-ap-edit]").forEach((b) => b.onclick = () => {
+    const r = byId.get(b.dataset.apEdit);
+    openDialog(`Comment on ${r.name}`, `<label for="ap-t">What you see, what was agreed with the student, the next step</label>
+      <textarea id="ap-t" rows="7" style="width:100%" maxlength="2000">${esc(r.note?.text || "")}</textarea>
+      <p class="muted small">Only teachers see it. Empty it to remove the comment.</p>`,
+      [{ label: "Save", primary: true, action: async () => { await api(`/plan/${r.discord_id}`, { method: "PUT", body: { note: $("#ap-t", dlg).value } }); dlg.close(); toast("Comment saved"); viewAssignments(); } }]);
+  });
+  $$("[data-ap-ai]").forEach((b) => b.onclick = () => busy(b, async () => {
+    const r = byId.get(b.dataset.apAi);
+    if (r.note?.by === "you" && !(await askConfirm("Replace your comment?", "The AI writes a new comment in place of yours.", "Replace"))) return;
+    toast("⏳ The AI reads this student's results…");
+    await api(`/plan/${b.dataset.apAi}/ai`, { method: "POST", body: {} });
+    toast("Comment written by the AI: you can edit it");
+    viewAssignments();
+  }));
+  $$("[data-ap-out]").forEach((b) => b.onclick = () => {
+    const r = byId.get(b.dataset.apOut);
+    confirmDialog(`Take ${r.name} out of the plan?`, "Their comment and the work given stay. You can add them back with Add a student.", "Take out", async () => { await api(`/plan/${r.discord_id}`, { method: "PUT", body: { flagged: -1 } }); toast("Out of the plan"); viewAssignments(); }, true);
+  });
+  $("#ap-add").onclick = () => {
+    const list = P.others;
+    openDialog("Add a student to the plan", list.length ? `<input type="search" id="ap-q" placeholder="Search a student" style="width:100%;margin-bottom:8px">
+      <div class="picklist" id="ap-l">${list.map((r) => `<label class="check"><input type="radio" name="ap-s" value="${esc(r.discord_id)}"> ${esc(r.name)} <span class="muted small">${r.current ? `· ${esc(AP_LV[r.current] || r.current)}` : ""}</span></label>`).join("")}</div>` : `<p class="muted">Every student is already in the plan.</p>`,
+      list.length ? [{ label: "Add to the plan", primary: true, action: async () => {
+        const v = $("input[name=ap-s]:checked", dlg)?.value;
+        if (!v) throw new Error("Choose a student");
+        await api(`/plan/${v}`, { method: "PUT", body: { flagged: 1 } }); dlg.close(); toast("Added to the plan"); viewAssignments();
+      } }] : []);
+    if ($("#ap-q", dlg)) $("#ap-q", dlg).oninput = (e) => { const q = e.target.value.toLowerCase(); $$("#ap-l label", dlg).forEach((l) => { l.hidden = !l.textContent.toLowerCase().includes(q); }); };
+  };
+  $$("[data-cancel]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/assignments/${b.dataset.cancel}`, { method: "DELETE", confirmTitle: "Cancel this assignment?", confirmText: "The student won't see it anymore. Work already handed in stays.", confirmLabel: "Cancel the assignment" }); toast("Assignment cancelled"); viewAssignments(); }));
 }
 
 // ========================================================== contests
@@ -1760,7 +1856,7 @@ async function viewDaily() {
     toast(`"${c.title}" planned for ${dayLabel(b.dataset.pin)}`);
     viewDaily();
   });
-  $$("[data-unpin]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/daily/pins/${b.dataset.unpin}`, { method: "DELETE" }); toast("Back to random"); viewDaily(); }));
+  $$("[data-unpin]").forEach((b) => b.onclick = () => busy(b, async () => { await api(`/daily/pins/${b.dataset.unpin}`, { method: "DELETE", confirmTitle: "Remove this pinned challenge?", confirmText: "That day goes back to a random challenge.", confirmLabel: "Unpin" }); toast("Back to random"); viewDaily(); }));
   const postNow = (replace) => openDialog(replace ? "Replace today's challenge" : "Post a challenge now", `
       <p class="muted small">${replace ? "The new challenge replaces today's: the Solve button on today's post opens the new one, and the first-solver bonus starts again." : "It becomes today's daily challenge (it replaces today's if one was already posted)."}</p>
       <div class="tabs" role="tablist"><button data-t="pick" aria-selected="true">Choose a challenge</button><button data-t="rand">Random</button></div>
