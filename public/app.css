@@ -1539,3 +1539,10 @@ div.asl-opt { cursor: default; }
   .app.nav-min #nav-min svg { transform: rotate(180deg); }
 }
 @media (max-width: 860px) { #nav-min { display: none; } }
+/* a grade: the objectives of the question, the score is their sum */
+.why-parts { list-style: none; margin: 8px 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.why-parts li { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: 13px; border-top: 1px solid var(--line); }
+.why-parts li:first-child { border-top: 0; }
+.why-parts li span { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.why-parts li.yes span { background: var(--up-bg); color: var(--up); } .why-parts li.partly span { background: var(--warn-bg); color: var(--warn); } .why-parts li.no span { background: var(--down-bg); color: var(--down); }
+.why-parts li b { margin-left: auto; font-size: 12px; color: var(--ink-soft); }

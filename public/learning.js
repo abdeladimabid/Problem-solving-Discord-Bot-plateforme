@@ -1644,7 +1644,7 @@ function assessResultsTab(root) {
     </div>
     <section class="panel">
     <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0">
-      <button class="btn small" id="rs-grade" title="The AI grades (again) every paper handed in; grades you changed stay">↻ Grade with AI</button><button class="btn small primary" id="rs-send">Send results by DM</button></span></div>
+      <button class="btn small" id="rs-grade" title="The AI grades the papers not graded yet (or all again); grades you changed and finalized debriefs stay">↻ Grade with AI</button><button class="btn small primary" id="rs-send">Send results by DM</button></span></div>
     <p class="muted small" style="margin-top:0">Click a <b>student</b> to read their whole paper (each answer, what was right, what was wrong, the mistakes in their code), or a <b>score</b> for one question. ✎ = changed by you.</p>
     ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Student</th><th>Score</th>${qs.map((q, i) => `<th class="ctr" title="${esc(q.prompt.slice(0, 200))}"><span class="qh">${QI[q.type]} Q${i + 1}</span><small>${q.points} pt</small></th>`).join("")}</tr></thead>
       <tbody>${done.map((t) => `<tr><td><button class="res-who" data-paper="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b><small>${t.status === "submitted" ? "to grade" : "open the paper →"}</small></span></button></td>
@@ -1658,7 +1658,7 @@ function assessResultsTab(root) {
         ${hardest.map((x) => `<div class="hard-q"><b style="color:${masteryInk(x.v)}">${x.v}%</b><div><b>Q${x.i + 1}</b> ${esc(x.q.prompt.slice(0, 160))}${(x.q.comps || []).map((c) => " " + compChip(c.code + "N" + c.level)).join("")}</div></div>`).join("")}</section>` : ""}
       ${done.some((t) => t.summary) ? `<section class="panel"><h2>AI summary per student</h2>${done.filter((t) => t.summary).map((t) => `<p class="small"><b>${esc(t.name || t.discord_id)}</b>: ${esc(t.summary)}</p>`).join("")}</section>` : ""}
     </div>` : ""}`;
-  $("#rs-grade").onclick = (e) => busy(e.currentTarget, async () => { toast("⏳ Grading (8 papers at a time)…"); AS.A = await api(`/assessments/${a.id}/grade`, { method: "POST", body: {} }); toast("Graded"); renderAssessment(); });
+  $("#rs-grade").onclick = () => gradeAllDialog(a);
   $("#rs-send").onclick = () => confirmDialog("Send the results?", `Each graded student gets their score${a.settings.showResults ? " and the corrections" : ""} by DM, and the results go to their competencies and skills${a.settings.points ? ` (+ up to ${a.settings.points} pts)` : ""}.`, "Send", async () => {
     const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: {} }); toast(`Sent to ${r.sent} student(s)`);
   });
@@ -1689,10 +1689,52 @@ function gradeWhy(g) {
   if (!g || !g.verdict) return `<p class="muted small">Not graded yet.</p>`;
   const v = VERDICT_TXT[g.verdict] || ["", g.verdict];
   return `<div class="why"><p style="margin:0"><span class="lvl ${v[0]}">${esc(v[1])}</span> ${g.verdict === "empty" ? "" : `<b style="color:${masteryInk(g.score)}">${g.score}%</b> `}<span class="muted small">${g.teacher ? "changed by you" : g.verdict === "empty" ? "no answer: counts 0, not as a mistake" : "graded by the AI"}</span></p>
+    ${(g.parts || []).length ? `<ul class="why-parts">${g.parts.map((x) => `<li class="${x.got}"><span>${x.got === "yes" ? "✓" : x.got === "partly" ? "½" : "✗"}</span>${esc(x.goal)}<b>${x.got === "yes" ? x.weight : x.got === "partly" ? Math.round(x.weight / 2) : 0}/${x.weight}</b></li>`).join("")}</ul>` : ""}
+    ${g.pending ? `<p class="why-ko"><b>Not graded yet:</b> the AI couldn't grade it. Click “Grade with AI” again, or change the grade yourself.</p>` : ""}
     ${g.right ? `<p class="why-ok"><b>✓ Right:</b> ${esc(g.right)}</p>` : ""}${g.wrong ? `<p class="why-ko"><b>✗ Wrong or missing:</b> ${esc(g.wrong)}</p>` : ""}
     ${g.comment ? `<p class="why-msg"><b>💬 To the student:</b> ${esc(g.comment)}</p>` : ""}</div>`;
 }
 /** A student's whole paper: each question, their answer and why it got its grade. */
+/** "Grade with AI": in small lots, with the progress. When the AI's limit is reached it stops, and the next time it
+ *  continues with the papers still to grade (nothing is given a 0 in the meantime). */
+function gradeAllDialog(a) {
+  const pending = (t) => t.status === "submitted" || (t.status === "graded" && Object.values(t.grades || {}).some((x) => x && !x.teacher && (x.pending || /indisponible|unavailable|Pas encore corrigé|Not graded yet/i.test(String(x.comment || "")))));
+  const handed = AS.A.takers.filter((t) => ["submitted", "graded"].includes(t.status));
+  const todo = handed.filter(pending).length;
+  openDialog("Grade with AI", `
+    <label class="check"><input type="radio" name="ga-m" value="todo" ${todo ? "checked" : ""}> <span><b>The papers still to grade</b> (${todo}) <span class="muted small">· not graded yet, or a question the AI couldn't grade</span></span></label>
+    <label class="check"><input type="radio" name="ga-m" value="all" ${todo ? "" : "checked"}> <span><b>Every paper again</b> (${handed.length}) <span class="muted small">· the grades you changed stay</span></span></label>
+    <p class="small muted">Students whose debrief is finalized are never graded again. The AI grades 3 papers at a time; if its limit is reached it stops, and the next time it continues where it stopped.</p>
+    <div id="ga-prog" hidden><div class="aa-bar"><span></span></div><p class="small" id="ga-st"></p></div>`,
+    [{ label: "Start", primary: true, action: async (d) => {
+      const all = $("input[name=ga-m]:checked", d).value === "all";
+      const btn = $(".dlg-foot .btn.primary", d);
+      btn.hidden = true; $$("input[name=ga-m]", d).forEach((x) => { x.disabled = true; });
+      $("#ga-prog", d).hidden = false;
+      let stop = false, done = 0, after = 0, left = all ? handed.length : todo, total = left || 1, err = "", skipped = 0;
+      $(".dlg-foot", d).insertAdjacentHTML("afterbegin", `<button class="btn" id="ga-stop">Stop</button>`);
+      $("#ga-stop", d).onclick = () => { stop = true; $("#ga-stop", d).disabled = true; };
+      const draw = (msg) => { $(".aa-bar span", d).style.width = `${Math.min(100, Math.round((done / total) * 100))}%`; $("#ga-st", d).textContent = msg; };
+      draw(`⏳ Grading… 0/${total}`);
+      while (!stop) {
+        let r;
+        try { r = await api(`/assessments/${a.id}/grade`, { method: "POST", body: { all, after, lot: 3 } }); }
+        catch (e) { err = e.message; break; }
+        AS.A = r; done += r.batch.graded; after = r.batch.last; skipped = r.batch.skipped;
+        total = Math.max(total, done + r.batch.left);
+        draw(`⏳ Grading… ${done}/${total}`);
+        if (r.batch.error) { err = r.batch.error; break; }
+        if (!r.batch.left || !r.batch.graded) break;
+      }
+      $("#ga-stop", d)?.remove();
+      const rest = AS.A.takers.filter(pending).length;
+      draw(err ? `Stopped: ${done} graded. The AI stopped answering (${err}). ${rest} paper(s) still to grade: click Grade with AI again later (or tomorrow): it continues with them, nothing was given a 0.`
+        : `${stop ? "Stopped" : "Done"}: ${done} paper(s) graded${rest ? `, ${rest} still to grade` : ""}${skipped ? ` · ${skipped} finalized debrief(s) left as they are` : ""}.`);
+      $("#ga-st", d).className = err ? "small notice warn" : "small";
+      btn.hidden = false; btn.textContent = "Close"; btn.onclick = () => d.close();
+      renderAssessment();
+    } }]);
+}
 function paperDialog(t) {
   const qs = AS.A.assessment.questions;
   const stops = t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length, pastes = t.events.filter((e) => e[1] === "paste").length;
