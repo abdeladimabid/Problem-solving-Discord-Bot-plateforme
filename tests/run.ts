@@ -3702,6 +3702,36 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
 }
 
+section("AI limits: grading in small requests, waiting out a per-minute limit");
+{
+  const { perMinuteWait } = await import("../src/shared/aikeys.ts");
+  check(perMinuteWait("Groq: limit reached (429): Rate limit reached for model `x` on tokens per minute (TPM): Limit 8000, Used 7000, Requested 2000. Please try again in 7.5s.") === 11
+    && perMinuteWait("limit reached (429): tokens per day (TPD): Limit 200000") === 0 && perMinuteWait("key refused (401)") === 0 && perMinuteWait("Gemini: limit reached (429): Resource exhausted") === 33, "a per-minute limit: wait (as long as it says); a daily one: no");
+  const qs = Array.from({ length: 8 }, (_, i) => ({ type: "explain", prompt: `Chunk question ${i + 1}`, expected: "x", points: 1 }));
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Chunks", questions: qs, settings: { minutes: 0, nav: "free" } });
+  const aid = mk.data.assessment.id;
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id], send: false });
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[U.bob.id].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return r.json() as any; };
+  const sid = "sessionCHUNKCHUNKCHUNK01";
+  const st = await quiz("start", { sid });
+  for (const p of st.paper) await quiz("answer", { sid, qid: p.id, answer: "display: flex", pos: 0 });
+  const before = ai.prompts.filter((x) => x.includes("Tu corriges l’évaluation")).length;
+  await quiz("submit", { sid });
+  const calls = ai.prompts.filter((x) => x.includes("Tu corriges l’évaluation")).length - before;
+  const row = q1("SELECT status, grades FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  check(calls === 2 && row.status === "graded" && Object.keys(JSON.parse(row.grades)).length === 8, "8 questions: graded in 2 smaller AI requests (6 + 2), every question graded");
+  run1("DELETE FROM ai_usage");
+}
+
+section("AI keys: a Gemini model overloaded (503): the reason shown, another model used");
+{
+  const add = await api("POST", "/api/settings/ai/providers", { g: G, type: "gemini", key: "AIza-good-1", model: "gemini-busy-flash" });
+  const p = add.data.providers?.find((x: any) => x.type === "gemini");
+  check(add.status === 200 && p?.model === "gemini-2.5-flash" && /overloaded right now \(503\)/.test(add.data.warn || ""), "added with a model that answers, and told why");
+  if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);

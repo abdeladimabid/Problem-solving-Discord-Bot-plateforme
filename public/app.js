@@ -1424,8 +1424,13 @@ async function aiSettings(root, flash = null) {
   const status = d.usage.own ? ["ok", "✅ This class uses its own AI keys", `${d.providers.filter((p) => !p.off).length} AI${d.providers.filter((p) => !p.off).length > 1 ? "s" : ""}, each one the backup of the one before. No ClassBot daily limit: only your providers' own limits.`]
     : d.server?.allowed ? ["ok", "✅ This class uses the ClassBot's key", `${esc(d.server.label)} (${esc(d.server.masked)}). Add this class's own key below so it doesn't depend on it.`]
     : ["warn", "⚠️ No AI key for this class", d.hasWorkers && d.workers ? `Cloudflare's free AI answers, with a daily limit for this class (${d.usage.today}/${d.usage.limit} used today). Add a free key below: Groq or Google Gemini take 2 minutes.` : "No AI answers for this class: add a key below."];
+  // several keys of the same Groq account (same organization in their errors): they share ONE limit, so they're no backup
+  const orgs = {};
+  for (const p of d.providers) { const m = String(p.err || "").match(/organization `?(org_[\w]+)/); if (m) (orgs[m[1]] ??= []).push(p.label); }
+  const shared = Object.values(orgs).filter((x) => x.length > 1);
   root.innerHTML = `
     ${flash ? `<div class="notice small" style="margin-bottom:12px">${esc(flash)}</div>` : ""}
+    ${shared.length ? `<div class="notice warn small" style="margin-bottom:12px"><b>${shared[0].length} of these keys come from the same account</b> (same organization): they share one limit, so when one is used up they all are. For real backups, use keys from different accounts, or add another provider (Google Gemini or Cerebras: free, with higher limits).</div>` : ""}
     <div class="panel set-card ai-status ${status[0]}"><div><b>${status[1]}</b><div class="small muted">${status[2]}</div>
       <div class="ai-chain small">${chain.length ? chain.map((c, i) => `<span>${i ? "→ " : ""}${esc(c)}</span>`).join(" ") : "<span>nothing</span>"}</div></div></div>
 

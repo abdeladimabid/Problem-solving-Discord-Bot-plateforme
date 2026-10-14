@@ -315,6 +315,7 @@ export function notAttempted(q: Pick<Question, "type" | "starter">, ans: unknown
   return q.type === "code" && !!q.starter && squash(ans) === squash(q.starter);
 }
 
+const GRADE_CHUNK = 6;
 export async function gradeTaker(env: Env, takerId: number, force = false): Promise<{ ok: boolean; error?: string }> {
   const x = await loadTaker(env, takerId);
   if (!x) return { ok: false, error: "This paper doesn't exist anymore." };
@@ -327,6 +328,9 @@ export async function gradeTaker(env: Env, takerId: number, force = false): Prom
   const open: Question[] = [];
   for (const q of qs) {
     if (grades[q.id]?.teacher && !force) continue;          // the teacher's grade stays
+    // a paper still to grade whose grading stopped half way (the AI's limit): the questions already graded stay
+    const gq = grades[q.id];
+    if (tk.status === "submitted" && q.type !== "mcq" && gq && !gq.pending && gq.verdict !== "empty" && !/indisponible|unavailable|Pas encore corrigé|Not graded yet/i.test(String(gq.comment || ""))) continue;
     const ans = answers[q.id];
     if (q.type === "mcq") {
       const pick = new Set<number>(Array.isArray(ans) ? ans : []);
@@ -341,7 +345,11 @@ export async function gradeTaker(env: Env, takerId: number, force = false): Prom
     else open.push(q);
   }
   let summary = tk.summary ?? "";
-  if (open.length) {
+  // a few questions per AI call: a whole paper in one request can be bigger than a free AI's limit per minute
+  const allOpen = open.slice(), bilans: string[] = [];
+  for (let c0 = 0; c0 < allOpen.length; c0 += GRADE_CHUNK) {
+    const open = allOpen.slice(c0, c0 + GRADE_CHUNK);
+    {
     const system = [
       L === "fr" ? "Tu corriges l’évaluation d’un apprenant développeur web, en français, avec bienveillance et précision." : "You grade a web development student's assessment, kindly and precisely, in English.",
       "Pour chaque question : verdict \"correct\" (tout est juste), \"partial\" (l’idée est là mais il manque ou il y a une erreur), \"wrong\" (faux ou hors sujet) ; un score de 0 à 100 qui suit ces points.",
@@ -397,13 +405,16 @@ export async function gradeTaker(env: Env, takerId: number, force = false): Prom
         // the AI forgot this one: say so instead of a made-up 50%
         if (!n) grades[q.id] = { verdict: "partial", score: 0, pending: true, comment: L === "fr" ? "Pas encore corrigé : ton formateur va le corriger." : "Not graded yet: your teacher will grade it.", wrong: "The AI gave no grade for this answer: click “Grade with AI” again, or grade it yourself." };
       });
-      summary = str(ask.data?.bilan ?? ask.data?.summary, 900);
+      const bl = str(ask.data?.bilan ?? ask.data?.summary, 600);
+      if (bl) bilans.push(bl);
+      summary = bilans.length > 1 ? str(bilans.join(" "), 900) : bilans[0] || "";
     } else {
       // the AI didn't answer (its limit is reached, or it's down): the paper stays "to grade", nothing is given a 0;
       // "Grade with AI" picks it up again later, where it stopped
       await run(env, "UPDATE assessment_takers SET grades = ? WHERE id = ?", JSON.stringify(grades), tk.id);
       return { ok: false, error: (ask as any).msg || "The AI didn't answer" };
     }
+  }
   }
   // "graded" only when every question has its grade: a question the AI forgot keeps the paper "to grade"
   if (qs.some((q) => !grades[q.id] || grades[q.id].pending)) {

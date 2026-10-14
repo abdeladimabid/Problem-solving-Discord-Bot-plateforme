@@ -690,6 +690,15 @@ function wireDebriefTools(root) {
   }
   $("#dbt-all", root).onclick = () => analyzeAllDialog(root);
 }
+/** The AI's per-minute limit (Groq tokens per minute…): seconds to wait before going on; 0 for a daily limit. */
+function perMinuteWait(msg) {
+  const m = String(msg || "");
+  if (/per day|\bTPD\b|\bRPD\b|daily|used up|for today|tomorrow/i.test(m)) return 0;
+  if (!/per minute|\bTPM\b|\bRPM\b|\(429\)|rate.?limit|resource exhausted|too many requests/i.test(m)) return 0;
+  const t = m.match(/try again in (?:(\d+)m)?\s*([\d.]+)\s*s/i);
+  return Math.max(5, Math.min(90, Math.ceil(t ? Number(t[1] || 0) * 60 + Number(t[2] || 0) : 30) + 3));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Analyze the debriefs one after the other (2 at a time), with the progress; it can be stopped. */
 function analyzeAllDialog(root) {
   const { B } = BR, id = B.brief.id;
@@ -719,7 +728,16 @@ function analyzeAllDialog(root) {
           const i = next++, r = q[i], li = $(`[data-i="${i}"]`, d);
           li.className = "run"; li.scrollIntoView({ block: "nearest" });
           try {
-            await api(`/briefs/${id}/review/analyze`, { method: "POST", body: { who: r.who } });
+            for (let tries = 0; ; tries++) {
+              try { await api(`/briefs/${id}/review/analyze`, { method: "POST", body: { who: r.who } }); break; }
+              catch (e) {
+                // the AI's per-minute limit: wait, then the same student again (up to 4 times)
+                const w = perMinuteWait(e.message);
+                if (!w || tries >= 4 || stop) throw e;
+                li.querySelector("small").textContent = `⏳ AI per-minute limit: waiting ${w} s…`;
+                await sleep(w * 1000);
+              }
+            }
             li.className = "ok"; done++;
           } catch (e) {
             li.className = "ko"; li.title = e.message; li.querySelector("small").textContent = e.message.slice(0, 120); failed++;
@@ -1768,18 +1786,24 @@ function gradeAllDialog(a) {
       const btn = $(".dlg-foot .btn.primary", d);
       btn.hidden = true; $$("input[name=ga-m]", d).forEach((x) => { x.disabled = true; });
       $("#ga-prog", d).hidden = false;
-      let stop = false, done = 0, after = 0, left = all ? handed.length : todo, total = left || 1, err = "", skipped = 0;
+      let stop = false, done = 0, after = 0, left = all ? handed.length : todo, total = left || 1, err = "", skipped = 0, waits = 0, lot = 2;
       $(".dlg-foot", d).insertAdjacentHTML("afterbegin", `<button class="btn" id="ga-stop">Stop</button>`);
       $("#ga-stop", d).onclick = () => { stop = true; $("#ga-stop", d).disabled = true; };
       const draw = (msg) => { $(".aa-bar span", d).style.width = `${Math.min(100, Math.round((done / total) * 100))}%`; $("#ga-st", d).textContent = msg; };
       draw(`⏳ Grading… 0/${total}`);
       while (!stop) {
         let r;
-        try { r = await api(`/assessments/${a.id}/grade`, { method: "POST", body: { all, after, lot: 3 } }); }
+        try { r = await api(`/assessments/${a.id}/grade`, { method: "POST", body: { all, after, lot } }); }
         catch (e) { err = e.message; break; }
         AS.A = r; done += r.batch.graded; after = r.batch.last; skipped = r.batch.skipped;
         total = Math.max(total, done + r.batch.left);
         draw(`⏳ Grading… ${done}/${total}`);
+        // the AI's per-minute limit (not the daily one): wait, then go on one paper at a time
+        if (r.batch.error && r.batch.retryIn && waits < 12 && !stop) {
+          waits++; lot = 1;
+          for (let s2 = r.batch.retryIn; s2 > 0 && !stop; s2--) { draw(`⏳ ${done}/${total} graded · the AI's per-minute limit is reached: going on in ${s2} s…`); await sleep(1000); }
+          continue;
+        }
         if (r.batch.error) { err = r.batch.error; break; }
         if (!r.batch.left || !r.batch.graded) break;
       }

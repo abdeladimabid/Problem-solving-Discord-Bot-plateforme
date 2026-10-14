@@ -198,6 +198,8 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const f = github.files[key];
     return f === undefined ? new Response("404: Not Found", { status: 404 }) : new Response(f, { status: 200 });
   }
+  if (url.hostname === "generativelanguage.googleapis.com" && url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "models/gemini-busy-flash" }, { id: "models/text-embedding-004" }, { id: "models/gemini-2.5-flash" }] });
+  if (url.hostname === "generativelanguage.googleapis.com" && /busy/.test(String(body?.model))) return new Response(JSON.stringify([{ error: { code: 503, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" } }]), { status: 503 });
     const h = new Headers(init.headers || {});
     const key = (h.get("authorization") || "").replace(/^Bearer /, "") || h.get("x-api-key") || "";
     aiFake.calls.push(`${url.hostname}:${body?.model}`);
