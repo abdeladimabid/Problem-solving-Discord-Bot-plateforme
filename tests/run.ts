@@ -2676,7 +2676,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  check(/Tu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Revois aussi cette notion abordée à l’oral : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
+  check(!/questions orales sur/.test(fb) && fb.includes(`Lors de notre échange, une notion t’a posé problème : revois ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
   const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
@@ -2930,7 +2930,7 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
   const st = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(st.status === 200 && st.data.states.co.C3 === false && st.data.states.co.C4 === true, `the assessment's "not validated" counts in the debrief (${JSON.stringify(st.data.states?.co)})`);
   const afb = st.data.review.result.feedback;
-  check(/Lors de l’évaluation « CSS de base », ces questions t’ont posé problème/.test(afb) && afb.includes(`- ${mk.data.assessment.questions[0].prompt.replace(/[\s.:;]+$/, "").slice(0, 60)}`) && /réponse incorrecte\)/.test(afb), "…and the comment lists the assessment's questions to work on");
+  check(/Lors de l’évaluation « CSS de base », certaines notions t’ont posé problème\. Documente-toi et entraîne-toi en priorité sur [^\n]+\./.test(afb) && !afb.includes(mk.data.assessment.questions[0].prompt.slice(0, 40)), `…and the comment names the notions to study, not the questions (${afb.match(/priorité sur ([^\n]+)/)?.[1]})`);
   check(st.data.review.assess?.[0]?.title === "CSS de base", "…the debrief page shows the assessment");
   check(!/%|niveau|Critique|Moyen|Compétences|C3|-Évaluation/.test(afb), "…with no score, no level and no competency codes");
   {
@@ -3162,7 +3162,7 @@ section("brief steps: found in the brief, dated in working days, proposed from t
     result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
   const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
-  check(fb.includes("Partie 1 : validée à temps.") && /Fais aussi plus attention à ces points\..*Partie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note (a late step in what to watch)");
+  check(/Fais aussi plus attention à ces points\..*Partie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note (a late step in what to watch)");
   check(fb.includes("La majorité de ton travail (83 % des commits) a été faite pendant la dernière étape") && fb.includes("terminer chaque partie à la date prévue"), "…work done at the end, and the advice");
   check(!/Partie 3 :/.test(fb), "a step not decided is not written");
   const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
@@ -3181,11 +3181,23 @@ section("the debrief comment: what went well, what to improve, what to watch; no
     { type: "bonus", texte: "En tant que visiteur, je veux un mode sombre", statut: "fait" },
     { type: "bonus", texte: "En tant que visiteur, je veux une animation", statut: "absent" }],
     [{ code: "C1N1", ok: true }, { code: "C3N1", ok: false }], null, null, null,
-    [{ title: "HTML de base", score: 56, comps: { C1N1: { ok: true } }, gaps: ["Écris une règle CSS qui met les <p> en rouge (non traitée)"] }]);
-  check(/^Bonjour Sara,\n\nVoici ce que tu as bien réussi dans ce projet\. Le menu permet d’accéder à toutes les pages\..*bonus \(un mode sombre\)/s.test(fb), "what went well first, with the bonus done");
+    [{ title: "HTML de base", score: 56, comps: { C1N1: { ok: true } }, gaps: ["les sélecteurs CSS (balise, classe, id)", "la mise en forme du texte et des couleurs en CSS"] }]);
+  check(/^Bonjour Sara,\n\nVoici ce que tu as bien réussi dans ce projet : tu as réalisé la plupart des fonctionnalités demandées dans le brief\. Tu maîtrises bien la navigation entre les pages\. Tu as aussi réalisé le bonus \(un mode sombre\)/.test(fb), "what went well first, short: the features as a whole, what they master, the bonus done");
+  const fb2 = buildFeedback("Sara", [{ id: "pages", ok: true, detail: "4 page(s) : index, contact" }, { id: "nav", ok: true }, { id: "semantic", ok: true }, { id: "alt", ok: true }, { id: "w3c", ok: true }, { id: "form", ok: true }, { id: "commits", ok: true, n: 7, days: 4 }, { id: "git", ok: true, total: 7, conv: 0 }],
+    [{ type: "story", texte: "Une page contact", statut: "fait" }], [], null, null, [{ notion: "alt", ok: true }]);
+  check(fb2.includes("tu as réalisé toutes les fonctionnalités demandées dans le brief. Tu maîtrises bien la navigation entre les pages, les balises sémantiques, les bonnes pratiques (l’accessibilité et un code HTML valide) et Git (commits réguliers et messages clairs). Tu as bien répondu à toutes les questions orales.")
+    && !/index, contact|formulaire est présent|7 commits/.test(fb2) && fb2.includes("utiliser la convention de nommage"), "…no detail of every page or feature; the commit convention is advice");
   check(fb.includes("réaliser cette partie du brief : une page contact") && fb.includes("meta description"), "…what to improve: the stories and the checks of the work");
   check(!/README|indenté|animation|essayer ce|Compétences|C1N1|C3N1|56|niveau|Moyen/.test(fb), "…no deliverable, criterion, bonus to do, competency code, score or level");
-  check(/Lors de l’évaluation « HTML de base », cette question t’a posé problème.*\n- Écris une règle CSS qui met les <p> en rouge \(non traitée\)/s.test(fb) && /\nBonne continuation !$/.test(fb), "…what to watch: the assessment's questions not answered");
+  check(fb.includes("Lors de l’évaluation « HTML de base », certaines notions t’ont posé problème. Documente-toi et entraîne-toi en priorité sur les sélecteurs CSS (balise, classe, id) et la mise en forme du texte et des couleurs en CSS.") && /\nBonne continuation !$/.test(fb), "…what to watch: the notions behind the questions missed, grouped");
+  const fb3 = buildFeedback("Sara", [], [], [], null, null, [{ notion: "Attribut alt", ok: false }, { notion: "Flexbox", ok: false }, { notion: "Doctype", ok: true }], null,
+    { forStudent: "Tu dois revoir les bases du HTML : l’utilité du doctype, des attributs label/for et alt, et améliorer l’aspect UI de ton site." });
+  check(fb3.includes("Lors de notre échange : Tu dois revoir les bases du HTML : l’utilité du doctype, des attributs label/for et alt, et améliorer l’aspect UI de ton site. Revois aussi Flexbox.")
+    && !/Attribut alt|Fais aussi plus attention/.test(fb3), "the one-to-one in one paragraph: the remarks, plus only the oral notions they don't already mention");
+  const { conceptsOf } = await import("../src/shared/review/engine.ts");
+  check(conceptsOf("Crée un formulaire avec un champ texte et un bouton submit. Utilise les attributs id et class appropriés.").join() === "les formulaires HTML (form, input, label, button)"
+    && conceptsOf("Ajoute un lien hypertexte qui ouvre https://example.com dans un nouvel onglet").join() === "les liens hypertextes (a, href, target)"
+    && conceptsOf("Écris le code HTML d’une page minimale : le doctype et les balises").join() === "la structure d’une page HTML (doctype, head, body)", "a question → the notion it tests (an HTML id is not a CSS selector, class appropriés is not OOP)");
 }
 
 section("sprints: competencies reached in the sprint's briefs, levels for the report (AI for the class, no names), decision, sprint comment");

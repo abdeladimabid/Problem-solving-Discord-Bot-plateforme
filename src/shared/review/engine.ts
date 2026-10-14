@@ -170,6 +170,7 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const ko = (id) => !!c[id] && c[id].ok === false;
   const d = (id) => String((c[id] && c[id].detail) || '');
   const listFr = (s) => String(s).replace(/, ([^,]+)$/, ' et $1');
+  const andList = (a) => (a.length > 1 ? `${a.slice(0, -1).join(', ')} et ${a[a.length - 1]}` : a[0] || '');
   const part = (t) => { const m = String(t).match(/je (vais|veux|dois|souhaite|peux)\s+(.+?)(,?\s+(afin|pour que|pour qu’|pour qu')\b|$)/i); return (m ? m[2] : String(t)).replace(/\.$/, ''); };
   const tw = /Tailwind/.test(d('responsive'));
   const sec = { 'Fonctionnalités': [], 'Intégration': [], 'Responsive': [], 'JavaScript': [], 'POO / Architecture': [], 'Base de données': [], 'Sécurité': [], 'API': [], 'Tests': [],
@@ -246,7 +247,8 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     if (ok('git')) {
       if (total && conv === total) G.push('Tes messages de commit sont clairs et suivent la convention (feat:, fix:…), bravo.');
       else {
-        G.push(`Tes messages de commit sont clairs${conv ? ` ; ${conv} sur ${total} suivent la convention (feat:, fix:…)` : ''}. Pour aller plus loin, utilise la convention de nommage pour ${conv ? 'tous tes' : 'tes'} commits (feat:, fix:, docs:, style:…).`);
+        G.push(`Tes messages de commit sont clairs${conv ? ` ; ${conv} sur ${total} suivent la convention (feat:, fix:…)` : ''}.`);
+        gitAdvice.push(`d’utiliser la convention de nommage pour ${conv ? 'tous tes' : 'tes'} commits (feat:, fix:, docs:, style:…)`);
       }
     } else {
       gitAdvice.push(`d’écrire des messages de commit clairs et précis, par exemple « feat: ajout de la page contact »${vague ? ` (${vague} message${vague > 1 ? 's' : ''} trop vague${vague > 1 ? 's' : ''}${k.vagueEx ? ` comme « ${k.vagueEx} »` : ''})` : ''}`);
@@ -321,23 +323,51 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     if (last / total >= 0.6) watch.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
   }
   const parts = [`Bonjour${firstName ? ` ${firstName}` : ''},`];
-  // 1. what went well (bonuses only when done)
-  const good = Object.values(sec).flat().map((x) => String(x).trim()).filter(Boolean);
-  if (good.length) parts.push(`Voici ce que tu as bien réussi dans ce projet. ${good.join(' ')}`);
+  // 1. what went well, short: the features as a whole, what they master, the bonuses, the live task, the oral, the rhythm
+  const good = [];
+  const nStories = stories.length, okStories = stories.filter(itemValid).length;
+  if (nStories && okStories === nStories) good.push('tu as réalisé toutes les fonctionnalités demandées dans le brief.');
+  else if (nStories && okStories / nStories >= 0.5) good.push('tu as réalisé la plupart des fonctionnalités demandées dans le brief.');
+  const fine = (id) => ok(id) && !bonusOnly.has(id) && !docOnly.has(id);
+  const tags = [];
+  if (fine('nav')) tags.push('la navigation entre les pages');
+  if (fine('semantic')) tags.push('les balises sémantiques');
+  if (fine('layout')) tags.push(/grid/i.test(d('layout')) && /flex/i.test(d('layout')) ? 'la mise en page avec Flexbox et Grid' : /grid/i.test(d('layout')) ? 'la mise en page avec Grid' : 'la mise en page avec Flexbox');
+  if (fine('responsive') && (ok('breakpoints') || !c.breakpoints)) tags.push('le responsive design');
+  if (fine('anim')) tags.push('les animations CSS');
+  const bpr = [fine('alt') && 'l’accessibilité', fine('seo') && 'le SEO', fine('w3c') && 'un code HTML valide'].filter(Boolean);
+  if (bpr.length) tags.push(`les bonnes pratiques (${listFr(bpr.join(', '))})`);
+  for (const id of Object.keys(DETECTORS)) if (fine(id)) tags.push(DETECTORS[id][0].charAt(0).toLowerCase() + DETECTORS[id][0].slice(1));
+  if (ok('commits') && ok('git')) tags.push('Git (commits réguliers et messages clairs)');
+  else if (ok('commits')) tags.push('des commits réguliers');
+  if (ok('branches') || ok('pr_review')) tags.push('le travail en équipe avec les branches et les pull requests');
+  if (tags.length) good.push(`Tu maîtrises bien ${andList(tags.slice(0, 7))}.`);
+  good.push(...sec['Bonus'], ...sec['Mise en situation']);
+  if (asked.length && !toReview.length) good.push('Tu as bien répondu à toutes les questions orales.');
+  if (stepsDone.length && stepsDone.length === (suivi.steps || []).length && stepsDone.every((x) => x.final === 'a_temps')) good.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
+  if (good.length) {
+    const g0 = good[0].charAt(0).toLowerCase() + good[0].slice(1);
+    parts.push(`Voici ce que tu as bien réussi dans ce projet : ${[g0, ...good.slice(1)].join(' ')}`);
+  }
   // 2. what to improve in the work
   if (advice.length === 1) parts.push(`Pour améliorer ton travail, je te conseille ${advice[0]}.`);
   else if (advice.length) parts.push(`Pour améliorer ton travail, je te conseille de :\n${advice.map((a) => `- ${a.replace(/^(de |d’)/, '')}`).join('\n')}`);
   // 3. what needs more attention: the questions of the assessment not answered or wrong, the oral notions, the live task, the rhythm
   const gaps = (assess || []).filter((a) => a.score != null && Array.isArray(a.gaps) && a.gaps.length);
   for (const a of gaps) {
-    const lines = a.gaps.slice(0, 8);
-    parts.push(`Lors de l’évaluation « ${a.title} », ${lines.length > 1 ? 'ces questions t’ont posé problème' : 'cette question t’a posé problème'} ; revois en priorité les notions qu’elles abordent :\n${lines.map((x) => `- ${x}`).join('\n')}`);
+    const notions = a.gaps.slice(0, 8);
+    parts.push(`Lors de l’évaluation « ${a.title} », certaines notions t’ont posé problème. Documente-toi et entraîne-toi en priorité sur ${andList(notions)}.`);
   }
-  if (toReview.length) watch.push(`Revois aussi ${toReview.length > 1 ? 'ces notions abordées' : 'cette notion abordée'} à l’oral : ${listFr(toReview.join(', '))}.`);
   if (watch.length) parts.push(`Fais aussi plus attention à ces points. ${watch.join(' ')}`);
-  // what the teacher noticed face to face (rewritten for the learner when the AI did it, else as the teacher wrote it)
-  if (remarks && (remarks.forStudent || remarks.text)) parts.push(`Lors de notre échange : ${String(remarks.forStudent || remarks.text).trim()}`);
-  const unfinished = advice.length || gaps.length || watch.length || competences.some((x) => x.ok === false) || !!(ch && ch.result !== 'valide');
+  // the one-to-one (oral questions + what the teacher noticed): one paragraph. The teacher's remarks say it all when written
+  // (rewritten for the learner when the AI did it); otherwise the oral notions missed
+  const said = remarks ? String(remarks.forStudent || remarks.text || '').trim() : '';
+  if (said) {
+    // the oral notions missed that the remarks don't already talk about
+    const extra = toReview.filter((n) => !saidIn(n, said));
+    parts.push(`Lors de notre échange : ${said}${/[.!?]$/.test(said) ? '' : '.'}${extra.length ? ` Revois aussi ${andList(extra)}.` : ''}`);
+  } else if (toReview.length) parts.push(`Lors de notre échange, ${toReview.length > 1 ? 'certaines notions t’ont posé problème' : 'une notion t’a posé problème'} : revois ${andList(toReview)}.`);
+  const unfinished = advice.length || gaps.length || watch.length || toReview.length || competences.some((x) => x.ok === false) || !!(ch && ch.result !== 'valide');
   parts.push(unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
   return parts.join('\n\n');
 }
@@ -404,6 +434,51 @@ export function debriefLevel(rec, st) {
 // The teacher's result for a step of the brief (see steps.ts)
 export const STEP_RESULTS = ['a_temps', 'en_retard', 'non_fait'];
 export const STEP_FR = { a_temps: 'validée à temps', en_retard: 'validée en retard', non_fait: 'non validée' };
+
+// The notions behind an assessment question (its text and its expected answer): what to study, not the question itself
+const CONCEPTS = [
+  [/doctype|page (html )?minimale|structure (de base|d’une page|d'une page)|<\s*(html|head|body)\b/i, 'la structure d’une page HTML (doctype, head, body)'],
+  [/feuille de style|stylesheet|<\s*link\b|styles?\.css/i, 'le lien entre une page HTML et sa feuille CSS (<link>)'],
+  [/<\s*(form|input|label|button|select|textarea)\b|formulaire|submit/i, 'les formulaires HTML (form, input, label, button)'],
+  [/<\s*img\b|\bimage|\balt\b|texte alternatif/i, 'les images et le texte alternatif (img, alt)'],
+  [/<\s*a\b|lien hypertexte|\bhref\b|target|nouvel onglet/i, 'les liens hypertextes (a, href, target)'],
+  [/<\s*(ul|ol|li|table|tr|td)\b|\bliste/i, 'les listes et les tableaux HTML'],
+  [/\b(header|nav|main|footer|section|article)\b|s[ée]mantique/i, 'les balises sémantiques'],
+  [/s[ée]lecteur|\b(classe|class|id)\b[^.]{0,40}\bCSS|\bCSS\b[^.]{0,60}\b(classe|class|id)\b|\.[a-z][\w-]*\s*\{/i, 'les sélecteurs CSS (balise, classe, id)'],
+  [/\bmargin\b|\bpadding\b|\bborder\b|centr|mod[èe]le de bo[iî]te|box-sizing/i, 'le modèle de boîte et le centrage (margin, padding)'],
+  [/\bdisplay\b|\binline\b|\bblock\b/i, 'la propriété display (block, inline)'],
+  [/flex|justify-content|align-items/i, 'Flexbox'],
+  [/\bgrid\b|grid-template/i, 'CSS Grid'],
+  [/@media|media quer|responsive|points? de rupture/i, 'le responsive (media queries)'],
+  [/\bcolor\b|couleur|background|\bfond\b|font|gras|bold|police|text-align|taille du texte/i, 'la mise en forme du texte et des couleurs en CSS'],
+  [/position\s*:|\babsolute\b|\brelative\b|\bfixed\b|z-index/i, 'le positionnement en CSS'],
+  [/transition|animation|@keyframes|transform/i, 'les transitions et les animations CSS'],
+  [/addEventListener|[ée]v[ée]nement|\bclick\b|onclick/i, 'les événements JavaScript (addEventListener)'],
+  [/querySelector|getElementById|\bDOM\b|innerHTML|textContent|createElement/i, 'la manipulation du DOM'],
+  [/\bfetch\b|async|await|promesse|promise|\bAPI\b/i, 'les appels d’API (fetch, async / await)'],
+  [/\b(for|while)\s*\(|boucle|\bloop\b/i, 'les boucles'],
+  [/\bif\s*\(|condition|else\b|switch/i, 'les conditions'],
+  [/tableau|array|\.map\(|\.filter\(|\.push\(/i, 'les tableaux et leurs méthodes'],
+  [/fonction|function|=>|return\b/i, 'les fonctions'],
+  [/\b(let|const|var)\b|variable/i, 'les variables'],
+  [/localStorage|sessionStorage/i, 'le localStorage'],
+  [/\bSELECT\b|\bINSERT\b|\bJOIN\b|\bSQL\b|requ[êe]te/i, 'les requêtes SQL'],
+  [/\bclass\s+\w+\s*(\{|extends)|\bobjets?\b|constructeur|h[ée]ritage|\bextends\b|\bPOO\b/i, 'la programmation orientée objet'],
+  [/\bgit\b|commit|branche|merge/i, 'Git (commit, branches)'],
+];
+export function conceptsOf(text) {
+  const t = String(text || '');
+  return CONCEPTS.filter(([re]) => re.test(t)).map(([, c]) => c);
+}
+
+// Is a notion already in the teacher's words? ("Attribut alt" is in "…des attributs label/for et alt…")
+const plain = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const GENERIC = new Set(['attribut', 'attributs', 'balise', 'balises', 'propriete', 'proprietes', 'les', 'des', 'une', 'the', 'notion', 'utilite', 'role', 'difference', 'entre', 'avec', 'dans', 'pour', 'element', 'elements']);
+export function saidIn(notion, text) {
+  const words = new Set(plain(text).split(/[^a-z0-9#.-]+/).map((w) => w.replace(/s$/, '')));
+  const keys = plain(notion).split(/[^a-z0-9#.-]+/).filter((w) => w.length >= 2 && !GENERIC.has(w) && !['du', 'de', 'la', 'le', 'et', 'en', 'un', 'a'].includes(w)).map((w) => w.replace(/s$/, ''));
+  return keys.length > 0 && keys.every((k) => words.has(k));
+}
 
 // The comment from the final checklist states
 export function buildComment(firstName, rec, states) {
