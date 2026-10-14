@@ -96,7 +96,8 @@ export const settingsOf = (a: Pick<AssessRow, "settings">) => cleanSettings(pars
 export async function saveAssessment(env: Env, g: GuildRow, id: number | null, b: any): Promise<number> {
   const title = str(b?.title, 120) || "Assessment";
   const qs = (Array.isArray(b?.questions) ? b.questions : []).slice(0, 60).map((q: any, i: number) => cleanQuestion(q, i)).filter(Boolean);
-  let st = cleanSettings(b?.settings ?? {});
+  // a new assessment: no going back by default (one question at a time); the teacher can allow it before inviting
+  let st = cleanSettings({ nav: "forward", ...(b?.settings ?? {}) });
   if (id) {
     const cur = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
     if (!cur) throw new AssessError("This assessment doesn't exist anymore.");

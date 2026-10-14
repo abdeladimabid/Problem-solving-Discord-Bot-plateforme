@@ -1601,10 +1601,10 @@ function assessOptionsDialog(next = null) {
       ${opt("op-fs", o.lockScreen, "Full screen lock", "The test runs in full screen. Leaving it, the tab or the window stops the session until you let them back in.")}
       ${opt("op-paste", o.noPaste, "Block copy-paste", "No pasting in the answers (and no right click).")}
       ${opt("op-shuf", o.shuffle, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
-      ${opt("op-back", o.nav === "free", "Allow going back", "Off: one question at a time; once a question is passed they can't come back to it.", started)}
+      ${opt("op-back", o.nav === "forward", "Disable going back", "One question at a time: once a question is passed they can't come back to it. Untick to let them go back and change their answers.", started)}
       ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>`,
     [{ label: next ? "Next: choose the students →" : "Save", primary: true, action: async (d) => {
-      AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "free" : "forward" } });
+      AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "forward" : "free" } });
       AS.optsAsked = a.id;
       if (next) next(); else { d.close(); toast("Options saved"); renderAssessment(); }
     } }]);

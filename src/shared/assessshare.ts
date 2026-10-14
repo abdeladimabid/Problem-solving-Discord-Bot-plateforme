@@ -70,7 +70,7 @@ export async function importShared(env: Env, g: GuildRow, url: string, doImport:
   const preview = { title: String(d.title || "Assessment").slice(0, 120), from: String(d.from || "").slice(0, 80), n: qs.length, code: count("code"), explain: count("explain"), mcq: count("mcq"),
     points: qs.reduce((s, q) => s + q.points, 0), minutes: Number(d.settings?.minutes) || 0, comps, prompts: qs.slice(0, 5).map((q) => q.prompt.slice(0, 140)) };
   if (!doImport) return { preview };
-  const id = await saveAssessment(env, g, null, { title: preview.title, questions: qs, settings: cleanSettings({ ...d.settings, target: [] }) });
+  const id = await saveAssessment(env, g, null, { title: preview.title, questions: qs, settings: { ...d.settings, target: [] } });
   return { preview, id };
 }
 
