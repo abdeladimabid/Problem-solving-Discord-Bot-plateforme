@@ -1498,3 +1498,7 @@ div.asl-opt { cursor: default; }
 .attn { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; white-space: nowrap; font-size: 11.5px; font-weight: 600; color: var(--warn); background: var(--warn-bg); border-radius: 999px; padding: 1px 8px; }
 .attn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 .niv-k.attn { color: var(--warn); }
+/* debrief not analyzed yet: the repo handed in */
+.db-repo { display: inline-flex; align-items: center; gap: 12px; text-align: left; margin: 4px auto 12px; padding: 10px 16px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface-2); }
+.db-repo > div { display: flex; flex-direction: column; gap: 1px; } .db-repo a b { font-size: 15px; }
+.db-repo-ic { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--surface); border: 1px solid var(--line); font-size: 18px; }
