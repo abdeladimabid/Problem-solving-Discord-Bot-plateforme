@@ -87,3 +87,25 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
   document.addEventListener("change", (e) => { if (e.target && e.target.id === "cb-simple-t") setTimeout(apply, 0); });
   apply();
 })();
+
+// The side menu folds to a bar of icons (the button at its bottom), remembered in this browser; each icon says its page
+(function navCollapse() {
+  const app = $(".app"), who = $(".board .who");
+  if (!app || !who || $("#nav-min")) return;
+  const btn = document.createElement("button");
+  btn.className = "icon-btn"; btn.id = "nav-min"; btn.type = "button";
+  btn.innerHTML = `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>`;
+  who.append(btn);
+  const titles = () => $$("#nav a").forEach((a) => { if (!a.title) a.title = a.textContent.replace(/\s+\d+\s*$/, "").trim(); });
+  const set = (min) => {
+    app.classList.toggle("nav-min", min);
+    btn.title = min ? "Show the menu" : "Hide the menu";
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-expanded", String(!min));
+    if (min) titles();
+  };
+  let min = false;
+  try { min = localStorage.getItem("cb-navmin") === "1"; } catch { /* this visit only */ }
+  set(min);
+  btn.onclick = () => { min = !min; set(min); try { localStorage.setItem("cb-navmin", min ? "1" : "0"); } catch { /* this visit only */ } };
+})();

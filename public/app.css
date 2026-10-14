@@ -1524,3 +1524,18 @@ div.asl-opt { cursor: default; }
 .aa-list li.ok .aa-dot { background: var(--up); border-color: var(--up); } .aa-list li.ko .aa-dot { background: var(--down); border-color: var(--down); } .aa-list li.ko small { color: var(--down); }
 @keyframes aa-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .aa-list li.run .aa-dot { animation: none; background: var(--blue); } }
+
+/* the side menu folded to icons (button at its bottom) */
+@media (min-width: 861px) {
+  .app.nav-min { grid-template-columns: 68px minmax(0, 1fr); }
+  .app.nav-min .board { padding: 16px 8px; gap: 12px; }
+  .app.nav-min .brand { justify-content: center; padding: 2px 0; }
+  .app.nav-min .brand > span:not(.logo), .app.nav-min #guild, .app.nav-min #who, .app.nav-min .nav .nav-label, .app.nav-min .nav-gh { display: none; }
+  .app.nav-min .nav-grp .nav-gb, .app.nav-min .nav-grp.closed .nav-gb { display: flex; padding-left: 0; margin-left: 0; border-left: 0; }
+  .app.nav-min .nav-grp + .nav-grp { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+  .app.nav-min .nav a { font-size: 0; justify-content: center; padding: 9px 0; position: relative; gap: 0; }
+  .app.nav-min .nav .pill { position: absolute; top: 2px; right: 4px; font-size: 9.5px; padding: 0 5px; margin: 0; }
+  .app.nav-min .board .who { flex-direction: column; padding: 10px 0 0; }
+  .app.nav-min #nav-min svg { transform: rotate(180deg); }
+}
+@media (max-width: 860px) { #nav-min { display: none; } }
