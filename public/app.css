@@ -1568,7 +1568,9 @@ div.asl-opt { cursor: default; }
 .db-fold > summary::before { content: "▸"; color: var(--ink-faint); transition: transform .15s; } .db-fold[open] > summary::before { transform: rotate(90deg); }
 .db-fold > summary h3 { margin: 10px 0; }
 .iv-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.res-table td:first-child { white-space: nowrap; } .res-ai { margin-left: 6px; vertical-align: middle; }
+.res-table td:first-child { white-space: nowrap; min-width: 280px; }
+.res-name { display: flex; align-items: center; gap: 12px; }
+.res-name .res-ai { margin-left: auto; flex: none; }
 /* AI keys: several keys of a provider at once */
 .ai-keys { display: grid; gap: 6px; max-width: 520px; }
 .ai-keyrow { display: flex; gap: 6px; } .ai-keyrow input { flex: 1; font-family: var(--mono, monospace); }
