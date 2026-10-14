@@ -221,6 +221,8 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "api.groq.com") {
     const auth = new Headers(init.headers || {}).get("authorization") || "";
     if (!auth.includes("gsk_good")) return new Response(JSON.stringify({ error: { message: "Invalid API Key" } }), { status: 401 });
+    // an account where the admin blocked a model
+    if (auth.includes("gsk_good_blocked") && body?.model === "openai/gpt-oss-120b") return new Response(JSON.stringify({ error: { message: "The model `openai/gpt-oss-120b` is blocked at the organization level. Please have the org admin enable this model" } }), { status: 403 });
     return Response.json({ choices: [{ message: { content: "ok" } }] });
   }
   if (url.hostname === "translate.googleapis.com") {
