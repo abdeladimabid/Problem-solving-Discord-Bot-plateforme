@@ -946,6 +946,7 @@ function compAdvice(avis, a) {
     : `<div class="db-adv ko">⚠️ Suggestion: <b>not valid</b>. The project shows it but the assessment doesn't: the code may be copied or made with AI. Check it in the mise en situation or an oral question.</div>`;
 }
 
+const noVerifText = (t) => String(t ?? "").replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim();
 const AVIS = { validable: ["ok", "Can be validated"], a_verifier: ["warn", "To check"], non_visible: ["bad", "Not visible"] };
 const MES = [["valide", "Validated"], ["partiel", "Partly"], ["non_valide", "Not validated"]];
 const EXTYPE = { fonctionnalite: "Feature", fonctionnalité: "Feature", technique: "Technical", livrable: "Deliverable", qualite: "Quality", qualité: "Quality", oral: "Oral", bonus: "Bonus", story: "Story", critere: "Criterion" };
@@ -1012,6 +1013,10 @@ function renderDebrief() {
   const exByType = {};
   ex.forEach((e, i) => (exByType[e.type] ??= []).push(i));
   const lvlOf = Object.fromEntries((B.brief.data.competencies || []).map((c) => { const p = parseC(c); return [p?.code, p?.level]; }));
+  // a check that a requirement shows is that requirement's switch: listed once
+  const shown = new Set(ex.filter((e) => e.check && e.check in st.ck).map((e) => e.check));
+  const otherChecks = checks.filter((c) => !shown.has(c.id));
+  const ckDetail = Object.fromEntries(checks.map((c) => [c.id, c.detail || ""]));
   const aV = assessVerdicts(rec.assess);
   body.innerHTML = `<div class="db-grid">
     <div class="stack">
@@ -1025,16 +1030,16 @@ function renderDebrief() {
         </div>
         <p class="muted small">Repo${(rec.repos || []).length > 1 ? "s" : ""}: ${(rec.repos || []).map((x) => `<a href="https://github.com/${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>`).join(", ") || "—"} · ${rec.count ?? 0} commit(s) during the brief</p>
       </section>
-      ${checks.length ? `<section class="panel"><h2>Automatic checks <span class="muted">read in the code: sure</span></h2>
-        <div class="db-rows">${checks.map((c) => `<div class="db-row ${c.info ? "info" : ""}">
+      ${otherChecks.length ? `<section class="panel"><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">read in the code: sure${otherChecks.length < checks.length ? " · the others are in the requirements" : ""}</span></h2>
+        <div class="db-rows">${otherChecks.map((c) => `<div class="db-row ${c.info ? "info" : ""}">
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></section>` : ""}
       <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
         ${Object.entries(exByType).map(([type, idx]) => `<h3>${esc(EXTYPE[type] || type)} <span class="muted small">${idx.length}</span></h3>
           <div class="db-rows">${idx.map((i) => { const e = ex[i], bound = e.check && e.check in st.ck; const s = STATUT[e.statut] || ["", e.statut];
-            return `<div class="db-row">${sw(`data-ex="${i}"`, st.ex[i], final || bound)}
-              <div><span>${esc(e.texte)}</span> <span class="lvl ${s[0]}">${esc(s[1])}</span>
-              <div class="small muted">${[bound ? `follows the check “${esc(ckLabel[e.check] || e.check)}”` : "", esc(e.preuve || "")].filter(Boolean).join(" · ")}</div></div></div>`; }).join("")}</div>`).join("") || `<p class="empty">No requirement found.</p>`}
+            return `<div class="db-row">${sw(`data-ex="${i}" ${bound ? `data-exck="${esc(e.check)}"` : ""}`, st.ex[i], final)}
+              <div><span>${esc(noVerifText(e.texte))}</span> <span class="lvl ${s[0]}">${esc(s[1])}</span>
+              <div class="small muted">${bound ? `🔎 automatic check: ${esc(ckDetail[e.check] || ckLabel[e.check] || e.check)}` : esc(e.preuve || "")}</div></div></div>`; }).join("")}</div>`).join("") || `<p class="empty">No requirement found.</p>`}
       </section>
       ${(r.commits || []).length ? `<section class="panel"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
         <div class="db-rows" style="margin-top:10px">${r.commits.map((c) => `<div class="db-row"><span class="db-i">${c.ok === true ? "✅" : c.ok === false ? "⚠️" : "·"}</span>
@@ -1042,7 +1047,10 @@ function renderDebrief() {
       ${rec.squad ? squadMembersHtml(rec, st, final) : ""}
     </div>
     <aside class="stack db-side">
-      <section class="panel"><h2>Competencies <span class="muted">assessment + project · your switch decides</span></h2>
+      ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
+      <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
+      <section class="panel" id="db-oral"></section>
+      <section class="panel"><h2>Competencies <span class="muted">assessment, project, mise en situation and oral questions · your switch decides</span></h2>
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
@@ -1053,9 +1061,6 @@ function renderDebrief() {
             ${compAdvice(c.avis, aV[base])}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
-      ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
-      <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
-      <section class="panel" id="db-oral"></section>
       <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : "Written from your switches. Edit it freely: your text is kept."}</p></section>
@@ -1064,8 +1069,8 @@ function renderDebrief() {
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
         : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
-          <label class="check"><input type="checkbox" id="db-dm" checked> Send the comment by Discord DM</label>
-          <p class="toolbar" style="margin:12px 0 0"><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
+          <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
+          <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
   wireAssessLink(body);
   updateMeter();
@@ -1161,6 +1166,7 @@ function currentStates() {
   const ck = {}, ex = [], co = {};
   $$("[data-ck]").forEach((c) => (ck[c.dataset.ck] = c.checked));
   $$("[data-ex]").forEach((c) => (ex[Number(c.dataset.ex)] = c.checked));
+  $$("[data-exck]").forEach((c) => (ck[c.dataset.exck] = (ck[c.dataset.exck] ?? true) && c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
   const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
   return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
@@ -1190,6 +1196,10 @@ function saveStatesSoon() {
 function wireDebrief() {
   const { bid, who } = DB;
   $$("[data-ck], [data-ex], [data-co]").forEach((c) => c.onchange = saveStatesSoon);
+  $$("[data-ck]").forEach((c) => c.addEventListener("change", () => {
+    $$(`[data-exck="${CSS.escape(c.dataset.ck)}"]`).forEach((x) => { x.checked = c.checked; });
+    updateMeter();
+  }));
   wireSeg(document, "mes", saveStatesSoon);
   if ($("#db-mn")) $("#db-mn").onchange = saveStatesSoon;
   $("#db-cp").onclick = () => copyText($("#db-c").value, "Comment copied");
@@ -1214,6 +1224,16 @@ function wireDebrief() {
     DB.R = { ...DB.R, ...R };
   };
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+  // everything as it is now (switches, mise en situation, oral questions, your comment), right away: a draft to finish later
+  if ($("#db-save")) $("#db-save").onclick = (e) => busy(e.currentTarget, async () => {
+    clearTimeout(DB.timer);
+    const keep = DB.commentEdited;
+    const R = await api(`/briefs/${bid}/review/states`, { method: "POST", body: { who, states: { ...currentStates(), keepComment: keep, comment: keep ? c.value : undefined } } });
+    DB.R = { ...DB.R, ...R };
+    if (!keep) c.value = R.review?.result?.feedback ?? c.value;
+    $("#db-cst").textContent = "Draft saved";
+    toast("Draft saved · finalize it when you're ready");
+  });
   if ($("#db-fin")) $("#db-fin").onclick = (e) => busy(e.currentTarget, async () => {
     if ($(".member")) await saveMembers();
     const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
