@@ -109,9 +109,26 @@ export async function openRouterFree(fresh = false): Promise<string[]> {
     return orCache.ids;
   } catch { return orCache?.ids ?? []; }
 }
+/** The models this key can use (the provider's own list, OpenAI-compatible GET /models), the chat ones, newest "flash"/fast first. */
+async function providerModels(p: AiProvider): Promise<string[]> {
+  const base = (PRESETS[p.type]?.base || p.base || "").replace(/\/$/, "");
+  if (!base || PRESETS[p.type]?.anthropic) return [];
+  try {
+    const res = await withTimeout(fetch(`${base}/models`, { headers: p.key ? { authorization: `Bearer ${p.key}` } : {} }), 10000);
+    if (!res.ok) return [];
+    const j: any = await res.json();
+    const ids = (Array.isArray(j?.data) ? j.data : Array.isArray(j?.models) ? j.models : []).map((m: any) => String(m?.id || m?.name || "").replace(/^models\//, ""))
+      .filter((id: string) => id && !/embed|tts|audio|image|vision-only|imagen|veo|whisper|guard|moderation|learnlm|aqa/i.test(id));
+    const rank = (id: string) => (/flash/i.test(id) && !/lite|thinking|exp|preview/i.test(id) ? 0 : /flash/i.test(id) ? 1 : /pro|70b|120b/i.test(id) ? 2 : 3);
+    const ver = (id: string) => Number((id.match(/(\d+(?:\.\d+)?)/) || [])[1] || 0);
+    return ids.sort((a: string, b: string) => rank(a) - rank(b) || ver(b) - ver(a)).slice(0, 8);
+  } catch { return []; }
+}
+
 /** OpenRouter says this model isn't there (or isn't free anymore). */
 const orGone = (s: { type: string }, e: unknown) => s.type === "openrouter" && e instanceof AiCallError && (e.status === 404 || /unavailable for free|not a valid model|no endpoints found/i.test(e.message));
 /** This model can't be used (gone, or blocked for this account), but the key may work with another one. */
+const busyNow = (e: unknown) => e instanceof AiCallError && [500, 502, 503].includes(e.status);
 const modelProblem = (e: unknown) => e instanceof AiCallError && (e.status === 404 || /model not allowed|unavailable for free|not a valid model|no endpoints found|model.*(not found|does not exist|decommissioned|blocked)/i.test(e.message));
 
 // ------------------------------------------------------------ calling one AI
@@ -142,13 +159,18 @@ async function callStep(s: Step, messages: Msg[], o: ChatOpts, model = s.model):
 }
 async function errText(res: Response): Promise<string> {
   let msg = "";
-  try { const j: any = await res.json(); msg = j?.error?.message || j?.message || j?.error || ""; } catch { /* not JSON */ }
+  try {
+    const raw: any = await res.json();
+    const j = Array.isArray(raw) ? raw[0] : raw;   // Gemini's OpenAI endpoint answers [{ error: {…} }]
+    msg = j?.error?.message || j?.message || (typeof j?.error === "string" ? j.error : "") || "";
+  } catch { /* not JSON */ }
   msg = String(msg).replace(/\s+/g, " ").slice(0, 160);
   // a model the account may not use (Groq: "blocked at the organization level", terms to accept…) isn't a wrong key
   if (res.status === 403 && /model/i.test(msg)) return `model not allowed for this account (403)${msg ? `: ${msg}` : ""}`;
   if (res.status === 401 || res.status === 403) return `key refused (${res.status})${msg ? `: ${msg}` : ""}`;
   if (res.status === 429) return `limit reached (429)${msg ? `: ${msg}` : ""}`;
   if (res.status === 404) return `model or address not found (404)${msg ? `: ${msg}` : ""}`;
+  if (res.status === 503 || res.status === 502 || res.status === 500) return `busy or unavailable right now (${res.status})${msg ? `: ${msg}` : ": the provider's servers are overloaded, it's not your key"}`;
   return `answered ${res.status}${msg ? `: ${msg}` : ""}`;
 }
 
@@ -204,7 +226,7 @@ export async function keyedChat(env: Env, messages: Msg[], o: ChatOpts): Promise
 }
 
 /** A tiny request to check a provider before saving it. */
-export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?: string; error?: string; model: string; gone?: boolean }> {
+export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?: string; error?: string; model: string; gone?: boolean; busy?: boolean }> {
   const s = stepOf(p);
   if (!s.base) return { ok: false, error: "Give the address of the API (it ends with /v1).", model: s.model };
   if (!s.model) return { ok: false, error: "Choose a model.", model: s.model };
@@ -216,7 +238,7 @@ export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?:
     const msg = String((e as Error)?.message ?? e);
     if (status === 429) return { ok: true, warn: `The key works, but its limit is reached right now: ${msg}`, model: s.model };
     if (msg === "timeout") return { ok: false, error: "It didn't answer within 25 seconds.", model: s.model };
-    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model, gone: orGone(s, e) || modelProblem(e) };
+    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model, gone: orGone(s, e) || modelProblem(e) || busyNow(e), busy: busyNow(e) };
   }
 }
 
@@ -277,20 +299,24 @@ export async function addProvider(env: Env, gid: string, b: { type?: string; key
   let t = await testProvider(p);
   // the model asked for can't be used (OpenRouter: not free anymore; Groq: blocked by the account's settings…):
   // the key may work with another model: OpenRouter's free models of today, else the provider's other suggested models
+  // busy (503): often just for a moment: once more after 2 s
+  if (!t.ok && t.busy) { await new Promise((r) => setTimeout(r, 2000)); const again = await testProvider(p); if (again.ok) t = again; }
   if (!t.ok && t.gone) {
     const asked = p.model;
-    const others = type === "openrouter" ? (await openRouterFree(true)).slice(0, 6) : PRESETS[type].models;
+    const others = type === "openrouter" ? (await openRouterFree(true)).slice(0, 6) : [...new Set([...(await providerModels(p)), ...PRESETS[type].models])];
     for (const m of others.filter((x) => x !== asked).slice(0, 5)) {
       const r = await testProvider({ ...p, model: m });
       if (r.ok) {
         p.model = m;
-        const why = type === "openrouter" ? `“${asked}” isn't free on OpenRouter anymore: ClassBot uses “${m}”, free today` : `“${asked}” can't be used with this key (${String(t.error).replace(/^[^:]+:\s*/, "").slice(0, 120)}): ClassBot uses “${m}”`;
+        const why = type === "openrouter" ? `“${asked}” isn't free on OpenRouter anymore: ClassBot uses “${m}”, free today`
+          : t.busy ? `“${asked}” is overloaded right now (503): ClassBot uses “${m}”` : `“${asked}” can't be used with this key (${String(t.error).replace(/^[^:]+:\s*/, "").slice(0, 120)}): ClassBot uses “${m}”`;
         t = { ...r, warn: [`${why} (you can change it in the list).`, r.warn].filter(Boolean).join(" ") };
         break;
       }
       if (r.error && /key refused/.test(r.error)) { t = r; break; }
     }
     if (!t.ok && t.gone) t.error = type === "openrouter" ? `${t.error} · No free OpenRouter model answered right now: try again later, or choose a paid model (your account needs credits).`
+      : t.busy ? `${t.error} · No model answered: the provider is overloaded right now. Try again in a few minutes (your key is probably fine).`
       : `${t.error} · None of the suggested models answered with this key: allow one in the provider's settings, or type another model name.`;
   }
   if (!t.ok) throw new AiKeyError(t.error || "This AI didn't answer.");
@@ -354,4 +380,17 @@ export async function aiChainLabel(env: Env): Promise<string> {
 export async function aiStatus(env: Env): Promise<"keys" | "workers" | null> {
   if ((await keyedSteps(env)).length) return "keys";
   return (await workersAllowed(env)) ? "workers" : null;
+}
+
+/**
+ * A "per minute" limit (Groq's tokens per minute, Gemini's requests per minute…): how many seconds to wait before
+ * trying again (0 when it's a daily limit or not a limit at all: waiting a minute won't help).
+ */
+export function perMinuteWait(msg: string): number {
+  const m = String(msg || "");
+  if (/per day|\bTPD\b|\bRPD\b|daily|used up|for today|tomorrow/i.test(m)) return 0;
+  if (!/per minute|\bTPM\b|\bRPM\b|\(429\)|rate.?limit|resource exhausted|too many requests/i.test(m)) return 0;
+  const t = m.match(/try again in (?:(\d+)m)?\s*([\d.]+)\s*s/i);
+  const sec = t ? Number(t[1] || 0) * 60 + Number(t[2] || 0) : 30;
+  return Math.max(5, Math.min(90, Math.ceil(sec) + 3));
 }

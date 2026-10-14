@@ -20,7 +20,7 @@ import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewards
 import { AssessError, generateQuestions, gradeTaker, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
-import { aiStatus } from "../shared/aikeys.ts";
+import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
@@ -630,7 +630,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
         if (!r.ok) { error = r.error || "The AI didn't answer"; break; }
         graded++;
       }
-      return ok({ ...(await assessView(env, g, id)), batch: { graded, left: todo.length - graded, error, last: graded ? lot[graded - 1].id : after, skipped: rows.filter((t) => locked.has(t.discord_id)).length } });
+      // the AI's per-minute limit (not the daily one): the page waits that long and goes on by itself
+      const retryIn = error ? perMinuteWait(error) : 0;
+      return ok({ ...(await assessView(env, g, id)), batch: { graded, left: todo.length - graded, error, retryIn, last: graded ? lot[graded - 1].id : after, skipped: rows.filter((t) => locked.has(t.discord_id)).length } });
     }
     if (act === "close") { await run(env, "UPDATE assessments SET status = 'closed' WHERE id = ?", id); return ok(await assessView(env, g, id)); }
     if (act === "reopen") { await run(env, "UPDATE assessments SET status = 'open', closes_at = MAX(COALESCE(closes_at, 0), ?) WHERE id = ?", now() + 86400, id); return ok(await assessView(env, g, id)); }
