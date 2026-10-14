@@ -282,6 +282,16 @@ export async function submit(env: Env, takerId: number, sid: string | null, ctx?
 
 // ------------------------------------------------------------- grading
 /** Grade one student's paper: multiple choice at once, code and explanations by the AI (one call for the paper). */
+/** Not attempted (≠ a wrong answer): nothing written, nothing picked, or the starter code handed back as it was. */
+const NOT_TRIED = { fr: "Non tentée : pas de réponse.", en: "Not attempted: no answer.",
+  frStarter: "Non tentée : le code de départ n'a pas été modifié.", enStarter: "Not attempted: the starter code wasn't changed." };
+const squash = (v: unknown) => String(v ?? "").replace(/\s+/g, "");
+export function notAttempted(q: Pick<Question, "type" | "starter">, ans: unknown): boolean {
+  if (q.type === "mcq") return !(Array.isArray(ans) && ans.length);
+  if (!String(ans ?? "").trim()) return true;
+  return q.type === "code" && !!q.starter && squash(ans) === squash(q.starter);
+}
+
 export async function gradeTaker(env: Env, takerId: number, force = false) {
   const x = await loadTaker(env, takerId);
   if (!x) return;
@@ -298,13 +308,13 @@ export async function gradeTaker(env: Env, takerId: number, force = false) {
     if (q.type === "mcq") {
       const pick = new Set<number>(Array.isArray(ans) ? ans : []);
       const right = new Set(q.answer!);
-      if (!pick.size) { grades[q.id] = { verdict: "empty", score: 0, comment: L === "fr" ? "Pas de réponse." : "No answer." }; continue; }
+      if (!pick.size) { grades[q.id] = { verdict: "empty", score: 0, comment: NOT_TRIED[L === "fr" ? "fr" : "en"] }; continue; }
       const hit = [...pick].filter((k) => right.has(k)).length, wrong = [...pick].filter((k) => !right.has(k)).length;
       const score = Math.max(0, Math.round(((hit - wrong) / right.size) * 100));
       const good = q.answer!.map((k) => q.choices![k]).join(" ; ");
       grades[q.id] = { verdict: score >= 100 ? "correct" : score > 0 ? "partial" : "wrong", score,
         comment: score >= 100 ? (L === "fr" ? "Bonne réponse." : "Right answer.") : (L === "fr" ? `La bonne réponse : ${good}.` : `The right answer: ${good}.`) };
-    } else if (!String(ans ?? "").trim()) grades[q.id] = { verdict: "empty", score: 0, comment: L === "fr" ? "Pas de réponse." : "No answer." };
+    } else if (notAttempted(q, ans)) grades[q.id] = { verdict: "empty", score: 0, comment: q.type === "code" && String(ans ?? "").trim() ? NOT_TRIED[L === "fr" ? "frStarter" : "enStarter"] : NOT_TRIED[L === "fr" ? "fr" : "en"] };
     else open.push(q);
   }
   let summary = tk.summary ?? "";
@@ -326,6 +336,7 @@ export async function gradeTaker(env: Env, takerId: number, force = false) {
       "Donne une note pour CHAQUE question, avec \"id\" = son numéro (1, 2, 3…).",
       "Termine par \"bilan\" : 2 à 3 phrases à l’apprenant sur ses points forts et ce qu’il doit retravailler en priorité.",
       'Réponds UNIQUEMENT avec ce JSON : {"notes":[{"id":1,"verdict":"correct|partial|wrong","score":0,"juste":"…","faux":"…","erreurs":[{"ligne":3,"extrait":"…","probleme":"…","gravite":"mineure"}],"commentaire":"…"}],"bilan":"…"}',
+      ...(qs.some((q) => grades[q.id]?.verdict === "empty") ? [`L’apprenant n’a pas tenté ${qs.filter((q) => grades[q.id]?.verdict === "empty").length} autre(s) question(s) (pas de réponse) : elles ne sont pas ci-dessous. Dans "bilan", parle-en comme de questions « non tentées », jamais comme d’erreurs ou de mauvaises réponses.`] : []),
     ].join("\n");
     const fence = (s: string) => String(s).replace(/<<</g, "‹‹‹").replace(/>>>/g, "›››");
     const user = (compact: boolean) => open.map((q, k) => [
@@ -434,9 +445,14 @@ export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
   for (const tk of takers.slice(0, 40)) {
     const grades = parse<Record<string, Grade>>(tk.grades, {});
     const order = paperFor(qs, tk.seed);
-    const lines = order.map((p) => { const gr = grades[p.id]; const icon = gr?.verdict === "correct" ? "✅" : gr?.verdict === "partial" ? "🟡" : "❌"; return `${icon} **${p.n}.** ${String(p.prompt).split("\n")[0].slice(0, 80)}\n${gr?.comment ?? ""}`; });
+    const fr = L === "fr";
+    const ICON: Record<string, string> = { correct: "✅", partial: "🟡", wrong: "❌", empty: "⚪" };
+    const lines = order.map((p) => { const gr = grades[p.id]; return `${ICON[gr?.verdict ?? "partial"] ?? "🟡"} **${p.n}.** ${String(p.prompt).split("\n")[0].slice(0, 80)}\n${gr?.comment ?? ""}`; });
+    const n = (v: string) => order.filter((p) => grades[p.id]?.verdict === v).length;
+    const tally = [n("correct") && `✅ ${n("correct")} ${fr ? "juste(s)" : "right"}`, n("partial") && `🟡 ${n("partial")} ${fr ? "en partie" : "partly right"}`,
+      n("wrong") && `❌ ${n("wrong")} ${fr ? "fausse(s)" : "wrong"}`, n("empty") && `⚪ ${n("empty")} ${fr ? "non tentée(s)" : "not attempted"}`].filter(Boolean).join(" · ");
     const ok = await dm(env, tk.discord_id, { embeds: [{ title: t(L, "assess.result_title", { title: a.title, score: tk.score ?? 0 }), color: (tk.score ?? 0) >= 60 ? 0x16a34a : 0xd97706,
-      description: [tk.summary ?? "", "", ...lines].join("\n").slice(0, 4000) }] });
+      description: [tk.summary ?? "", "", tally, "", ...lines].join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000) }] });
     if (ok) sent++;
   }
   return sent;

@@ -165,3 +165,20 @@ export async function aiPlanNote(env: Env, g: GuildRow, row: Awaited<ReturnType<
   await upsert(env, g, row.discord_id, { note: t, by: "ai" });
   return { note: { text: t, by: "ai", at: now() } };
 }
+
+/** Each student's niveau (excellent … critique): their last debrief's level, else their last sprint's, and how it moves. */
+export async function niveaux(env: Env, g: GuildRow) {
+  const P = await progressView(env, g);
+  const sprints = await all<{ discord_id: string; sprint: number; lv: string | null }>(env,
+    "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []);
+  const out: Record<string, { lv: string; from: string; trend: string; history: string[] }> = {};
+  for (const s of P.students) {
+    const deb = P.briefs.map((b, i) => { const c = P.cells[`${b.id}:${s.discord_id}`]; const lv = c ? c.lv || c.plv : ""; return lv in RANK ? { lv, from: `B${i + 1} · ${b.title}` } : null; }).filter(Boolean) as { lv: string; from: string }[];
+    const sp = sprints.filter((r) => r.discord_id === s.discord_id && r.lv && r.lv in RANK).map((r) => ({ lv: r.lv!, from: `Sprint ${r.sprint}` }));
+    const last = deb[deb.length - 1] ?? sp[sp.length - 1];
+    if (!last) continue;
+    const seq = (deb.length >= 2 ? deb : [...sp, ...deb]).map((x) => x.lv);
+    out[s.discord_id] = { lv: last.lv, from: last.from, trend: levelTrend(seq, ""), history: seq.slice(-6) };
+  }
+  return out;
+}

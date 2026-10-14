@@ -790,12 +790,48 @@ function assessVerdicts(assess) {
   }
   return out;
 }
+// the "no assessment" panel: generate one with AI, link an existing one, or go on without it for this brief
+function wireAssessLink(root) {
+  const box = $(".asl, .asl-min", root);
+  if (!box || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  const bid = DB.bid;
+  const sel = $("[data-asl-sel]", box);
+  if (sel) api("/assessments").then((r) => {
+    const list = (r.items || []).filter((a) => String(a.brief_id || "") !== String(bid));
+    sel.innerHTML = list.length ? `<option value="">Choose…</option>` + list.map((a) => `<option value="${a.id}">${esc(a.title)}${a.brief_id ? " (linked to another brief)" : ""}</option>`).join("") : `<option value="">No assessment yet</option>`;
+  }).catch(() => { sel.innerHTML = `<option value="">—</option>`; });
+  const set = (v) => { try { v ? localStorage.setItem(`cb-noassess:${bid}`, "1") : localStorage.removeItem(`cb-noassess:${bid}`); } catch { /* private window */ } };
+  $$("[data-asl]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const act = b.dataset.asl;
+    if (act === "hide" || act === "show") { set(act === "hide"); renderDebrief(); return; }
+    if (act === "ai") { generateQuestionsDialog(null, { brief: bid, title: DB.B.brief.title }); return; }
+    if (!sel.value) throw new Error("Choose the assessment to link");
+    await api(`/assessments/${sel.value}/link`, { method: "POST", body: { brief_id: Number(bid) } });
+    toast(DB.R.review?.result ? "Assessment linked: analyze again so the debrief uses it" : "Assessment linked to this brief");
+    DB.R = await api(`/briefs/${bid}/review?who=${encodeURIComponent(DB.who)}`);
+    renderDebrief();
+  }));
+}
 function assessPanelHtml(assess) {
   const list = assess || [];
-  if (!list.length) return `<section class="panel db-step1"><h2>1 · Assessment</h2>
-    <div class="notice warn"><b>No assessment linked to this brief.</b> The debrief works on the project only. An assessment is recommended:
-      it is the surest proof that the learner masters the competencies (a project can be copied or made with AI).
-      <p style="margin:8px 0 0"><a class="btn small" href="#/assessments">Create an assessment</a> <span class="small muted">then choose this brief as its “Linked brief”.</span></p></div></section>`;
+  if (!list.length) {
+    const bid = (typeof DB !== "undefined" && DB && DB.bid) || "";
+    let hidden = false; try { hidden = localStorage.getItem(`cb-noassess:${bid}`) === "1"; } catch { /* private window */ }
+    if (hidden) return `<section class="panel db-step1 asl-min"><span class="asl-mi" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z"/><path d="M8 6H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"/></svg></span>
+      <span><b>1 · Assessment</b> <span class="muted">none linked: this debrief uses the project only</span></span><button class="btn small" data-asl="show">Add one</button></section>`;
+    return `<section class="panel db-step1 asl">
+      <div class="asl-head"><span class="asl-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z"/><path d="M8 6H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"/><path d="M12 11v4M12 18h.01"/></svg></span>
+        <div><h2>1 · Add an assessment to this brief</h2>
+          <p>Without one, the debrief only sees the project, and a project can be copied or made with AI. A short assessment is the surest proof that the learner masters the competencies: its results set where each competency starts and go into the comment.</p></div>
+        <button class="btn small asl-x" data-asl="hide" title="Continue without an assessment for this brief">Not for this brief</button></div>
+      <div class="asl-opts">
+        <button type="button" class="asl-opt main" data-asl="ai"><b>✨ Generate it with AI</b><span>Questions written from this brief's notions and competencies. You check them before inviting the class.</span></button>
+        <div class="asl-opt"><b>Link an existing one</b><span>An assessment you already made or imported.</span>
+          <div class="asl-link"><select data-asl-sel aria-label="Assessment to link"><option value="">Loading…</option></select><button class="btn small" data-asl="link">Link</button></div></div>
+        <a class="asl-opt" href="#/assessments"><b>Write one yourself</b><span>In Assessments, then choose this brief as its “Linked brief”.</span></a>
+      </div></section>`;
+  }
   return `<section class="panel db-step1"><h2>1 · Assessment <span class="muted">it comes first: it decides where each competency starts</span></h2>
     <div class="db-rows">${list.map((x) => {
       const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
@@ -863,6 +899,7 @@ function renderDebrief() {
       <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
       <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
     $("#db-an2").onclick = () => analyzeDialog();
+    wireAssessLink(body);
     renderSteps(false);
     return;
   }
@@ -928,6 +965,7 @@ function renderDebrief() {
           <label class="check"><input type="checkbox" id="db-dm" checked> Send the comment by Discord DM</label>
           <p class="toolbar" style="margin:12px 0 0"><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
+  wireAssessLink(body);
   updateMeter();
   wireDebrief();
   renderSteps(final);
@@ -1210,14 +1248,14 @@ async function viewAssessments() {
 
 /** AI questions: a new assessment (onDone null) or more questions for the one being edited. */
 const lastTechs = () => { try { const v = JSON.parse(localStorage.getItem("classbot.techs") || "null"); return Array.isArray(v) && v.length ? v : ["HTML", "CSS"]; } catch { return ["HTML", "CSS"]; } };
-async function generateQuestionsDialog(onDone) {
+async function generateQuestionsDialog(onDone, preset = null) {
   const [br, students] = await Promise.all([api("/briefs"), loadStudents(), loadRef()]);
   openDialog(onDone ? "✨ Add questions with AI" : "✨ New assessment with AI", `
-    <label for="gq-t">Topic</label><input type="text" id="gq-t" style="width:100%" placeholder="e.g. Flexbox and responsive design, PHP sessions, SQL joins">
+    <label for="gq-t">Topic</label><input type="text" id="gq-t" style="width:100%" value="${esc(preset?.title || "")}" placeholder="e.g. Flexbox and responsive design, PHP sessions, SQL joins">
     <label>Technologies to assess <span class="muted">(one or more: the questions use these and nothing else)</span></label>
     ${tagSelect("gq-tech", TECH_OPTIONS, lastTechs(), { allowNew: true, placeholder: "Type: HTML, CSS, PHP, SQL, Laravel…" })}
     <div class="field-row">
-      <div><label for="gq-b">From a brief <span class="muted">(optional)</span></label><select id="gq-b"><option value="">—</option>${br.items.map((b) => `<option value="${b.id}">${esc(b.title)}</option>`).join("")}</select></div>
+      <div><label for="gq-b">From a brief <span class="muted">(optional)</span></label><select id="gq-b"><option value="">—</option>${br.items.map((b) => `<option value="${b.id}" ${String(b.id) === String(preset?.brief || "") ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select></div>
       <div><label for="gq-s">For one student <span class="muted">(their weak points)</span></label><select id="gq-s"><option value="">—</option>${students.map((s) => `<option value="${s.discord_id}">${esc(s.name || s.discord_id)}</option>`).join("")}</select></div>
     </div>
     <div class="field-row">
@@ -1455,6 +1493,8 @@ function assessResultsTab(root) {
     const ans = t.answers[q.id];
     const empty = ans == null || (Array.isArray(ans) ? !ans.length : !String(ans).trim());
     if (!g) return `<td class="cell"><button data-g="${t.id}" data-q="${q.id}" title="Not graded yet">${empty ? "—" : "…"}</button></td>`;
+    // not attempted is not a wrong answer: grey, no score
+    if (g.verdict === "empty") return `<td class="cell"><button class="sc na" data-g="${t.id}" data-q="${q.id}" title="Not attempted${g.teacher ? " (set by you)" : ""}">—${g.teacher ? "<i>✎</i>" : ""}</button></td>`;
     return `<td class="cell"><button class="sc" style="background:${masteryColor(g.score)};color:${masteryInk(g.score)}" data-g="${t.id}" data-q="${q.id}" title="${esc(g.wrong || g.comment || "")}">${g.score}${g.teacher ? "<i>✎</i>" : ""}</button></td>`;
   };
   root.innerHTML = `
@@ -1471,7 +1511,8 @@ function assessResultsTab(root) {
     ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Student</th><th>Score</th>${qs.map((q, i) => `<th class="ctr" title="${esc(q.prompt.slice(0, 200))}"><span class="qh">${QI[q.type]} Q${i + 1}</span><small>${q.points} pt</small></th>`).join("")}</tr></thead>
       <tbody>${done.map((t) => `<tr><td><button class="res-who" data-paper="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b><small>${t.status === "submitted" ? "to grade" : "open the paper →"}</small></span></button></td>
         <td>${t.score == null ? `<span class="muted">—</span>` : `<div class="res-score"><b style="color:${masteryInk(t.score)}">${t.score}%</b>${meter(t.score)}</div>`}</td>${qs.map((q) => cell(t, q)).join("")}</tr>`).join("")}
-      <tr class="avg"><td class="small"><b>Average per question</b></td><td></td>${avgQ.map((v) => `<td class="ctr"><b class="small" style="color:${masteryInk(v)}">${v ?? "—"}</b></td>`).join("")}</tr></tbody></table></div>`
+      <tr class="avg"><td class="small"><b>Average per question</b></td><td></td>${avgQ.map((v) => `<td class="ctr"><b class="small" style="color:${masteryInk(v)}">${v ?? "—"}</b></td>`).join("")}</tr></tbody></table></div>
+      <p class="muted small" style="margin:10px 0 0"><span class="lvl none" style="padding:0 8px">—</span> not attempted (no answer, or the starter code left as it was): it counts 0 but isn't a wrong answer, and the student is told so.</p>`
       : `<div class="empty-state"><div style="font-size:40px">📭</div><p class="muted">No paper handed in yet.</p></div>`}
     </section>
     ${hardest.length || done.some((t) => t.summary) ? `<div class="grid cols-2-even">
@@ -1487,7 +1528,7 @@ function assessResultsTab(root) {
   $$("[data-g]", root).forEach((b) => b.onclick = () => gradeDialog(A.takers.find((t) => String(t.id) === b.dataset.g), qs.find((q) => q.id === b.dataset.q)));
 }
 
-const VERDICT_TXT = { correct: ["ok", "Correct"], partial: ["warn", "Partly right"], wrong: ["bad", "Wrong"], empty: ["bad", "No answer"] };
+const VERDICT_TXT = { correct: ["ok", "Correct"], partial: ["warn", "Partly right"], wrong: ["bad", "Wrong"], empty: ["none", "Not attempted"] };
 function answerHtml(q, ans, marks = []) {
   // code: numbered lines, the AI's mistakes highlighted on their line (yellow: small slip, red: serious)
   if (q.type === "code" && ans && String(ans).trim()) {
@@ -1509,7 +1550,7 @@ function answerHtml(q, ans, marks = []) {
 function gradeWhy(g) {
   if (!g || !g.verdict) return `<p class="muted small">Not graded yet.</p>`;
   const v = VERDICT_TXT[g.verdict] || ["", g.verdict];
-  return `<div class="why"><p style="margin:0"><span class="lvl ${v[0]}">${esc(v[1])}</span> <b style="color:${masteryInk(g.score)}">${g.score}%</b> <span class="muted small">${g.teacher ? "changed by you" : "graded by the AI"}</span></p>
+  return `<div class="why"><p style="margin:0"><span class="lvl ${v[0]}">${esc(v[1])}</span> ${g.verdict === "empty" ? "" : `<b style="color:${masteryInk(g.score)}">${g.score}%</b> `}<span class="muted small">${g.teacher ? "changed by you" : g.verdict === "empty" ? "no answer: counts 0, not as a mistake" : "graded by the AI"}</span></p>
     ${g.right ? `<p class="why-ok"><b>✓ Right:</b> ${esc(g.right)}</p>` : ""}${g.wrong ? `<p class="why-ko"><b>✗ Wrong or missing:</b> ${esc(g.wrong)}</p>` : ""}
     ${g.comment ? `<p class="why-msg"><b>💬 To the student:</b> ${esc(g.comment)}</p>` : ""}</div>`;
 }
@@ -1539,7 +1580,7 @@ function gradeDialog(t, q, fromPaper = false) {
     ${q.expected ? `<details class="small"><summary>Expected</summary><pre class="code-view" style="white-space:pre-wrap">${esc(q.expected)}</pre></details>` : ""}
     <h3>Why this grade</h3>${gradeWhy(g)}
     <h3>Change it</h3>
-    ${segHtml("vd", [["correct", "Correct"], ["partial", "Partly"], ["wrong", "Wrong"], ["empty", "Empty"]], g.verdict || "partial")}
+    ${segHtml("vd", [["correct", "Correct"], ["partial", "Partly"], ["wrong", "Wrong"], ["empty", "Not attempted"]], g.verdict || "partial")}
     <div class="field-row"><div><label for="gd-s">Score (%)</label><input type="number" id="gd-s" min="0" max="100" value="${g.score ?? ""}"></div></div>
     <label for="gd-c">Comment for the student</label><textarea id="gd-c">${esc(g.comment || "")}</textarea>`,
     [{ label: "Save the grade", primary: true, action: async () => {
@@ -1978,7 +2019,7 @@ function learningPanel(d, sid, part = "comps") {
   if (part === "assess") {
     const done = L.assessments.filter((a) => a.score != null);
     const avg = done.length ? Math.round(done.reduce((s, a) => s + a.score, 0) / done.length) : null;
-    const VD = { correct: ["ok", "✓"], partial: ["warn", "½"], wrong: ["bad", "✗"], empty: ["bad", "—"] };
+    const VD = { correct: ["ok", "✓"], partial: ["warn", "½"], wrong: ["bad", "✗"], empty: ["none", "—"] };
     return `<div class="stack">
       <div class="stu-mini-figs">
         <div><b>${L.assessments.length}</b><span>assessment(s)</span></div>
@@ -1995,7 +2036,7 @@ function learningPanel(d, sid, part = "comps") {
         </div>
         ${a.comps.length ? `<div class="asx-comps">${a.comps.map((c) => `<span class="tag comp ${c.ok ? "ok" : "ko"}" title="${esc(c.note || "")}">${c.ok ? "✓" : "✗"} ${esc(cText(c.code + (c.level ? "N" + c.level : "")))} <span class="muted">${esc(nameOf(c.code).slice(0, 40))}</span></span>`).join("")}</div>` : ""}
         ${a.questions.some((q) => q.verdict) ? `<div class="asx-qs">${a.questions.map((q) => { const v = VD[q.verdict] || ["", "·"];
-          return `<div class="asx-q ${v[0]}" title="Q${q.n} · ${esc(q.prompt)}${q.score != null ? ` · ${q.score}/100` : ""}"><b>Q${q.n}</b><span>${v[1]}</span></div>`; }).join("")}</div>` : ""}
+          return `<div class="asx-q ${v[0]}" title="Q${q.n} · ${esc(q.prompt)}${q.verdict === "empty" ? " · not attempted" : q.score != null ? ` · ${q.score}/100` : ""}"><b>Q${q.n}</b><span>${v[1]}</span></div>`; }).join("")}</div>` : ""}
         ${a.summary ? `<p class="small asx-sum">${esc(a.summary)}</p>` : ""}
       </section>`).join("") : `<div class="empty-state"><div style="font-size:40px">📝</div><p class="muted">No assessment yet for this student.</p><a class="btn" href="#/assessments">Assessments →</a></div>`}
     </div>`;

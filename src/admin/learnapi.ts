@@ -571,7 +571,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const id = await saveAssessment(env, g, null, body);
     return ok(await assessView(env, g, id));
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -586,6 +586,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "invite") {
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });
+    }
+    if (act === "link" && method === "POST") {
+      // linked to a brief (from the debrief): its results count in that brief's debriefs
+      const bid = Number(body.brief_id) || null;
+      if (bid && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", bid, g.id))) throw new ApiError(404, "This brief doesn't exist anymore.");
+      await run(env, "UPDATE assessments SET brief_id = ? WHERE id = ?", bid, id);
+      return ok({ ok: true, brief_id: bid });
     }
     if (act === "remove") {
       // take back an invitation (their link stops working); a paper already handed in stays
