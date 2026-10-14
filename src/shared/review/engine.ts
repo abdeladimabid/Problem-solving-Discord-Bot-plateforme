@@ -161,7 +161,10 @@ const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.t
 
 // Comment in the teacher's style, built only from the checklist (checks + brief requirements + competencies).
 // Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
+// "Responsive (vérif : responsive)" → "Responsive": the grid's hint, never shown to the learner
+export const noVerif = (t) => String(t ?? '').replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, '').trim();
 export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null, assess = null) {
+  exigences = (exigences || []).map((x) => ({ ...x, texte: noVerif(x.texte) }));
   const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
   const ok = (id) => !!c[id] && c[id].ok === true;
   const ko = (id) => !!c[id] && c[id].ok === false;
@@ -346,7 +349,8 @@ export function reviewStates(rec) {
   const saved = (rec && rec.final) || {};
   const ck = {};
   for (const x of (rec && rec.checks) || []) if (!x.info && (x.ok === true || x.ok === false)) ck[x.id] = typeof (saved.ck || {})[x.id] === 'boolean' ? saved.ck[x.id] : x.ok;
-  const ex = (r.exigences || []).map((e, i) => (isBound(e) && e.check in ck ? ck[e.check] : typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : itemValid(e)));
+  // a requirement proved by a check starts as the check says; the teacher's switch wins
+  const ex = (r.exigences || []).map((e, i) => (typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : isBound(e) && e.check in ck ? ck[e.check] : itemValid(e)));
   const co = {};
   // the assessment linked to the brief comes first: a competency it tested starts as the assessment says (validated
   // only if every assessment validated it), whatever the project shows; the others start as the project shows
@@ -1023,8 +1027,8 @@ export function cleanAi(r, commits, skills = [], items = []) {
     const inOrder = !byN.size && given.length === items.length;
     items.forEach((it, i) => {
       const e = inOrder ? given[i] : byN.get(it.n);
-      const line = it.type === 'oral' ? { type: it.type, texte: it.texte, statut: 'non_verifiable', preuve: 'à voir à l’oral' }
-        : { type: it.type, texte: it.texte, statut: e ? STATUT[key(e.statut)] || 'non_verifiable' : 'non_verifiable', preuve: e ? str(e.preuve, 200) : 'non analysé' };
+      const line = it.type === 'oral' ? { type: it.type, texte: noVerif(it.texte), statut: 'non_verifiable', preuve: 'à voir à l’oral' }
+        : { type: it.type, texte: noVerif(it.texte), statut: e ? STATUT[key(e.statut)] || 'non_verifiable' : 'non_verifiable', preuve: e ? str(e.preuve, 200) : 'non analysé' };
       if (it.verif) line.verif = it.verif;
       out.exigences.push(line);
     });
