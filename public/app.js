@@ -1453,7 +1453,7 @@ async function aiSettings(root, flash = null) {
       <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="${esc(v.keyHint || "paste the key")}" style="width:100%;max-width:520px;font-family:var(--mono, monospace)">
       <label for="ai-m">Model</label>
       <input id="ai-m" list="ai-mlist" value="${esc(v.models[0] || "")}" placeholder="model name" style="width:100%;max-width:520px"><datalist id="ai-mlist">${v.models.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
-      <p class="small muted" style="margin:6px 0 0">${v.models.length ? `Suggested: ${v.models.map((m) => `<code>${esc(m)}</code>`).join(", ")}. Model names change: if the test says “model not found”, copy the exact name from the provider's site.` : ""}</p>
+      <p class="small muted" style="margin:6px 0 0">${v.models.length ? `Suggested: ${v.models.map((m) => `<code>${esc(m)}</code>`).join(", ")}. ${type === "openrouter" ? "Free models change often on OpenRouter: if this one isn't free anymore, ClassBot picks one that is free today, by itself." : "Model names change: if the test says “model not found”, copy the exact name from the provider's site."}` : ""}</p>
       <div class="set-foot"><button class="btn primary" id="ai-addbtn">Test and add</button></div>`;
     $("#ai-addbtn", root).onclick = (e) => busy(e.currentTarget, async () => {
       const r = await api("/settings/ai/providers", { method: "POST", body: { type, key: $("#ai-key", root).value.trim(), model: $("#ai-m", root).value.trim(), base: $("#ai-base", root)?.value.trim() } });

@@ -3586,6 +3586,16 @@ section("debrief: link an existing assessment to the brief from the debrief");
   run1("DELETE FROM assessments WHERE id = ?", aid); run1("DELETE FROM briefs WHERE id = ?", bid);
 }
 
+section("AI keys: an OpenRouter model that isn't free anymore is replaced by one free today");
+{
+  const add = await api("POST", "/api/settings/ai/providers", { g: G, type: "openrouter", key: "sk-or-good-123", model: "openai/gpt-oss-120b:free" });
+  const p = add.data.providers?.find((x: any) => x.type === "openrouter");
+  check(add.status === 200 && p?.model === "meta-llama/llama-3.3-70b-instruct:free" && /isn't free on OpenRouter anymore/.test(add.data.warn || ""), "added with the best free model of today, and told why");
+  const bad = await api("POST", "/api/settings/ai/providers", { g: G, type: "openrouter", key: "sk-or-wrong", model: "x/y:free" });
+  check(bad.status === 400 && /key refused/.test(bad.data.error), "…a wrong key is still refused");
+  if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
