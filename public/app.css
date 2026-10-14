@@ -1567,3 +1567,4 @@ div.asl-opt { cursor: default; }
 .db-fold > summary::-webkit-details-marker { display: none; }
 .db-fold > summary::before { content: "▸"; color: var(--ink-faint); transition: transform .15s; } .db-fold[open] > summary::before { transform: rotate(90deg); }
 .db-fold > summary h3 { margin: 10px 0; }
+.iv-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

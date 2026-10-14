@@ -1459,7 +1459,8 @@ function renderAssessment() {
   const locked = A.takers.filter((t) => t.status === "locked" && !t.resume_ok).length;
   view.innerHTML = `
     <div class="page-head"><div><p class="crumb"><a href="#/assessments">Assessments</a></p><h1>${esc(a.title)}</h1>
-      <p class="sub">${status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status)} · ${a.questions.length} question(s) · ${a.settings.minutes ? `${a.settings.minutes} min` : "no time limit"}${a.closes_at ? ` · closes ${fmtDateTime(a.closes_at)}` : ""}</p></div>
+      <p class="sub">${status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status)} · ${a.questions.length} question(s) · ${a.settings.minutes ? `${a.settings.minutes} min` : "no time limit"}${a.closes_at ? ` · closes ${fmtDateTime(a.closes_at)}` : ""}</p>
+      <p class="iv-sum" style="margin:6px 0 0">${optsChips(a.settings)} <button class="ap-link" id="aa-opts">Change</button></p></div>
       <div class="toolbar" style="margin:0">
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
@@ -1482,6 +1483,7 @@ function renderAssessment() {
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
+  $("#aa-opts").onclick = () => assessOptionsDialog();
   $("#aa-share").onclick = () => shareAssessmentDialog(a.id);
   if ($("#aa-close")) $("#aa-close").onclick = () => confirmDialog("Close this assessment?", "Students still working are handed in automatically within a minute.", "Close", async () => { AS.A = await api(`/assessments/${a.id}/close`, { method: "POST", body: {} }); renderAssessment(); });
   if ($("#aa-open")) $("#aa-open").onclick = (e) => busy(e.currentTarget, async () => { AS.A = await api(`/assessments/${a.id}/reopen`, { method: "POST", body: {} }); toast("Open again for 24 h"); renderAssessment(); });
@@ -1584,18 +1586,36 @@ function readQuestions() {
   });
 }
 
+// The assessment's anti-cheat options, in words (shown before inviting, and on the assessment page)
+const optsOf = (st = {}) => ({ lockScreen: st.lockScreen !== false, noPaste: st.noPaste !== false, shuffle: st.shuffle !== false, nav: st.nav === "forward" ? "forward" : "free" });
+const optsChips = (st) => { const o = optsOf(st);
+  return [o.lockScreen ? "🔒 Full screen lock" : "🔓 No full screen lock", o.noPaste ? "✋ Copy-paste blocked" : "📋 Copy-paste allowed", o.shuffle ? "🔀 Shuffled" : "➡️ Same order for all", o.nav === "forward" ? "⏭️ No going back" : "↩️ Can go back"]
+    .map((x) => `<span class="tag">${x}</span>`).join(" "); };
+/** Step 1: the anti-cheat options (always asked before the first invitation; "Change" later while nobody started). */
+function assessOptionsDialog(next = null) {
+  const { A } = AS, a = A.assessment, o = optsOf(a.settings), started = A.takers.some((t) => t.status !== "invited");
+  const opt = (id, on, title, sub, locked = false) => `<label class="iv-opt ${locked ? "locked" : ""}"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>${title}</b><small>${sub}</small></span></label>`;
+  openDialog(next ? "Anti-cheat options · step 1 of 2" : "Anti-cheat options", `
+    <p class="muted small" style="margin-top:4px">Choose how the students take this assessment.</p>
+    <div class="iv-opts">
+      ${opt("op-fs", o.lockScreen, "Full screen lock", "The test runs in full screen. Leaving it, the tab or the window stops the session until you let them back in.")}
+      ${opt("op-paste", o.noPaste, "Block copy-paste", "No pasting in the answers (and no right click).")}
+      ${opt("op-shuf", o.shuffle, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
+      ${opt("op-back", o.nav === "free", "Allow going back", "Off: one question at a time; once a question is passed they can't come back to it.", started)}
+      ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>`,
+    [{ label: next ? "Next: choose the students →" : "Save", primary: true, action: async (d) => {
+      AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "free" : "forward" } });
+      AS.optsAsked = a.id;
+      if (next) next(); else { d.close(); toast("Options saved"); renderAssessment(); }
+    } }]);
+}
 async function inviteDialog() {
   const { A } = AS, a = A.assessment;
+  // the options are always asked before the first invitation of an assessment
+  if (!A.takers.length && AS.optsAsked !== a.id) return assessOptionsDialog(() => inviteDialog());
   const invited = new Set(A.takers.map((t) => t.discord_id));
-  const st = a.settings || {}, started = A.takers.some((t) => t.status !== "invited");
-  const opt = (id, on, title, sub, locked = false) => `<label class="iv-opt ${locked ? "locked" : ""}"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>${title}</b><small>${sub}</small></span></label>`;
-  openDialog("Invite students", `
-    <div class="iv-opts"><div class="iv-h">Options of this assessment</div>
-      ${opt("op-fs", st.lockScreen !== false, "Full screen lock", "Leaving full screen, the tab or the window stops the session until you let them back in.")}
-      ${opt("op-paste", st.noPaste !== false, "Block copy-paste", "No pasting in the answers (and no right click).")}
-      ${opt("op-shuf", st.shuffle !== false, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
-      ${opt("op-back", st.nav !== "forward", "Allow going back", "Off: one question at a time; once a question is passed they can't come back to it.", started)}
-      ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>
+  openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `
+    <div class="iv-sum"><span class="iv-h">Options</span> ${optsChips(a.settings)} <button class="ap-link" id="iv-chg">Change</button></div>
     <p class="muted small" style="margin-top:12px">Each student gets their own link by Discord DM.</p>
     ${segHtml("who", [["some", "Chosen students"], ["all", "The whole class"]], "some")}
     <div id="iv-list" class="iv-list">${A.students.map((s) => `<label class="check small"><input type="checkbox" value="${s.discord_id}" ${invited.has(s.discord_id) ? "checked disabled" : (a.settings.target || []).includes(s.discord_id) ? "checked" : ""}> ${esc(s.name || s.discord_id)}${invited.has(s.discord_id) ? ` <span class="muted">(invited)</span>` : ""}</label>`).join("")}</div>
@@ -1606,13 +1626,11 @@ async function inviteDialog() {
       const mode = segVal(dlg, "who");
       const students = mode === "all" ? "all" : $$("#iv-list input:checked:not(:disabled)").map((c) => c.value);
       if (mode === "some" && !students.length) throw new Error("Tick at least one student.");
-      const opts = { lockScreen: $("#op-fs", dlg).checked, noPaste: $("#op-paste", dlg).checked, shuffle: $("#op-shuf", dlg).checked, nav: $("#op-back", dlg).checked ? "free" : "forward" };
-      if (opts.lockScreen !== (st.lockScreen !== false) || opts.noPaste !== (st.noPaste !== false) || opts.shuffle !== (st.shuffle !== false) || opts.nav !== (st.nav || "free"))
-        AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: opts });
       AS.A = await api(`/assessments/${a.id}/invite`, { method: "POST", body: { students, days: $("#iv-d")?.value, send: $("#iv-dm").checked } });
       dlg.close(); toast("Invited"); AS.tab = "live"; renderAssessment();
     } }]);
   wireSeg(dlg, "who", (v) => { $("#iv-list").hidden = v !== "some"; $("#iv-all").hidden = v === "some"; });
+  $("#iv-chg", dlg).onclick = () => assessOptionsDialog(() => inviteDialog());
 }
 
 function assessLiveTab(root) {
