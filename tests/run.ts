@@ -2667,7 +2667,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/-Échange avec ton formateur :\nRevois la différence entre margin et padding\./.test(rm.data.review.result.feedback), "…and they go into the comment, for the learner");
+  check(/Lors de notre échange : Revois la différence entre margin et padding\./.test(rm.data.review.result.feedback), "…and they go into the comment, for the learner");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -2676,7 +2676,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  check(/-Questions orales :\nTu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Notions à revoir : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
+  check(/Tu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Revois aussi cette notion abordée à l’oral : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
   const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
@@ -2929,9 +2929,10 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify(rec), clock.now());
   const st = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(st.status === 200 && st.data.states.co.C3 === false && st.data.states.co.C4 === true, `the assessment's "not validated" counts in the debrief (${JSON.stringify(st.data.states?.co)})`);
-  check(/-Évaluation :\n« CSS de base » : 0 %.*à retravailler : C3/.test(st.data.review.result.feedback), "…and the comment says how the assessment went");
+  const afb = st.data.review.result.feedback;
+  check(/Lors de l’évaluation « CSS de base », ces questions t’ont posé problème/.test(afb) && afb.includes(`- ${mk.data.assessment.questions[0].prompt.replace(/[\s.:;]+$/, "").slice(0, 60)}`) && /réponse incorrecte\)/.test(afb), "…and the comment lists the assessment's questions to work on");
   check(st.data.review.assess?.[0]?.title === "CSS de base", "…the debrief page shows the assessment");
-  check(/« CSS de base » : 0 %, niveau Critique/.test(st.data.review.result.feedback), "…with the assessment's level");
+  check(!/%|niveau|Critique|Moyen|Compétences|C3|-Évaluation/.test(afb), "…with no score, no level and no competency codes");
   {
     // the assessment comes first, both ways: what it validated starts valid even if the project doesn't show it
     const r2 = { result: { exigences: [], competences: [{ code: "C3", avis: "non_visible" }, { code: "C4", avis: "validable" }, { code: "C5", avis: "validable" }] },
@@ -3161,12 +3162,30 @@ section("brief steps: found in the brief, dated in working days, proposed from t
     result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
   const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
-  check(/-Suivi du projet :\nPartie 1 : validée à temps\.\nPartie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note");
+  check(fb.includes("Partie 1 : validée à temps.") && /Fais aussi plus attention à ces points\..*Partie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note (a late step in what to watch)");
   check(fb.includes("La majorité de ton travail (83 % des commits) a été faite pendant la dernière étape") && fb.includes("terminer chaque partie à la date prévue"), "…work done at the end, and the advice");
   check(!/Partie 3 :/.test(fb), "a step not decided is not written");
   const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
   check(rv.data.steps.length === 3 && rv.data.stepRecs[2].note === "Les pages sont arrivées en retard.", "the debrief page gets the steps and the results");
   env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
+}
+
+section("the debrief comment: what went well, what to improve, what to watch; no deliverables, criteria, bonus to do, scores or codes");
+{
+  const { buildFeedback } = await import("../src/shared/review/engine.ts");
+  const fb = buildFeedback("Sara", [{ id: "nav", ok: true }, { id: "docs", ok: false }, { id: "seo", ok: false }], [
+    { type: "story", texte: "En tant que visiteur, je veux voir le menu", statut: "fait", check: "nav" },
+    { type: "story", texte: "En tant que visiteur, je veux une page contact", statut: "absent" },
+    { type: "livrable", texte: "README avec le lien de la maquette", statut: "absent", check: "docs" },
+    { type: "critere", texte: "Code indenté proprement", statut: "absent" },
+    { type: "bonus", texte: "En tant que visiteur, je veux un mode sombre", statut: "fait" },
+    { type: "bonus", texte: "En tant que visiteur, je veux une animation", statut: "absent" }],
+    [{ code: "C1N1", ok: true }, { code: "C3N1", ok: false }], null, null, null,
+    [{ title: "HTML de base", score: 56, comps: { C1N1: { ok: true } }, gaps: ["Écris une règle CSS qui met les <p> en rouge (non traitée)"] }]);
+  check(/^Bonjour Sara,\n\nVoici ce que tu as bien réussi dans ce projet\. Le menu permet d’accéder à toutes les pages\..*bonus \(un mode sombre\)/s.test(fb), "what went well first, with the bonus done");
+  check(fb.includes("réaliser cette partie du brief : une page contact") && fb.includes("meta description"), "…what to improve: the stories and the checks of the work");
+  check(!/README|indenté|animation|essayer ce|Compétences|C1N1|C3N1|56|niveau|Moyen/.test(fb), "…no deliverable, criterion, bonus to do, competency code, score or level");
+  check(/Lors de l’évaluation « HTML de base », cette question t’a posé problème.*\n- Écris une règle CSS qui met les <p> en rouge \(non traitée\)/s.test(fb) && /\nBonne continuation !$/.test(fb), "…what to watch: the assessment's questions not answered");
 }
 
 section("sprints: competencies reached in the sprint's briefs, levels for the report (AI for the class, no names), decision, sprint comment");

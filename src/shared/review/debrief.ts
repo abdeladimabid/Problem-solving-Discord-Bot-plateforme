@@ -145,7 +145,7 @@ export async function getReview(env: Env, briefId: number, who: string): Promise
  * switch still decides), and the comment says how the assessment went.
  */
 export async function briefAssessments(env: Env, briefId: number, who: string, rec: any = null) {
-  const list = await all<{ id: number; title: string }>(env, "SELECT id, title FROM assessments WHERE brief_id = ? ORDER BY id", briefId).catch(() => []);
+  const list = await all<{ id: number; title: string; questions: string | null }>(env, "SELECT id, title, questions FROM assessments WHERE brief_id = ? ORDER BY id", briefId).catch(() => []);
   if (!list.length) return [];
   let ids: string[] = who.startsWith("u:") ? [who.slice(2)] : (rec?.squad?.members ?? []).map((m: any) => String(m.gid));
   if (!ids.length && who.startsWith("s:")) {
@@ -153,10 +153,10 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
   }
   if (!ids.length) return [];
-  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }> }[] = [];
+  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[] }[] = [];
   for (const a of list) {
-    const takers = await all<{ discord_id: string; score: number | null; status: string }>(env,
-      `SELECT discord_id, score, status FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
+    const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null }>(env,
+      `SELECT discord_id, score, status, grades, answers FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const graded = takers.filter((t) => t.status === "graded");
     if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
     const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
@@ -167,9 +167,30 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
       // a squad: validated only if every member who took it validated it
       comps[r.code] = c ? { ok: c.ok && !!r.ok, level: Math.min(c.level ?? 1, r.level ?? 1), note: c.note } : { ok: !!r.ok, level: r.level, note: r.note };
     }
-    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps });
+    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(a.questions, graded) });
   }
   return out;
+}
+/** The questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong: what to work on. */
+function gapsOf(questions: string | null, takers: { grades: string | null; answers: string | null }[]): string[] {
+  let qs: any[] = [];
+  try { qs = JSON.parse(questions || "[]"); } catch { return []; }
+  const out: string[] = [];
+  for (const q of qs) {
+    let worst = "";
+    for (const t of takers) {
+      let g: any = {}, an: any = {};
+      try { g = JSON.parse(t.grades || "{}")[q.id]; an = JSON.parse(t.answers || "{}"); } catch { /* old row */ }
+      const a = an?.[q.id];
+      const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
+      const v = g?.verdict || (empty ? "empty" : "");
+      if (v === "empty" || (v === "wrong" && worst !== "empty") || (v === "partial" && !worst)) worst = v;
+    }
+    if (!worst || worst === "correct") continue;
+    const what = worst === "empty" ? "non traitée" : worst === "wrong" ? "réponse incorrecte" : "réponse incomplète";
+    out.push(`${oneLine(String(q.prompt || ""), 140).replace(/[\s.:;]+$/, "")} (${what})`);
+  }
+  return out.slice(0, 10);
 }
 /** The graded assessments of the brief, for the AI: what the learner showed in class, without help (never a name). */
 export function assessForAi(assess: any[] | null | undefined): string {
