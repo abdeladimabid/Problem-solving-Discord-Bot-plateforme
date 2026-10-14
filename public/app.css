@@ -1546,3 +1546,24 @@ div.asl-opt { cursor: default; }
 .why-parts li span { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
 .why-parts li.yes span { background: var(--up-bg); color: var(--up); } .why-parts li.partly span { background: var(--warn-bg); color: var(--warn); } .why-parts li.no span { background: var(--down-bg); color: var(--down); }
 .why-parts li b { margin-left: auto; font-size: 12px; color: var(--ink-soft); }
+/* Plan d'action: a student's weak points */
+.gp-b { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px 14px; margin-bottom: 10px; }
+.gp-b header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; } .gp-b header a { color: inherit; text-decoration: none; } .gp-b header a:hover { color: var(--blue); }
+.gp-b header > b:last-child { margin-left: auto; }
+.gp-k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700; margin: 10px 0 4px; }
+.gp-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.gp-l { margin: 0; padding-left: 18px; font-size: 13.5px; } .gp-l li { margin: 3px 0; }
+.gp-h { margin: 16px 0 8px; font-size: 15px; }
+.ap-h.pgc-none { background: var(--line-strong); }
+/* Invite: the options of the assessment */
+.iv-opts { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px 14px; margin-top: 8px; display: grid; gap: 8px; background: var(--surface-2); }
+.iv-h { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); font-weight: 700; }
+.iv-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; } .iv-opt input { margin-top: 3px; }
+.iv-opt span { display: flex; flex-direction: column; } .iv-opt small { color: var(--ink-soft); font-size: 12.5px; }
+.iv-opt.locked { opacity: .6; cursor: default; }
+/* Debrief: Criterion, Deliverable and Bonus folded */
+.db-fold { border-top: 1px solid var(--line); margin-top: 8px; }
+.db-fold > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.db-fold > summary::-webkit-details-marker { display: none; }
+.db-fold > summary::before { content: "▸"; color: var(--ink-faint); transition: transform .15s; } .db-fold[open] > summary::before { transform: rotate(90deg); }
+.db-fold > summary h3 { margin: 10px 0; }

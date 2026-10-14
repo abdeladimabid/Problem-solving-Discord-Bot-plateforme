@@ -26,7 +26,7 @@ import { challengeMistakes, classHeatmap, difficultyCheck, practiceSet, teacherS
 import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
-import { PlanError, aiPlanNote, niveaux, planView, savePlan } from "../shared/actionplan.ts";
+import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -376,6 +376,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/plan" && method === "GET") { const g = await guild(); return ok(await planView(env, g, await students(env, g))); }
     m = path.match(/^\/plan\/(\d+)$/);
     if (m && method === "PUT") return ok(await savePlan(env, await guild(), m[1], body));
+    m = path.match(/^\/plan\/(\d+)\/gaps$/);
+    if (m && method === "GET") return ok(await gapsOf(env, await guild(), m[1]));
     m = path.match(/^\/plan\/(\d+)\/ai$/);
     if (m && method === "POST") {
       const g = await guild();

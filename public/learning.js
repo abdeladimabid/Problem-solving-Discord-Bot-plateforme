@@ -1043,11 +1043,14 @@ function renderDebrief() {
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></section>` : ""}
       <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
-        ${Object.entries(exByType).map(([type, idx]) => `<h3>${esc(EXTYPE[type] || type)} <span class="muted small">${idx.length}</span></h3>
+        ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
+          const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${/bonus/i.test(type) ? " · not counted in the %" : ""}</span>`;
+          // Criterion, Deliverable and Bonus: folded by default (open them to check or switch)
+          return `${fold ? `<details class="db-fold"><summary><h3>${head}</h3></summary>` : `<h3>${head}</h3>`}
           <div class="db-rows">${idx.map((i) => { const e = ex[i], bound = e.check && e.check in st.ck; const s = STATUT[e.statut] || ["", e.statut];
             return `<div class="db-row">${sw(`data-ex="${i}" ${bound ? `data-exck="${esc(e.check)}"` : ""}`, st.ex[i], final)}
               <div><span>${esc(noVerifText(e.texte))}</span> <span class="lvl ${s[0]}">${esc(s[1])}</span>
-              <div class="small muted">${bound ? `🔎 automatic check: ${esc(ckDetail[e.check] || ckLabel[e.check] || e.check)}` : esc(e.preuve || "")}</div></div></div>`; }).join("")}</div>`).join("") || `<p class="empty">No requirement found.</p>`}
+              <div class="small muted">${bound ? `🔎 automatic check: ${esc(ckDetail[e.check] || ckLabel[e.check] || e.check)}` : esc(e.preuve || "")}</div></div></div>`; }).join("")}</div>${fold ? "</details>" : ""}`; }).join("") || `<p class="empty">No requirement found.</p>`}
       </section>
       ${(r.commits || []).length ? `<section class="panel"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
         <div class="db-rows" style="margin-top:10px">${r.commits.map((c) => `<div class="db-row"><span class="db-i">${c.ok === true ? "✅" : c.ok === false ? "⚠️" : "·"}</span>
@@ -1058,7 +1061,12 @@ function renderDebrief() {
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
       <section class="panel" id="db-oral"></section>
-      <section class="panel"><h2>Competencies <span class="muted">assessment, project, mise en situation and oral questions · your switch decides</span></h2>
+      <section class="panel" id="db-rem"><div class="panel-head" style="margin:0"><h2>One-to-one remarks</h2>${rec.remarks?.at ? `<span class="muted small">saved ${fmtAgo(Math.floor(rec.remarks.at / 1000))}</span>` : ""}</div>
+        <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
+        <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
+        ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
+        ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>
+      <section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
@@ -1067,6 +1075,7 @@ function renderDebrief() {
             <div style="margin-top:4px">${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
               <span class="lvl ${a[0]}">📁 project: ${esc(a[1])}</span>${(rec.assess || []).some((x) => x.score != null) && !ax.length ? ` <span class="small muted">not in the assessment</span>` : ""}</div>
             ${compAdvice(c.avis, aV[base])}
+            ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
       <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
@@ -1081,6 +1090,15 @@ function renderDebrief() {
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
   wireAssessLink(body);
+  const saveRm = (ai) => async () => {
+    toast(ai ? "⏳ The AI reads your remarks…" : "Saving…");
+    const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text: $("#db-rm").value, ai } });
+    DB.R = { ...DB.R, ...R };
+    toast(ai ? "Remarks saved: see the competencies and the comment" : "Remarks saved (in the comment and the level)");
+    renderDebrief();
+  };
+  if ($("#db-rms")) $("#db-rms").onclick = (e) => busy(e.currentTarget, saveRm(false));
+  if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
   updateMeter();
   wireDebrief();
   renderSteps(final);
@@ -1181,7 +1199,7 @@ function currentStates() {
 }
 function updateMeter() {
   const ex = DB.R.review?.result?.exigences || [];
-  const vals = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([e]) => e && e.type !== "bonus");
+  const vals = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([e]) => e && !/bonus/i.test(e.type || ""));   // bonuses never count in the %
   const pct = vals.length ? Math.round((vals.filter(([, v]) => v).length / vals.length) * 100) : null;
   if ($("#db-meter")) $("#db-meter").innerHTML = meter(pct, "Requirements validated");
   if ($("#db-pct")) $("#db-pct").innerHTML = pct == null ? "" : `<b style="color:${masteryInk(pct)}">${pct}%</b> <span class="muted small">of the requirements · ${$$("[data-co]:checked").length}/${$$("[data-co]").length} competencies</span>`;
@@ -1569,8 +1587,16 @@ function readQuestions() {
 async function inviteDialog() {
   const { A } = AS, a = A.assessment;
   const invited = new Set(A.takers.map((t) => t.discord_id));
+  const st = a.settings || {}, started = A.takers.some((t) => t.status !== "invited");
+  const opt = (id, on, title, sub, locked = false) => `<label class="iv-opt ${locked ? "locked" : ""}"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${locked ? "disabled" : ""}><span><b>${title}</b><small>${sub}</small></span></label>`;
   openDialog("Invite students", `
-    <p class="muted small" style="margin-top:12px">Each student gets their own link by Discord DM. The page opens in full screen; if they leave it, they're stopped until you let them back in.</p>
+    <div class="iv-opts"><div class="iv-h">Options of this assessment</div>
+      ${opt("op-fs", st.lockScreen !== false, "Full screen lock", "Leaving full screen, the tab or the window stops the session until you let them back in.")}
+      ${opt("op-paste", st.noPaste !== false, "Block copy-paste", "No pasting in the answers (and no right click).")}
+      ${opt("op-shuf", st.shuffle !== false, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
+      ${opt("op-back", st.nav !== "forward", "Allow going back", "Off: one question at a time; once a question is passed they can't come back to it.", started)}
+      ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>
+    <p class="muted small" style="margin-top:12px">Each student gets their own link by Discord DM.</p>
     ${segHtml("who", [["some", "Chosen students"], ["all", "The whole class"]], "some")}
     <div id="iv-list" class="iv-list">${A.students.map((s) => `<label class="check small"><input type="checkbox" value="${s.discord_id}" ${invited.has(s.discord_id) ? "checked disabled" : (a.settings.target || []).includes(s.discord_id) ? "checked" : ""}> ${esc(s.name || s.discord_id)}${invited.has(s.discord_id) ? ` <span class="muted">(invited)</span>` : ""}</label>`).join("")}</div>
     <p class="muted small" id="iv-all" hidden>Every student of the class gets a link (${A.students.length - invited.size} new).</p>
@@ -1580,6 +1606,9 @@ async function inviteDialog() {
       const mode = segVal(dlg, "who");
       const students = mode === "all" ? "all" : $$("#iv-list input:checked:not(:disabled)").map((c) => c.value);
       if (mode === "some" && !students.length) throw new Error("Tick at least one student.");
+      const opts = { lockScreen: $("#op-fs", dlg).checked, noPaste: $("#op-paste", dlg).checked, shuffle: $("#op-shuf", dlg).checked, nav: $("#op-back", dlg).checked ? "free" : "forward" };
+      if (opts.lockScreen !== (st.lockScreen !== false) || opts.noPaste !== (st.noPaste !== false) || opts.shuffle !== (st.shuffle !== false) || opts.nav !== (st.nav || "free"))
+        AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: opts });
       AS.A = await api(`/assessments/${a.id}/invite`, { method: "POST", body: { students, days: $("#iv-d")?.value, send: $("#iv-dm").checked } });
       dlg.close(); toast("Invited"); AS.tab = "live"; renderAssessment();
     } }]);
@@ -1633,6 +1662,8 @@ function assessResultsTab(root) {
   const avgQ = qs.map((q) => { const v = done.map((t) => t.grades[q.id]?.score).filter((x) => x != null); return v.length ? Math.round(v.reduce((s, x) => s + x, 0) / v.length) : null; });
   const hardest = qs.map((q, i) => ({ q, i, v: avgQ[i] })).filter((x) => x.v != null && x.v < 60).sort((x, y) => x.v - y.v).slice(0, 3);
   const QI = { code: "💻", explain: "💬", mcq: "☑️" };
+  // still to grade: handed in and not graded, or a question the AI couldn't grade
+  const toGrade = done.filter(paperPending).length;
   const cell = (t, q) => {
     const g = t.grades[q.id];
     const ans = t.answers[q.id];
@@ -1647,7 +1678,7 @@ function assessResultsTab(root) {
       <div class="figure"><span class="ico">📥</span><div><b>${done.length}/${A.takers.length}</b><span>papers handed in</span></div></div>
       <div class="figure"><span class="ico">📊</span><div><b style="color:${masteryInk(avg)}">${avg == null ? "—" : avg + "%"}</b><span>class average</span></div></div>
       <div class="figure"><span class="ico">✅</span><div><b>${passed}/${graded.length}</b><span>passed (≥ ${a.settings.passAt}%)</span></div></div>
-      <div class="figure ${done.length - graded.length ? "cs-attn" : ""}"><span class="ico">⏳</span><div><b>${done.length - graded.length}</b><span>to grade</span></div></div>
+      <div class="figure ${toGrade ? "cs-attn" : ""}"><span class="ico">⏳</span><div><b>${toGrade}</b><span>to grade</span></div></div>
     </div>
     <section class="panel">
     <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0">
@@ -1704,8 +1735,9 @@ function gradeWhy(g) {
 /** A student's whole paper: each question, their answer and why it got its grade. */
 /** "Grade with AI": in small lots, with the progress. When the AI's limit is reached it stops, and the next time it
  *  continues with the papers still to grade (nothing is given a 0 in the meantime). */
+const paperPending = (t) => t.status === "submitted" || (t.status === "graded" && Object.values(t.grades || {}).some((x) => x && !x.teacher && (x.pending || /indisponible|unavailable|Pas encore corrigé|Not graded yet/i.test(String(x.comment || "")))));
 function gradeAllDialog(a) {
-  const pending = (t) => t.status === "submitted" || (t.status === "graded" && Object.values(t.grades || {}).some((x) => x && !x.teacher && (x.pending || /indisponible|unavailable|Pas encore corrigé|Not graded yet/i.test(String(x.comment || "")))));
+  const pending = paperPending;
   const handed = AS.A.takers.filter((t) => ["submitted", "graded"].includes(t.status));
   const todo = handed.filter(pending).length;
   openDialog("Grade with AI", `

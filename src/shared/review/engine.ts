@@ -163,7 +163,7 @@ const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.t
 // Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
 // "Responsive (vérif : responsive)" → "Responsive": the grid's hint, never shown to the learner
 export const noVerif = (t) => String(t ?? '').replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, '').trim();
-export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null, assess = null) {
+export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null, assess = null, remarks = null) {
   exigences = (exigences || []).map((x) => ({ ...x, texte: noVerif(x.texte) }));
   const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
   const ok = (id) => !!c[id] && c[id].ok === true;
@@ -325,6 +325,8 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   if (more.length === 1) parts.push(`Pour progresser, tu peux aussi essayer ce bonus : ${more[0]}.`);
   else if (more.length) parts.push(`Pour progresser, tu peux aussi essayer ces bonus :\n${more.map((t) => `- ${t}`).join('\n')}`);
   if (toReview.length) parts.push(`Notions à revoir : ${toReview.join(', ')}.`);
+  // what the teacher noticed face to face (rewritten for the learner when the AI did it, else as the teacher wrote it)
+  if (remarks && (remarks.forStudent || remarks.text)) parts.push(`-Échange avec ton formateur :\n${String(remarks.forStudent || remarks.text).trim()}`);
   // the assessments linked to the brief
   const graded = (assess || []).filter((a) => a.score != null);
   if (graded.length) {
@@ -415,7 +417,7 @@ export function buildComment(firstName, rec, states) {
   const comps = (r.competences || []).map((x) => ({ code: x.code, ok: st.co[x.code] }));
   const ch = rec.challenge ? { ...rec.challenge, result: st.mes.r, note: st.mes.note } : null;
   const oral = (rec.oral || []).map((q, i) => ({ notion: q.notion || q.q, ok: !!st.oral[i] }));
-  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral, rec.assess || null);
+  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral, rec.assess || null, rec.remarks || null);
 }
 
 // The sure checks win over the AI: a requirement that a check proves (or disproves) gets the check's answer

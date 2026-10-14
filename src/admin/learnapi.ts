@@ -9,7 +9,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, saveRemarks, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
@@ -17,7 +17,7 @@ import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_disco
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
-import { AssessError, generateQuestions, gradeTaker, invite, needsGrading, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { aiStatus } from "../shared/aikeys.ts";
@@ -280,7 +280,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck|oral|level))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -323,6 +323,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
+    if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     if (act === "oral" && method === "POST") {
       if (body.del != null) await delOral(env, g, id, who, Number(body.del), body.states?.oral);
       else await makeOral(env, g, b, who);
@@ -572,7 +573,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const id = await saveAssessment(env, g, null, body);
     return ok(await assessView(env, g, id));
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link|options))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -588,6 +589,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });
     }
+    if (act === "options" && method === "POST") { await saveOptions(env, g, id, body); return ok(await assessView(env, g, id)); }
     if (act === "link" && method === "POST") {
       // linked to a brief (from the debrief): its results count in that brief's debriefs
       const bid = Number(body.brief_id) || null;
@@ -624,6 +626,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       let graded = 0, error = "";
       for (const t of lot) {
         const r = await gradeTaker(env, t.id, false);
+        if (!r.ok && /every question/.test(r.error || "")) continue;   // the AI forgot a question: this paper stays to grade, the next ones go on
         if (!r.ok) { error = r.error || "The AI didn't answer"; break; }
         graded++;
       }
@@ -676,7 +679,7 @@ async function briefView(env: Env, g: GuildRow, id: number) {
       const st = statesOf(rec);
       if (st) {
         const ex = rec.result?.exigences ?? [];
-        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => e.type !== "bonus");
+        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
         pct = main.length ? Math.round((main.filter(([, v]: any) => v).length / main.length) * 100) : null;
         ok = Object.entries(st.co).filter(([, v]) => v).map(([c]) => c);
         ko = Object.entries(st.co).filter(([, v]) => !v).map(([c]) => c);
@@ -723,9 +726,10 @@ async function assessView(env: Env, g: GuildRow, id: number) {
       try { answers = JSON.parse(tk.answers || "{}"); } catch { answers = {}; }
       try { grades = JSON.parse(tk.grades || "{}"); } catch { grades = {}; }
       try { events = JSON.parse(tk.events || "[]"); } catch { events = []; }
-      return { id: tk.id, discord_id: tk.discord_id, name: tk.name, status: tk.status, pos: tk.pos, answered: Object.values(answers).filter((v: any) => (Array.isArray(v) ? v.length : String(v ?? "").trim())).length,
+      // a paper with a question not graded yet (old ones: "Correction automatique indisponible") shows as "to grade"
+      return { id: tk.id, discord_id: tk.discord_id, name: tk.name, status: tk.status === "graded" && needsGrading(tk) ? "submitted" : tk.status, pos: tk.pos, answered: Object.values(answers).filter((v: any) => (Array.isArray(v) ? v.length : String(v ?? "").trim())).length,
         started_at: tk.started_at, deadline: tk.deadline, submitted_at: tk.submitted_at, locked_at: tk.locked_at, lock_reason: tk.lock_reason, resume_ok: tk.resume_ok, unlocks: tk.unlocks,
-        score: tk.score, summary: tk.summary, answers, grades, events, order: paperFor(qs, tk.seed).map((q: any) => q.id) };
+        score: tk.score, summary: tk.summary, answers, grades, events, order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id) };
     }),
   };
 }

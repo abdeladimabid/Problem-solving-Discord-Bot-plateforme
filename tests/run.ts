@@ -2330,6 +2330,19 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
   check(messagesTo(ARENA).some((x) => text(x).includes("Les Flammes")), "the result in #arena");
   const rm = await act("rematch");
   check(rm.d.phase === "lobby" && rm.d.round === 2 && rm.d.starter === 0, "rematch from the phone");
+  {
+    // a request that read the battle a moment before the judge's tap can't write the old state back
+    const stale = (await B.getBattle(env, bid))!;
+    await act("starter", { team: 1 });
+    let refused = false;
+    try { await B.judgeAction(env, stale, { a: "start" }); } catch (e) { refused = e instanceof B.BattleError; }
+    const now1 = (await B.getBattle(env, bid))!;
+    check(refused && now1.state.starter === 1 && now1.state.phase === "lobby", "a write based on an old read is refused (compare-and-set): the TV and the judge keep the same state");
+    const t1 = await tvState();
+    const same = await (await bot.fetch(new Request(cr.data.tv + `/state?seq=${t1.seq}&v=${encodeURIComponent(t1.v)}`), env, makeCtx())).json() as any;
+    const diff = await (await bot.fetch(new Request(cr.data.tv + `/state?seq=${t1.seq}&v=${t1.seq}.999.0.lobby`), env, makeCtx())).json() as any;
+    check(same.same === true && !diff.same && diff.phase === "lobby", "the TV gets the whole state when what it shows differs, even with the same seq");
+  }
   const vw = await api("GET", `/api/battles/${bid}?g=${G}`);
   check(vw.data.live.phase === "lobby" && vw.data.judgeTaken, "the dashboard follows the game");
   const ed = await api("PUT", `/api/battles/${bid}?g=${G}`, { questions: vw.data.questions.slice(0, 5) });
@@ -2647,6 +2660,20 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   check(sys.includes("au plus 5 questions courtes") && sys.includes("aucune technique que le brief ne cite pas"), "…the brief's notions and technologies only");
   const o2 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, del: 1, states: { oral: [true, false, false, true, false] } });
   check(o2.data.review.oral.length === 4 && JSON.stringify(o2.data.states.oral) === "[true,false,true,false]", "a question removed, the other switches kept");
+  const askedU = ai.users[ai.users.length - 1];
+  const o3 = await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, states: { oral: o2.data.states.oral } });
+  check(o3.status === 200 && o3.data.review.oral.length > 4 && o3.data.review.oral.slice(0, 4).every((q: any, i: number) => q.q === o2.data.review.oral[i].q) && JSON.stringify(o3.data.states.oral.slice(0, 4)) === JSON.stringify(o2.data.states.oral), "more questions: added after the ones there, their switches kept");
+  check(ai.users[ai.users.length - 1].includes("DÉJÀ POSÉES") && ai.users[ai.users.length - 1].includes("LACUNES DE L’ÉVALUATION") && /LACUNES/.test(ai.prompts[ai.prompts.length - 1]), "…aimed at the lacunes (assessment, project), never the same question twice");
+  void askedU;
+  const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
+  check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
+  check(/-Échange avec ton formateur :\nRevois la différence entre margin et padding\./.test(rm.data.review.result.feedback), "…and they go into the comment, for the learner");
+  const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
+  check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
+  await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
+  await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, del: 5, states: { oral: o3.data.states.oral } });
+  for (let k = o3.data.review.oral.length - 1; k >= 4; k--) await api("POST", `/api/briefs/${id}/review/oral`, { g: G, who, del: k });
+  run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
   check(/-Questions orales :\nTu as bien répondu à 3 questions orales sur 4\./.test(fb) && fb.includes(`Notions à revoir : ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
@@ -3116,6 +3143,7 @@ section("brief steps: found in the brief, dated in working days, proposed from t
   github.trees["carol/etapes@" + "b".repeat(40)] = ["maquette.png"];
   github.trees["carol/etapes@HEAD"] = ["maquette.png", "index.html", "pages/contact.html"];
   const p1 = await api("POST", `/api/briefs/${sid}/review/stepcheck`, { g: G, who, n: 1 });
+
   check(p1.status === 200 && p1.data.prop.statut === "a_temps" && p1.data.prop.before === 1 && p1.data.prop.after === 2 && p1.data.prop.files === 1 && p1.data.prop.added === 2, "step 1: proposed from the repo as it was at its date");
   check(ai.users.some((u) => u.includes("ATTENDU : maquette du site") && u.includes("FICHIERS À LA DATE (1) :\nmaquette.png")), "the AI gets what was expected and the files at the date");
   check(ai.prompts.some((p) => p.includes("Juge SEULEMENT cette étape") && p.includes("bonus n’est pas exigé") && p.includes("à voir à l’oral")), "only this step is judged; a bonus is not required; what a repo cannot show is named");
@@ -3543,6 +3571,9 @@ section("plan d'action: the weak students, improving or not, engaged or not, the
   const bob = v.data.plan?.find((r: any) => r.discord_id === U.bob.id);
   check(v.status === 200 && bob && bob.current === "faible" && bob.trend === "up" && bob.debriefs.length >= 2 && bob.why.some((w: string) => /Faible/.test(w)), "Bob is in the plan: Faible on the last brief, improving (critique → faible)");
   check(v.data.summary.faible >= 1 && Array.isArray(v.data.others), "…the counts at the top, the other students apart");
+  check(v.data.plan.every((r: any) => ["faible", "critique"].includes(r.current) || r.manual), "only the debriefs decide (Faible or Critique), or the teacher adding someone: no other warning signs");
+  const gp = await api("GET", `/api/plan/${U.bob.id}/gaps?g=${G}`);
+  check(gp.status === 200 && gp.data.debriefs.filter((d: any) => /Plan B/.test(d.title)).length === 2 && Array.isArray(gp.data.assess), "his weak points, debrief by debrief, and the assessments");
   const stl = await api("GET", `/api/students?g=${G}`);
   const bn = stl.data.find((r: any) => r.discord_id === U.bob.id)?.niveau;
   check(bn?.lv === "faible" && bn.trend === "up" && /Plan B2/.test(bn.from), "Students: each one's niveau (last debrief) and how it moves");
@@ -3643,6 +3674,30 @@ section("AI keys: a Groq model blocked by the account's settings: another model,
   const p = add.data.providers?.find((x: any) => x.type === "groq" && x.model !== "openai/gpt-oss-120b");
   check(add.status === 200 && p?.model === "llama-3.3-70b-versatile" && /can't be used with this key/.test(add.data.warn || ""), "added with the next model that this key may use, and told why");
   if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
+}
+
+section("assessments: options before inviting (copy-paste, full screen, shuffle, going back) and the no-going-back mode");
+{
+  const qs = [1, 2, 3].map((i) => ({ type: "explain", prompt: `Question numéro ${i}`, expected: "x", points: 1 }));
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Options", questions: qs, settings: { minutes: 0 } });
+  const aid = mk.data.assessment.id;
+  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, free to go back");
+  const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
+  check(op.status === 200 && op.data.assessment.settings.nav === "forward" && op.data.assessment.settings.shuffle === false && op.data.assessment.settings.lockScreen === false, "the teacher sets the options before inviting");
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.dave?.id || U.carol.id], send: false });
+  const who = U.dave?.id || U.carol.id;
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[who].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
+  const sid = "sessionOPTOPTOPTOPTOPT01";
+  const st = (await quiz("start", { sid })).d;
+  check(st.paper.map((p: any) => p.prompt).join("|") === "Question numéro 1|Question numéro 2|Question numéro 3" && st.rules.nav === "forward" && st.rules.lockScreen === false, "not shuffled: the questions in the teacher's order; the page gets the options");
+  await quiz("answer", { sid, qid: st.paper[0].id, answer: "un", pos: 1 });
+  const back = await quiz("answer", { sid, qid: st.paper[0].id, answer: "changé", pos: 0 });
+  check(back.status === 409 && back.d.error === "passed", "no going back: a passed question can't be answered again");
+  await quiz("event", { sid, what: "fullscreen" });
+  check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).status === "active", "no full screen lock: leaving the page doesn't stop the session");
+  const late = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "free", shuffle: true });
+  check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
 }
 
 section("i18n: every key exists in English and French");

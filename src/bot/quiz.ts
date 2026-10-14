@@ -58,7 +58,7 @@ h1{font-size:26px;margin:0 0 6px;letter-spacing:-.01em}h2{font-size:19px;margin:
 .btn:disabled{opacity:.5;cursor:default}.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}.btn.big{padding:15px 28px;font-size:17px}
 .rules{list-style:none;padding:0;margin:18px 0;display:grid;gap:10px}.rules li{display:flex;gap:12px;align-items:flex-start;background:var(--blue50);border-radius:12px;padding:12px 14px}
 .top{position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0 10px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.dots{display:flex;gap:6px;flex-wrap:wrap;flex:1}.dot{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:var(--card);font-size:12px;font-weight:700;color:var(--faint);cursor:pointer;display:grid;place-items:center}
+.dots{display:flex;gap:6px;flex-wrap:wrap;flex:1}.dot.nolink{cursor:default}.dot.past{opacity:.45;text-decoration:line-through}.dot{width:28px;height:28px;border-radius:8px;border:1px solid var(--line);background:var(--card);font-size:12px;font-weight:700;color:var(--faint);cursor:pointer;display:grid;place-items:center}
 .dot.done{background:var(--blue50);color:var(--blue);border-color:transparent}.dot.cur{outline:2px solid var(--blue);color:var(--ink)}
 .timer{font-variant-numeric:tabular-nums;font-weight:700;padding:6px 12px;border-radius:10px;background:var(--card);border:1px solid var(--line)}.timer.low{color:var(--bad);border-color:var(--bad)}
 .qhead{display:flex;justify-content:space-between;gap:10px;align-items:baseline;margin-bottom:10px}.tag{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--blue);background:var(--blue50);padding:3px 9px;border-radius:99px}
@@ -95,7 +95,9 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       locked: "Session arrêtée", lockwhy: { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d'onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs.", left: "Tu as quitté l'évaluation." },
       askteacher: "Demande à ton formateur de te laisser reprendre. Cette page se met à jour toute seule.", resumeok: "Ton formateur t'a laissé reprendre.",
       done: "Copie rendue ✅", donesub: "Ton formateur te transmettra les résultats.", closed: "L'évaluation est fermée.", nofs: "Ouvre ce lien sur un ordinateur : l'évaluation se fait en plein écran.",
-      timeup: "Temps écoulé : ta copie est rendue.", paste: "Le copier-coller est désactivé pendant l'évaluation.", hello: "Bonjour" },
+      timeup: "Temps écoulé : ta copie est rendue.", paste: "Le copier-coller est désactivé pendant l'évaluation.", hello: "Bonjour",
+      r5: "Une question à la fois : quand tu passes à la suivante, tu ne peux plus revenir en arrière.", startnofs: "Commencer", contnofs: "Continuer",
+      pass: "Passer →", validate: "Valider et continuer →", nogoback: "Une fois passée, tu ne pourras plus revenir sur cette question.", passed: "Cette question est déjà passée." },
     en: { expired: "This link has expired or doesn't exist.", intro: "Assessment", q: "questions", min: "minutes", nolimit: "no time limit",
       r1: "The assessment runs in full screen.", r2: "If you leave full screen, switch tab or window, your session stops. Only your teacher can let you continue.",
       r3: "Your answers are saved as you go.", r4: "Copy-paste is blocked in the answers.", start: "Start in full screen", cont: "Continue in full screen",
@@ -105,12 +107,15 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       locked: "Session stopped", lockwhy: { fullscreen: "You left full screen.", hidden: "You switched tab or minimized the window.", blur: "You switched window.", reload: "The page was reloaded or opened somewhere else.", left: "You left the assessment." },
       askteacher: "Ask your teacher to let you continue. This page updates by itself.", resumeok: "Your teacher let you continue.",
       done: "Paper handed in ✅", donesub: "Your teacher will send you the results.", closed: "This assessment is closed.", nofs: "Open this link on a computer: the assessment runs in full screen.",
-      timeup: "Time is up: your paper is handed in.", paste: "Copy-paste is disabled during the assessment.", hello: "Hello" },
+      timeup: "Time is up: your paper is handed in.", paste: "Copy-paste is disabled during the assessment.", hello: "Hello",
+      r5: "One question at a time: once you move on to the next one, you can't go back.", startnofs: "Start", contnofs: "Continue",
+      pass: "Skip →", validate: "Answer and continue →", nogoback: "Once you move on, you can't come back to this question.", passed: "This question is already passed." },
   };
   const tr = (k) => T[L][k];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   let sid = ""; try { sid = sessionStorage.getItem("cbq:" + TOKEN) || ""; } catch {}
   if (!sid) { sid = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, "0")).join(""); try { sessionStorage.setItem("cbq:" + TOKEN, sid); } catch {} }
+  let R = { noPaste: true, lockScreen: true, nav: "free" };   // the assessment's options (set by the teacher)
   let S = null, paper = [], answers = {}, cur = 0, running = false, leaving = false, graceUntil = 0, timer = null, saveT = null, offset = 0;
   const post = (path, body) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sid, ...body }), keepalive: true }).then((r) => r.json().catch(() => ({})));
   const get = (path) => fetch(base + path, { cache: "no-store" }).then((r) => r.json());
@@ -118,21 +123,27 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   function screen(html) { app.className = "full"; app.innerHTML = '<div class="card center" style="max-width:560px">' + html + "</div>"; }
   function intro(info) {
     const resume = info.status === "active" || info.status === "locked";
+    if (info.rules) R = info.rules;
+    const rules = [R.lockScreen ? "🖥️ <span>" + tr("r1") + "</span>" : "", R.lockScreen ? "🔒 <span>" + tr("r2") + "</span>" : "", R.nav === "forward" ? "➡️ <span>" + tr("r5") + "</span>" : "",
+      "💾 <span>" + tr("r3") + "</span>", R.noPaste ? "✋ <span>" + tr("r4") + "</span>" : ""].filter(Boolean);
     screen('<div class="big-ico">📝</div><h1>' + esc(info.title) + '</h1><p class="muted">' + (info.name ? tr("hello") + " " + esc(info.name) + " · " : "") + info.n + " " + tr("q") + " · " + (info.minutes ? info.minutes + " " + tr("min") : tr("nolimit")) + '</p>'
-      + '<ul class="rules" style="text-align:left"><li>🖥️ <span>' + tr("r1") + "</span></li><li>🔒 <span>" + tr("r2") + "</span></li><li>💾 <span>" + tr("r3") + "</span></li><li>✋ <span>" + tr("r4") + "</span></li></ul>"
-      + (document.fullscreenEnabled ? '<button class="btn big" id="go">' + (resume ? tr("cont") : tr("start")) + "</button>" : '<p class="warn">' + tr("nofs") + "</p>"));
+      + '<ul class="rules" style="text-align:left">' + rules.map((x) => "<li>" + x + "</li>").join("") + "</ul>"
+      + (!R.lockScreen ? '<button class="btn big" id="go">' + (resume ? tr("contnofs") : tr("startnofs")) + "</button>"
+        : document.fullscreenEnabled ? '<button class="btn big" id="go">' + (resume ? tr("cont") : tr("start")) + "</button>" : '<p class="warn">' + tr("nofs") + "</p>"));
     const go = document.getElementById("go");
     if (go) go.onclick = begin;
   }
   async function begin() {
-    try { await document.documentElement.requestFullscreen({ navigationUI: "hide" }); } catch { return; }
+    if (R.lockScreen) { try { await document.documentElement.requestFullscreen({ navigationUI: "hide" }); } catch { return; } }
     graceUntil = Date.now() + 1500;
     const v = await post("/start", {});
+    if (v.rules) R = v.rules;
     if (v.status !== "active") { running = false; return show(v); }
     S = v; paper = v.paper || []; answers = v.answers || {}; cur = Math.min(v.pos || 0, paper.length - 1); offset = Date.now() / 1000 - v.now;
     running = true; draw(); tick();
   }
   function show(v) {
+    if (v && v.rules) R = v.rules;
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (v.status === "locked") return lockedScreen(v.reason);
     if (v.status === "submitted" || v.status === "graded") return screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>");
@@ -156,7 +167,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     setTimeout(poll, 3000);
   }
   async function leave(what) {
-    if (!running || leaving || Date.now() < graceUntil) return;
+    if (!R.lockScreen || !running || leaving || Date.now() < graceUntil) return;
     leaving = true; running = false;
     await post("/event", { what }).catch(() => {});
     leaving = false;
@@ -165,7 +176,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) leave("fullscreen"); });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") leave("hidden"); });
   window.addEventListener("blur", () => setTimeout(() => { if (!document.hasFocus()) leave("blur"); }, 400));
-  document.addEventListener("contextmenu", (e) => { if (running) e.preventDefault(); });
+  document.addEventListener("contextmenu", (e) => { if (running && R.noPaste) e.preventDefault(); });
 
   function remaining() { return S && S.deadline ? Math.round(S.deadline - (Date.now() / 1000 - offset)) : null; }
   function tick() {
@@ -183,7 +194,9 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   function draw() {
     const q = paper[cur];
     app.className = "";
-    const head = '<div class="wrap"><div class="top"><div class="dots">' + paper.map((p, i) => '<button class="dot' + (answered(p) ? " done" : "") + (i === cur ? " cur" : "") + '" data-i="' + i + '" title="' + (i + 1) + '">' + (i + 1) + "</button>").join("") + "</div>"
+    const fwd = R.nav === "forward";
+    // one question at a time: the dots only show where they are (not clickable), the passed ones are greyed
+    const head = '<div class="wrap"><div class="top"><div class="dots">' + paper.map((p, i) => (fwd ? '<span class="dot nolink' + (i < cur ? " past" : "") : '<button class="dot') + (answered(p) ? " done" : "") + (i === cur ? " cur" : "") + '" data-i="' + i + '" title="' + (i + 1) + '">' + (i + 1) + (fwd ? "</span>" : "</button>")).join("") + "</div>"
       + (S.deadline ? '<span class="timer" id="timer">…</span>' : "") + "</div>";
     const TRL = [["ar", "العربية"], ["fr", "FR"], ["en", "EN"]];
     let body = '<div class="card"><div class="qhead"><span class="tag">' + tr(q.type) + '</span><span class="trbar" title="Google Translate">🌐 ' + TRL.map(([k, l]) => '<button type="button" data-tr="' + k + '" class="' + (trTo === k ? "on" : "") + '">' + l + "</button>").join("") + '</span><span class="muted small">' + (cur + 1) + " / " + paper.length + " · " + q.points + " " + tr("pts") + "</span></div>"
@@ -195,21 +208,24 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       const val = answers[q.id] != null ? answers[q.id] : (q.starter || "");
       body += '<textarea id="ans" class="' + (q.type === "explain" ? "prose" : "") + '" spellcheck="' + (q.type === "explain") + '" placeholder="' + (q.type === "code" ? tr("typecode") : tr("typetext")) + '">' + esc(val) + "</textarea>";
     }
-    body += '<div class="nav"><button class="btn ghost" id="prev"' + (cur === 0 ? " disabled" : "") + ">" + tr("prev") + '</button><span class="saved" id="saved"></span>'
-      + (cur < paper.length - 1 ? '<button class="btn" id="next">' + tr("next") + "</button>" : '<button class="btn" id="fin">' + tr("finish") + "</button>") + "</div></div></div>";
+    body += '<div class="nav">' + (fwd ? '<span></span>' : '<button class="btn ghost" id="prev"' + (cur === 0 ? " disabled" : "") + ">" + tr("prev") + "</button>") + '<span class="saved" id="saved"></span>'
+      + (cur < paper.length - 1 ? '<button class="btn" id="next">' + (fwd ? (answered(q) ? tr("validate") : tr("pass")) : tr("next")) + "</button>" : '<button class="btn" id="fin">' + tr("finish") + "</button>") + "</div>"
+      + (fwd && cur < paper.length - 1 ? '<p class="muted small" style="margin:10px 0 0;text-align:right">' + tr("nogoback") + "</p>" : "") + "</div></div>";
     app.innerHTML = head + body;
     app.querySelectorAll("[data-tr]").forEach((b) => (b.onclick = () => { trTo = trTo === b.dataset.tr ? "" : b.dataset.tr; app.querySelectorAll("[data-tr]").forEach((x) => x.classList.toggle("on", x.dataset.tr === trTo)); translateQ(q); }));
     if (trTo) translateQ(q);
-    app.querySelectorAll(".dot").forEach((b) => (b.onclick = () => go(Number(b.dataset.i))));
-    document.getElementById("prev").onclick = () => go(cur - 1);
+    if (!fwd) app.querySelectorAll(".dot").forEach((b) => (b.onclick = () => go(Number(b.dataset.i))));
+    const pv = document.getElementById("prev"); if (pv) pv.onclick = () => go(cur - 1);
     const nx = document.getElementById("next"); if (nx) nx.onclick = () => go(cur + 1);
     const fin = document.getElementById("fin"); if (fin) fin.onclick = () => confirmFinish();
     const ta = document.getElementById("ans");
     if (ta) {
       ta.focus();
-      ta.addEventListener("input", () => { answers[q.id] = ta.value; queueSave(q); });
-      ta.addEventListener("paste", (e) => { e.preventDefault(); flash(tr("paste")); post("/event", { what: "paste" }); });
-      ta.addEventListener("drop", (e) => e.preventDefault());
+      ta.addEventListener("input", () => { answers[q.id] = ta.value; queueSave(q); if (R.nav === "forward") { const nx = document.getElementById("next"); if (nx) nx.textContent = answered(q) ? tr("validate") : tr("pass"); } });
+      if (R.noPaste) {
+        ta.addEventListener("paste", (e) => { e.preventDefault(); flash(tr("paste")); post("/event", { what: "paste" }); });
+        ta.addEventListener("drop", (e) => e.preventDefault());
+      }
       ta.addEventListener("keydown", (e) => {
         if (e.key === "Tab" && q.type === "code") { e.preventDefault(); const s = ta.selectionStart; ta.value = ta.value.slice(0, s) + "  " + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = s + 2; answers[q.id] = ta.value; queueSave(q); }
       });
@@ -248,10 +264,19 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     const r = await post("/answer", { qid: q.id, answer: answers[q.id], pos: cur }).catch(() => null);
     const s = document.getElementById("saved");
     if (r && r.ok) { if (s) { s.textContent = tr("saved") + " ✓"; s.className = "saved"; } }
+    else if (r && r.error === "passed") { flash(tr("passed")); }
     else if (r && r.error) { running = false; return r.error === "locked" ? lockedScreen("left") : r.error === "time" ? finish(true) : show({ status: r.error }); }
   }
   async function go(i) {
     const q = paper[cur];
+    if (R.nav === "forward") {
+      // only forward, one step; the position is saved at once (the server refuses going back)
+      if (i !== cur + 1 || i >= paper.length) return;
+      cur = i;
+      await post("/answer", { qid: q.id, answer: answers[q.id] != null ? answers[q.id] : (q.type === "mcq" ? [] : ""), pos: cur }).catch(() => null);
+      draw();
+      return;
+    }
     if (q && q.type !== "mcq" && answers[q.id] != null) await saveNow(q);
     cur = Math.max(0, Math.min(paper.length - 1, i));
     draw();
