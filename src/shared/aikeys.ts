@@ -111,6 +111,8 @@ export async function openRouterFree(fresh = false): Promise<string[]> {
 }
 /** OpenRouter says this model isn't there (or isn't free anymore). */
 const orGone = (s: { type: string }, e: unknown) => s.type === "openrouter" && e instanceof AiCallError && (e.status === 404 || /unavailable for free|not a valid model|no endpoints found/i.test(e.message));
+/** This model can't be used (gone, or blocked for this account), but the key may work with another one. */
+const modelProblem = (e: unknown) => e instanceof AiCallError && (e.status === 404 || /model not allowed|unavailable for free|not a valid model|no endpoints found|model.*(not found|does not exist|decommissioned|blocked)/i.test(e.message));
 
 // ------------------------------------------------------------ calling one AI
 export class AiCallError extends Error { status: number; constructor(msg: string, status = 0) { super(msg); this.status = status; } }
@@ -142,6 +144,8 @@ async function errText(res: Response): Promise<string> {
   let msg = "";
   try { const j: any = await res.json(); msg = j?.error?.message || j?.message || j?.error || ""; } catch { /* not JSON */ }
   msg = String(msg).replace(/\s+/g, " ").slice(0, 160);
+  // a model the account may not use (Groq: "blocked at the organization level", terms to accept…) isn't a wrong key
+  if (res.status === 403 && /model/i.test(msg)) return `model not allowed for this account (403)${msg ? `: ${msg}` : ""}`;
   if (res.status === 401 || res.status === 403) return `key refused (${res.status})${msg ? `: ${msg}` : ""}`;
   if (res.status === 429) return `limit reached (429)${msg ? `: ${msg}` : ""}`;
   if (res.status === 404) return `model or address not found (404)${msg ? `: ${msg}` : ""}`;
@@ -188,7 +192,7 @@ export async function keyedChat(env: Env, messages: Msg[], o: ChatOpts): Promise
         err = "empty answer";
       } catch (e) {
         err = String((e as Error)?.message ?? e);
-        if (e instanceof AiCallError && (e.status === 401 || e.status === 403)) break;   // a refused key: the other models won't help
+        if (e instanceof AiCallError && (e.status === 401 || e.status === 403) && !modelProblem(e)) break;   // a refused key: the other models won't help
         // OpenRouter: this model isn't free anymore (or is gone): try the ones free right now
         if (!swapped && orGone(s, e)) { swapped = true; models.push(...(await openRouterFree(true)).filter((m) => !models.includes(m)).slice(0, 3)); }
       }
@@ -212,7 +216,7 @@ export async function testProvider(p: AiProvider): Promise<{ ok: boolean; warn?:
     const msg = String((e as Error)?.message ?? e);
     if (status === 429) return { ok: true, warn: `The key works, but its limit is reached right now: ${msg}`, model: s.model };
     if (msg === "timeout") return { ok: false, error: "It didn't answer within 25 seconds.", model: s.model };
-    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model, gone: orGone(s, e) };
+    return { ok: false, error: `${PRESETS[p.type]?.label || "The AI"}: ${msg}`, model: s.model, gone: orGone(s, e) || modelProblem(e) };
   }
 }
 
@@ -271,15 +275,23 @@ export async function addProvider(env: Env, gid: string, b: { type?: string; key
   if (type !== "custom") base = "";
   const p: AiProvider = { id: crypto.randomUUID().slice(0, 8), type, key, model, ...(base ? { base } : {}) };
   let t = await testProvider(p);
-  // OpenRouter: the model asked for isn't free (anymore): the free models of today, best first
-  if (!t.ok && type === "openrouter" && t.gone) {
+  // the model asked for can't be used (OpenRouter: not free anymore; Groq: blocked by the account's settings…):
+  // the key may work with another model: OpenRouter's free models of today, else the provider's other suggested models
+  if (!t.ok && t.gone) {
     const asked = p.model;
-    for (const m of (await openRouterFree(true)).filter((x) => x !== asked).slice(0, 5)) {
+    const others = type === "openrouter" ? (await openRouterFree(true)).slice(0, 6) : PRESETS[type].models;
+    for (const m of others.filter((x) => x !== asked).slice(0, 5)) {
       const r = await testProvider({ ...p, model: m });
-      if (r.ok) { p.model = m; t = { ...r, warn: [`“${asked}” isn't free on OpenRouter anymore: ClassBot uses “${m}”, free today (you can change it in the list).`, r.warn].filter(Boolean).join(" ") }; break; }
+      if (r.ok) {
+        p.model = m;
+        const why = type === "openrouter" ? `“${asked}” isn't free on OpenRouter anymore: ClassBot uses “${m}”, free today` : `“${asked}” can't be used with this key (${String(t.error).replace(/^[^:]+:\s*/, "").slice(0, 120)}): ClassBot uses “${m}”`;
+        t = { ...r, warn: [`${why} (you can change it in the list).`, r.warn].filter(Boolean).join(" ") };
+        break;
+      }
       if (r.error && /key refused/.test(r.error)) { t = r; break; }
     }
-    if (!t.ok && t.gone) t.error = `${t.error} · No free OpenRouter model answered right now: try again later, or choose a paid model (your account needs credits).`;
+    if (!t.ok && t.gone) t.error = type === "openrouter" ? `${t.error} · No free OpenRouter model answered right now: try again later, or choose a paid model (your account needs credits).`
+      : `${t.error} · None of the suggested models answered with this key: allow one in the provider's settings, or type another model name.`;
   }
   if (!t.ok) throw new AiKeyError(t.error || "This AI didn't answer.");
   const cfg = await classAi(env, gid, true);

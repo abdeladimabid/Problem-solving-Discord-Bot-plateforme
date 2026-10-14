@@ -3637,6 +3637,14 @@ section("assessments: graded by objectives, in lots that resume after an AI fail
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id = ?", bid);
 }
 
+section("AI keys: a Groq model blocked by the account's settings: another model, not \"key refused\"");
+{
+  const add = await api("POST", "/api/settings/ai/providers", { g: G, type: "groq", key: "gsk_good_blocked_1", model: "openai/gpt-oss-120b" });
+  const p = add.data.providers?.find((x: any) => x.type === "groq" && x.model !== "openai/gpt-oss-120b");
+  check(add.status === 200 && p?.model === "llama-3.3-70b-versatile" && /can't be used with this key/.test(add.data.warn || ""), "added with the next model that this key may use, and told why");
+  if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);

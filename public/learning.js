@@ -696,7 +696,7 @@ function analyzeAllDialog(root) {
   const unit = B.kind === "squad" ? "squads" : "students";
   const count = (a, h) => debriefQueue(a, h).length;
   openDialog("Analyze all the debriefs", `
-    <p style="margin-top:4px">The bot analyzes each ${B.kind === "squad" ? "squad's" : "student's"} repo, one after the other (about 30 s to a minute each). Keep this page open: you can stop at any time, what's done stays done. Finalized debriefs are never touched.</p>
+    <p style="margin-top:4px">The bot analyzes each ${B.kind === "squad" ? "squad's" : "student's"} repo, one after the other (about 30 s to a minute each). You can close this window: it goes on while the dashboard stays open in this tab. Stop at any time: what's done stays done. If the AI's limit is reached it stops, and next time it continues with the ones left. Finalized debriefs are never touched.</p>
     <label class="check"><input type="checkbox" id="aa-again"> Also analyze again the ${unit} already analyzed (not finalized): their switches and comment start over</label>
     <label class="check"><input type="checkbox" id="aa-noh"> Also the ${unit} who didn't hand in (the repo they pushed to during the brief)</label>
     <p class="small" id="aa-n"></p>
@@ -709,7 +709,7 @@ function analyzeAllDialog(root) {
       $$(".check input", d).forEach((x) => { x.disabled = true; });
       $("#aa-prog", d).hidden = false;
       $("#aa-list", d).innerHTML = q.map((r, i) => `<li data-i="${i}"><span class="aa-dot"></span>${esc(r.name)}<small>${r.handin ? esc(r.handin.repo) : "no hand-in"}</small></li>`).join("");
-      let done = 0, failed = 0, stop = false, next = 0;
+      let done = 0, failed = 0, stop = false, next = 0, aiStop = "";
       const foot = $(".dlg-foot", d);
       foot.insertAdjacentHTML("afterbegin", `<button class="btn" id="aa-stop">Stop</button>`);
       $("#aa-stop", d).onclick = () => { stop = true; $("#aa-stop", d).disabled = true; $("#aa-st", d).textContent = "Stopping after the ones running…"; };
@@ -721,18 +721,25 @@ function analyzeAllDialog(root) {
           try {
             await api(`/briefs/${id}/review/analyze`, { method: "POST", body: { who: r.who } });
             li.className = "ok"; done++;
-          } catch (e) { li.className = "ko"; li.title = e.message; li.querySelector("small").textContent = e.message.slice(0, 120); failed++; }
+          } catch (e) {
+            li.className = "ko"; li.title = e.message; li.querySelector("small").textContent = e.message.slice(0, 120); failed++;
+            // the AI's limit is reached (or it's down): stop here instead of failing everyone after; nothing was saved for them
+            if (/\bAI\b|limit|429|quota|used up|didn't answer|timeout|rate/i.test(e.message)) { aiStop = e.message; stop = true; }
+          }
           draw();
         }
       };
       draw();
       await Promise.all([worker(), worker()]);
-      $("#aa-st", d).textContent = `${stop ? "Stopped" : "Done"}: ${done} analyzed${failed ? `, ${failed} failed (hover to see why, or open their debrief)` : ""}.`;
+      const left = q.length - done;
+      $("#aa-st", d).textContent = aiStop ? `Stopped: ${done} analyzed. The AI stopped answering (${aiStop.slice(0, 160)}). ${left} left: click Analyze all again later (or tomorrow), it continues with them.`
+        : `${stop ? "Stopped" : "Done"}: ${done} analyzed${failed ? `, ${failed} failed (hover to see why, or open their debrief)` : ""}.`;
+      if (aiStop) $("#aa-st", d).className = "small notice warn";
       $("#aa-stop", d)?.remove();
       btn.hidden = false; btn.textContent = "Close"; btn.onclick = () => d.close();
       BR.B = await api(`/briefs/${id}`);
       if (location.hash === `#/brief/${id}`) renderBrief();
-      toast(`${done} debrief(s) analyzed${failed ? ` · ${failed} failed` : ""}`, !!failed && !done);
+      toast(aiStop ? `Analysis stopped at the AI's limit: ${done} analyzed, ${left} left. Analyze all again later to continue.` : `${done} debrief(s) analyzed${failed ? ` · ${failed} failed` : ""}`, !!aiStop || (!!failed && !done));
     } }]);
   const d = dlg;
   const upd = () => { const n = count($("#aa-again", d).checked, $("#aa-noh", d).checked); $("#aa-n", d).innerHTML = n ? `<b>${n}</b> ${unit} to analyze.` : `Nothing to analyze with these options.`; };
@@ -1704,7 +1711,7 @@ function gradeAllDialog(a) {
   openDialog("Grade with AI", `
     <label class="check"><input type="radio" name="ga-m" value="todo" ${todo ? "checked" : ""}> <span><b>The papers still to grade</b> (${todo}) <span class="muted small">· not graded yet, or a question the AI couldn't grade</span></span></label>
     <label class="check"><input type="radio" name="ga-m" value="all" ${todo ? "" : "checked"}> <span><b>Every paper again</b> (${handed.length}) <span class="muted small">· the grades you changed stay</span></span></label>
-    <p class="small muted">Students whose debrief is finalized are never graded again. The AI grades 3 papers at a time; if its limit is reached it stops, and the next time it continues where it stopped.</p>
+    <p class="small muted">Students whose debrief is finalized are never graded again. The AI grades 3 papers at a time; if its limit is reached it stops, and the next time it continues where it stopped. You can close this window: it goes on while the dashboard stays open in this tab.</p>
     <div id="ga-prog" hidden><div class="aa-bar"><span></span></div><p class="small" id="ga-st"></p></div>`,
     [{ label: "Start", primary: true, action: async (d) => {
       const all = $("input[name=ga-m]:checked", d).value === "all";
@@ -1732,7 +1739,9 @@ function gradeAllDialog(a) {
         : `${stop ? "Stopped" : "Done"}: ${done} paper(s) graded${rest ? `, ${rest} still to grade` : ""}${skipped ? ` · ${skipped} finalized debrief(s) left as they are` : ""}.`);
       $("#ga-st", d).className = err ? "small notice warn" : "small";
       btn.hidden = false; btn.textContent = "Close"; btn.onclick = () => d.close();
-      renderAssessment();
+      // the window may have been closed (the grading went on): say it's over, and refresh only if you're still here
+      if (!d.open) toast(err ? `Grading stopped: ${done} graded, ${rest} still to grade (the AI's limit). Click Grade with AI later to continue.` : `Grading done: ${done} paper(s) graded`, !!err);
+      if (location.hash.startsWith(`#/assessment/${a.id}`)) renderAssessment();
     } }]);
 }
 function paperDialog(t) {
