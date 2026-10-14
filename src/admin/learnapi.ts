@@ -655,6 +655,12 @@ async function briefView(env: Env, g: GuildRow, id: number) {
     students: students.map((s) => ({ ...s, push: push.get(s.discord_id) ?? null, handin: handins.find((h) => h.who === `u:${s.discord_id}`) ?? null, review: reviewOf(`u:${s.discord_id}`), squad: squadOf(squads, s.discord_id)?.id ?? null })),
     squadRows: squads.map((s) => ({ ...s, handin: handins.find((h) => h.who === `s:${s.id}`) ?? null, review: reviewOf(`s:${s.id}`) })),
     sections: SECTIONS,
+    // the assessments linked to this brief (for every student's debrief), and where the class is with them
+    assessments: await all<{ id: number; title: string; status: string; takers: number; done: number; graded: number }>(env,
+      `SELECT a.id, a.title, a.status, (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id) AS takers,
+              (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status IN ('submitted', 'graded')) AS done,
+              (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'graded') AS graded
+         FROM assessments a WHERE a.brief_id = ? AND a.guild_id = ? ORDER BY a.id`, id, g.id).catch(() => []),
   };
 }
 
