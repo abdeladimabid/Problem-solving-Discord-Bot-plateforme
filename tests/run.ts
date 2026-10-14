@@ -2905,6 +2905,9 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
     const s2 = reviewStates(r2);
     check(s2.co.C3 === true && s2.co.C4 === false && s2.co.C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
     check(debriefLevel(r2, s2) === "faible" && debriefLevel({ ...r2, assess: [] }, s2) === "moyen", "the proposed level counts the assessment's score");
+    const r3 = { checks: [{ id: "responsive", label: "Responsive", ok: false }], result: { exigences: [{ type: "critere", texte: "Responsive", statut: "absent", check: "responsive", bound: true }], competences: [] } };
+    check(reviewStates(r3).ex[0] === false && reviewStates({ ...r3, final: { ex: [true] } }).ex[0] === true && reviewStates({ ...r3, final: { ck: { responsive: true } } }).ex[0] === true,
+      "a requirement proved by a check starts as the check says, and the teacher's switch wins");
   }
   const none = await api("GET", `/api/briefs/${bid}/review?g=${G}&who=${encodeURIComponent(`u:${U.bob.id}`)}`);
   check(none.status === 200 && !none.data.review && none.data.assess?.[0]?.title === "CSS de base" && none.data.assess[0].of === 0, "before the analysis, the page shows the linked assessment (not taken by this learner)");
