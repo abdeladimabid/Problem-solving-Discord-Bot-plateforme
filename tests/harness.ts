@@ -286,7 +286,44 @@ export const ai = {
   users: [] as string[],
   chTech: false,
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
+  actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
 };
+
+// Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript
+function activityAnswer(user: string): string {
+  if (user.includes("PLANNING DE LA SEMAINE À PRÉPARER")) {
+    const days = [...user.matchAll(/^- (\d{4}-\d{2}-\d{2}) \([^)]*\) : veille( \+ live coding)?/gm)];
+    return JSON.stringify({ resume: "Rendre la page interactive pas à pas.",
+      jours: days.map((m, i) => ({ date: m[1], veille: `Veille ${i + 1} : le DOM`, focus: "Sélectionner et modifier des éléments.", avancement: `Partie ${i + 1} du brief`, live: m[2] ? `Live ${i + 1} : une liste de produits` : "", live_focus: m[2] ? "Afficher des cartes." : "" })),
+      besoins: [{ besoin: "Sélectionner un élément", ou: "Veille Lun" }, { besoin: "Réagir à un clic", ou: "LC1" }], hors_perimetre: ["fetch", "async/await"], points_ouverts: ["Le starter est-il donné ?"] });
+  }
+  if (user.includes("VEILLE À ÉCRIRE")) {
+    return JSON.stringify({ titre: "Sélectionner et modifier le DOM 🚀", contexte: "Tu sais écrire une page HTML. Le brief demande de la rendre vivante. Le DOM est la page vue par JavaScript. Tu vas apprendre à le lire et à le changer.",
+      objectifs: ["Expliquer ce qu'est le DOM", "Utiliser `querySelector` pour trouver un élément", "Modifier le texte et les classes d'un élément"],
+      plan: [{ titre: "Le DOM", points: ["Arbre des éléments", "Nœuds et éléments", "Outils du navigateur"] }, { titre: "Sélectionner", points: ["`querySelector`", "`querySelectorAll`", "Parcourir les enfants"] }],
+      questions: ["Pourquoi `querySelector` renvoie-t-il null parfois ?", "Quand préférer `classList` à `style` ?"],
+      ressources: [{ titre: "Document.querySelector()", url: "https://developer.mozilla.org/fr/docs/Web/API/Document/querySelector" }, { titre: "Parcourir le DOM", url: "https://fr.javascript.info/dom-navigation" },
+        { titre: "Element.classList", url: "https://developer.mozilla.org/fr/docs/Web/API/Element/classList" }, { titre: "Un lien inventé", url: "https://example.com/dom" }],
+      artefact: "Un schéma de l'arbre DOM de la page du brief", demo: "Changer le titre de la page depuis la console", criteres: ["Le schéma est juste", "La démo marche", "Les questions ont une réponse"] });
+  }
+  if (user.includes("LIVE CODING À ÉCRIRE")) {
+    const bad = ai.actBad > 0;
+    if (bad) ai.actBad--;
+    const final = ["// Les produits du jour", "const produits = [", "  { nom: \"Msemen\", prix: 5 },", "  { nom: \"Harira\", prix: 10 },", "  { nom: \"Thé\", prix: 4 },", "];",
+      "const liste = document.querySelector(\"#liste\");", "", "function afficher() {", "  liste.innerHTML = \"\";", "  for (const p of produits) {", "    const li = document.createElement(\"li\");",
+      "    li.textContent = `${p.nom} : ${p.prix} DH`;", "    liste.append(li);", "  }", "}", "", "function ajouter(e) {", "  e.preventDefault();", "  const nom = document.querySelector(\"#nom\").value;",
+      "  produits.push({ nom, prix: 0 });", "  afficher();", "}", "", "document.querySelector(\"form\").addEventListener(\"submit\", ajouter);", "afficher();", ...(bad ? ["fetch(\"/menu\");"] : [])].join("\n");
+    return JSON.stringify({ titre: "Afficher le menu du food truck", objectifs: ["Créer des éléments avec `createElement`", "Parcourir un tableau avec `for...of`", "Réagir à l'envoi d'un formulaire"],
+      contexte: "Le food truck veut afficher son menu. On construit la liste à partir d'un tableau. C'est la partie 2 du brief.",
+      deroule: [{ minutes: 5, etape: "Présenter le besoin et le starter", notions: "HTML" }, { minutes: 15, etape: "Un produit à la main", notions: "createElement" }, { minutes: 10, etape: "Généraliser avec une boucle", notions: "for...of" },
+        { minutes: bad ? 5 : 10, etape: "Ajouter un produit", notions: "submit" }, { minutes: 5, etape: "Tester en direct, récap", notions: "" }],
+      starter: { fichier: "index.html", code: "<!doctype html>\n<html lang=\"fr\">\n<head><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\" defer></script></head>\n<body>\n<form><input id=\"nom\" required><button type=\"submit\">Ajouter</button></form>\n<ul id=\"liste\"></ul>\n</body>\n</html>" },
+      support: { fichier: "style.css", code: "body { font-family: sans-serif; }\nul { padding: 0; }\nli { list-style: none; }" },
+      final: { fichier: "app.js", code: final }, tests: [{ action: "Nom", saisie: "Msemen", resultat: "Ajouté" }], attention: "`innerHTML` avec du texte tapé est dangereux. Utilise `textContent`.",
+      extensions: ["Supprimer un produit"], reflexion: ["Pourquoi vider la liste avant d'afficher ?", "Que se passe-t-il sans `preventDefault` ?"], resultat: ["La liste du menu s'affiche", "Il sait expliquer la boucle"] });
+  }
+  return "{}";
+}
 
 // a real (small) problem: maximum subarray sum. The reference is O(n), the brute O(n^2).
 const WRITE_PROBLEM = {
@@ -311,6 +348,7 @@ function fakeAI() {
       ai.users.push(user);
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
+      if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       if (sys.includes("see what a student really built")) {
         const sha = (user.match(/^([0-9a-f]{7}) \|/m) || [])[1] || "abc1234";
         return { response: JSON.stringify({ overview: "Built the contact page step by step.", repos: [{ repo: "carol/site", features: [{ title: "Contact form with validation", commits: [sha], status: "done" }] }],
