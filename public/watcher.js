@@ -805,7 +805,16 @@ const W_LV_NAME = Object.fromEntries(W_LV);
 .w-lv.on { background: var(--c); border-color: var(--c); color: #fff; } .w-lv.prop { border: 2px dashed var(--c); }
 .w-or-row { grid-template-columns: 44px minmax(0, 1fr) auto; }
 .pg-table { border-collapse: collapse; } .pg-table th, .pg-table td { padding: 5px 8px; text-align: left; white-space: nowrap; }
-.pg-table th.pg-b { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 12px; font-weight: 600; color: var(--ink-soft); max-height: 130px; overflow: hidden; }
+.pg-table th.pg-b { text-align: center; vertical-align: bottom; padding: 6px 4px; min-width: 44px; } .pg-table td { text-align: center; } .pg-table td.pg-name, .pg-table th.pg-name { text-align: left; }
+.pg-table th.pg-name, .pg-table td.pg-name { position: sticky; left: 0; background: var(--surface); z-index: 2; } .pg-table td.pg-name a { color: inherit; text-decoration: none; } .pg-table td.pg-name a:hover { color: var(--blue); }
+.pg-table tbody tr:hover td { background: var(--surface-2); } .pg-table tbody tr { border-top: 1px solid var(--line); }
+.pg-bh { position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 34px; height: 26px; padding: 0 6px; border-radius: 8px; background: var(--blue-50); color: var(--blue-700); font-size: 12.5px; font-weight: 700; text-decoration: none; }
+.pg-bh:hover, .pg-bh:focus-visible { background: var(--blue); color: #fff; text-decoration: none; }
+.pg-bh sup { margin-left: 1px; font-size: 10px; }
+.pg-bh[data-tip]:hover::after, .pg-bh[data-tip]:focus-visible::after { content: attr(data-tip); position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%); z-index: 20; width: max-content; max-width: 260px; white-space: normal; text-align: left;
+  background: var(--ink); color: var(--surface); font-size: 12.5px; font-weight: 500; line-height: 1.35; text-transform: none; letter-spacing: normal; padding: 7px 10px; border-radius: 8px; box-shadow: var(--shadow-m); pointer-events: none; }
+.pg-mini { display: flex; height: 4px; width: 34px; margin: 5px auto 0; border-radius: 3px; overflow: hidden; background: var(--line); } .pg-mini i { background: var(--c); }
+.pg-key { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); font-size: 13px; } .pg-key a { color: var(--ink-soft); text-decoration: none; } .pg-key a:hover { color: var(--blue); } .pg-key b { color: var(--blue-700); margin-right: 3px; }
 .pg-sq { display: inline-block; width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--line-strong); vertical-align: middle; }
 .pg-sq.has { background: var(--c); border-color: var(--c); } a.pg-sq { cursor: pointer; } a.pg-sq:not(.has):hover { border-color: var(--blue); background: var(--surface-2); } a.pg-sq.has:hover { outline: 2px solid var(--c); outline-offset: 2px; } .pg-sq.ev { border-style: dashed; border-color: var(--ink-soft); }
 .pg-cell { position: relative; display: inline-block; }
@@ -932,15 +941,22 @@ async function viewProgress() {
     <div class="toolbar"><select id="pg-f">${opt([["all", "All students"], ["low", "Faible or Critique"]], W_PG.filter)}</select>
       <select id="pg-s">${opt([["name", "Name"], ["low", "Lowest level first"]], W_PG.sort)}</select></div>
     ${!P.briefs.length ? `<div class="empty-state"><p class="muted">No brief published yet.</p></div>` : `<section class="panel"><div class="table-wrap"><table class="pg-table">
-      <thead><tr><th></th>${P.briefs.map((b) => `<th class="pg-b" title="${esc(b.title)}${b.assessments ? "" : " · no assessment linked"}">${b.assessments ? "" : `<span class="pg-noas" aria-label="no assessment linked">⚠ </span>`}${esc(b.title.slice(0, 24))}</th>`).join("")}<th>Over the year</th></tr></thead>
-      <tbody>${rows.map((x) => `<tr><td><b>${esc(x.s.name)}</b></td>${x.lv.map((c, i) => {
+      <thead><tr><th class="pg-name">Student</th>${P.briefs.map((b, i) => {
+        // B1, B2…: the full name in a tooltip; under it, how the class did (the share of each level)
+        const lvls = P.students.map((s) => (P.cells[`${b.id}:${s.discord_id}`] || {}).lv).filter(Boolean);
+        const bar = lvls.length ? W_LV.map(([v]) => { const n = lvls.filter((l) => l === v).length; return n ? `<i class="pgc-${v}" style="flex:${n}"></i>` : ""; }).join("") : "";
+        const tip = `${b.title}${b.assessments ? "" : " · no assessment linked"}${lvls.length ? ` · ${lvls.length} debrief(s)` : ""}`;
+        return `<th class="pg-b"><a class="pg-bh" href="#/brief/${b.id}" data-tip="${esc(tip)}" aria-label="${esc(tip)}">B${i + 1}${b.assessments ? "" : `<sup class="pg-noas" aria-hidden="true">!</sup>`}</a><span class="pg-mini">${bar}</span></th>`;
+      }).join("")}<th>Over the year</th></tr></thead>
+      <tbody>${rows.map((x) => `<tr><td class="pg-name"><a href="#/student/${esc(x.s.discord_id)}"><b>${esc(x.s.name)}</b></a></td>${x.lv.map((c, i) => {
         const b = P.briefs[i];
         const am = pgAssess(P, b, x.s.discord_id);
         return `<td>${c ? `<span class="pg-cell"><a class="pg-sq ${c.lv ? "has pgc-" + c.lv : "ev"}" href="#/debrief/${b.id}~${encodeURIComponent(c.who)}" title="${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "debriefed, no level yet"}${am.tip}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: ${c.lv ? W_LV_NAME[c.lv] : "no level"}${am.tip}"></a>${am.html}<button type="button" class="pg-copy" data-pgcopy="${b.id}" data-who="${esc(c.who)}" data-sid="${esc(x.s.discord_id)}" data-name="${esc(x.s.name)} · ${esc(b.title)}" title="Copy the comment" aria-label="Copy the comment of ${esc(x.s.name)} for ${esc(b.title)}">📋</button></span>`
           : `<span class="pg-cell"><a class="pg-sq" href="#/debrief/${b.id}~${encodeURIComponent((P.squadOfMember || {})[`${b.id}:${x.s.discord_id}`] || `u:${x.s.discord_id}`)}" title="${esc(b.title)}: no debrief yet, click to debrief${am.tip}" aria-label="${esc(x.s.name)}, ${esc(b.title)}: debrief${am.tip}"></a>${am.html}</span>`}</td>`;
       }).join("")}<td><span class="pg-year">${W_LV.filter(([v]) => x.count[v]).map(([v, l]) => `<span title="${l}"><i class="pg-dot pgc-${v}"></i>${x.count[v]}</span>`).join("")}</span></td></tr>`).join("")}</tbody></table></div>
+      <div class="pg-key">${P.briefs.map((b, i) => `<a href="#/brief/${b.id}"><b>B${i + 1}</b> ${esc(b.title)}${b.assessments ? "" : ` <span class="pg-noas" title="no assessment linked">!</span>`}</a>`).join("")}</div>
       <p class="muted small" style="margin:10px 0 0">${legend}</p>
-      <p class="muted small" style="margin:4px 0 0">Assessment of the brief: <span style="margin-right:12px"><i class="pg-as ok"></i>graded</span><span style="margin-right:12px"><i class="pg-as open"></i>not graded yet</span><span style="margin-right:12px"><i class="pg-as miss"></i>not taken</span>no mark (<span class="pg-noas">⚠</span> on the brief): no assessment linked to it.</p></section>`}`;
+      <p class="muted small" style="margin:4px 0 0">Assessment of the brief: <span style="margin-right:12px"><i class="pg-as ok"></i>graded</span><span style="margin-right:12px"><i class="pg-as open"></i>not graded yet</span><span style="margin-right:12px"><i class="pg-as miss"></i>not taken</span>no mark (<span class="pg-noas">!</span> next to the brief): no assessment linked to it.</p></section>`}`;
   // the comment of that debrief (a squad member's own comment, else the squad's)
   $$("[data-pgcopy]").forEach((btn) => btn.onclick = () => busy(btn, async () => {
     const R = await api(`/briefs/${btn.dataset.pgcopy}/review?who=${encodeURIComponent(btn.dataset.who)}`);

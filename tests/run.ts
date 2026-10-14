@@ -2740,6 +2740,13 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
   check(ovr.data.takers.find((t: any) => t.discord_id === U.alice.id).grades[expl.id].teacher === true && q1("SELECT score FROM assessment_takers WHERE id = ?", row.id).score === 100, "teacher changes a grade");
   const res = await api("POST", `/api/assessments/${aid}/results`, { g: G });
   check(res.data.sent === 1, "results sent by DM");
+  {
+    const { notAttempted } = await import("../src/shared/assess.ts");
+    check(notAttempted({ type: "code", starter: "function f(a) {\n  // ton code\n}" }, "function f(a){\n// ton code\n}  ") && notAttempted({ type: "explain" }, "  ") && notAttempted({ type: "mcq" }, [])
+      && !notAttempted({ type: "code", starter: "function f() {}" }, "function f() { return 1 }") && !notAttempted({ type: "mcq" }, [2]), "not attempted: no answer, nothing picked, or the starter code handed back as it was");
+    const dmText = JSON.stringify(discordCalls.filter((c) => c.method === "POST" && /\/channels\/.*\/messages/.test(c.path)).slice(-3));
+    check(/✅ \d+ juste|✅ \d+ right/.test(dmText), "the student's message counts right, partly, wrong and not attempted answers");
+  }
   check(q("SELECT * FROM competency_results WHERE discord_id = ? AND source = 'assessment' AND ref = ?", U.alice.id, aid).some((c: any) => c.code === "C3" && c.ok === 1), "the assessment validates the competency of its questions");
   check(q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE discord_id = ? AND source = ?", U.alice.id, `assess:${aid}`).n >= 2, "…and adds skill evidence");
   const det = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
@@ -3513,6 +3520,68 @@ section("students: the teacher edits a name (Discord no longer replaces it), rem
     && !q("SELECT 1 FROM team_members WHERE discord_id = ?", id).length && !q("SELECT 1 FROM gh_activity WHERE discord_id = ?", id).length
     && !q("SELECT 1 FROM brief_handins WHERE who = ?", `u:${id}`).length, "removed from the class: profile, team, GitHub activity and brief work");
   check(!(await api("GET", `/api/students?g=${G}`)).data.some((r: any) => r.discord_id === id) && (await api("DELETE", `/api/students/${id}?g=${G}`)).status === 404, "…gone from the list");
+}
+
+section("plan d'action: the weak students, improving or not, engaged or not, the teacher's or the AI's comment");
+{
+  const { levelTrend, engagement } = await import("../src/shared/actionplan.ts");
+  check(levelTrend(["critique", "faible", "moyen", "bon"], "flat") === "up" && levelTrend(["bon", "moyen", "faible"], "up") === "down" && levelTrend(["faible", "faible"], "up") === "flat"
+    && levelTrend([], "inactive") === "down" && levelTrend(["moyen"], "new") === "unknown", "improving or not: the last levels against the ones before, else the activity");
+  const T0 = clock.now();
+  const e1 = engagement([{ status: "done" }, { status: "late" }, { status: "missed" }, { status: "open", due_at: T0 + 99 }].map((r: any) => ({ discord_id: "1", due_at: null, created_at: 0, completed_at: null, ...r })), T0, T0);
+  check(e1.pct === 67 && e1.state === "partial" && e1.open === 1 && e1.overdue === 0, "engagement: the share of the work done (late counts, open not yet)");
+  check(engagement([], null, T0).state === "none", "…nothing given: no work yet");
+  // Bob: Faible on the last brief → in the plan by himself
+  const T = clock.now();
+  run1(`INSERT INTO briefs (guild_id, title, status, data, start_at, due_at, created_at) VALUES (?, 'Plan B1', 'assigned', '{}', ?, ?, ?)`, G, T - 9 * 86400, T - 8 * 86400, T - 9 * 86400);
+  const b1 = q1("SELECT id FROM briefs WHERE title = 'Plan B1'").id;
+  run1(`INSERT INTO briefs (guild_id, title, status, data, start_at, due_at, created_at) VALUES (?, 'Plan B2', 'assigned', '{}', ?, ?, ?)`, G, T - 5 * 86400, T - 4 * 86400, T - 5 * 86400);
+  const b2 = q1("SELECT id FROM briefs WHERE title = 'Plan B2'").id;
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at, level) VALUES (?, ?, ?, '{}', 'final', ?, 'critique')", b1, G, `u:${U.bob.id}`, T);
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at, level) VALUES (?, ?, ?, '{}', 'final', ?, 'faible')", b2, G, `u:${U.bob.id}`, T);
+  const v = await api("GET", `/api/plan?g=${G}`);
+  const bob = v.data.plan?.find((r: any) => r.discord_id === U.bob.id);
+  check(v.status === 200 && bob && bob.current === "faible" && bob.trend === "up" && bob.debriefs.length >= 2 && bob.why.some((w: string) => /Faible/.test(w)), "Bob is in the plan: Faible on the last brief, improving (critique → faible)");
+  check(v.data.summary.faible >= 1 && Array.isArray(v.data.others), "…the counts at the top, the other students apart");
+  const stl = await api("GET", `/api/students?g=${G}`);
+  const bn = stl.data.find((r: any) => r.discord_id === U.bob.id)?.niveau;
+  check(bn?.lv === "faible" && bn.trend === "up" && /Plan B2/.test(bn.from), "Students: each one's niveau (last debrief) and how it moves");
+  const sv = await api("PUT", `/api/plan/${U.bob.id}`, { g: G, note: "  Vu avec Bob : il refait le formulaire.  " });
+  const v2 = await api("GET", `/api/plan?g=${G}`);
+  check(sv.status === 200 && v2.data.plan.find((r: any) => r.discord_id === U.bob.id).note?.text === "Vu avec Bob : il refait le formulaire." && v2.data.plan.find((r: any) => r.discord_id === U.bob.id).note.by === "you", "the teacher's comment, saved");
+  const gen = await api("POST", `/api/plan/${U.bob.id}/ai`, { g: G });
+  const asked = ai.users[ai.users.length - 1];
+  check(gen.status === 200 && gen.data.note.by === "ai" && /progresse/.test(gen.data.note.text) && asked.includes("critique") && asked.includes("Vu avec Bob"), "✨ the AI writes the comment from the levels, the work and the teacher's earlier comment");
+  const out = await api("PUT", `/api/plan/${U.bob.id}`, { g: G, flagged: -1 });
+  const v3 = await api("GET", `/api/plan?g=${G}`);
+  check(out.status === 200 && !v3.data.plan.some((r: any) => r.discord_id === U.bob.id) && v3.data.others.some((r: any) => r.discord_id === U.bob.id && /progresse/.test(r.note?.text)), "taken out of the plan by hand (the comment stays)");
+  await api("PUT", `/api/plan/${U.bob.id}`, { g: G, flagged: 1 });
+  check((await api("GET", `/api/plan?g=${G}`)).data.plan.some((r: any) => r.discord_id === U.bob.id), "…and added back");
+  check((await api("PUT", `/api/plan/${U.bob.id}`, { g: G })).status === 400, "nothing to save: refused");
+  run1("DELETE FROM brief_reviews WHERE brief_id IN (?, ?)", b1, b2);
+  run1("DELETE FROM briefs WHERE id IN (?, ?)", b1, b2);
+  run1("DELETE FROM plan_notes");
+}
+
+section("briefs: the Work of the brief (individuel, binôme, groupe) sets solo or squads");
+{
+  run1(`INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Work mode', 'draft', '{}', ?)`, G, clock.now());
+  const id = q1("SELECT id FROM briefs WHERE title = 'Work mode'").id;
+  const kindAfter = async (mode: string) => { await api("PUT", `/api/briefs/${id}`, { g: G, data: { modalities: { mode } } }); return q1("SELECT kind FROM briefs WHERE id = ?", id).kind; };
+  check(await kindAfter("binôme") === "squad" && await kindAfter("individuel") === "solo" && await kindAfter("groupe") === "squad", "binôme and groupe: squads; individuel: solo");
+  run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
+section("debrief: link an existing assessment to the brief from the debrief");
+{
+  run1(`INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Link me', 'assigned', '{}', ?)`, G, clock.now());
+  const bid = q1("SELECT id FROM briefs WHERE title = 'Link me'").id;
+  run1(`INSERT INTO assessments (guild_id, title, status, settings, questions, created_at) VALUES (?, 'Quiz to link', 'draft', '{}', '[]', ?)`, G, clock.now());
+  const aid = q1("SELECT id FROM assessments WHERE title = 'Quiz to link'").id;
+  const r = await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: bid });
+  check(r.status === 200 && q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === bid, "linked: its results count in the brief's debriefs");
+  check((await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: 999999 })).status === 404, "…an unknown brief: refused");
+  run1("DELETE FROM assessments WHERE id = ?", aid); run1("DELETE FROM briefs WHERE id = ?", bid);
 }
 
 section("i18n: every key exists in English and French");

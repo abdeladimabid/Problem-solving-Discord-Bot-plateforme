@@ -406,6 +406,7 @@ function fakeAI() {
       ] }) };
       if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", consigne: "Modifie la couleur du fond du formulaire en utilisant Flexbox, ajoute une règle @media pour la taille du texte.", observer: ["Flexbox appliqué", "règle @media ajoutée"] }) };
       if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
+      if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
       if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {
         const ids = [...user.matchAll(/### Question (\w+)/g)].map((m) => m[1]);
