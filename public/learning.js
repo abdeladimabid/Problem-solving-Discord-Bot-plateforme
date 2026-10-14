@@ -431,7 +431,7 @@ function renderBrief() {
         ${b.due_at ? ` · due ${fmtDateTime(b.due_at)}` : ""} · ${d.competencies.map((c) => compChip(c)).join(" ")}</p></div>
       <div class="toolbar" style="margin:0">
         <button class="btn" id="bb-copy">Copy for Simplonline</button>
-        ${b.status === "assigned" ? `<button class="btn" id="bb-assign">Dates &amp; announce</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Publish to the class</button>`}
+        ${b.status === "assigned" ? `<button class="btn" id="bb-assign">${B.kind === "squad" ? "Dates, squads &amp; announce" : "Dates &amp; announce"}</button><button class="btn" id="bb-archive">Archive</button>` : `<button class="btn primary" id="bb-assign">Assign to the class</button>`}
         <button class="btn danger" id="bb-del">Delete</button></div></div>
     ${b.status === "assigned" ? `<div class="figures cs-figs">
       <div class="figure"><span class="ico">📥</span><div><b>${handed}/${total}</b><span>handed in</span></div></div>
@@ -443,7 +443,6 @@ function renderBrief() {
       <button role="tab" data-bt="brief">Brief</button>
       <button role="tab" data-bt="students">${B.kind === "squad" ? "Squads" : "Students"} &amp; debriefs</button>
       <button role="tab" data-bt="grid">Evaluation grid</button>
-      <button role="tab" data-bt="team">Solo or squads</button>
       <button role="tab" data-bt="po">PO notes</button>
     </div>
     <div id="bb-tab"></div>`;
@@ -480,6 +479,10 @@ function wireDirty(root, id = "bb-save") {
   return mark;
 }
 
+// how the students work on a brief: alone, in pairs, in squads (the brief's "Work" field)
+const WORK_MODES = [["individuel", "Individuel (each student alone)"], ["binôme", "Binôme (pairs)"], ["groupe", "Groupe (squads)"]];
+const workMode = (m) => (/bin|pair/i.test(String(m || "")) ? "binôme" : /group|squad|[ée]quipe|team/i.test(String(m || "")) ? "groupe" : "individuel");
+
 function briefEditorTab(root) {
   const { B } = BR, d = B.brief.data;
   const card = (sec, body) => `<section class="bf" data-sec="${sec}"><header><b>${esc(SEC_LABEL[sec])}</b><span class="bf-act">
@@ -501,7 +504,7 @@ function briefEditorTab(root) {
       ${card("bonus", ta("bonus", d.bonus.join("\n"), "lines", 70))}
       ${card("modalities", `<div class="field-row">
           <div><label>Days</label><input type="number" min="1" max="30" data-f="modalities.days" data-k="num" value="${d.modalities.days}"></div>
-          <div><label>Work</label><input type="text" data-f="modalities.mode" value="${esc(d.modalities.mode)}"></div>
+          <div><label>Work</label><select data-f="modalities.mode">${WORK_MODES.map(([v, l]) => `<option value="${v}" ${workMode(d.modalities.mode) === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
           <div><label>Start</label><input type="date" data-f="modalities.start" value="${esc(d.modalities.start)}"></div>
           <div><label>Due</label><input type="date" data-f="modalities.due" value="${esc(d.modalities.due)}"></div></div>
         <label>Your own wording <span class="muted">(optional: else it's written from the fields above)</span></label>${ta("modalities.text", d.modalities.text, "", 60)}`)}
@@ -573,16 +576,67 @@ function rewriteDialog(sec) {
 }
 
 function assignBriefDialog() {
-  const b = BR.B.brief, d = b.data;
-  openDialog(b.status === "assigned" ? "Dates and announcement" : "Publish to the class", `
+  const B = BR.B, b = B.brief, d = b.data;
+  // the Work chosen in the editor counts even before it's saved
+  const live = $('#bb-tab select[data-f="modalities.mode"]')?.value || "";
+  const mode = workMode(live || d.modalities.mode), grouped = mode !== "individuel";
+  const students = B.students.map((s) => ({ id: s.discord_id, name: s.name || s.discord_id }));
+  const squads = JSON.parse(JSON.stringify(B.kind === "squad" ? B.squads : []));
+  openDialog(b.status === "assigned" ? "Dates, squads and announcement" : "Assign to the class", `
+    <p class="small muted" style="margin:4px 0 6px">Work: <b>${esc(WORK_MODES.find(([v]) => v === mode)[1])}</b> <span class="muted">(change it in the brief's modalities)</span></p>
     <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
     <div data-wsprint></div>
-    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord</label>`,
-    [{ label: b.status === "assigned" ? "Save" : "Publish", primary: true, action: async () => {
+    <label for="ab-h">Expected repo name <span class="muted">(optional: finds their repo when they didn't hand it in, e.g. <code>portfolio</code>)</span></label>
+    <input type="text" id="ab-h" value="${esc(B.repo_hint || "")}" style="max-width:340px">
+    ${grouped ? `<div class="ab-sq">
+      <div class="ab-sq-head"><div><b>${mode === "binôme" ? "Pairs" : "Squads"}</b> <span class="small muted" id="ab-sq-n"></span>
+        <div class="small muted">The scrum master hands in the ${mode === "binôme" ? "pair's" : "squad's"} repo with <code>/brief submit</code>. Drag students between ${mode === "binôme" ? "pairs" : "squads"}.</div></div>
+        <div class="toolbar" style="margin:0"><select id="ab-from"><option value="">Class squads…</option></select>
+          ${mode === "binôme" ? `<button class="btn small" id="ab-rand" type="button">🎲 Random pairs</button>` : ""}</div></div>
+      <div id="ab-board" class="${mode === "binôme" ? "ab-pairs" : ""}"></div></div>` : ""}
+    <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (in #general)</label>`,
+    [{ label: b.status === "assigned" ? "Save" : "Assign", primary: true, action: async () => {
+      const keep = squads.filter((x) => x.members.length);
+      if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Random squads, or load the class squads).");
+      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...(live && live !== d.modalities.mode ? { data: { ...d, modalities: { ...d.modalities, mode: live } } } : {}) } });
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
-      dlg.close(); toast(b.status === "assigned" ? "Saved" : "Published to the class"); renderBrief();
+      dlg.close(); toast(b.status === "assigned" ? "Saved" : "Assigned to the class"); renderBrief();
     } }]);
+  dlg.classList.add("wide");
   wSprintField(dlg, b.sprint ?? null, "#ab-d", b.week);
+  if (!grouped) return;
+  const count = () => { const n = squads.filter((x) => x.members.length).length, inSq = new Set(squads.flatMap((x) => x.members)); $("#ab-sq-n", dlg).textContent = `${n} ${mode === "binôme" ? "pair(s)" : "squad(s)"} · ${students.length - students.filter((x) => inSq.has(x.id)).length} student(s) left`; };
+  const board = squadBoard($("#ab-board", dlg), students, squads, count);
+  count();
+  const hex = () => Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
+  // random groups: everyone in one, sizes as even as possible (an odd student joins a pair as a trio)
+  const randomize = () => {
+    const size = mode === "binôme" ? 2 : 4;
+    const pool = students.map((x) => x.id).sort(() => Math.random() - 0.5);
+    const n = Math.max(1, Math.floor(pool.length / size));
+    const groups = Array.from({ length: n }, () => []);
+    pool.forEach((id, i) => groups[i % n].push(id));
+    squads.splice(0, squads.length, ...groups.map((m, i) => ({ id: hex(), name: `${mode === "binôme" ? "Binôme" : "Squad"} ${i + 1}`, members: m, sm: m[0] })));
+    board.redraw(); count();
+  };
+  if ($("#ab-rand", dlg)) $("#ab-rand", dlg).onclick = randomize;
+  api("/squads").then((r) => {
+    const sel = $("#ab-from", dlg);
+    if (!sel) return;
+    sel.innerHTML = `<option value="">${r.sets.length ? "Load the class squads…" : "No class squads yet"}</option>` + r.sets.map((x) => `<option value="${x.id}">${esc(x.name)}${x.active ? " · current" : ""} (${x.squads.length})</option>`).join("");
+    sel.onchange = () => {
+      const set = r.sets.find((x) => String(x.id) === sel.value);
+      if (!set) return;
+      const ok = new Set(students.map((x) => x.id));
+      squads.splice(0, squads.length, ...set.squads.map((x) => ({ ...x, members: x.members.filter((m) => ok.has(m)) })).filter((x) => x.members.length));
+      board.redraw(); count();
+    };
+    // nothing yet: the class's current squads (for groups) or random pairs
+    if (!squads.length) {
+      const cur = r.sets.find((x) => x.active) || r.sets[0];
+      if (cur && mode !== "binôme") { sel.value = String(cur.id); sel.onchange(); } else randomize();
+    }
+  }).catch(() => { if (!squads.length) randomize(); });
 }
 
 function reviewCell(rv) {
@@ -602,13 +656,13 @@ function briefStudentsTab(root) {
   if (B.kind === "squad") {
     const nameOf = (uid) => B.students.find((s) => s.discord_id === uid)?.name || uid;
     const alone = B.students.filter((s) => !s.squad);
-    html = (alone.length ? `<div class="notice warn" style="margin-bottom:12px">${alone.length} student(s) in no squad: ${alone.map((s) => esc(s.name || s.discord_id)).join(", ")}. Add them in “Solo or squads”.</div>` : "") + table([
+    html = (alone.length ? `<div class="notice warn" style="margin-bottom:12px">${alone.length} student(s) in no squad: ${alone.map((s) => esc(s.name || s.discord_id)).join(", ")}. Add them with “Dates, squads & announce”.</div>` : "") + table([
       { label: "Squad", sort: "name", html: (s) => `<b>${esc(s.name)}</b><div class="small">${s.members.map((m) => `${avatar(nameOf(m), m)} ${esc(nameOf(m))}${m === s.sm ? " <span class='tag'>SM</span>" : ""}`).join("<br>")}</div>` },
       { label: "Pushed", html: (s) => s.members.map((m) => pushCell(B.students.find((x) => x.discord_id === m)?.push)).join("<br>") },
       { label: "Handed in", html: (s) => handinCell(s.handin) },
       { label: "Debrief", html: (s) => reviewCell(s.review) },
       { label: "", html: (s) => actions(`s:${s.id}`, s.handin) },
-    ], B.squadRows, { empty: "No squads yet: make them in “Solo or squads”." });
+    ], B.squadRows, { empty: "No squads yet: make them with “Dates, squads & announce”." });
   } else {
     html = table([
       { label: "Student", sort: "name", html: (s) => `<a href="#/student/${s.discord_id}">${avatar(s.name, s.discord_id)} ${esc(s.name || s.discord_id)}</a>` },
@@ -736,12 +790,48 @@ function assessVerdicts(assess) {
   }
   return out;
 }
+// the "no assessment" panel: generate one with AI, link an existing one, or go on without it for this brief
+function wireAssessLink(root) {
+  const box = $(".asl, .asl-min", root);
+  if (!box || box.dataset.wired) return;
+  box.dataset.wired = "1";
+  const bid = DB.bid;
+  const sel = $("[data-asl-sel]", box);
+  if (sel) api("/assessments").then((r) => {
+    const list = (r.items || []).filter((a) => String(a.brief_id || "") !== String(bid));
+    sel.innerHTML = list.length ? `<option value="">Choose…</option>` + list.map((a) => `<option value="${a.id}">${esc(a.title)}${a.brief_id ? " (linked to another brief)" : ""}</option>`).join("") : `<option value="">No assessment yet</option>`;
+  }).catch(() => { sel.innerHTML = `<option value="">—</option>`; });
+  const set = (v) => { try { v ? localStorage.setItem(`cb-noassess:${bid}`, "1") : localStorage.removeItem(`cb-noassess:${bid}`); } catch { /* private window */ } };
+  $$("[data-asl]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const act = b.dataset.asl;
+    if (act === "hide" || act === "show") { set(act === "hide"); renderDebrief(); return; }
+    if (act === "ai") { generateQuestionsDialog(null, { brief: bid, title: DB.B.brief.title }); return; }
+    if (!sel.value) throw new Error("Choose the assessment to link");
+    await api(`/assessments/${sel.value}/link`, { method: "POST", body: { brief_id: Number(bid) } });
+    toast(DB.R.review?.result ? "Assessment linked: analyze again so the debrief uses it" : "Assessment linked to this brief");
+    DB.R = await api(`/briefs/${bid}/review?who=${encodeURIComponent(DB.who)}`);
+    renderDebrief();
+  }));
+}
 function assessPanelHtml(assess) {
   const list = assess || [];
-  if (!list.length) return `<section class="panel db-step1"><h2>1 · Assessment</h2>
-    <div class="notice warn"><b>No assessment linked to this brief.</b> The debrief works on the project only. An assessment is recommended:
-      it is the surest proof that the learner masters the competencies (a project can be copied or made with AI).
-      <p style="margin:8px 0 0"><a class="btn small" href="#/assessments">Create an assessment</a> <span class="small muted">then choose this brief as its “Linked brief”.</span></p></div></section>`;
+  if (!list.length) {
+    const bid = (typeof DB !== "undefined" && DB && DB.bid) || "";
+    let hidden = false; try { hidden = localStorage.getItem(`cb-noassess:${bid}`) === "1"; } catch { /* private window */ }
+    if (hidden) return `<section class="panel db-step1 asl-min"><span class="asl-mi" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z"/><path d="M8 6H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"/></svg></span>
+      <span><b>1 · Assessment</b> <span class="muted">none linked: this debrief uses the project only</span></span><button class="btn small" data-asl="show">Add one</button></section>`;
+    return `<section class="panel db-step1 asl">
+      <div class="asl-head"><span class="asl-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1Z"/><path d="M8 6H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-2"/><path d="M12 11v4M12 18h.01"/></svg></span>
+        <div><h2>1 · Add an assessment to this brief</h2>
+          <p>Without one, the debrief only sees the project, and a project can be copied or made with AI. A short assessment is the surest proof that the learner masters the competencies: its results set where each competency starts and go into the comment.</p></div>
+        <button class="btn small asl-x" data-asl="hide" title="Continue without an assessment for this brief">Not for this brief</button></div>
+      <div class="asl-opts">
+        <button type="button" class="asl-opt main" data-asl="ai"><b>✨ Generate it with AI</b><span>Questions written from this brief's notions and competencies. You check them before inviting the class.</span></button>
+        <div class="asl-opt"><b>Link an existing one</b><span>An assessment you already made or imported.</span>
+          <div class="asl-link"><select data-asl-sel aria-label="Assessment to link"><option value="">Loading…</option></select><button class="btn small" data-asl="link">Link</button></div></div>
+        <a class="asl-opt" href="#/assessments"><b>Write one yourself</b><span>In Assessments, then choose this brief as its “Linked brief”.</span></a>
+      </div></section>`;
+  }
   return `<section class="panel db-step1"><h2>1 · Assessment <span class="muted">it comes first: it decides where each competency starts</span></h2>
     <div class="db-rows">${list.map((x) => {
       const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
@@ -803,13 +893,22 @@ function renderDebrief() {
         ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next →</a>` : ""}
         ${final ? "" : `<button class="btn ${rec ? "" : "primary"}" id="db-an">${rec ? "↻ Analyze again" : "🔍 Analyze the work"}</button>`}</div></div>
     <div id="db-body"></div>`;
-  if ($("#db-an")) $("#db-an").onclick = () => analyzeDialog();
+  if ($("#db-an")) $("#db-an").onclick = () => analyzeWork();
+  if ($("#db-other")) $("#db-other").onclick = () => analyzeDialog();
   const body = $("#db-body");
   if (!rec) {
     body.innerHTML = `<div style="margin-bottom:16px">${assessPanelHtml(R.assess)}</div>${(R.steps || []).length ? `<section class="panel" id="db-steps" style="margin-bottom:16px"></section>` : ""}<section class="panel"><div class="empty-state"><div style="font-size:42px">🔍</div><h2 style="justify-content:center">Not analyzed yet</h2>
-      <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
-      <button class="btn primary" id="db-an2">🔍 Analyze the work</button></div></section>`;
-    $("#db-an2").onclick = () => analyzeDialog();
+      ${T.handin ? `<div class="db-repo"><span class="db-repo-ic" aria-hidden="true">🐙</span><div><span class="small muted">${T.squad ? "The squad handed in" : "Handed in"} ${fmtAgo(T.handin.at)}</span>
+          <a href="https://github.com/${esc(T.handin.repo)}" target="_blank" rel="noopener"><b>${esc(T.handin.repo)}</b> ↗</a>${T.handin.plan ? ` · <a class="small" href="${esc(T.handin.plan)}" target="_blank" rel="noopener">planning board</a>` : ""}</div></div>
+        <p class="muted">The bot reads this repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
+        <button class="btn primary" id="db-an2">🔍 Analyze ${esc(T.handin.repo.split("/")[1] || T.handin.repo)}</button>
+        <p style="margin:10px 0 0"><button class="ap-link" id="db-other2">Analyze another repo instead</button></p>`
+      : `<div class="notice warn" style="text-align:left;max-width:560px;margin:0 auto 12px">${T.squad ? "The squad" : "This student"} didn't hand in a repo. Pick the one to debrief: the bot lists their GitHub repos, the ones pushed during the brief first.</div>
+        <p class="muted">The bot reads the repo (files, commits${T.squad ? ", each member's part" : ""}), runs the automatic checks, asks the AI to judge each point of the grid and each competency, then writes the comment. You decide everything after.</p>
+        <button class="btn primary" id="db-an2">🔍 Find the repo and analyze</button>`}</div></section>`;
+    $("#db-an2").onclick = () => analyzeWork();
+    if ($("#db-other2")) $("#db-other2").onclick = () => analyzeDialog();
+    wireAssessLink(body);
     renderSteps(false);
     return;
   }
@@ -879,6 +978,7 @@ function renderDebrief() {
           <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
+  wireAssessLink(body);
   updateMeter();
   wireDebrief();
   renderSteps(final);
@@ -1055,20 +1155,29 @@ function wireDebrief() {
   });
 }
 
+/** Read the repo, run the checks, ask the AI (the handed-in repo when there's no other one given). */
+async function analyzeRun(repo, saveHandin = false) {
+  if ($("#db-wait")) return;
+  $$("#db-an, #db-an2").forEach((b) => { b.disabled = true; });
+  view.querySelector("#db-body").insertAdjacentHTML("afterbegin", `<div class="notice" id="db-wait">⏳ Reading ${esc(repo || debriefTarget().handin?.repo || "the repo")}, running the checks and asking the AI… (up to a minute)</div>`);
+  try {
+    const R = await api(`/briefs/${DB.bid}/review/analyze`, { method: "POST", body: { who: DB.who, repo: repo || undefined, saveHandin } });
+    DB.R = R; DB.commentEdited = false;
+    DB.B = await api(`/briefs/${DB.bid}`);
+    toast(R.msg || "Analyzed");
+    renderDebrief();
+  } catch (e) { $("#db-wait")?.remove(); $$("#db-an, #db-an2").forEach((b) => { b.disabled = false; }); toast(e.message, true); }
+}
+/** "Analyze the work": the repo handed in, straight away; nothing handed in: pick the repo first. */
+function analyzeWork() {
+  if (debriefTarget().handin) analyzeRun();
+  else analyzeDialog();
+}
 function analyzeDialog() {
   const T = debriefTarget();
-  const run = async (repo, saveHandin = false) => {
-    view.querySelector("#db-body").insertAdjacentHTML("afterbegin", `<div class="notice" id="db-wait">⏳ Reading the repo, running the checks and asking the AI… (up to a minute)</div>`);
-    try {
-      const R = await api(`/briefs/${DB.bid}/review/analyze`, { method: "POST", body: { who: DB.who, repo: repo || undefined, saveHandin } });
-      DB.R = R; DB.commentEdited = false;
-      DB.B = await api(`/briefs/${DB.bid}`);
-      toast(R.msg || "Analyzed");
-      renderDebrief();
-    } catch (e) { $("#db-wait")?.remove(); toast(e.message, true); }
-  };
+  const run = analyzeRun;
   openDialog(`Analyze the work · ${T.name}`, `
-    <p class="muted small" style="margin-top:12px">${T.handin ? `Handed in: <b>${esc(T.handin.repo)}</b>. Analyze it, or pick another repo.` : `Nothing was handed in. Pick the repo to debrief${DB.B.repo_hint ? ` (the brief's repos are named like <code>${esc(DB.B.repo_hint)}</code>)` : ""}.`}</p>
+    <p class="muted small" style="margin-top:12px">${T.handin ? `Handed in: <b>${esc(T.handin.repo)}</b>. Pick another repo to analyze instead of it.` : `Nothing was handed in. Pick the repo to debrief${DB.B.repo_hint ? ` (the brief's repos are named like <code>${esc(DB.B.repo_hint)}</code>)` : ""}.`}</p>
     <input type="search" id="an-q" placeholder="Filter the repos…" style="width:100%;margin-bottom:8px">
     <div class="repo-pick" id="an-list"><p class="muted small">⏳ Loading ${T.squad ? "the squad's" : "their"} GitHub repos…</p></div>
     <details class="small" style="margin-top:10px"><summary>Another repo (link or owner/repo)</summary><input type="text" id="an-r" style="width:100%;margin-top:6px" placeholder="https://github.com/owner/repo"></details>
@@ -1142,7 +1251,7 @@ async function shareAssessmentDialog(id) {
     <p class="small" style="margin-top:0">Send this link to other teachers. In their ClassBot (yours or their own) they open <b>Assessments → Import from a link</b> and get a copy of the questions, with their competencies and skills. Your students' papers and results are never shared.</p>
     <div class="url-list"><div><b>Link</b><code id="sh-url">${esc(r.url)}</code><button class="btn small" id="sh-copy">Copy</button></div></div>
     <p class="small muted">Opened in a browser, it shows the title and the questions' first lines. Shared it with the wrong person? Make a new link: the old one stops working.</p>`,
-  [{ label: "New link (the old one stops working)", action: async () => { const n = await api(`/assessments/${id}/share`, { method: "DELETE" }); $("#sh-url", dlg).textContent = n.url; toast("New link: the old one doesn't work anymore"); } },
+  [{ label: "New link (the old one stops working)", action: async () => { const n = await api(`/assessments/${id}/share`, { method: "DELETE", confirmed: true }); $("#sh-url", dlg).textContent = n.url; toast("New link: the old one doesn't work anymore"); } },
    { label: "Done", primary: true, action: async () => dlg.close() }]);
   $("#sh-copy", dlg).onclick = () => copyText($("#sh-url", dlg).textContent, "Link copied");
 }
@@ -1176,14 +1285,14 @@ async function viewAssessments() {
 
 /** AI questions: a new assessment (onDone null) or more questions for the one being edited. */
 const lastTechs = () => { try { const v = JSON.parse(localStorage.getItem("classbot.techs") || "null"); return Array.isArray(v) && v.length ? v : ["HTML", "CSS"]; } catch { return ["HTML", "CSS"]; } };
-async function generateQuestionsDialog(onDone) {
+async function generateQuestionsDialog(onDone, preset = null) {
   const [br, students] = await Promise.all([api("/briefs"), loadStudents(), loadRef()]);
   openDialog(onDone ? "✨ Add questions with AI" : "✨ New assessment with AI", `
-    <label for="gq-t">Topic</label><input type="text" id="gq-t" style="width:100%" placeholder="e.g. Flexbox and responsive design, PHP sessions, SQL joins">
+    <label for="gq-t">Topic</label><input type="text" id="gq-t" style="width:100%" value="${esc(preset?.title || "")}" placeholder="e.g. Flexbox and responsive design, PHP sessions, SQL joins">
     <label>Technologies to assess <span class="muted">(one or more: the questions use these and nothing else)</span></label>
     ${tagSelect("gq-tech", TECH_OPTIONS, lastTechs(), { allowNew: true, placeholder: "Type: HTML, CSS, PHP, SQL, Laravel…" })}
     <div class="field-row">
-      <div><label for="gq-b">From a brief <span class="muted">(optional)</span></label><select id="gq-b"><option value="">—</option>${br.items.map((b) => `<option value="${b.id}">${esc(b.title)}</option>`).join("")}</select></div>
+      <div><label for="gq-b">From a brief <span class="muted">(optional)</span></label><select id="gq-b"><option value="">—</option>${br.items.map((b) => `<option value="${b.id}" ${String(b.id) === String(preset?.brief || "") ? "selected" : ""}>${esc(b.title)}</option>`).join("")}</select></div>
       <div><label for="gq-s">For one student <span class="muted">(their weak points)</span></label><select id="gq-s"><option value="">—</option>${students.map((s) => `<option value="${s.discord_id}">${esc(s.name || s.discord_id)}</option>`).join("")}</select></div>
     </div>
     <div class="field-row">
@@ -1421,6 +1530,8 @@ function assessResultsTab(root) {
     const ans = t.answers[q.id];
     const empty = ans == null || (Array.isArray(ans) ? !ans.length : !String(ans).trim());
     if (!g) return `<td class="cell"><button data-g="${t.id}" data-q="${q.id}" title="Not graded yet">${empty ? "—" : "…"}</button></td>`;
+    // not attempted is not a wrong answer: grey, no score
+    if (g.verdict === "empty") return `<td class="cell"><button class="sc na" data-g="${t.id}" data-q="${q.id}" title="Not attempted${g.teacher ? " (set by you)" : ""}">—${g.teacher ? "<i>✎</i>" : ""}</button></td>`;
     return `<td class="cell"><button class="sc" style="background:${masteryColor(g.score)};color:${masteryInk(g.score)}" data-g="${t.id}" data-q="${q.id}" title="${esc(g.wrong || g.comment || "")}">${g.score}${g.teacher ? "<i>✎</i>" : ""}</button></td>`;
   };
   root.innerHTML = `
@@ -1437,7 +1548,8 @@ function assessResultsTab(root) {
     ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Student</th><th>Score</th>${qs.map((q, i) => `<th class="ctr" title="${esc(q.prompt.slice(0, 200))}"><span class="qh">${QI[q.type]} Q${i + 1}</span><small>${q.points} pt</small></th>`).join("")}</tr></thead>
       <tbody>${done.map((t) => `<tr><td><button class="res-who" data-paper="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b><small>${t.status === "submitted" ? "to grade" : "open the paper →"}</small></span></button></td>
         <td>${t.score == null ? `<span class="muted">—</span>` : `<div class="res-score"><b style="color:${masteryInk(t.score)}">${t.score}%</b>${meter(t.score)}</div>`}</td>${qs.map((q) => cell(t, q)).join("")}</tr>`).join("")}
-      <tr class="avg"><td class="small"><b>Average per question</b></td><td></td>${avgQ.map((v) => `<td class="ctr"><b class="small" style="color:${masteryInk(v)}">${v ?? "—"}</b></td>`).join("")}</tr></tbody></table></div>`
+      <tr class="avg"><td class="small"><b>Average per question</b></td><td></td>${avgQ.map((v) => `<td class="ctr"><b class="small" style="color:${masteryInk(v)}">${v ?? "—"}</b></td>`).join("")}</tr></tbody></table></div>
+      <p class="muted small" style="margin:10px 0 0"><span class="lvl none" style="padding:0 8px">—</span> not attempted (no answer, or the starter code left as it was): it counts 0 but isn't a wrong answer, and the student is told so.</p>`
       : `<div class="empty-state"><div style="font-size:40px">📭</div><p class="muted">No paper handed in yet.</p></div>`}
     </section>
     ${hardest.length || done.some((t) => t.summary) ? `<div class="grid cols-2-even">
@@ -1453,7 +1565,7 @@ function assessResultsTab(root) {
   $$("[data-g]", root).forEach((b) => b.onclick = () => gradeDialog(A.takers.find((t) => String(t.id) === b.dataset.g), qs.find((q) => q.id === b.dataset.q)));
 }
 
-const VERDICT_TXT = { correct: ["ok", "Correct"], partial: ["warn", "Partly right"], wrong: ["bad", "Wrong"], empty: ["bad", "No answer"] };
+const VERDICT_TXT = { correct: ["ok", "Correct"], partial: ["warn", "Partly right"], wrong: ["bad", "Wrong"], empty: ["none", "Not attempted"] };
 function answerHtml(q, ans, marks = []) {
   // code: numbered lines, the AI's mistakes highlighted on their line (yellow: small slip, red: serious)
   if (q.type === "code" && ans && String(ans).trim()) {
@@ -1475,7 +1587,7 @@ function answerHtml(q, ans, marks = []) {
 function gradeWhy(g) {
   if (!g || !g.verdict) return `<p class="muted small">Not graded yet.</p>`;
   const v = VERDICT_TXT[g.verdict] || ["", g.verdict];
-  return `<div class="why"><p style="margin:0"><span class="lvl ${v[0]}">${esc(v[1])}</span> <b style="color:${masteryInk(g.score)}">${g.score}%</b> <span class="muted small">${g.teacher ? "changed by you" : "graded by the AI"}</span></p>
+  return `<div class="why"><p style="margin:0"><span class="lvl ${v[0]}">${esc(v[1])}</span> ${g.verdict === "empty" ? "" : `<b style="color:${masteryInk(g.score)}">${g.score}%</b> `}<span class="muted small">${g.teacher ? "changed by you" : g.verdict === "empty" ? "no answer: counts 0, not as a mistake" : "graded by the AI"}</span></p>
     ${g.right ? `<p class="why-ok"><b>✓ Right:</b> ${esc(g.right)}</p>` : ""}${g.wrong ? `<p class="why-ko"><b>✗ Wrong or missing:</b> ${esc(g.wrong)}</p>` : ""}
     ${g.comment ? `<p class="why-msg"><b>💬 To the student:</b> ${esc(g.comment)}</p>` : ""}</div>`;
 }
@@ -1505,7 +1617,7 @@ function gradeDialog(t, q, fromPaper = false) {
     ${q.expected ? `<details class="small"><summary>Expected</summary><pre class="code-view" style="white-space:pre-wrap">${esc(q.expected)}</pre></details>` : ""}
     <h3>Why this grade</h3>${gradeWhy(g)}
     <h3>Change it</h3>
-    ${segHtml("vd", [["correct", "Correct"], ["partial", "Partly"], ["wrong", "Wrong"], ["empty", "Empty"]], g.verdict || "partial")}
+    ${segHtml("vd", [["correct", "Correct"], ["partial", "Partly"], ["wrong", "Wrong"], ["empty", "Not attempted"]], g.verdict || "partial")}
     <div class="field-row"><div><label for="gd-s">Score (%)</label><input type="number" id="gd-s" min="0" max="100" value="${g.score ?? ""}"></div></div>
     <label for="gd-c">Comment for the student</label><textarea id="gd-c">${esc(g.comment || "")}</textarea>`,
     [{ label: "Save the grade", primary: true, action: async () => {
@@ -1944,7 +2056,7 @@ function learningPanel(d, sid, part = "comps") {
   if (part === "assess") {
     const done = L.assessments.filter((a) => a.score != null);
     const avg = done.length ? Math.round(done.reduce((s, a) => s + a.score, 0) / done.length) : null;
-    const VD = { correct: ["ok", "✓"], partial: ["warn", "½"], wrong: ["bad", "✗"], empty: ["bad", "—"] };
+    const VD = { correct: ["ok", "✓"], partial: ["warn", "½"], wrong: ["bad", "✗"], empty: ["none", "—"] };
     return `<div class="stack">
       <div class="stu-mini-figs">
         <div><b>${L.assessments.length}</b><span>assessment(s)</span></div>
@@ -1961,7 +2073,7 @@ function learningPanel(d, sid, part = "comps") {
         </div>
         ${a.comps.length ? `<div class="asx-comps">${a.comps.map((c) => `<span class="tag comp ${c.ok ? "ok" : "ko"}" title="${esc(c.note || "")}">${c.ok ? "✓" : "✗"} ${esc(cText(c.code + (c.level ? "N" + c.level : "")))} <span class="muted">${esc(nameOf(c.code).slice(0, 40))}</span></span>`).join("")}</div>` : ""}
         ${a.questions.some((q) => q.verdict) ? `<div class="asx-qs">${a.questions.map((q) => { const v = VD[q.verdict] || ["", "·"];
-          return `<div class="asx-q ${v[0]}" title="Q${q.n} · ${esc(q.prompt)}${q.score != null ? ` · ${q.score}/100` : ""}"><b>Q${q.n}</b><span>${v[1]}</span></div>`; }).join("")}</div>` : ""}
+          return `<div class="asx-q ${v[0]}" title="Q${q.n} · ${esc(q.prompt)}${q.verdict === "empty" ? " · not attempted" : q.score != null ? ` · ${q.score}/100` : ""}"><b>Q${q.n}</b><span>${v[1]}</span></div>`; }).join("")}</div>` : ""}
         ${a.summary ? `<p class="small asx-sum">${esc(a.summary)}</p>` : ""}
       </section>`).join("") : `<div class="empty-state"><div style="font-size:40px">📝</div><p class="muted">No assessment yet for this student.</p><a class="btn" href="#/assessments">Assessments →</a></div>`}
     </div>`;

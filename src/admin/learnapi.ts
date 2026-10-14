@@ -182,6 +182,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       if (!cur) throw new ApiError(404, "This brief doesn't exist anymore.");
       await saveBrief(env, g, id, { data: body.data ?? cur.data, internal: body.internal ?? cur.internal, status: body.status ?? cur.status, week: body.week ?? null });
       const students = new Set((await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id)).map((r) => r.discord_id));
+      // the brief's "Work" (individuel / binôme / groupe) says if students work alone or in squads
+      if (body.data?.modalities?.mode && !("kind" in body)) {
+        const kind = /bin|group|squad|[ée]quipe|team|pair/i.test(String(body.data.modalities.mode)) ? "squad" : "solo";
+        if (kind !== (cur as any).kind) await run(env, "UPDATE briefs SET kind = ? WHERE id = ?", kind, id);
+      }
       if ("kind" in body || "squads" in body || "repo_hint" in body) {
         await run(env, "UPDATE briefs SET kind = ?, squads = ?, repo_hint = ? WHERE id = ?", body.kind === "squad" ? "squad" : "solo",
           JSON.stringify(body.kind === "squad" ? cleanSquads(body.squads ?? [], students) : []), String(body.repo_hint ?? "").slice(0, 100) || null, id);
@@ -566,7 +571,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const id = await saveAssessment(env, g, null, body);
     return ok(await assessView(env, g, id));
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -581,6 +586,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "invite") {
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });
+    }
+    if (act === "link" && method === "POST") {
+      // linked to a brief (from the debrief): its results count in that brief's debriefs
+      const bid = Number(body.brief_id) || null;
+      if (bid && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", bid, g.id))) throw new ApiError(404, "This brief doesn't exist anymore.");
+      await run(env, "UPDATE assessments SET brief_id = ? WHERE id = ?", bid, id);
+      return ok({ ok: true, brief_id: bid });
     }
     if (act === "remove") {
       // take back an invitation (their link stops working); a paper already handed in stays
