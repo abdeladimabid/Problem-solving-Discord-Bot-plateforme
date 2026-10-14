@@ -3683,6 +3683,8 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   const aid = mk.data.assessment.id;
   check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, free to go back");
   const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
+  await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
+  check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
   check(op.status === 200 && op.data.assessment.settings.nav === "forward" && op.data.assessment.settings.shuffle === false && op.data.assessment.settings.lockScreen === false, "the teacher sets the options before inviting");
   await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.dave?.id || U.carol.id], send: false });
   const who = U.dave?.id || U.carol.id;

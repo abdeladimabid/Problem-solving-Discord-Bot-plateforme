@@ -96,10 +96,12 @@ export const settingsOf = (a: Pick<AssessRow, "settings">) => cleanSettings(pars
 export async function saveAssessment(env: Env, g: GuildRow, id: number | null, b: any): Promise<number> {
   const title = str(b?.title, 120) || "Assessment";
   const qs = (Array.isArray(b?.questions) ? b.questions : []).slice(0, 60).map((q: any, i: number) => cleanQuestion(q, i)).filter(Boolean);
-  const st = cleanSettings(b?.settings ?? {});
+  let st = cleanSettings(b?.settings ?? {});
   if (id) {
     const cur = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
     if (!cur) throw new AssessError("This assessment doesn't exist anymore.");
+    // what the editor doesn't send (the anti-cheat options, the target students) is kept
+    st = cleanSettings({ ...settingsOf(cur), ...(b?.settings ?? {}) });
     if (cur.status !== "draft") {
       // once open, questions can be fixed (wording, expected answer) but not added or removed
       const old = questionsOf(cur).map((q) => q.id).sort().join(",");
