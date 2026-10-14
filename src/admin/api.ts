@@ -266,6 +266,31 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/students") return ok(await students(env, await guild()));
     let m = path.match(/^\/students\/(\d+)$/);
     if (m && method === "GET") return ok(await studentDetail(env, await guild(), m[1]));
+    // the teacher's name for the student (kept: the Discord nickname no longer replaces it); empty = the Discord name again
+    if (m && method === "PUT") {
+      const g = await guild();
+      const name = String(body.name ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      const r = await run(env, "UPDATE players SET name = COALESCE(?, name), name_lock = ? WHERE guild_id = ? AND discord_id = ?", name || null, name ? 1 : 0, g.id, m[1]);
+      if (!r.meta?.changes) throw new HttpError(404, "This student isn't in the class.");
+      return ok({ ok: true, name });
+    }
+    // remove from the class: the profile and what is only theirs (links, team, brief work, GitHub activity, competencies);
+    // the class's past statistics keep their answers, without a name. Using ClassBot again starts a new profile.
+    if (m && method === "DELETE") {
+      const g = await guild(), id = m[1], who = `u:${id}`;
+      const exists = await one(env, "SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", g.id, id);
+      if (!exists) throw new HttpError(404, "This student isn't in the class.");
+      const by = (table: string) => env.DB.prepare(`DELETE FROM ${table} WHERE guild_id = ? AND discord_id = ?`).bind(g.id, id);
+      await env.DB.batch([
+        ...["team_members", "gh_activity", "gh_log", "gh_summaries", "sprint_reviews", "daily_plans", "weekly_reports", "assessment_takers",
+          "competency_results", "skill_evidence", "hands", "purchases"].map(by),
+        env.DB.prepare("DELETE FROM rivals WHERE guild_id = ? AND (owner_id = ? OR rival_id = ?)").bind(g.id, id, id),
+        env.DB.prepare("DELETE FROM brief_handins WHERE guild_id = ? AND who = ?").bind(g.id, who),
+        env.DB.prepare("DELETE FROM brief_reviews WHERE guild_id = ? AND who = ?").bind(g.id, who),
+        env.DB.prepare("DELETE FROM players WHERE guild_id = ? AND discord_id = ?").bind(g.id, id),
+      ]);
+      return ok({ ok: true });
+    }
     m = path.match(/^\/students\/(\d+)\/points$/);
     if (m && method === "POST") {
       const g = await guild();

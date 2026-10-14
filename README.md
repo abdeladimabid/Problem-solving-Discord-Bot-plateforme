@@ -135,10 +135,10 @@ It reads your live database (you must be logged in to wrangler, as for `npm run 
 After you get a new version of the files, run this in the classbot folder:
 
 ```bash
-npm run update
+npm run setup
 ```
 
-It updates the database (`db:migrate`) and deploys the bot and the dashboard. Slash commands update by themselves within a minute. If the bot ever says *"the database wasn't updated"*, this is the command it means. Dashboard → Settings → **Run checks** shows whether anything is missing.
+On a ClassBot already installed, setup **is the update**: it installs the new packages, adds the new database tables and deploys the bot and the dashboard, without asking for anything (`npm run setup -- --full` redoes the whole setup). `npm run update` does the same without the checks. Slash commands update by themselves within a minute. If the bot ever says *"the database wasn't updated"*, this is the command it means. Dashboard → Settings → **Run checks** shows whether anything is missing.
 
 ## Quick setup (about 15 minutes)
 
@@ -148,7 +148,9 @@ It updates the database (`db:migrate`) and deploys the bot and the dashboard. Sl
    npm install
    npm run setup
    ```
-   Paste the token when asked. It stays hidden and is only stored as an encrypted Cloudflare secret. The assistant invites the bot to your server, logs you in to Cloudflare, creates the database, deploys, connects Discord and registers the commands. Running it again is safe.
+   Paste the token when asked. It stays hidden and is only stored as an encrypted Cloudflare secret. The assistant invites the bot to your server, logs you in to Cloudflare, creates the database, deploys, connects Discord and registers the commands. Running it again is safe: once installed, it updates.
+
+   **Used GitHub Watcher before?** Nothing to do: if your Cloudflare account has the Watcher's storage, setup finds it and the bot imports it by itself, once (students and their GitHub links, briefs and squads, hand-ins, debriefs with your switches, levels and comments, forum posts, GitHub activity, sprint decisions). Setup prints what came in, then what's left: each student runs `/github` once, and you turn off the old Watcher (its App's webhook and its Worker's cron trigger) so nothing is posted twice. No Watcher: a normal install.
 3. Lock the dashboard with a password only you know: `npm run setup:password`. This is free, with no card needed. If you'd rather use Cloudflare Access with email codes, see step 9 below and run `npm run setup:access`.
 
 The manual steps below do the same thing by hand, if you prefer or if something goes wrong.
@@ -297,7 +299,7 @@ That's it. 🎉
 1. **AI:** `npx wrangler secret put GROQ_API_KEY -c wrangler.bot.jsonc` and `-c wrangler.admin.jsonc`.
 2. **Programme:** dashboard → **Settings → Programme**. The DWWM 2026/2027 planning is built in. For another year or stack, download the Excel template (it comes filled with the current programme), change it, and upload it; the YouCode planning workbook (sheets *Planning Annuel* and *02_Sprints*) can be uploaded as it is. You check what was read before it's used.
 3. **GitHub App:** dashboard → **Settings → GitHub & Watcher** → **✨ Create the GitHub App for me**: GitHub opens with everything filled in (URLs, permissions, events), you click *Create GitHub App*, and the App is saved for the class. Or do it by hand: It shows the three URLs to paste in the App (Callback, Setup, Webhook) and a step-by-step guide; paste the App ID, slug, Client ID, client secret, webhook secret and private key there. Each class (each teacher) can have its own App. A school-wide App can also be set once in the Worker's secrets (`GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_PRIVATE_KEY`): classes without their own App use it.
-4. **Coming from GitHub Watcher?** Settings → GitHub & Watcher → *Import*: give the Cloudflare Account ID, the Watcher's KV namespace ID and an API token with *Workers KV Storage: Read* (used once, never saved). Or bind the namespace as `WATCHER_KV` in both wrangler files and deploy.
+4. **Coming from GitHub Watcher?** `npm run setup` imports it by itself (see Quick setup). By hand: Settings → GitHub & Watcher → *Import*, with the Cloudflare Account ID, the Watcher's KV namespace ID and an API token with *Workers KV Storage: Read* (used once, never saved); or bind the namespace as `WATCHER_KV` in both wrangler files and deploy. Debriefs come in as drafts (finalize them from Progress). With the class's own GitHub App, students run `/github` once.
 5. `npm run update`, then students run `/github` once.
 
 ## Project layout

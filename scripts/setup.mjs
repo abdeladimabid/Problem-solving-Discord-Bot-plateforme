@@ -1,6 +1,8 @@
 // ClassBot setup assistant: does the whole Cloudflare + Discord setup for you.
 //
-//   npm run setup           first-time setup (safe to run again; it skips what's done)
+//   npm run setup           first-time setup; on a ClassBot already installed, an update (packages, new tables,
+//                           deploy). Either way, an old GitHub Watcher on the Cloudflare account is imported by itself.
+//   npm run setup -- --full redo the whole setup (Discord token, server, commands)
 //   npm run setup:access    after enabling Cloudflare Access on the dashboard
 //
 // You only need: a Discord application with a bot token, and a Cloudflare account.
@@ -51,7 +53,7 @@ function askHidden(q) {
 
 // --------------------------------------------------------------- commands
 /** Run a command; output is shown live. Returns { code, out } (out = captured stdout+stderr). */
-function run(cmd, { input, capture = true, env } = {}) {
+function run(cmd, { input, capture = true, env, quiet = false } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, {
       cwd: ROOT, shell: true, env: { ...process.env, ...env },
@@ -59,8 +61,8 @@ function run(cmd, { input, capture = true, env } = {}) {
     });
     let out = "";
     if (capture) {
-      child.stdout.on("data", (d) => { out += d; process.stdout.write(C.dim(String(d))); });
-      child.stderr.on("data", (d) => { out += d; process.stderr.write(C.dim(String(d))); });
+      child.stdout.on("data", (d) => { out += d; if (!quiet) process.stdout.write(C.dim(String(d))); });
+      child.stderr.on("data", (d) => { out += d; if (!quiet) process.stderr.write(C.dim(String(d))); });
     }
     if (input !== undefined) { child.stdin.write(input); child.stdin.end(); }
     child.on("close", (code) => resolve({ code: code ?? 1, out }));
@@ -94,10 +96,123 @@ function setVar(file, key, value) {
   writeFileSync(file, s);
 }
 
+// ------------------------------------------------------ steps used by the setup and the update
+async function cloudflareLogin() {
+  let who = await wrangler("whoami");
+  if (/not authenticated|You are not logged in/i.test(who.out) || who.code !== 0) {
+    console.log("  A browser page opens: log in to Cloudflare and click Allow.");
+    const r = await wrangler("login", { capture: false });
+    if (r.code !== 0) fail("Cloudflare login didn't finish. Run `npm run setup` again.");
+    who = await wrangler("whoami");
+  }
+  ok("Logged in to Cloudflare");
+}
+// the tables: only the new ones are added (a ClassBot already installed gets those of the new version)
+async function migrate() {
+  const r = await wrangler("d1 migrations apply classbot-db --remote -c wrangler.bot.jsonc");
+  if (r.code !== 0) fail("Updating the tables failed. See the message above, then run `npm run setup` again.");
+  state.migrated = true;
+  save();
+  ok("Tables and challenge bank up to date");
+}
+
+// An old GitHub Watcher on this Cloudflare account: its storage (KV) is bound to ClassBot as WATCHER_KV, and the bot
+// imports it by itself, once (students, briefs, squads, hand-ins, debriefs, GitHub activity). No Watcher: nothing.
+async function findWatcher() {
+  const r = await wrangler("kv namespace list", { quiet: true });
+  let list = [];
+  try { list = JSON.parse(r.out.slice(r.out.indexOf("["), r.out.lastIndexOf("]") + 1)); } catch { return null; }
+  const ns = list.filter((n) => /watcher/i.test(n.title || ""));
+  return ns.find((n) => n.title === "github-watcher-db") ?? ns[0] ?? null;
+}
+function bindWatcher(file, id) {
+  let t = readFileSync(file, "utf8");
+  if (/"binding"\s*:\s*"WATCHER_KV"/.test(t)) t = t.replace(/("binding"\s*:\s*"WATCHER_KV"\s*,\s*"id"\s*:\s*)"[^"]*"/, `$1"${id}"`);
+  else if (/"kv_namespaces"\s*:\s*\[/.test(t)) t = t.replace(/"kv_namespaces"\s*:\s*\[/, `"kv_namespaces": [{ "binding": "WATCHER_KV", "id": "${id}" }, `);
+  else if (/\n([ \t]*)"vars"\s*:/.test(t)) t = t.replace(/\n([ \t]*)"vars"\s*:/, `\n$1// the old GitHub Watcher's storage, found by npm run setup: the bot imports it once by itself\n$1"kv_namespaces": [{ "binding": "WATCHER_KV", "id": "${id}" }],\n\n$1"vars":`);
+  else fail(`Couldn't add the Watcher's storage to ${file.split(/[\\/]/).pop()}.`);
+  writeFileSync(file, t);
+}
+async function watcherStep() {
+  if (state.watcher?.done) { ok("GitHub Watcher data already imported"); return false; }
+  const ns = await findWatcher();
+  if (!ns) return false;
+  for (const f of [BOT_CFG, ADMIN_CFG]) bindWatcher(f, ns.id);
+  state.watcher = { id: ns.id, title: ns.title, done: false };
+  save();
+  ok(`Found your GitHub Watcher (${ns.title}): its students, briefs and debriefs will be imported after the deploy`);
+  return true;
+}
+// after the deploy: the bot imports within a minute; wait for it and say what came in
+async function waitWatcher() {
+  console.log("  Importing your GitHub Watcher data (about a minute)…");
+  for (let i = 0; i < 18; i++) {
+    await new Promise((r) => setTimeout(r, process.env.CLASSBOT_SKIP_HEALTH ? 10 : 10000));
+    const r = await wrangler(`d1 execute classbot-db --remote -c wrangler.bot.jsonc --json --command "SELECT github FROM guilds WHERE github LIKE '%watcherImport%'"`, { quiet: true });
+    let rows = [];
+    try { rows = JSON.parse(r.out.slice(r.out.indexOf("[")))[0]?.results ?? []; } catch { continue; }
+    for (const row of rows) {
+      let st = null;
+      try { st = JSON.parse(row.github || "{}").watcherImport; } catch { st = null; }
+      if (!st?.at) continue;
+      state.watcher.done = true;
+      save();
+      ok(`Imported from GitHub Watcher: ${st.students} students, ${st.briefs} briefs, ${st.handins} hand-ins, ${st.reviews} debriefs (${st.levels} with a level), ${st.activity} GitHub events`);
+      return st;
+    }
+  }
+  warn("The import isn't finished yet: it goes on by itself. Dashboard → Settings → GitHub & Watcher shows it when it's done.");
+  return null;
+}
+function watcherNotes(st) {
+  if (!state.watcher) return "";
+  const stopCron = "remove the cron trigger of the old Watcher's Worker (Cloudflare → Workers & Pages → github-watcher → Settings → Triggers),\n  so its reports stop. Its data stays as a backup.";
+  // the class uses the Watcher's own App: its webhook now goes to ClassBot (keep it Active), students do nothing
+  if (st && st.keepInst) return `
+  ${C.bold("Your GitHub Watcher data")} is in ClassBot (dashboard → Progress: the debriefs are drafts, finalize them there).
+  Students keep their GitHub App: nothing to do for them. Last step: ${stopCron}
+`;
+  return `
+  ${C.bold("Your GitHub Watcher data")} is in ClassBot (dashboard → Progress: the debriefs are drafts, finalize them there).
+  ${C.bold("No /github for students:")} put the Watcher's GitHub App in ClassBot (dashboard → Settings → GitHub & Watcher: its App ID,
+  slug, Client ID, a new client secret, a webhook secret, a new private key; and ClassBot's 3 URLs in the App), then click Import again.
+  Or keep the class's new App: each student runs ${C.bold("/github")} once, and you turn off the Watcher App's webhook.
+  Either way, ${stopCron}
+`;
+}
+
+// ================================================================== update
+// ClassBot is already installed (npm run setup finished once): the new version's packages, tables and code
+async function update() {
+  console.log(C.bold("\n🤖 ClassBot is already installed: updating it"));
+  console.log(C.dim("  (npm run setup -- --full redoes the whole setup)\n"));
+  step(1, "Packages");
+  const r = await run("npm install", { capture: false });
+  if (r.code !== 0) fail("npm install failed. Fix the error above, then run `npm run setup` again.");
+  ok("Packages up to date");
+  step(2, "Cloudflare");
+  await cloudflareLogin();
+  step(3, "Database");
+  await migrate();
+  const watcher = await watcherStep();
+  step(4, "Deploying");
+  for (const [cfg, name] of [["wrangler.bot.jsonc", "classbot"], ["wrangler.admin.jsonc", "classbot-admin"]]) {
+    const d = await wrangler(`deploy -c ${cfg}`);
+    if (d.code !== 0) fail(`Deploying ${name} failed. See the message above.`);
+  }
+  ok(`Bot and dashboard deployed (https://classbot-admin.${state.subdomain}.workers.dev)`);
+  const st = watcher || (state.watcher && !state.watcher.done) ? await waitWatcher() : null;
+  console.log(C.bold(C.green("\n✅ ClassBot is up to date.")) + " Slash commands update by themselves within a minute.");
+  console.log(watcherNotes(st));
+}
+
 // ================================================================== main
 async function main() {
   const [major] = process.versions.node.split(".").map(Number);
   if (major < 22) fail(`Node.js 22 or newer is needed (you have ${process.versions.node}). Install the LTS from https://nodejs.org and try again.`);
+
+  const mine = [BOT_CFG, ADMIN_CFG].map((f) => (existsSync(f) ? readFileSync(f, "utf8") : "PASTE_")).join("\n");
+  if (!process.argv.includes("--full") && state.appId && state.dbId && state.subdomain && state.guildId && !/PASTE_|YOUR-SUBDOMAIN/.test(mine)) return update();
 
   console.log(C.bold("\n🤖 ClassBot setup assistant"));
   console.log("It's safe to run this again: finished steps are skipped.\n");
@@ -157,14 +272,7 @@ async function main() {
 
   // ---------------------------------------------------------------- 4
   step(4, "Logging in to Cloudflare");
-  let who = await wrangler("whoami");
-  if (/not authenticated|You are not logged in/i.test(who.out) || who.code !== 0) {
-    console.log("  A browser page opens: log in to Cloudflare and click Allow.");
-    const r = await wrangler("login", { capture: false });
-    if (r.code !== 0) fail("Cloudflare login didn't finish. Run `npm run setup` again.");
-    who = await wrangler("whoami");
-  }
-  ok("Logged in to Cloudflare");
+  await cloudflareLogin();
 
   // ---------------------------------------------------------------- 5
   step(5, "Database");
@@ -187,13 +295,8 @@ async function main() {
   }
   setVar(BOT_CFG, "DISCORD_PUBLIC_KEY", state.publicKey);
   ok(`Database classbot-db (${state.dbId})`);
-  if (!state.migrated) {
-    const r = await wrangler("d1 migrations apply classbot-db --remote -c wrangler.bot.jsonc");
-    if (r.code !== 0) fail("Creating the tables failed. See the message above, then run `npm run setup` again.");
-    state.migrated = true;
-    save();
-  }
-  ok("Tables and challenge bank ready");
+  await migrate();
+  const watcher = await watcherStep();
 
   // ---------------------------------------------------------------- 6
   step(6, "Deploying to Cloudflare");
@@ -257,6 +360,7 @@ async function main() {
   if (reg.code !== 0) fail("Registering commands failed. See the message above.");
   writeFileSync(join(ROOT, ".env"), `DISCORD_APP_ID=${state.appId}\nGUILD_ID=${state.guildId}\n# DISCORD_TOKEN=paste-it-here-only-if-you-run "npm run register" yourself\n`);
   ok("Commands registered");
+  const wst = watcher || (state.watcher && !state.watcher.done) ? await waitWatcher() : null;
 
   // ---------------------------------------------------------------- done
   console.log(C.bold(C.green("\n🎉 The bot is live!")));
@@ -267,7 +371,7 @@ async function main() {
 
   ${C.bold("Last step: choose your dashboard password")} (it holds student data):
       ${C.bold("npm run setup:password")}
-`);
+${watcherNotes(wst)}`);
 }
 
 // ============================================================ access step

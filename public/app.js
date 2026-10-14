@@ -346,7 +346,7 @@ const routes = {
 async function route() {
   const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const fn = routes[name] || viewOverview;
-  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "briefs", assessment: "assessments", battle: "battles" }[name] || name;
+  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", assessment: "assessments", battle: "battles" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
@@ -657,7 +657,10 @@ async function viewStudent(arg) {
         </div></div></div>
       <div class="stu-actions">
         <button class="btn primary" id="assign">Assign a challenge</button><button class="btn" id="give">Give points</button>
-        ${p.hr_display ? `<details class="menu"><summary class="btn">⋯</summary><div class="menu-list">${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button></div></details>` : ""}
+        <details class="menu"><summary class="btn" aria-label="More actions">⋯</summary><div class="menu-list">
+          <button class="btn small" id="st-name">✏️ Edit name</button>
+          ${p.hr_display ? `${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button>` : ""}
+          <button class="btn small danger" id="st-del">Remove from class</button></div></details>
       </div>
     </div>
     ${row.attention.length ? `<div class="notice" style="margin-bottom:12px"><b>Worth a check-in:</b> ${esc(row.attention.join(", "))}.</div>` : ""}
@@ -798,6 +801,18 @@ async function viewStudent(arg) {
   showPane(current);
   $("#assign").onclick = () => assignDialog([id]);
   const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(`${id}?tab=${current}`); };
+  $("#st-name").onclick = () => {
+    openDialog("Edit name", `<label for="st-nm">Name</label><input type="text" id="st-nm" maxlength="60" value="${esc(p.name || "")}" style="width:100%">
+      <p class="small muted">${p.name_lock ? "Your name for this student. Leave it empty to use their Discord name again." : "Your name is kept: their Discord nickname no longer replaces it."}</p>`,
+      [{ label: "Save", primary: true, action: async () => {
+        const r = await api(`/students/${id}`, { method: "PUT", body: { name: $("#st-nm").value } });
+        dlg.close(); S.students = null; toast(r.name ? "Name saved" : "Back to the Discord name"); viewStudent(id);
+      } }]);
+    setTimeout(() => $("#st-nm")?.focus(), 0);
+  };
+  $("#st-del").onclick = () => confirmDialog(`Remove ${p.name || "this student"} from the class?`,
+    "Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. If they use ClassBot again, they start a new profile. This can't be undone.",
+    "Remove", async () => { await api(`/students/${id}`, { method: "DELETE" }); S.students = null; toast("Removed from the class"); location.hash = "#/students"; }, true);
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);
   $("#give").onclick = () => openDialog(`Give points to ${p.name || id}`, `

@@ -13,8 +13,13 @@ import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
 import { DICTS } from "../src/shared/i18n.ts";
 import { finish } from "../src/shared/challenges.ts";
-import { getGuild } from "../src/shared/db.ts";
+import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
+import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
+import { assessForAi } from "../src/shared/review/debrief.ts";
+import { memoryKv } from "../src/shared/watcher.ts";
+import { BUILTIN } from "../src/shared/program.ts";
+import { pushStatus } from "../src/shared/github.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -2892,8 +2897,26 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
   check(st.status === 200 && st.data.states.co.C3 === false && st.data.states.co.C4 === true, `the assessment's "not validated" counts in the debrief (${JSON.stringify(st.data.states?.co)})`);
   check(/-Évaluation :\n« CSS de base » : 0 %.*à retravailler : C3/.test(st.data.review.result.feedback), "…and the comment says how the assessment went");
   check(st.data.review.assess?.[0]?.title === "CSS de base", "…the debrief page shows the assessment");
+  check(/« CSS de base » : 0 %, niveau Critique/.test(st.data.review.result.feedback), "…with the assessment's level");
+  {
+    // the assessment comes first, both ways: what it validated starts valid even if the project doesn't show it
+    const r2 = { result: { exigences: [], competences: [{ code: "C3", avis: "non_visible" }, { code: "C4", avis: "validable" }, { code: "C5", avis: "validable" }] },
+      assess: [{ id: 1, title: "A", score: 20, done: 1, of: 1, comps: { C3: { ok: true }, C4: { ok: false } } }] };
+    const s2 = reviewStates(r2);
+    check(s2.co.C3 === true && s2.co.C4 === false && s2.co.C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
+    check(debriefLevel(r2, s2) === "faible" && debriefLevel({ ...r2, assess: [] }, s2) === "moyen", "the proposed level counts the assessment's score");
+  }
+  const none = await api("GET", `/api/briefs/${bid}/review?g=${G}&who=${encodeURIComponent(`u:${U.bob.id}`)}`);
+  check(none.status === 200 && !none.data.review && none.data.assess?.[0]?.title === "CSS de base" && none.data.assess[0].of === 0, "before the analysis, the page shows the linked assessment (not taken by this learner)");
   const sw = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { co: { C3: true, C4: true } } });
   check(sw.data.states.co.C3 === true, "the teacher's switch still decides");
+  await api("POST", `/api/briefs/${bid}/review/level`, { g: G, who, ai: true });
+  check(/ÉVALUATION \(en classe, sans aide\) :\n« CSS de base » : 0 % ; non validées : C3/.test(ai.users[ai.users.length - 1]) && !ai.users[ai.users.length - 1].includes("Carol"), "✨ the AI level sees the assessment (no name)");
+  check(assessForAi([{ title: "JS", score: 70, comps: { C4: { ok: true }, C5: { ok: false } } }, { title: "Pas noté", score: null, comps: {} }]) === "« JS » : 70 % ; compétences validées : C4 ; non validées : C5"
+    && assessForAi([]) === "", "the analysis gets the graded assessments to compare with the project");
+  const pa = await api("GET", `/api/progress?g=${G}`);
+  check(pa.data.briefs.find((b: any) => b.id === bid)?.assessments === 1 && pa.data.assess[`${bid}:${U.carol.id}`]?.st === "graded"
+    && pa.data.assess[`${bid}:${U.carol.id}`].score === 0 && !pa.data.assess[`${bid}:${U.bob.id}`], "Progress: each square knows the brief's assessment (graded with its score, or not taken)");
   run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, who);
   const sp = await api("GET", `/api/students/${U.carol.id}?g=${G}`);
   const sa = sp.data.learning.assessments.find((x: any) => x.id === aid);
@@ -2946,6 +2969,99 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   const imp = await api("POST", "/api/github/import", { g: G, data });
   check(imp.status === 200 && imp.data.students === 1 && imp.data.briefs === 1 && imp.data.handins === 1, "Watcher import from its data (read in the dashboard through the Cloudflare API)");
   check(q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).github_login === "bob-gh", "…students linked");
+
+  // a whole class from the Watcher's storage (bound as WATCHER_KV): debriefs with their level and comment, the
+  // decisions of an earlier brief, activity in the keys' metadata, first pushes, a sprint decision; batched
+  {
+    const wk = BUILTIN[0].weeks.find((x) => x.sprint && x.start)!;
+    const dueIso = new Date(Date.parse(wk.start + "T12:00:00Z") + 3 * 86400000).toISOString(), t0 = Date.parse(wk.start + "T10:00:00Z");
+    const W: Record<string, unknown> = {
+      names: JSON.stringify({}), aliases: JSON.stringify({ "7000": "Zineb A." }),
+      deadlines: JSON.stringify([{ id: "fit", name: "Fitness", createdAt: wk.start + "T08:00:00Z", due: dueIso, brief: "Contexte\nEn tant que visiteur, je vais voir les cours, afin de choisir.", skills: "C3N1, CT5N1", sprint: "sp1" },
+        { id: "pet", name: "PetNest", createdAt: wk.start + "T08:00:00Z", due: dueIso, brief: "Contexte", skills: "C4N1", kind: "squad", squads: [{ id: "abc123", name: "Squad A", members: [{ gid: 7001 }, { gid: 7002 }], sm: 7001 }] }]),
+      evals: JSON.stringify({ "fit:7001": { at: 1, co: { C3N1: true, CT5N1: false }, lv: "bon", plv: "moyen" } }),
+      sprints: JSON.stringify([{ id: "sp1", name: "Sprint 1", start: wk.start, end: wk.end }]),
+      sprintdec: JSON.stringify({ "sp1:7000": { r: "valide", note: "ok", plvl: "bon" } }),
+      "ai:7000": JSON.stringify({ dl: "fit", first: "Zineb", result: { feedback: "Bonjour Zineb, auto.", exigences: [], competences: [{ code: "C3N1", avis: "validable" }] }, final: { co: { C3N1: true } }, level: { lvl: "excellent", prop: "bon" } }),
+      "ai:7003": JSON.stringify({ result: { feedback: "old" } }),
+      "fb:fit:7000": "Bonjour Zineb, mon commentaire.", "fb:fit:7001": "Bonjour, ancien brief.",
+      "dl:fit:7002": new Date(t0 - 86400000).toISOString(),
+    };
+    for (let i = 0; i < 30; i++) {
+      const gid = 7000 + i, did = String(990000 + i);
+      W[`inst:${5000 + i}`] = JSON.stringify({ discordId: did, githubId: gid, login: `st${i}`, discordName: `Student ${i}` });
+      W[`thread:${gid}`] = String(1300000000000000000n + BigInt(i));
+      W[`sub:fit:${gid}`] = JSON.stringify({ repo: `st${i}/fitness`, at: dueIso });
+      for (let j = 0; j < 10; j++) W[`ev:${wk.start}:${gid}:d-${i}-${j}`] = { __meta: { commits: 1, real: 1, tiny: 0, flagged: 0, bad: 0, lines: 12, prs: 0, other: 0, t: t0 + j * 60000, r: `st${i}/fitness` } };
+    }
+    await api("PUT", "/api/github/app", { g: G, appId: "99", slug: "classbot-b", clientId: "Iv23abc", clientSecret: "cs", webhookSecret: "own_secret", privateKey: pem });
+    (env as any).WATCHER_KV = memoryKv(W);
+    const before = d1.queries;
+    const im = await api("POST", "/api/github/import", { g: G });
+    const trips = d1.queries - before;
+    delete (env as any).WATCHER_KV;
+    const r = im.data;
+    check(im.status === 200 && r.students === 30 && r.briefs === 2 && r.handins === 30 && r.activity === 300 && r.threads === 30 && r.sprints === 1, `a class of 30 imported (${JSON.stringify(r)})`);
+    check(trips < 50, `…in ${trips} database round trips (Cloudflare's free limit is 50)`);
+    const zi = q1("SELECT name, github_login, gh_inst FROM players WHERE guild_id = ? AND discord_id = '990000'", G);
+    check(zi.name === "Zineb A." && zi.github_login === "st0" && zi.gh_inst === null && r.keepInst === 0, "…the class has its own App: links kept, the Watcher App's installations not (students run /github)");
+    const fit = q1("SELECT id, sprint FROM briefs WHERE guild_id = ? AND source = 'watcher:fit'", G);
+    const rv = q1("SELECT record, status, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = 'u:990000'", fit.id);
+    check(rv.status === "draft" && rv.level === "excellent" && rv.plevel === "bon" && JSON.parse(rv.record).result.feedback === "Bonjour Zineb, mon commentaire." && JSON.parse(rv.record).final.co.C3N1 === true,
+      "…a debrief: a draft with its level (Progress shows it), the teacher's switches and the comment as last edited");
+    const ev = q1("SELECT record, level FROM brief_reviews WHERE brief_id = ? AND who = 'u:990001'", fit.id);
+    check(ev && ev.level === "bon" && JSON.parse(ev.record).final.co.CT5N1 === false && JSON.parse(ev.record).result.feedback === "Bonjour, ancien brief.", "…an earlier brief's debrief from its decisions and comment");
+    check(r.skipped === 1 && r.levels === 2 && r.comments === 2, "…an old debrief whose brief is gone is skipped");
+    check(fit.sprint === wk.sprint, "…the brief in the programme's sprint");
+    const st = await pushStatus(env, await getGuild(env, G), q1("SELECT * FROM briefs WHERE id = ?", fit.id));
+    check(st.get("990000") === "on" && st.get("990002") === "on" && r.pushes === 1, "…who pushed on time, from the activity");
+    check(q1("SELECT decision, plevel FROM sprint_reviews WHERE guild_id = ? AND discord_id = '990000'", G).decision === "valide", "…the sprint decision");
+    // run again: nothing doubled, nothing the teacher did since is overwritten
+    run1("UPDATE brief_reviews SET status = 'final' WHERE brief_id = ? AND who = 'u:990000'", fit.id);
+    (env as any).WATCHER_KV = memoryKv(W);
+    const again = await api("POST", "/api/github/import", { g: G });
+    delete (env as any).WATCHER_KV;
+    check(again.status === 200 && q1("SELECT COUNT(*) AS n FROM gh_activity WHERE guild_id = ? AND discord_id = '990000'", G).n === 10 && q1("SELECT status FROM brief_reviews WHERE brief_id = ? AND who = 'u:990000'", fit.id).status === "final"
+      && q1("SELECT COUNT(*) AS n FROM briefs WHERE guild_id = ? AND source LIKE 'watcher:%'", G).n === 3, "safe to run again: no double activity, a finalized debrief stays");
+    await api("DELETE", `/api/github/app?g=${G}`);
+    // this class of 30 was only for the import: the next sections use the usual students
+    const ids = q("SELECT id FROM briefs WHERE guild_id = ? AND source IN ('watcher:fit', 'watcher:pet')", G).map((x: any) => x.id);
+    for (const t of ["brief_reviews", "brief_handins"]) run1(`DELETE FROM ${t} WHERE brief_id IN (${ids.join(",")})`);
+    run1(`DELETE FROM briefs WHERE id IN (${ids.join(",")})`);
+    for (const t of ["gh_activity", "sprint_reviews", "players"]) run1(`DELETE FROM ${t} WHERE guild_id = ? AND discord_id LIKE '9900%'`, G);
+
+    // the class uses the Watcher's own App (GitHub says the installation is its own): installations kept, students do nothing
+    const { generateKeyPairSync } = await import("node:crypto");
+    const realPem = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs1", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } }).privateKey;
+    await api("PUT", "/api/github/app", { g: G, appId: "424242", slug: "watcher-app", clientId: "Iv23w", clientSecret: "cs", webhookSecret: "ws", privateKey: realPem });
+    const same = await api("POST", "/api/github/import", { g: G, data: { "inst:8801": JSON.stringify({ discordId: "990555", githubId: 7555, login: "same-gh" }) } });
+    check(same.data.keepInst === 1 && q1("SELECT gh_inst FROM players WHERE guild_id = ? AND discord_id = '990555'", G).gh_inst === "8801", "the class uses the Watcher's App: the students' installations are kept (no /github needed)");
+    github.foreign.add("8802");
+    const other = await api("POST", "/api/github/import", { g: G, data: { "inst:8802": JSON.stringify({ discordId: "990556", githubId: 7556, login: "other-gh" }) } });
+    check(other.data.keepInst === 0 && q1("SELECT gh_inst FROM players WHERE guild_id = ? AND discord_id = '990556'", G).gh_inst === null, "…another App: not kept (students run /github)");
+    github.foreign.delete("8802");
+    await api("DELETE", `/api/github/app?g=${G}`);
+    run1("DELETE FROM players WHERE guild_id = ? AND discord_id IN ('990555', '990556')", G);
+
+    // npm run setup found a Watcher and bound it: the bot imports it by itself, once, for the Watcher's server
+    const flag = () => { try { return JSON.parse(q1("SELECT github FROM guilds WHERE id = ?", G).github || "{}").watcherImport ?? null; } catch { return null; } };
+    const cfg0 = q1("SELECT github FROM guilds WHERE id = ?", G).github;
+    run1("UPDATE guilds SET github = ? WHERE id = ?", JSON.stringify({ ...JSON.parse(cfg0 || "{}"), watcherImport: undefined }), G);
+    (env as any).WATCHER_KV = memoryKv({ guild_id: G, "inst:6001": JSON.stringify({ discordId: "990777", githubId: 7777, login: "auto-gh" }), deadlines: "[]" });
+    await runCron(env);
+    const f1 = flag();
+    check(f1?.at && f1.by === "setup" && f1.students === 1 && q1("SELECT github_login FROM players WHERE guild_id = ? AND discord_id = '990777'", G)?.github_login === "auto-gh", "the bot imports the Watcher by itself after npm run setup");
+    run1("DELETE FROM players WHERE guild_id = ? AND discord_id = '990777'", G);
+    await runCron(env);
+    check(!q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = '990777'", G), "…only once");
+    const gs = await api("GET", `/api/github?g=${G}`);
+    check(gs.data.setup.watcher === true && gs.data.setup.watcherDone?.by === "setup", "…and the dashboard shows it was imported");
+    delete (env as any).WATCHER_KV;
+    run1("UPDATE guilds SET github = ? WHERE id = ?", JSON.stringify({ ...JSON.parse(cfg0 || "{}"), watcherImport: undefined }), G);
+    await runCron(env);
+    check(flag() === null, "no Watcher bound (a new ClassBot): nothing happens");
+    run1("UPDATE guilds SET github = ? WHERE id = ?", cfg0, G);
+  }
 }
 
 section("brief steps: found in the brief, dated in working days, proposed from the repo at the date, the teacher decides, Suivi du projet in the comment");
@@ -3373,6 +3489,27 @@ section("GitHub: every commit on the student page, history from GitHub, AI summa
   const nob = await api("POST", `/api/students/${"424242"}/github/sync`, { g: G });
   check(nob.status === 400, "a student without GitHub gets a clear message");
   await api("DELETE", `/api/github/app?g=${G}`);
+}
+
+section("students: the teacher edits a name (Discord no longer replaces it), removes a student from the class");
+{
+  const id = "990901";
+  await getPlayer(env, G, id, "Discord Nick");
+  run1("INSERT INTO team_members (guild_id, team_id, discord_id) VALUES (?, 1, ?)", G, id);
+  run1("INSERT INTO gh_activity (guild_id, discord_id, delivery, day, t, commits) VALUES (?, ?, 'x1', '2026-10-01', 1, 1)", G, id);
+  run1("INSERT INTO brief_handins (brief_id, guild_id, who, repo, at) VALUES (1, ?, ?, 'a/b', 1)", G, `u:${id}`);
+  const ed = await api("PUT", `/api/students/${id}`, { g: G, name: "  Yasmine   B. " });
+  await getPlayer(env, G, id, "New Nick");
+  check(ed.status === 200 && q1("SELECT name, name_lock FROM players WHERE guild_id = ? AND discord_id = ?", G, id).name === "Yasmine B.", "the teacher's name is kept when the student uses ClassBot again");
+  await api("PUT", `/api/students/${id}`, { g: G, name: "" });
+  await getPlayer(env, G, id, "New Nick");
+  check(q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, id).name === "New Nick", "…empty: the Discord name again");
+  check((await api("PUT", "/api/students/123456", { g: G, name: "X" })).status === 404, "…an unknown student: refused");
+  const del = await api("DELETE", `/api/students/${id}?g=${G}`);
+  check(del.status === 200 && !q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", G, id)
+    && !q("SELECT 1 FROM team_members WHERE discord_id = ?", id).length && !q("SELECT 1 FROM gh_activity WHERE discord_id = ?", id).length
+    && !q("SELECT 1 FROM brief_handins WHERE who = ?", `u:${id}`).length, "removed from the class: profile, team, GitHub activity and brief work");
+  check(!(await api("GET", `/api/students?g=${G}`)).data.some((r: any) => r.discord_id === id) && (await api("DELETE", `/api/students/${id}?g=${G}`)).status === 404, "…gone from the list");
 }
 
 section("i18n: every key exists in English and French");

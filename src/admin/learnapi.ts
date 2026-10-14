@@ -9,7 +9,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
@@ -24,7 +24,7 @@ import { aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
-import { WatcherError, importWatcher, memoryKv, watcherKeys, watcherValues } from "../shared/watcher.ts";
+import { WatcherError, importWatcher, markWatcherImport, memoryKv, watcherImportOf, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
 
 export class ApiError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
@@ -400,7 +400,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
         // own: this class has its own GitHub App; shared: the Worker's secrets have one the class can use instead
         own: app.own, shared: !!(env.GITHUB_CLIENT_ID && env.GITHUB_APP_SLUG),
         app: !!app.slug, oauth: !!(app.clientId && app.clientSecret), webhook: !!app.webhookSecret, key: !!app.privateKey,
-        ai: await aiStatus(env), watcher: !!env.WATCHER_KV, slug: app.slug || null,
+        ai: await aiStatus(env), watcher: !!env.WATCHER_KV, watcherDone: watcherImportOf(g), slug: app.slug || null,
         appId: app.appId || "", clientId: app.clientId || "",          // never the secrets
         urls: githubUrls(env, app), ownUrls: githubUrls(env, { ...app, own: true, guildId: g.id }),
       },
@@ -510,13 +510,15 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   }
   if (path === "/github/import" && method === "POST") {
     // from the Watcher's data read through the Cloudflare API (sent by the dashboard), or from the WATCHER_KV binding
-    if (body.data && typeof body.data === "object") return ok(await importWatcher(env, await guild(), memoryKv(body.data)));
-    if (!env.WATCHER_KV) bad("Give the Watcher's Cloudflare account, namespace and token first.");
-    return ok(await importWatcher(env, await guild()));
+    const gg = await guild();
+    if (!(body.data && typeof body.data === "object") && !env.WATCHER_KV) bad("Give the Watcher's Cloudflare account, namespace and token first.");
+    const out = await importWatcher(env, gg, body.data && typeof body.data === "object" ? memoryKv(body.data) : env.WATCHER_KV);
+    await markWatcherImport(env, gg.id, { at: now(), by: "you", ...out });
+    return ok(out);
   }
   if (path === "/github/watcher/keys" && method === "POST") {
     await guild();
-    try { return ok({ keys: await watcherKeys(body.account, body.namespace, body.token) }); } catch (e) { if (e instanceof WatcherError) bad(e.message); throw e; }
+    try { return ok(await watcherKeys(body.account, body.namespace, body.token)); } catch (e) { if (e instanceof WatcherError) bad(e.message); throw e; }
   }
   if (path === "/github/watcher/values" && method === "POST") {
     await guild();
@@ -648,7 +650,7 @@ async function reviewView(env: Env, g: GuildRow, briefId: number, who: string) {
   const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
   const stepRes = steps.length ? await stepRecs(env, briefId, who) : {};
   const r = await getReview(env, briefId, who);
-  if (!r) return { review: null, status: null, steps, stepRecs: stepRes };
+  if (!r) return { review: null, status: null, steps, stepRecs: stepRes, assess: await briefAssessments(env, briefId, who) };
   const states = statesOf(r.rec);
   return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at, steps, stepRecs: stepRes };
 }
