@@ -199,6 +199,9 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   const lineChecks = (x) => [x.check, ...String(x.verif || '').split(/[\s,]+/)].filter(Boolean);
   const forMain = new Set(exigences.filter((x) => x.type !== 'bonus').flatMap(lineChecks));
   const bonusOnly = new Set(exigences.filter((x) => x.type === 'bonus').flatMap(lineChecks).filter((id) => !forMain.has(id)));
+  // deliverables and criteria are not in the learner's comment: a check that only proves one of them is not asked for
+  const forWork = new Set(exigences.filter((x) => x.type === 'story' || x.type === 'technique').flatMap(lineChecks));
+  const docOnly = new Set(exigences.filter((x) => x.type === 'livrable' || x.type === 'critere').flatMap(lineChecks).filter((id) => !forWork.has(id)));
   // JavaScript, PHP, SQL, Laravel… checks of the brief grid: praised in their own part
   for (const id of Object.keys(DETECTORS)) if (ok(id) && !bonusOnly.has(id)) sec[DETECTORS[id][1]].push(DETECTORS[id][2]);
   const stories = exigences.filter((x) => x.type === 'story');
@@ -210,15 +213,17 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
   else if (bonus.length > 1) sec['Bonus'].push(`Tu as aussi réalisé ${bonus.length} bonus : tu as fait plus que demandé, bravo pour ce travail.`);
   // Live challenge done in front of the teacher
   const ch = challenge && challenge.result ? challenge : null;
+  const watch = [];   // what the learner must give more attention to
   if (ch) {
     const t = ch.titre ? ` (« ${ch.titre} »)` : '';
-    sec['Mise en situation'].push(ch.result === 'valide' ? `Tu as réussi la mise en situation${t}.` : ch.result === 'partiel' ? `La mise en situation${t} est partiellement réussie.` : `La mise en situation${t} n’est pas validée.`);
-    if (ch.note) sec['Mise en situation'].push(String(ch.note).trim());
+    if (ch.result === 'valide') { sec['Mise en situation'].push(`Tu as réussi la mise en situation${t}.`); if (ch.note) sec['Mise en situation'].push(String(ch.note).trim()); }
+    else watch.push(`${ch.result === 'partiel' ? `La mise en situation${t} n’est que partiellement réussie` : `La mise en situation${t} n’est pas validée`}${ch.note ? ` : ${String(ch.note).trim().replace(/\.$/, '')}` : ''}.`);
   }
   // Oral questions asked: the notions still Not valid are notions to review
   const asked = Array.isArray(oral) ? oral : [];
   const toReview = asked.filter((x) => !x.ok).map((x) => String(x.notion).trim()).filter(Boolean);
-  if (asked.length) sec['Questions orales'] = [toReview.length ? `Tu as bien répondu à ${asked.length - toReview.length} question${asked.length - toReview.length > 1 ? 's' : ''} orale${asked.length - toReview.length > 1 ? 's' : ''} sur ${asked.length}.` : 'Tu as bien répondu à toutes les questions orales.'];
+  const nOk = asked.length - toReview.length;
+  if (asked.length && nOk) sec['Questions orales'] = [toReview.length ? `Tu as bien répondu à ${nOk} question${nOk > 1 ? 's' : ''} orale${nOk > 1 ? 's' : ''} sur ${asked.length}.` : 'Tu as bien répondu à toutes les questions orales.'];
 
   // Git / GitHub, always judged: number and regularity of commits, messages and their style, branches when used
   const gitAdvice = [];
@@ -296,8 +301,8 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     ['figma', 'd’ajouter le lien de ta maquette Figma dans le README'],
     ['planning', 'd’ajouter le lien de ta planification (GitHub Projects, Trello…) dans le README'],
   ];
-  for (const [id, text] of ADV) if (ko(id) && !bonusOnly.has(id) && !(id === 'responsive' && ko('breakpoints'))) advice.push(text);
-  for (const id of Object.keys(DETECTORS)) if (ko(id) && !bonusOnly.has(id)) advice.push(DETECTORS[id][3]);
+  for (const [id, text] of ADV) if (ko(id) && !bonusOnly.has(id) && !docOnly.has(id) && !(id === 'responsive' && ko('breakpoints'))) advice.push(text);
+  for (const id of Object.keys(DETECTORS)) if (ko(id) && !bonusOnly.has(id) && !docOnly.has(id)) advice.push(DETECTORS[id][3]);
   advice.push(...gitAdvice);
   // Steps of the brief: the teacher's result for each step, and when the work was done (see steps.ts)
   const stepsDone = suivi && Array.isArray(suivi.steps) ? suivi.steps.filter((x) => STEP_RESULTS.includes(x.final)) : [];
@@ -306,42 +311,34 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     if (stepsDone.length === suivi.steps.length && stepsDone.every((x) => x.final === 'a_temps')) {
       SP.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
       for (const x of stepsDone) if (x.note) SP.push(`${x.name} : ${x.note}`);
-    } else for (const x of stepsDone) SP.push(`${x.name} : ${STEP_FR[x.final]}.${x.note ? ' ' + x.note : ''}`);
+    } else for (const x of stepsDone) (x.final === 'a_temps' ? SP : watch).push(`${x.name} : ${STEP_FR[x.final]}.${x.note ? ' ' + x.note : ''}`);
     if (stepsDone.some((x) => x.final !== 'a_temps')) advice.push('de terminer chaque partie à la date prévue : découpe le travail et avance à chaque étape');
   }
   const rh = suivi && suivi.rhythm, nSteps = suivi && suivi.steps ? suivi.steps.length : 0;
   const total = rh ? rh.reduce((a, b) => a + b, 0) : 0;
   if (rh && nSteps >= 2 && total >= 5) {
     const last = (rh[nSteps - 1] || 0) + (rh[nSteps] || 0);
-    if (last / total >= 0.6) SP.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
+    if (last / total >= 0.6) watch.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
   }
-  for (const e of exigences.filter((x) => (x.type === 'livrable' || x.type === 'critere') && own(x))) advice.push(`de compléter ce point du brief : ${String(e.texte).replace(/\s*:$/, '').replace(/\.$/, '')}`);
   const parts = [`Bonjour${firstName ? ` ${firstName}` : ''},`];
-  for (const [title, lines] of Object.entries(sec)) if (lines.length) parts.push(`-${title} :\n${lines.join('\n')}`);
-  if (advice.length === 1) parts.push(`Je te conseille ${advice[0]}.`);
-  else if (advice.length) parts.push(`Je te conseille de :\n${advice.map((a) => `- ${a.replace(/^(de |d’)/, '')}`).join('\n')}`);
-  // Bonus not done: not a fault, only a way to go further
-  const more = exigences.filter((x) => x.type === 'bonus' && !itemValid(x)).slice(0, 4).map((x) => part(x.texte).replace(/[\s:;,.]+$/, '')).filter(Boolean);
-  if (more.length === 1) parts.push(`Pour progresser, tu peux aussi essayer ce bonus : ${more[0]}.`);
-  else if (more.length) parts.push(`Pour progresser, tu peux aussi essayer ces bonus :\n${more.map((t) => `- ${t}`).join('\n')}`);
-  if (toReview.length) parts.push(`Notions à revoir : ${toReview.join(', ')}.`);
-  // what the teacher noticed face to face (rewritten for the learner when the AI did it, else as the teacher wrote it)
-  if (remarks && (remarks.forStudent || remarks.text)) parts.push(`-Échange avec ton formateur :\n${String(remarks.forStudent || remarks.text).trim()}`);
-  // the assessments linked to the brief
-  const graded = (assess || []).filter((a) => a.score != null);
-  if (graded.length) {
-    const lines = graded.map((a) => {
-      const ok = Object.entries(a.comps || {}).filter(([, v]) => v.ok).map(([k]) => skillDisplay(k));
-      const ko = Object.entries(a.comps || {}).filter(([, v]) => !v.ok).map(([k]) => skillDisplay(k));
-      return `« ${a.title} » : ${a.score} %, niveau ${LEVEL_FR[scoreLevel(a.score)]}${ok.length ? ` (validé : ${ok.join(', ')}` : ''}${ko.length ? `${ok.length ? ' ; ' : ' ('}à retravailler : ${ko.join(', ')}` : ''}${ok.length || ko.length ? ')' : ''}.`;
-    });
-    parts.push(`-Évaluation :\n${lines.join('\n')}`);
+  // 1. what went well (bonuses only when done)
+  const good = Object.values(sec).flat().map((x) => String(x).trim()).filter(Boolean);
+  if (good.length) parts.push(`Voici ce que tu as bien réussi dans ce projet. ${good.join(' ')}`);
+  // 2. what to improve in the work
+  if (advice.length === 1) parts.push(`Pour améliorer ton travail, je te conseille ${advice[0]}.`);
+  else if (advice.length) parts.push(`Pour améliorer ton travail, je te conseille de :\n${advice.map((a) => `- ${a.replace(/^(de |d’)/, '')}`).join('\n')}`);
+  // 3. what needs more attention: the questions of the assessment not answered or wrong, the oral notions, the live task, the rhythm
+  const gaps = (assess || []).filter((a) => a.score != null && Array.isArray(a.gaps) && a.gaps.length);
+  for (const a of gaps) {
+    const lines = a.gaps.slice(0, 8);
+    parts.push(`Lors de l’évaluation « ${a.title} », ${lines.length > 1 ? 'ces questions t’ont posé problème' : 'cette question t’a posé problème'} ; revois en priorité les notions qu’elles abordent :\n${lines.map((x) => `- ${x}`).join('\n')}`);
   }
-  const compOk = competences.filter((x) => x.ok === true).map((x) => skillDisplay(x.code));
-  const compKo = competences.filter((x) => x.ok === false).map((x) => skillDisplay(x.code));
-  if (compOk.length || compKo.length) parts.push([compOk.length ? `Compétences validées : ${compOk.join(', ')}.` : '', compKo.length ? `Compétences non validées : ${compKo.join(', ')}.` : ''].filter(Boolean).join('\n'));
-  const unfinished = exigences.some((x) => x.type !== 'bonus' && !itemValid(x)) || compKo.length > 0 || !!(ch && ch.result !== 'valide') || stepsDone.some((x) => x.final === 'non_fait') || toReview.length > 0;
-  parts.push(advice.length || unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
+  if (toReview.length) watch.push(`Revois aussi ${toReview.length > 1 ? 'ces notions abordées' : 'cette notion abordée'} à l’oral : ${listFr(toReview.join(', '))}.`);
+  if (watch.length) parts.push(`Fais aussi plus attention à ces points. ${watch.join(' ')}`);
+  // what the teacher noticed face to face (rewritten for the learner when the AI did it, else as the teacher wrote it)
+  if (remarks && (remarks.forStudent || remarks.text)) parts.push(`Lors de notre échange : ${String(remarks.forStudent || remarks.text).trim()}`);
+  const unfinished = advice.length || gaps.length || watch.length || competences.some((x) => x.ok === false) || !!(ch && ch.result !== 'valide');
+  parts.push(unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
   return parts.join('\n\n');
 }
 
@@ -1148,8 +1145,7 @@ export function memberComment(m, rec, ms) {
   const parts = [`Bonjour ${first},`];
   if (lines.length) parts.push(lines.join('\n'));
   const codes = Object.keys(ms.co || {});
-  const okC = codes.filter((c) => ms.co[c] === true).map(skillDisplay), koC = codes.filter((c) => ms.co[c] === false).map(skillDisplay);
-  if (okC.length || koC.length) parts.push([okC.length ? `Compétences validées : ${okC.join(', ')}.` : '', koC.length ? `Compétences non validées : ${koC.join(', ')}.` : ''].filter(Boolean).join('\n'));
+  const koC = codes.filter((c) => ms.co[c] === false);   // never written in the comment (no codes for the learner), only for the closing words
   const weak = !m.commits || (ms.quiz != null && ms.quiz < 50);
   const allOk = !koC.length && !weak && (!ms.mes || !ms.mes.r || ms.mes.r === 'valide');
   parts.push(allOk ? 'Très bon travail, bonne continuation !' : weak ? 'Bon courage, je suis sûr que tu peux y arriver !' : 'Bonne continuation !');
