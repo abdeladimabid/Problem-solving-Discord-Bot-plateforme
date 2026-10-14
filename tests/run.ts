@@ -18,7 +18,8 @@ import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText 
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
-import { BUILTIN } from "../src/shared/program.ts";
+import { BUILTIN, techOfWeek } from "../src/shared/program.ts";
+import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, dayInfo as actDayInfo, holidayOf as actHolidayOf, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2824,6 +2825,91 @@ section("briefs keep to the technologies the teacher picked");
   check(d.tags.join(",") === "HTML,CSS,Figma" && gen.data.checks.some((c: any) => c.ok && /Only uses its technologies/.test(c.text)), "the brief's technologies are the ones picked, and the check confirms it");
   const pg = await api("GET", `/api/programs?g=${G}`);
   check(pg.data.weekTech["2"].includes("Tailwind CSS") && pg.data.weekTech["2"].includes("HTML") && !pg.data.weekTech["2"].includes("JavaScript"), "the technologies of a week come from the planning (tailwind.config.js isn't JavaScript)");
+}
+
+section("activités: days, holidays, live coding days, weeks, checks, the template's markdown");
+{
+  const P = BUILTIN[0];
+  const kind = (d: string, ov = {}) => actDayInfo(P, d, ov).kind;
+  check(kind("2026-10-12") === "work" && actDayInfo(P, "2026-10-12").label === "S2 · Sprint 1 · Brief 2", "a weekday of a brief week is a working day (week, sprint, brief)");
+  check(kind("2026-10-17") === "weekend" && kind("2026-11-06") === "holiday" && actDayInfo(P, "2026-11-06").label.includes("Marche Verte"), "weekends and public holidays have no activity");
+  check(kind("2026-11-25") === "break" && kind("2026-12-01") === "crossdefense" && kind("2027-04-20") === "certification" && kind("2026-09-01") === "outside", "breaks, cross defenses, certification and days outside the programme");
+  check(kind("2026-10-13", { "2026-10-13": "off" }) === "off" && kind("2026-11-06", { "2026-11-06": "on" }) === "work", "the teacher marks a day off, or works on a holiday");
+  check(actHolidayOf("2027-03-10")?.approx === true && actHolidayOf("2026-11-18")?.approx === false && !actHolidayOf("2026-11-19"), "the Islamic holidays are marked as estimated");
+  const full = actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", null);
+  check(full.work.length === 5 && full.live.join() === "2026-10-13,2026-10-15", "a full week: 5 veilles, live codings on Tuesday and Thursday");
+  check(full.submission.join() === "2026-10-16" && full.next?.n === 3, "Friday is the submission day; the next brief week is out of scope");
+  const split = actWeekFacts(P, "2026-11-02", "2026-11-02", "2026-11-06", null);
+  check(split.weeks.map((w) => w.n).join() === "5,6" && split.submission.includes("2026-11-04") && !split.work.includes("2026-11-06"), "a week across two briefs: each day follows its own, brief 5 ends Wednesday, Friday 6/11 is a holiday");
+  check(actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", ["2026-10-12", "2026-10-17", "2026-10-14"]).live.join() === "2026-10-12,2026-10-14", "the teacher's live coding days (working days only)");
+  const weeks = actSplitWeeks(actRangeDays(P, "2026-10-14", "2026-10-25"));
+  check(weeks.length === 2 && weeks[0].days.length === 3 && weeks[1].days.length === 5, "a range is cut in weeks (Monday → Friday)");
+  check(actStackOf(techOfWeek(P.weeks[0])) === "web" && actStackOf(techOfWeek(P.weeks[2])) === "js" && actStackOf(techOfWeek(P.weeks.find((w) => w.n === 11)!)) === "sql"
+    && actStackOf(techOfWeek(P.weeks.find((w) => w.n === 19)!)) === "laravel" && actStackOf(techOfWeek(P.weeks.find((w) => w.n === 27)!)) === "react", "the live coding's language follows the week (HTML/CSS, JS, SQL, Laravel, React)");
+  check(!!actLinkOk("https://developer.mozilla.org/fr/docs/Web/API/Element/classList") && !!actLinkOk("https://fr.javascript.info/dom-navigation") && !actLinkOk("https://developer.mozilla.org/en-US/docs/Web")
+    && !actLinkOk("http://fr.javascript.info/") && !actLinkOk("https://example.com/x") && !actLinkOk("pas une url"), "links: only the allowed sites (French pages), https, well formed");
+  check(actNamedFunctions("function a() {}\nconst b = (x) => x;\nbtn.addEventListener(\"click\", (e) => {});") === 2 && actDataItems("const t = [{ a: \"1, 2\" }, { a: 2 }, [3, 4]];") === 3
+    && actDataItems("INSERT INTO p VALUES (1, 'a'), (2, 'b, c');\nINSERT INTO p VALUES (3, 'd');") === 3 && actFormFields("<input id=a><input type=\"submit\"><select></select><textarea></textarea>") === 3, "code checks: named functions, data items, form fields");
+  const good = { titre: "Le DOM", contexte: "Tu sais écrire du HTML. Le brief demande une page vivante. Le DOM est la page vue par JavaScript.", objectifs: ["Expliquer le DOM", "Utiliser `querySelector`", "Modifier un élément"],
+    plan: [{ titre: "A", points: ["a", "b", "c"] }, { titre: "B", points: ["a", "b", "c"] }], questions: ["Pourquoi ?", "Quand ?"],
+    ressources: [{ titre: "a", url: "https://developer.mozilla.org/fr/docs/Web/API/Document" }, { titre: "b", url: "https://fr.javascript.info/dom-nodes" }, { titre: "c", url: "https://regex101.com/" }, { titre: "d", url: "https://invented.dev/x" }],
+    artefact: "Un schéma", demo: "Changer un titre", criteres: ["x", "y", "z"] };
+  const v = actCleanVeille(good);
+  check(!actValidateVeille(v).length && v.ressources.length === 3 && v.dropped.length === 1, "a veille that follows the template passes; the invented link is dropped");
+  const bad = actValidateVeille(actCleanVeille({ ...good, objectifs: ["Le DOM"], questions: ["Définition du DOM"], plan: [{ titre: "A", points: ["a"] }] }));
+  check(bad.some((e) => e.includes("3 à 5 objectifs")) && bad.some((e) => e.includes("verbe")) && bad.some((e) => e.includes("questions de réflexion")) && bad.some((e) => e.includes("plan")), "a veille that breaks it: each rule is named");
+  const md = actRenderVeille(v, "2026-10-19");
+  const heads = ["## Lundi 19/10 — Veille : Le DOM", "09:15 · 30 min · Veille", "**📌 Contexte**", "**🎯 Objectifs d'apprentissage**", "**📚 Plan à suivre**", "1️⃣ A", "**❓ Questions de réflexion**", "**🔗 Ressources conseillées**", "**📦 Livrable attendu**", "**✅ Critères d'évaluation**", "- La présentation est claire et respecte le temps"];
+  check(heads.every((h, i) => md.indexOf(h) >= 0 && (i === 0 || md.indexOf(h) > md.indexOf(heads[i - 1]))) && md.includes("- MDN – a : https://developer.mozilla.org/fr/docs/Web/API/Document"), "the veille's markdown: the template's sections, in its order");
+  const lv = actCleanLive({ titre: "Liste", objectifs: ["Créer", "Parcourir", "Afficher"], contexte: "Un client. Une liste.", deroule: [{ minutes: 5, etape: "Présenter" }, { minutes: 15, etape: "Un élément" }, { minutes: 10, etape: "Boucle" }, { minutes: 10, etape: "Ajout" }, { minutes: 5, etape: "Tester en direct, récap" }],
+    starter: { fichier: "index.html", code: "```html\n<ul></ul>\n```" }, final: { fichier: "../evil.sh", code: "function a() {}\nfunction b() {}\nfunction c() {}\nfetch('/x')" }, extensions: ["x"], reflexion: ["a ?", "b ?"], resultat: ["ok"] }, "js");
+  const le = actValidateLive(lv, { stack: "js", allowed: techSoFar(P, P.weeks[2]), concepts: "" });
+  check(lv.final?.file === "app.js" && lv.starter?.code === "<ul></ul>", "the live coding's files: a strange name gets the week's file, code fences are removed");
+  check(le.some((e) => e.includes("3 fonctions nommées")) && le.some((e) => e.includes("Fetch / API")) && !le.some((e) => e.includes("45")), "live coding checks: 2 named functions at most, nothing the class hasn't seen yet");
+  const lmd = actRenderLive(lv, "2026-10-20", 1);
+  check(lmd.includes("## Mardi 20/10 — Live coding 1 : Liste") && lmd.includes("| 0–5 | Présenter |") && lmd.includes("| 40–45 | Tester en direct, récap | — |") && lmd.includes("**💻 Starter — index.html**") && lmd.includes("**💻 Code final — app.js**\n\n```javascript"), "the live coding's markdown: déroulé from 0 to 45, the files of the week");
+}
+
+section("activités: the page's API generates a week item by item, checks, retries, saves, edits");
+{
+  const from = "2026-10-19", to = "2026-10-23";
+  const v0 = await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`);
+  check(v0.status === 200 && v0.data.days.length === 5 && v0.data.weeks.length === 1 && v0.data.weeks[0].live.join() === "2026-10-20,2026-10-22", "a range: its days and its week, with live codings on Tuesday and Thursday");
+  check(v0.data.weeks[0].weeks[0].n === 3 && v0.data.weeks[0].sprint.n === 2 && v0.data.weeks[0].next.n === 4 && v0.data.weeks[0].weeks[0].competencies.includes("C4N1"), "the summary: programme week, sprint, competencies, the week out of scope");
+  check((await api("GET", `/api/activities?g=${G}&from=2026-10-01&to=2027-01-31`)).status === 400, "a range too long is refused");
+  check((await api("POST", "/api/activities/item", { g: G, day: "2026-10-19", kind: "veille" })).data.error?.includes("week's plan"), "an item needs the week's plan first");
+  const w = await api("POST", "/api/activities/week", { g: G, monday: from, from, to });
+  check(w.status === 200 && w.data.item.md.startsWith("## Analyse de la semaine") && w.data.item.md.includes("| Mar 20/10 | Veille 2 : le DOM | LC1 : Live 2 : une liste de produits |"), "the week's overview from the template, with LC1 on Tuesday");
+  check(w.data.item.md.includes("| Ven 23/10 | Veille 5 : le DOM | — | Finitions, README, déploiement, soumission avant 23:59 |") && w.data.item.md.includes("**Hors périmètre cette semaine** (S4"), "Friday is the submission day; the next week is out of scope");
+  const u0 = ai.users.length;
+  const ve = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille" });
+  check(ve.status === 200 && ve.data.item.md.startsWith("## Lundi 19/10 — Veille : Sélectionner et modifier le DOM") && !ve.data.item.md.includes("🚀") && !ve.data.item.md.includes("example.com") && !ve.data.item.warnings.length, "a veille: checked, no emoji in the text, the invented link dropped");
+  check(ai.users.slice(u0).join("\n").includes("MÉTIER DES LIVE CODINGS") && ai.users.slice(u0).join("\n").includes("HORS PÉRIMÈTRE"), "the AI gets the métier and what's out of scope");
+  ai.actBad = 1;
+  const u1 = ai.users.length;
+  const lc = await api("POST", "/api/activities/item", { g: G, day: "2026-10-20", kind: "live" });
+  const retry = ai.users.slice(u1);
+  check(lc.status === 200 && retry.length === 2 && retry[1].includes("TA RÉPONSE PRÉCÉDENTE NE RESPECTE PAS") && retry[1].includes("exactement 45") && retry[1].includes("Fetch / API") && !lc.data.item.warnings.length, "a live coding that breaks the template is asked again once, with what's wrong");
+  check(retry[0].includes("VEILLES DE LA SEMAINE JUSQU'À CE JOUR") && retry[0].includes("Sélectionner et modifier le DOM"), "the live coding knows the veilles of the week so far");
+  ai.actBad = 2;
+  const lc2 = await api("POST", "/api/activities/item", { g: G, day: "2026-10-22", kind: "live" });
+  check(lc2.status === 200 && lc2.data.item.warnings.some((e: string) => e.includes("45")) && lc2.data.item.md.includes("## Jeudi 22/10 — Live coding 2"), "still wrong after the retry: kept, with its warnings");
+  ai.actBad = 0;
+  const v1 = await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`);
+  const wk = v1.data.items.find((x: any) => x.kind === "week");
+  check(v1.data.items.length === 4 && wk.md.includes("| Lun 19/10 | Sélectionner et modifier le DOM |") && wk.md.includes("LC1 : Afficher le menu du food truck"), "reopening the range shows the saved items; the overview has their real titles");
+  check(q1("SELECT COUNT(*) AS n FROM activities WHERE guild_id = ?", G).n === 4, "saved in the database, per class and day");
+  const ed = await api("PUT", `/api/activities/${ve.data.item.id}`, { g: G, md: "## Ma veille\n\nRéécrite." });
+  check(ed.status === 200 && ed.data.item.edited && ed.data.item.md === "## Ma veille\n\nRéécrite.", "the teacher edits an item");
+  check((await api("POST", "/api/activities/item", { g: G, day: "2026-11-06", kind: "veille" })).data.error?.includes("Marche Verte"), "no activity on a holiday");
+  const off = await api("PUT", "/api/activities/days", { g: G, day: "2026-10-21", mark: "off" });
+  check(off.data.overrides["2026-10-21"] === "off" && (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.days[2].kind === "off", "the teacher marks a day without activity");
+  await api("PUT", "/api/activities/days", { g: G, day: "2026-10-21", mark: null });
+  const lv = await api("PUT", "/api/activities/live", { g: G, monday: from, live: ["2026-10-20"] });
+  const after = (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data;
+  check(lv.data.removed.join() === "2026-10-22" && after.items.filter((x: any) => x.kind === "live").length === 1 && after.weeks[0].live.join() === "2026-10-20", "live coding only on Tuesday: Thursday's is removed");
+  check((await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`)).status === 200 && !(await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.some((x: any) => x.kind === "live"), "an item is deleted");
+  check((await api("GET", `/api/activities?g=g-unknown&from=${from}&to=${to}`)).status === 404, "another class's range: unknown class");
 }
 
 section("programme from an Excel workbook (ClassBot template or YouCode planning)");
