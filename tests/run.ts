@@ -4287,6 +4287,14 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(rmv.status === 200 && !rmv.data.live.players.some((p: any) => p.pid === "104") && (await r.join(4, "104")).status === 200, "remove one player (not banned: their link lets them back in)");
   const clr = await api("POST", `/api/games/${R.data.id}/clear?g=${G}`, {});
   check(clr.status === 200 && clr.data.live.players.length === 0 && clr.data.live.phase === "lobby" && (await r.play("state", dev(1))).status === 403 && clr.data.content.questions.length === 5, "free all the players: an empty lobby with the same questions; the old phones are sent to Discord");
+  const pc1 = discordCalls.length;
+  check((await api("POST", `/api/games/${R.data.id}/announce?g=${G}`, {})).status === 200 && discordCalls.slice(pc1).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "📣 the dashboard posts a new Join button in Discord");
+  const pc2 = discordCalls.length;
+  await api("POST", `/api/games/${R.data.id}/clear?g=${G}`, {});
+  await bot.fetch(new Request(R.data.tv), env, makeCtx());
+  check(discordCalls.slice(pc2).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "after freeing everyone, opening the TV posts the Join button again by itself");
+  const relink = await r.join(1, U.alice.id);
+  check(relink.status === 200 && relink.data.phase === "lobby", "…and the students join again with their Discord link");
 
   // ---------------------------------------------------------------- 🕵️ sql, solo
   const Q = await api("POST", `/api/games?g=${G}`, { kind: "sql", mode: "solo", settings: { caseId: "cafe", hintPenalty: 60, wrongPenalty: 120, reward: 10 } });
@@ -4427,7 +4435,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const rt = await rg.tv("act", { a: "runtests" });
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
   const list = await api("GET", `/api/games?g=${G}`);
-  check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 0) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
+  check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 1) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
 
 section("🎤 Activités: shared in Discord, /activity choose with a binôme, approved, graded; fair random presenters");

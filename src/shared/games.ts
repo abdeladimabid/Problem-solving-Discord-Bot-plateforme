@@ -281,7 +281,7 @@ export async function joinGame(env: Env, gm: Game, key: string, pid: string): Pr
 /** Everyone leaves: the game is back at the start, ready for another group (they join again with /play). */
 export async function clearPlayers(env: Env, gm: Game) {
   for (const t of ["game_moves", "game_teams", "game_players"]) await run(env, `DELETE FROM ${t} WHERE game_id = ?`, gm.id);
-  const n = newState(); n.seq = gm.state.seq + 1; n.posted = gm.state.posted;
+  const n = newState(); n.seq = gm.state.seq + 1;   // not posted yet: the TV posts the 🎮 Join button again when it opens
   await run(env, "UPDATE games SET state = ?, status = 'ready', updated_at = ?, finished_at = NULL WHERE id = ?", JSON.stringify(n), now(), gm.id);
   gm.state = n;
 }
