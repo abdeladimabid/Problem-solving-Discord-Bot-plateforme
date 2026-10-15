@@ -3,6 +3,7 @@
 // teacher sees each card fill in. Returns null when the path isn't one of ours (the main API goes on).
 import type { Env, GuildRow } from "../shared/types.ts";
 import { aiStatus } from "../shared/aikeys.ts";
+import { libCfg, syncLibrary } from "../shared/library.ts";
 import { SignupError, presentationsView, assignActivity, cancelClaim, decideClaim, dropSignups, gradeClaim, randomAssign, saveSignupCfg, setMembers, setSlot, shareActivities, signupStats, signupView } from "../shared/actsignup.ts";
 import { ActivityError, activitiesView, deleteItem, editItem, generateItem, generateWeek, setDay, setLiveDays } from "../shared/activities.ts";
 
@@ -11,7 +12,11 @@ const ok = (data: unknown) => Response.json(data);
 export async function activitiesApi(env: Env, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
   if (!/^\/activities(\/|$)/.test(path)) return null;
   try {
-    return await route(env, path, method, body, url, guild);
+    // the shared library: what the other classes changed comes in before the page is shown; what changes here goes out
+    if (method === "GET" && (path === "/activities" || path === "/activities/presentations")) await syncLibrary(env, await guild()).catch(() => null);
+    const res = await route(env, path, method, body, url, guild);
+    if (method !== "GET" && res && res.ok && !/^\/activities\/(signups|share|random|claims|stats|presentations|\d+\/(slot|assign))/.test(path)) await syncLibrary(env, await guild(), { force: false, pushOnly: true }).catch(() => null);
+    return res;
   } catch (e) {
     // the AI's per-minute limit: the page waits that long and asks again by itself
     if (e instanceof ActivityError && e.wait) return Response.json({ error: e.message, retryIn: e.wait });
@@ -24,7 +29,7 @@ async function route(env: Env, path: string, method: string, body: any, url: URL
   let m: RegExpMatchArray | null;
   if (path === "/activities" && method === "GET") {
     const g = await guild();
-    return ok({ ...(await activitiesView(env, g, String(url.searchParams.get("from") || ""), String(url.searchParams.get("to") || ""))), ai: !!(await aiStatus(env)) });
+    return ok({ ...(await activitiesView(env, g, String(url.searchParams.get("from") || ""), String(url.searchParams.get("to") || ""))), ai: !!(await aiStatus(env)), library: (await libCfg(env, g.id))?.name ?? null });
   }
   if (path === "/activities/days" && method === "PUT") {
     const g = await guild();

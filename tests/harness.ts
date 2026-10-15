@@ -131,6 +131,7 @@ export const discordFake = { channels: [] as any[], fail: [] as { method: string
 export const discordRoles = { forbidden: false, list: [{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }] as any[] };
 let msgId = 1000;
 
+export const libraryHub = { handler: null as null | ((r: Request) => Promise<Response>), target: "", down: false };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
@@ -154,6 +155,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (/^\/guilds\/[^/]+$/.test(path)) return Response.json({ id: "g", name: "CS Class" });
     if (method === "PUT" || method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({});
+  }
+  // another ClassBot hosting a shared library: the test points it at a handler
+  if (url.hostname === "hub.classbot.test") {
+    if (!libraryHub.handler || libraryHub.down) return new Response("down", { status: 503 });
+    return libraryHub.handler(new Request(url.toString().replace("https://hub.classbot.test", libraryHub.target), { method, headers: { "content-type": "application/json" }, body: init.body }));
   }
   if (url.hostname === "wandbox.org") {
     runner.calls++;

@@ -1851,3 +1851,18 @@ a.gm-card:hover { text-decoration: none; }
 .sqb-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 10px; }
 .sqb-legend span { display: inline-flex; gap: 6px; align-items: center; }
 :root[data-theme="dark"] .sqb-rep { background: #422006; color: #fcd34d; } :root[data-theme="dark"] .sqb-rep.ok { background: #14532d; color: #bbf7d0; }
+
+/* settings: shared library */
+.lib-start { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.lib-card { display: flex; flex-direction: column; gap: 6px; }
+.lib-card h3 { margin: 4px 0 0; }
+.lib-card .btn { margin-top: auto; }
+.lib-ic { width: 44px; height: 44px; border-radius: 12px; background: var(--blue-50); display: grid; place-items: center; font-size: 22px; flex: none; }
+.lib-head { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.lib-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 4px 0 14px; }
+.lib-counts > div { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; }
+.lib-counts span { grid-row: span 2; font-size: 20px; } .lib-counts b { font-size: 20px; line-height: 1; } .lib-counts small { color: var(--ink-soft); font-size: 12px; }
+.lib-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.lib-recent li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
+.lib-what { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.lib-tag { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--blue-50); color: var(--blue); white-space: nowrap; }

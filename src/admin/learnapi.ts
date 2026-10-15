@@ -2,6 +2,7 @@
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
+import { libAssessment, syncLibrary } from "../shared/library.ts";
 import { all, now, one, run } from "../shared/db.ts";
 import { send } from "../shared/discord.ts";
 import { t } from "../shared/i18n.ts";
@@ -535,6 +536,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   // ------------------------------------------------------------ assessments
   if (path === "/assessments" && method === "GET") {
     const g = await guild();
+    await syncLibrary(env, g).catch(() => null);   // the shared library's assessments come in first
     const rows = await all<AssessRow & { takers: number; done: number; avg: number | null; locked: number }>(env,
       `SELECT a.*, (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id) AS takers,
               (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status IN ('submitted', 'graded')) AS done,
@@ -566,11 +568,16 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   if (path === "/assessments/import" && method === "POST") {
     // a link shared by another teacher (this ClassBot or another one): preview first, then a draft copy
     const g = await guild();
-    try { return ok(await importShared(env, g, String(body.url || ""), !!body.import)); } catch (e) { if (e instanceof ShareError) bad(e.message); throw e; }
+    try {
+      const r: any = await importShared(env, g, String(body.url || ""), !!body.import);
+      if (r.id) await libAssessment(env, g, r.id);
+      return ok(r);
+    } catch (e) { if (e instanceof ShareError) bad(e.message); throw e; }
   }
   if (path === "/assessments" && method === "POST") {
     const g = await guild();
     const id = await saveAssessment(env, g, null, body);
+    await libAssessment(env, g, id);
     return ok(await assessView(env, g, id));
   }
   if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link|options))?$/))) {
@@ -579,9 +586,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
     if (!a) throw new ApiError(404, "This assessment doesn't exist anymore.");
     const act = m[2];
-    if (!act && method === "GET") return ok(await assessView(env, g, id));
-    if (!act && method === "PUT") { await saveAssessment(env, g, id, body); return ok(await assessView(env, g, id)); }
+    if (!act && method === "GET") { await syncLibrary(env, g).catch(() => null); return ok(await assessView(env, g, id)); }
+    if (!act && method === "PUT") { await saveAssessment(env, g, id, body); await libAssessment(env, g, id); return ok(await assessView(env, g, id)); }
     if (!act && method === "DELETE") {
+      await libAssessment(env, g, id, true);   // shared: removed for the other classes too (their papers stay with them)
       await env.DB.batch([env.DB.prepare("DELETE FROM assessment_takers WHERE assessment_id = ?").bind(id), env.DB.prepare("DELETE FROM assessments WHERE id = ?").bind(id)]);
       return ok({ ok: true });
     }
@@ -589,7 +597,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });
     }
-    if (act === "options" && method === "POST") { await saveOptions(env, g, id, body); return ok(await assessView(env, g, id)); }
+    if (act === "options" && method === "POST") { await saveOptions(env, g, id, body); await libAssessment(env, g, id); return ok(await assessView(env, g, id)); }
     if (act === "link" && method === "POST") {
       // linked to a brief (from the debrief): its results count in that brief's debriefs
       const bid = Number(body.brief_id) || null;

@@ -1315,6 +1315,55 @@ async function loadDiscord() {
 }
 const channelOptions = (sel) => (S.discord?.channels || []).map((c) => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}># ${esc(c.name)}</option>`).join("");
 
+/** Settings → Shared library: create one (hosted on this ClassBot) or join with a link; then its status. */
+async function librarySettings(box, d = null) {
+  try { d = d || await api("/library"); } catch (e) { box.innerHTML = `<p class="act-err">${esc(e.message)}</p>`; return; }
+  const KINDS = [["activity", "🗓️", "activities"], ["assessment", "📝", "assessments"], ["quiz", "🎤", "live quizzes"], ["case", "🔎", "SQL cases"], ["task", "🏃", "relay challenges"], ["royale", "👑", "question sets"]];
+  const again = (r) => librarySettings(box, r);
+  if (!d.connected) {
+    box.innerHTML = `<div class="lib-start">
+      <div class="panel set-card lib-card"><div class="lib-ic">🏗️</div><h3>Create a library</h3>
+        <p class="muted small">You host it on this ClassBot. Give it a name, then send its link to the other teachers.</p>
+        <label for="lb-name">Name</label><input type="text" id="lb-name" style="width:100%" maxlength="60" placeholder="e.g. A1 DWWM 2026/2027">
+        <p class="small muted">What this class already has (activities, assessments) goes in it.</p>
+        <button class="btn primary" id="lb-create" style="width:100%">Create the library</button></div>
+      <div class="panel set-card lib-card"><div class="lib-ic">🔗</div><h3>Join a library</h3>
+        <p class="muted small">Another teacher sent you a link: paste it here. Their activities, assessments and quizzes come into this class.</p>
+        <label for="lb-link">Library link</label><input type="url" id="lb-link" style="width:100%" placeholder="https://…/library/1a2b3c4d5e6f.Ab3…">
+        <p class="small muted">If you both wrote the same day's activity, the library's version is kept.</p>
+        <button class="btn primary" id="lb-join" style="width:100%">Join</button></div>
+    </div>`;
+    $("#lb-create", box).onclick = (e) => busy(e.currentTarget, async () => { const r = await api("/library", { method: "POST", body: { create: true, name: $("#lb-name", box).value } }); toast("Library created: send its link to the other teachers"); again(r); });
+    $("#lb-join", box).onclick = (e) => busy(e.currentTarget, async () => { const r = await api("/library", { method: "POST", body: { link: $("#lb-link", box).value } }); toast("Joined: the library's content is in this class"); again(r); });
+    return;
+  }
+  box.innerHTML = `
+    <div class="panel set-card lib-on">
+      <div class="lib-head"><div class="lib-ic">📚</div><div><h3 style="margin:0">${esc(d.name)}</h3>
+        <p class="small muted" style="margin:2px 0 0">${d.hostedHere ? "Hosted on this ClassBot" : `Hosted on ${esc(d.host.replace(/^https?:\/\//, ""))}`} · ${d.synced ? `synced ${esc(fmtAgo(d.synced))}` : "not synced yet"}</p></div>
+        <button class="btn small" id="lb-sync" style="margin-left:auto">↻ Sync now</button></div>
+      ${d.error ? `<p class="notice warn small">⚠️ ${esc(d.error)}</p>` : ""}
+      <div class="lib-counts">${KINDS.map(([k, ic, l]) => `<div><span>${ic}</span><b>${d.counts[k] || 0}</b><small>${l}</small></div>`).join("")}</div>
+      <label>Invite the other teachers</label>
+      <div class="toolbar" style="margin:0"><input type="text" readonly value="${esc(d.link)}" id="lb-l" style="flex:1;font-family:var(--mono, monospace);font-size:12.5px"><button class="btn small" id="lb-copy">Copy the link</button></div>
+      <p class="small muted">They paste it in <b>Settings → Shared library → Join</b> on their ClassBot. Anyone with the link can read and edit the library: share it only with your colleagues.</p>
+    </div>
+    ${d.recent.length ? `<div class="panel set-card"><h3>Latest changes</h3><ul class="lib-recent">${d.recent.map((r) => `<li><span>${(KINDS.find((k) => k[0] === r.kind) || [, "📄"])[1]}</span><b>${esc(r.title || "—")}</b><span class="muted small">${esc(r.by || "")} · ${esc(fmtAgo(r.updated_at))}</span></li>`).join("")}</ul></div>` : ""}
+    <div class="panel set-card"><h3>What is shared</h3>
+      <ul class="small lib-what">
+        <li>🗓️ <b>Activités</b>: every week overview, veille and live coding, by date. Generate, regenerate, edit or delete one: every class gets it. Sign-ups and presentations stay in each class.</li>
+        <li>📝 <b>Assessments</b>: the questions and options. Invitations, papers and grades stay in each class; once students have one, its questions can be fixed but not added or removed.</li>
+        <li>🎤 <b>Live quizzes</b>: in Events → Live quiz → From the shared library.</li>
+        <li>🎮 <b>Class games</b>: SQL Detective cases, Code Relay challenges and Battle Royale question sets, under “Made before” and “Shared library”.</li>
+      </ul>
+      <div class="toolbar" style="margin:12px 0 0"><button class="btn small" id="lb-all">Share everything this class has</button><button class="btn small danger" id="lb-leave" style="margin-left:auto">Leave the library</button></div>
+    </div>`;
+  $("#lb-copy", box).onclick = () => copyText(d.link, "Library link copied: send it to the other teachers");
+  $("#lb-sync", box).onclick = (e) => busy(e.currentTarget, async () => { again(await api("/library/sync", { method: "POST" })); toast("Synced"); });
+  $("#lb-all", box).onclick = (e) => busy(e.currentTarget, async () => { again(await api("/library/sync", { method: "POST", body: { shareAll: true } })); toast("Everything this class has is in the library"); });
+  $("#lb-leave", box).onclick = () => confirmDialog("Leave the library?", "This class keeps what it has, as its own copy. Changes from the other classes stop coming in.", "Leave", async () => again(await api("/library", { method: "DELETE" })), true);
+}
+
 async function viewContests() {
   const [rows] = await Promise.all([api("/contests"), loadDiscord()]);
   view.innerHTML = `
@@ -1557,6 +1606,7 @@ async function viewSettings(arg) {
     ["programme", "🎓", "Programme", "Planning & competencies"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
+    ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1699,6 +1749,11 @@ async function viewSettings(arg) {
       <div id="set-ai"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="library" hidden>
+      ${head("Shared library", "Share the Activités (veilles, live codings, week overviews), the assessments, the live quizzes and the class games with the other teachers of your programme (for example every A1 class), even on their own ClassBot. One shared copy: when one of you generates, edits or deletes something, everyone gets it. Only your content is shared: never a student's name, answer or grade.")}
+      <div id="set-library"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="diag" hidden>
       ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
       <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
@@ -1714,6 +1769,7 @@ async function viewSettings(arg) {
       if (k === "programme" && typeof programmeSettings === "function") programmeSettings($("#set-programme"));
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
       if (k === "ai") aiSettings($("#set-ai"));
+      if (k === "library") librarySettings($("#set-library"));
     }
   };
   $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });
@@ -2350,11 +2406,14 @@ async function viewEvents() {
 }
 
 async function quizDialog() {
-  await Promise.all([loadDiscord(), loadChallenges()]);
+  const [, , lib] = await Promise.all([loadDiscord(), loadChallenges(), api("/library/templates?kind=quiz").catch(() => ({ items: [] }))]);
   const st = { t: "Live quiz", s: "20", ch: "", pts: true, picked: [] };
   const save = () => Object.assign(st, { t: $("#qd-t", dlg).value, s: $("#qd-s", dlg).value, ch: $("#qd-ch", dlg).value, pts: $("#qd-pts", dlg).checked });
   const open = () => {
     openDialog("New live quiz", `
+      ${lib.items.length ? `<div class="ev-ai"><label for="qd-lib" style="margin-top:0">📚 From the shared library <span class="muted">(quizzes made in the other classes too)</span></label>
+        <div class="toolbar" style="margin:0"><select id="qd-lib" style="flex:1">${lib.items.map((x) => `<option value="${esc(x.key)}">${esc(x.title || "Live quiz")} · ${(x.data?.questions || []).length} questions${x.by ? ` · ${esc(x.by)}` : ""}</option>`).join("")}</select>
+        <button type="button" class="btn small primary" id="qd-use">Use it</button></div></div>` : ""}
       <label for="qd-t">Title</label><input type="text" id="qd-t" style="width:100%" maxlength="80" value="${esc(st.t)}">
       <div class="field-row">
         <div><label for="qd-s">Seconds per question</label><input type="number" id="qd-s" min="10" max="120" value="${esc(st.s)}"></div>
@@ -2378,6 +2437,14 @@ async function quizDialog() {
       $("#qd-list", dlg).innerHTML = st.picked.length ? st.picked.map((c, i) => `<span class="chip">${i + 1}. ${esc(c.title)}<button type="button" data-rm="${i}" aria-label="Remove">×</button></span>`).join("") : `<span class="muted small">None yet.</span>`;
       $$("[data-rm]", dlg).forEach((b) => b.onclick = () => { st.picked.splice(Number(b.dataset.rm), 1); draw(); });
     };
+    const use = $("#qd-use", dlg);
+    if (use) use.onclick = () => busy(use, async () => {
+      save();
+      await api("/quizzes", { method: "POST", body: { template: $("#qd-lib", dlg).value, channel_id: st.ch || null, give_points: st.pts } });
+      dlg.close();
+      toast("Quiz ready: press Start when the class is watching");
+      viewEvents();
+    });
     $("#qd-add", dlg).onclick = async () => { save(); const c = await pickChallengeDialog("Add a question", { kinds: QUIZ_KINDS }); if (c && !st.picked.some((p) => p.id === c.id) && st.picked.length < 30) st.picked.push(c); open(); };
     $("#qd-ai", dlg).onclick = (e) => busy(e.currentTarget, async () => {
       const btnEl = e.currentTarget;
