@@ -30,6 +30,7 @@ import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../s
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
+import { levelsOf } from "../shared/actsignup.ts";
 import { QUIZ_KINDS, cleanLore, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
 import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
@@ -455,7 +456,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // -------------------------------------------------------------- 🧩 squads by sprint
     if (path === "/squads" || path.startsWith("/squads/")) {
       const g = await guild();
-      const sview = async () => ({ sets: await squadSets(env, g), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).map((x) => ({ id: x.id, name: x.name || x.id })) });
+      // each student's last debrief level, so balanced squads mix the levels
+      const sview = async () => {
+        const lv = await levelsOf(env, g);
+        return { sets: await squadSets(env, g), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => x.id !== g.teacher_id || lv.has(x.id)).map((x) => ({ id: x.id, name: x.name || x.id, lv: lv.get(x.id) || null })) };
+      };
       try {
         if (path === "/squads" && method === "GET") return ok(await sview());
         if (path === "/squads" && method === "POST") { const id = await createSquadSet(env, g, body); return ok({ id, ...(await sview()) }); }

@@ -1837,3 +1837,17 @@ a.gm-card:hover { text-decoration: none; }
 @media (max-width: 900px) { .pr-share { grid-template-columns: 1fr; } .pr-req, .pr-req.pr-plan { grid-template-columns: 1fr; } .pr-btns { margin-left: 0; } }
 .ev-lore { margin: 8px 0 4px; } .ev-lore summary { cursor: pointer; font-size: 13px; color: var(--blue); } .ev-lore ul { margin: 6px 0; padding-left: 18px; display: grid; gap: 4px; }
 .linkish { background: none; border: 0; padding: 0; color: var(--blue); cursor: pointer; font: inherit; text-decoration: underline; }
+
+/* squads: levels and teammates already met */
+.sqb-lv { width: 9px; height: 9px; border-radius: 50%; flex: none; display: inline-block; background: var(--line-strong); }
+.lv-critique { background: #dc2626; } .lv-faible { background: #f97316; } .lv-moyen { background: #eab308; } .lv-bon { background: #22c55e; } .lv-excellent { background: #2563eb; } .lv-none { background: var(--line-strong); }
+.sqb-card .sqb-lv { margin-left: auto; }
+.sqb-card .sqb-lv + .sqb-star, .sqb-card .sqb-lv + .sqb-bd { margin-left: 6px; }
+.sqb-mix { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: -4px 0 8px; }
+.sqb-lvc { font-size: 11px; font-weight: 700; color: #fff; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: inline-grid; place-items: center; }
+.sqb-lvc.lv-moyen { color: #422006; } .sqb-lvc.lv-none { color: var(--ink-soft); }
+.sqb-rep { margin-left: auto; font-size: 11.5px; font-weight: 650; color: #b45309; background: #fef3c7; padding: 2px 8px; border-radius: 999px; cursor: help; }
+.sqb-rep.ok { color: #166534; background: #dcfce7; }
+.sqb-legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 10px; }
+.sqb-legend span { display: inline-flex; gap: 6px; align-items: center; }
+:root[data-theme="dark"] .sqb-rep { background: #422006; color: #fcd34d; } :root[data-theme="dark"] .sqb-rep.ok { background: #14532d; color: #bbf7d0; }

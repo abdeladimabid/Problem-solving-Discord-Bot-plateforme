@@ -531,7 +531,7 @@ async function viewCoins() {
     title: "Custom title", color: "Name color", theme: "Profile theme", motto: "Motto", emoji: "Profile emoji", showcase: "Badge showcase", lang: "Favourite language",
     pin: "Proudest solve", frame: "Avatar frame", victory: "Victory message", levelup: "Level-up style", flair: "Leaderboard flair" };
   const builtinHelp = { freeze: "A missed day doesn't break their streak.", hint: "Their next hint costs no points.",
-    buddy: "A student picks a classmate to be in the same squad next sprint. “Max” is how many the whole class can buy per season (1 = the first student to buy it). You see it on Teams & squads, and random squads keep them together.",
+    buddy: "A student picks a classmate to be in the same squad next sprint. “Max” is how many the whole class can buy per season (1 = the first student to buy it). You see it on Teams & squads, and balanced squads keep them together.",
     double: "×2 points on write-code they pick (practice, /today, /path). Never on your assignments, the daily or sessions.",
     contract: "They pick a goal (5 easy, 3 medium or 2 hard code/SQL solves) and win the reward if they reach it in time.",
     shield: "A lost duel doesn't cost Elo rating.", title: "A title next to their name.", color: "Their name in a color they pick (a Discord role).",

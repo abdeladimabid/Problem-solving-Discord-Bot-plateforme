@@ -388,6 +388,16 @@ env.ASSETS = {
   db.prepare("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`actsign:${G}`, JSON.stringify({ channel: null, veille: 20, live: 40 }), now);
 }
 
+// ---------------------------------------------------------- squads: last debrief levels, and an earlier sprint's squads
+{
+  const lv = ["bon", "moyen", "faible", "critique", "moyen", "bon", "faible", "moyen", "excellent", "critique", "moyen", "faible", "bon", "moyen"];
+  const bid = Number(db.prepare("INSERT INTO briefs (guild_id, title, status, data, kind, created_at) VALUES (?, 'Demo levels', 'assigned', '{}', 'solo', ?)").run(G, now - 20 * DAY).lastInsertRowid);
+  lv.forEach((l, i) => db.prepare("INSERT INTO brief_reviews (brief_id, guild_id, who, record, level, status) VALUES (?, ?, ?, '{}', ?, 'final')").run(bid, G, `u:${100 + i}`, l));
+  const sq = (n: string, ids: number[]) => ({ id: n, name: n, members: ids.map((i) => String(100 + i)), sm: String(100 + ids[0]) });
+  db.prepare("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint 1', ?, 0, ?, ?)").run(G,
+    JSON.stringify([sq("Unicode", [0, 1, 2, 3]), sq("SegFault", [4, 5, 6]), sq("Leaders", [7, 8, 9, 10]), sq("PixelForce", [11, 12, 13])]), now - 30 * DAY, now - 30 * DAY);
+}
+
 createServer(async (req, res) => {
   // public pages of the bot Worker (shared profile, certificates)
   const chunks: Buffer[] = [];
