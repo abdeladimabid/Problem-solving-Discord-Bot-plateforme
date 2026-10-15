@@ -1814,8 +1814,12 @@ a.gm-card:hover { text-decoration: none; }
 .sg-grade .seg label { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px; cursor: pointer; margin: 0; }
 .sg-grade .seg label input { display: none; }
 .sg-grade .seg label:has(input:checked) { border-color: var(--blue); background: var(--blue-50); color: var(--blue); font-weight: 600; }
-.pr-share { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 18px; align-items: end; }
+.pr-share { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .pr-share h2 { margin: 0 0 4px; } .pr-share p { margin: 0; }
+.pr-kc { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.pr-kc b { font-size: 15px; min-width: 1ch; text-align: right; }
+.pr-kc .small { color: var(--muted); }
+.pr-kc.late b { color: var(--red, #dc2626); }
 .pr-share-r { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .pr-share-r > label { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); display: flex; flex-direction: column; gap: 4px; }
 .pr-share-r select { min-width: 190px; text-transform: none; letter-spacing: 0; font-weight: 500; }
