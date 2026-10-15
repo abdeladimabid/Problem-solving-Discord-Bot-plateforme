@@ -14,6 +14,7 @@ async function viewBattles() {
   const done = d.items.filter((b) => b.phase === "over").length;
   const live = d.items.filter((b) => ["countdown", "playing", "paused"].includes(b.phase)).length;
   view.innerHTML = `
+    <div class="crumbs" style="margin-bottom:8px"><a href="#/games">Class games</a></div>
     <section class="bt-hero">
       <div class="bt-hero-text">
         <span class="bt-kicker">🎲 Class game · on the TV</span>
@@ -153,7 +154,7 @@ async function viewBattle(id) {
   const L = B.live;
   const [pc, pl] = BT_PHASE[L.phase] || ["pending", L.phase];
   view.innerHTML = `
-    <div class="page-head"><div><div class="crumbs"><a href="#/battles">Squad battle</a></div>
+    <div class="page-head"><div><div class="crumbs"><a href="#/games">Class games</a> › <a href="#/battles">Squad battle</a></div>
       <h1 class="bt-title"><span style="color:${esc(B.teams[0].color)}">${esc(B.teams[0].emoji)} ${esc(B.teams[0].name)}</span> <i>vs</i> <span style="color:${esc(B.teams[1].color)}">${esc(B.teams[1].emoji)} ${esc(B.teams[1].name)}</span></h1>
       <p class="sub">${esc(B.settings.topics.join(", ") || "all topics")} · ${fmtClock(B.settings.seconds * 1000)} per team · pass −${B.settings.penalty} s · ${B.questions.length} questions${B.settings.reward ? ` · winners +${B.settings.reward} pts` : ""}</p></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="bt-edit">Settings</button><button class="btn danger" id="bt-del">Delete</button></div></div>
