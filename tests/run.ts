@@ -4214,6 +4214,9 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const bt = await click(U.carol, `gjoin:${R.data.id}`);
   check(String(bt?.data?.components?.[0]?.components?.[0]?.url ?? "").includes("#p="), "the 🎮 Join button gives the same private link");
   check(text(await slash({ id: "105", name: "Eve", teacher: false } as any, "play")).includes("removed"), "a removed student is told so in Discord");
+  const nBot = q1("SELECT COUNT(*) AS n FROM players WHERE guild_id = ?", G).n;
+  const botPick = await call(raw(2, U.alice, { name: "profile", type: 1, options: [{ name: "member", value: "777000777", type: 6 }], resolved: { users: { "777000777": { id: "777000777", username: "classbot", bot: true } }, members: { "777000777": { nick: null } } } }));
+  check(text(botPick).includes("bot") && q1("SELECT COUNT(*) AS n FROM players WHERE guild_id = ?", G).n === nBot, "/profile on a bot: no student profile is made for it");
   const pc0 = discordCalls.length;
   check((await r.tv("act", { a: "announce" })).status === 200 && discordCalls.slice(pc0).some((c) => JSON.stringify(c.body).includes("gjoin:")), "the teacher can post the button again");
   const st = await r.tv("act", { a: "start" });

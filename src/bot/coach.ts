@@ -22,6 +22,7 @@ const CODE_SKILLS = ["loops", "strings", "arrays", "dicts", "math", "sorting", "
 export async function cmdSkills(ix: Ix, memberId: string) {
   const L = ix.L;
   if (memberId !== ix.userId && !ix.teacher) return say(t(L, "skills.only_yours"));
+  if (memberId !== ix.userId && (ix.raw.data.resolved?.users?.[memberId]?.bot || memberId === ix.env.DISCORD_APP_ID)) return say(t(L, "bot.not_student"));
   const name = memberId === ix.userId ? ix.userName : memberName(ix.raw, memberId);
   later(ix, async () => {
     await getPlayer(ix.env, ix.guild.id, memberId, name);
