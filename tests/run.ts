@@ -3187,10 +3187,10 @@ section("the debrief comment: what went well, what to improve, what to watch; no
     [{ type: "story", texte: "Une page contact", statut: "fait" }], [], null, null, [{ notion: "alt", ok: true }]);
   check(fb2.includes("tu as réalisé toutes les fonctionnalités demandées dans le brief. Tu maîtrises bien la navigation entre les pages, les balises sémantiques, les bonnes pratiques (l’accessibilité et un code HTML valide) et Git (commits réguliers et messages clairs). Tu as bien répondu à toutes les questions orales.")
     && !/index, contact|formulaire est présent|7 commits/.test(fb2) && fb2.includes("utiliser la convention de nommage"), "…no detail of every page or feature; the commit convention is advice");
-  check(fb.includes("- travailler sur une page contact") && !/partie du brief/.test(fb) && fb.includes("meta description"), "…what to improve: the stories and the checks of the work, as actions");
+  check(fb.includes("de travailler sur une page contact") && !/partie du brief/.test(fb) && fb.includes("meta description"), "…what to improve: the stories and the checks of the work, as actions");
   const fbA = buildFeedback("Sara", [], [{ type: "story", texte: "En tant que développeur, je vais appliquer les bonnes pratiques UX/UI (lisibilité), afin d'offrir une expérience agréable.", statut: "absent" },
     { type: "story", texte: "En tant que développeur, je vais créer la page contact, afin que l'internaute écrive.", statut: "partiel" }, { type: "technique", texte: "Utiliser Flexbox pour la mise en page.", statut: "absent" }], []);
-  check(fbA.includes("- appliquer les bonnes pratiques UX/UI (lisibilité)\n- finir de créer la page contact\n- utiliser Flexbox pour la mise en page"), "a story or a technical demand not done: what to do, as an action");
+  check(fbA.includes("Pour améliorer ton travail, je te conseille d’appliquer les bonnes pratiques UX/UI (lisibilité), de finir de créer la page contact et d’utiliser Flexbox pour la mise en page."), "a story or a technical demand not done: what to do, as an action");
   check(!/README|indenté|animation|essayer ce|Compétences|C1N1|C3N1|56|niveau|Moyen/.test(fb), "…no deliverable, criterion, bonus to do, competency code, score or level");
   check(fb.includes("Lors de l’évaluation « HTML de base », certaines notions t’ont posé problème. Documente-toi et entraîne-toi en priorité sur les sélecteurs CSS (balise, classe, id) et la mise en forme du texte et des couleurs en CSS.") && /\nBonne continuation !$/.test(fb), "…what to watch: the notions behind the questions missed, grouped");
   const fb3 = buildFeedback("Sara", [], [], [], null, null, [{ notion: "Attribut alt", ok: false }, { notion: "Flexbox", ok: false }, { notion: "Doctype", ok: true }], null,
@@ -3842,6 +3842,252 @@ section("i18n: every key exists in English and French");
   walk(join(ROOT, "src"));
   const unknown = [...used].filter((k) => !(k in DICTS.en));
   check(!unknown.length, "keys used in code but missing from i18n: " + unknown.join(", "));
+}
+
+section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + students' devices)");
+{
+  const GM = await import("../src/shared/games.ts");
+  const SC = await import("../src/shared/sqlcases.ts");
+  const { DatabaseSync } = await import("node:sqlite");
+  // the cases: each teacher's solution passes its own step, and gives exactly what the clue asks
+  let casesOk = true;
+  for (const c of SC.SQL_CASES) {
+    const sdb = new DatabaseSync(":memory:"); sdb.exec(c.schema);
+    for (const st of c.steps) if (!SC.checkResult(st, sdb.prepare(st.ref).all().map((r: any) => Object.values(r))).ok) { casesOk = false; console.log("case step fails:", c.id, st.title); }
+  }
+  check(casesOk, "SQL Detective: every step's solution is accepted by the checker");
+  const cafe = SC.SQL_CASES[0];
+  check(SC.checkResult(cafe.steps[0], [["Omar Tazi", "15:24", "bureau"], ["Salma Idrissi", "15:12", "bureau"], ["Yassine Amrani", "15:05", "bureau"]]).ok
+    && !SC.checkResult(cafe.steps[0], [["Omar Tazi"], ["Salma Idrissi"]]).ok && SC.checkResult(cafe.steps[0], [["x"], ["y"]]).need === 3, "a result: any order, any extra column; the number of rows is said when it's wrong");
+  check(SC.checkResult(cafe.steps[3], [["KARIM BENALI ", "860.0"]]).ok && !SC.checkResult(cafe.steps[3], [[860]]).ok && !SC.checkResult(cafe.steps[3], [["Karim Benali", 400]]).ok, "two columns needed: the name AND its own total (case, spaces, 860 = 860.0)");
+  check(SC.culpritOk(cafe, " omar  TAZI ") && !SC.culpritOk(cafe, "Karim Benali"), "the culprit, whatever the case and spaces");
+  check(!JSON.stringify(SC.caseForPlayers(cafe)).includes("Karim Benali\"],[860") && !JSON.stringify(SC.caseForPlayers(cafe)).includes("SUM(co.total)") && !("culprit" in SC.caseForPlayers(cafe)), "the students' browser never gets the expected values, the solutions or the culprit");
+  // royale questions from the squad-battle generator and from an assessment
+  const conv = GM.fromBattle([
+    { id: "1", kind: "mcq", topic: "HTML", prompt: "Quelle balise ?", options: ["<head>", "<h1>", "<h6>", "<title>"], answer: "B · <h1>" },
+    { id: "2", kind: "truefalse", topic: "CSS", prompt: "Vrai ou faux : margin est à l'intérieur de la bordure.", answer: "Faux / False (c'est padding)" },
+    { id: "3", kind: "quick", topic: "JS", prompt: "Quick?", answer: "x" },
+  ] as any, "fr");
+  check(conv.length === 2 && conv[0].answer === 1 && conv[1].options.join() === "Vrai,Faux" && conv[1].answer === 1 && !/^Vrai ou faux/.test(conv[1].prompt), "battle questions → choices (multiple choice and true/false only)");
+  check(GM.fromAssessment([{ type: "mcq", prompt: "P", choices: ["a", "b"], answer: [1] }, { type: "mcq", prompt: "Q", choices: ["a", "b", "c"], answer: [0, 2] }, { type: "code", prompt: "C" }]).length === 1, "assessment questions: only one-answer multiple choices");
+
+  const page = await api("GET", `/api/games?g=${G}`);
+  check(page.status === 200 && page.data.kinds.relay.modes.join() === "squads,random" && page.data.cases.length >= 2 && page.data.tasks.length >= 6, "the games page: kinds, cases, relay tasks");
+  check((await api("POST", `/api/games?g=${G}`, { kind: "royale", mode: "solo", questions: [] })).status === 400 && (await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "squads", squads: [] })).status === 400, "a royale needs questions, squads need squads");
+  // two more students
+  for (const [id, nm] of [["104", "Dina"], ["105", "Elias"]]) run1("INSERT OR IGNORE INTO players (guild_id, discord_id, name, last_active, created_at) VALUES (?, ?, ?, ?, ?)", G, id, nm, clock.now(), clock.now());
+  const scriptOf = (h: string) => h.slice(h.lastIndexOf("<script>") + 8, h.lastIndexOf("</script>"));
+  const dev = (n: number) => String(n).repeat(32).slice(0, 32);
+  const game = (created: any) => {
+    const play = (path: string, key: string, body?: any) => bot.fetch(new Request(created.join + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-player-key": key }, body: body ? JSON.stringify({ key, ...body }) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
+    const tv = (path: string, body?: any) => bot.fetch(new Request(created.tv + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
+    return { play, tv };
+  };
+
+  // ---------------------------------------------------------------- 👑 royale, squads
+  const qs = [0, 1, 2, 3, 4].map((i) => ({ prompt: "Question " + i, options: ["a" + i, "b" + i, "c" + i, "d" + i], answer: 0 }));
+  const R = await api("POST", `/api/games?g=${G}`, { kind: "royale", mode: "squads", squads: [{ name: "Les Requins", members: [U.alice.id, U.bob.id] }, { name: "Les Flammes", members: [U.carol.id] }], questions: qs, settings: { seconds: 20, reviveCost: 1, reward: 15 } });
+  check(R.status === 200 && R.data.tv.includes("/game/") && R.data.join.includes("/play/") && R.data.qr.startsWith("<svg") && R.data.live.phase === "lobby", "royale created: TV link, join link + QR");
+  const r = game(R.data);
+  const tvHtml = await (await bot.fetch(new Request(R.data.tv), env, makeCtx())).text();
+  const plHtml = await (await bot.fetch(new Request(R.data.join), env, makeCtx())).text();
+  let parsed = true;
+  try { new Function(scriptOf(tvHtml)); new Function(scriptOf(plHtml)); } catch (e) { parsed = false; console.log(e); }
+  check(parsed, "the TV and the student pages' scripts are valid JavaScript (royale)");
+  const ros = await r.play("roster", "");
+  check(ros.status === 200 && ros.data.names.some((n: any) => n.name === "Alice" && n.squad) && ros.data.names.find((n: any) => n.pid === U.alice.id)?.taken === false, "the student picks their name (squad members first)");
+  check((await r.play("state", dev(1))).status === 403, "no name yet: the page asks for it");
+  const ja = await r.play("join", dev(1), { pid: U.alice.id });
+  check(ja.status === 200 && ja.data.me.name === "Alice" && ja.data.squad.name === "Les Requins", "Alice joins: her squad");
+  check((await r.play("join", dev(9), { pid: U.alice.id })).status === 409, "the same name on another device is refused");
+  await r.play("join", dev(2), { pid: U.bob.id }); await r.play("join", dev(3), { pid: U.carol.id });
+  const e1 = await r.play("join", dev(4), { pid: "104" });
+  check(e1.data.squad.name === "Les Flammes", "a student in no squad goes to the smallest one");
+  await r.play("join", dev(5), { pid: "105" });
+  const kick = await r.tv("act", { a: "kick", pid: "105" });
+  check(kick.status === 200 && !kick.data.players.some((p: any) => p.pid === "105"), "the teacher frees a name from the TV");
+  const st = await r.tv("act", { a: "start" });
+  check(st.status === 200 && st.data.phase === "question" && st.data.q && st.data.q.answer === undefined && st.data.players.length === 4, "start: the first question, never its answer on the TV");
+  check((await r.play("answer", dev(1), { step: 1, choice: 0 })).status === 409, "too early: wait for the question");
+  clock.advance(4);
+  const order = q1("SELECT state FROM games WHERE id = ?", R.data.id);
+  const qi = JSON.parse(order.state).order[0];
+  const pa = await r.play("answer", dev(1), { step: 1, choice: qs[qi].answer });
+  check(pa.status === 200 && pa.data.picked === 0 && pa.data.q.answer === undefined, "Alice answers (locked, the answer stays hidden)");
+  check((await r.play("answer", dev(1), { step: 1, choice: 2 })).status === 409, "an answer can't be changed");
+  await r.play("answer", dev(2), { step: 1, choice: 3 });   // Bob wrong
+  await r.play("answer", dev(3), { step: 1, choice: 0 });   // Carol right; Dina says nothing
+  check((await r.tv("act", { a: "reveal" })).status === 409, "reveal before the time is up (not everyone answered): refused");
+  clock.advance(20);
+  const rv = await r.tv("act", { a: "reveal" });
+  check(rv.data.phase === "reveal" && rv.data.last.out.sort().join() === [U.bob.id, "104"].sort().join() && rv.data.last.right === 2 && rv.data.q.answer === 0 && rv.data.last.dist[0] === 2, "reveal: a wrong answer and no answer are out, the answer and the votes shown");
+  check(rv.data.pts[0] === 1 && rv.data.pts[1] === 1, "each right answer gives its squad a point");
+  const bobView = await r.play("state", dev(2));
+  check(bobView.data.me.alive === false && bobView.data.last.out === true, "Bob sees he's out");
+  check((await r.play("revive", dev(3), { target: U.bob.id })).status === 409, "a player can only bring back their own squad");
+  const rb = await r.play("revive", dev(1), { target: U.bob.id });
+  check(rb.status === 200 && rb.data.pts === 0 && rb.data.squad.mates.find((m: any) => m.pid === U.bob.id).alive, "Alice spends her squad's point: Bob is back");
+  check((await r.play("revive", dev(1), { target: U.bob.id })).status === 409, "…once");
+  await r.tv("act", { a: "next" });
+  clock.advance(4);
+  const qi2 = JSON.parse(q1("SELECT state FROM games WHERE id = ?", R.data.id).state).order[1];
+  for (const k of [1, 2, 3]) await r.play("answer", dev(k), { step: 2, choice: (qs[qi2].answer + 1) % 4 });   // everyone wrong
+  const rv2 = await r.tv("act", { a: "reveal" });
+  check(rv2.data.last.everyone && rv2.data.last.out.length === 0 && rv2.data.players.filter((p: any) => p.alive).length === 3, "everyone wrong (all answered: revealed at once): nobody is out");
+  await r.tv("act", { a: "next" });
+  clock.advance(4);
+  const qi3 = JSON.parse(q1("SELECT state FROM games WHERE id = ?", R.data.id).state).order[2];
+  await r.play("answer", dev(1), { step: 3, choice: qs[qi3].answer }); await r.play("answer", dev(2), { step: 3, choice: qs[qi3].answer }); await r.play("answer", dev(3), { step: 3, choice: 3 });
+  const rv3 = await r.tv("act", { a: "reveal" });
+  check(rv3.data.last.final && rv3.data.winSquad === 0, "only one squad left standing: it wins");
+  const before = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'game'", U.bob.id)?.n ?? 0;
+  const ov = await r.tv("act", { a: "next" });
+  const after = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'game'", U.bob.id)?.n ?? 0;
+  check(ov.data.phase === "over" && after - before === 15, "the end: the winning squad's players get their points");
+  await r.tv("act", { a: "stop" }).catch(() => null);
+  const again = await r.tv("act", { a: "reset" });
+  check(again.data.phase === "lobby" && again.data.players.length === 4 && again.data.players.every((p: any) => p.alive), "play again: the same players, everyone back");
+
+  // ---------------------------------------------------------------- 🕵️ sql, solo
+  const Q = await api("POST", `/api/games?g=${G}`, { kind: "sql", mode: "solo", settings: { caseId: "cafe", hintPenalty: 60, wrongPenalty: 120, reward: 10 } });
+  check(Q.status === 200 && Q.data.content.case.steps[0].ref, "SQL Detective created (the teacher gets the answer key)");
+  const sq = game(Q.data);
+  let parsed2 = true;
+  try { for (const u of [Q.data.tv, Q.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsed2 = false; console.log(e); }
+  check(parsed2 && (await (await bot.fetch(new Request(Q.data.join), env, makeCtx())).text()).includes("cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"), "SQL Detective pages: valid scripts, sql.js from cdnjs");
+  await sq.play("join", dev(1), { pid: U.alice.id }); await sq.play("join", dev(2), { pid: U.bob.id });
+  const cs = await bot.fetch(new Request(Q.data.join + "/case"), env, makeCtx());
+  const cj = await cs.json() as any;
+  check(cs.status === 200 && cj.schema.includes("CREATE TABLE badges") && cj.steps.length === 4 && !JSON.stringify(cj).includes("Omar Tazi\", \"tazi") && !("culprit" in cj), "the case for the browser: story, database, clues");
+  check((await sq.play("check", dev(1), { step: 0, rows: [] })).status === 409, "before the start: nothing counts");
+  await sq.tv("act", { a: "start" });
+  const sdb = new DatabaseSync(":memory:"); sdb.exec(cafe.schema);
+  const rowsOf = (sql: string) => sdb.prepare(sql).all().map((x: any) => Object.values(x));
+  const w1 = await sq.play("check", dev(1), { step: 0, rows: rowsOf("SELECT personne FROM badges WHERE porte = 'bureau'") });
+  check(w1.status === 200 && !w1.data.ok && w1.data.rows === 8 && w1.data.need === 3, "a wrong result: how many rows it gives, how many are needed");
+  const ok1 = await sq.play("check", dev(1), { step: 0, rows: rowsOf(cafe.steps[0].ref) });
+  check(ok1.data.ok && ok1.data.step === 1 && /Trois personnes/.test(ok1.data.found), "the right result: the clue is found");
+  check((await sq.play("check", dev(1), { step: 0, rows: rowsOf(cafe.steps[0].ref) })).data.stale, "the same step twice: nothing more");
+  const h = await sq.play("hint", dev(1), {});
+  check(/JOIN/.test(h.data.hint) && JSON.parse(q1("SELECT data FROM game_teams WHERE game_id = ? AND squad = 0", Q.data.id).data).penalty === 60, "a hint: shown, and it costs 60 s");
+  for (const k of [1, 2, 3]) await sq.play("check", dev(1), { step: k, rows: rowsOf(cafe.steps[k].ref) });
+  const tvq = await sq.tv("state");
+  check(tvq.data.teams.find((t: any) => t.squad === 0).step === 4 && tvq.data.feed.length === 4, "the TV: Alice's 4 clues, in the live feed");
+  const acc1 = await sq.play("accuse", dev(1), { name: "Karim Benali" });
+  check(acc1.status === 200 && !acc1.data.ok && (await sq.play("accuse", dev(1), { name: "Omar Tazi" })).status === 409, "a wrong accusation: a penalty, and a wait before trying again");
+  clock.advance(25);
+  const acc2 = await sq.play("accuse", dev(1), { name: "omar tazi" });
+  check(acc2.data.ok && /Affaire résolue/.test(acc2.data.ending), "the right culprit: case solved");
+  check((await sq.play("accuse", dev(2), { name: "Omar Tazi" })).status === 409, "Bob must find the clues first");
+  const end = await sq.tv("act", { a: "stop" });
+  check(end.data.phase === "over" && end.data.winSquad === 0 && end.data.ranking[0] === 0, "the teacher ends it: Alice's squad (solo) wins");
+
+  // ---------------------------------------------------------------- 🏃 relay, random squads of 2
+  const Y = await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "random", taskIndex: page.data.tasks.findIndex((t: any) => t.fn === "somme"), settings: { size: 2, total: 120, rounds: 1, noise: true, strikes: 2, reward: 20 } });
+  check(Y.status === 200 && Y.data.content.task.fn === "somme", "Code Relay created");
+  const ry = game(Y.data);
+  let parsed3 = true;
+  try { for (const u of [Y.data.tv, Y.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsed3 = false; console.log(e); }
+  check(parsed3, "Code Relay pages: valid scripts");
+  for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id], [4, "104"]] as [number, string][]) await ry.play("join", dev(k), { pid });
+  const ys = await ry.tv("act", { a: "start" });
+  check(ys.data.phase === "playing" && ys.data.teams.length === 2 && ys.data.teams.every((t: any) => t.order.length === 2), "start: random squads of 2, each with its order");
+  check((await ry.play("join", dev(5), { pid: "105" })).status === 409, "nobody joins a relay once it runs");
+  const tA = ys.data.teams[0];
+  const keyOf = (pid: string) => dev([U.alice.id, U.bob.id, U.carol.id, "104"].indexOf(pid) + 1);
+  const w0 = tA.order[0], w1p = tA.order[1];
+  const v0 = await ry.play("state", keyOf(w0)), v1 = await ry.play("state", keyOf(w1p));
+  check(v0.data.writing && v0.data.code.includes("function somme") && !v1.data.writing && v1.data.code === null && v1.data.nextAt > v0.data.now, "the first one writes (with the starter code); the next one waits without seeing the code");
+  check((await ry.play("code", keyOf(w1p), { turn: 0, code: "x" })).status === 409, "only the writer can save");
+  check((await ry.play("code", keyOf(w0), { turn: 0, code: "function somme(t) {\n  let s = 0;\n" })).status === 200, "the writer's code is saved");
+  clock.advance(61);
+  const v1b = await ry.play("state", keyOf(w1p));
+  check(v1b.data.writing && v1b.data.turn === 1 && v1b.data.code.startsWith("function somme(t) {\n  let s = 0;"), "60 s each (2 min ÷ 2): the next one gets the code as it was left");
+  check((await ry.play("code", keyOf(w0), { turn: 0, code: "late" })).status === 200 && JSON.parse(q1("SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", Y.data.id, tA.squad).data).code === "late", "a last save a moment after the turn ends still counts…");
+  await ry.play("code", keyOf(w1p), { turn: 1, code: "function somme(t) {\n  let s = 0;\n  for (const x of t) s += x;\n  return s;\n}" });
+  check((await ry.play("code", keyOf(w0), { turn: 0, code: "too late" })).status === 409, "…but never over the next one's work");
+  // the other squad talks twice: out
+  const tB = ys.data.teams[1];
+  const n1 = await ry.play("noise", keyOf(tB.order[0]), {});
+  check(n1.data.strikes === 1 && !n1.data.out && (await ry.play("noise", keyOf(tB.order[0]), {})).data.ignored, "a voice: a strike for the squad (one per burst)");
+  const pardon = await ry.tv("act", { a: "pardon", squad: tB.squad });
+  check(pardon.data.teams.find((t: any) => t.squad === tB.squad).strikes === 0, "the teacher cancels a false strike");
+  await ry.play("noise", keyOf(tB.order[0]), {}).catch(() => null);
+  clock.advance(6);
+  const n2 = await ry.play("noise", keyOf(tB.order[1]), {});
+  clock.advance(6);
+  const n3 = await ry.play("noise", keyOf(tB.order[1]), {});
+  check(n2.data.strikes === 1 && n3.data.strikes === 2 && n3.data.out && (await ry.play("code", keyOf(tB.order[1]), { turn: 1, code: "x" })).status === 409, "2 strikes: the squad is out");
+  clock.advance(60);
+  const test = await ry.tv("state");
+  check(test.data.phase === "testing" && test.data.teams.find((t: any) => t.squad === tA.squad).code.includes("return s"), "time's up: the tests (the TV gets the codes)");
+  const codes = await ry.tv("codes");
+  check(codes.data.fn === "somme" && codes.data.tests.length === 6 && codes.data.codes[tB.squad] === null, "the TV runs every squad's code (not the one that is out)");
+  const res = await ry.tv("act", { a: "results", results: { [tA.squad]: { passed: 6, total: 6, details: [] }, [tB.squad]: { passed: 0, total: 6, error: "out" } } });
+  const winners = res.data.players.filter((p: any) => p.squad === tA.squad).map((p: any) => p.pid);
+  check(res.data.phase === "over" && res.data.winSquad === tA.squad && res.data.ranking[0] === tA.squad && winners.every((pid: string) => q1("SELECT COUNT(*) AS n FROM ledger WHERE discord_id = ? AND reason = 'game' AND ref = ?", pid, String(Y.data.id)).n === 1), "the most tests passed wins; its players get their points");
+  const mine = await ry.play("state", keyOf(w0));
+  check(mine.data.result.passed === 6 && mine.data.rank === 1 && mine.data.code.includes("return s"), "each student sees their squad's result and final code");
+  // the relay's test runner (the same code runs in the TV's Web Worker)
+  const workerSrc = scriptOf(await (await bot.fetch(new Request(Y.data.tv), env, makeCtx())).text()).match(/new Blob\(\[("(?:[^"\\]|\\.)*")\]/);
+  let runOk = false;
+  if (workerSrc) {
+    const src = JSON.parse(workerSrc[1]);
+    let out: any = null;
+    const fake: any = { postMessage: (m: any) => { out = m; } };
+    new Function("self", "postMessage", src + "\nself.onmessage = onmessage;")(fake, fake.postMessage);
+    const onm = new Function("postMessage", src + "\nreturn onmessage;")((m: any) => { out = m; });
+    onm({ data: { code: "function somme(t){return t.reduce((a,b)=>a+b,0)}", fn: "somme", tests: [{ args: [[1, 2]], expect: 3 }, { args: [[]], expect: 1 }] } });
+    runOk = out && out.out[0].ok && !out.out[1].ok && out.out[1].got === "0";
+    onm({ data: { code: "function nope(){}", fn: "somme", tests: [] } });
+    runOk = runOk && /n'existe pas/.test(out.error);
+  }
+  check(runOk, "the test runner: right/wrong per test, a missing function said clearly");
+  const del = await api("DELETE", `/api/games/${Y.data.id}?g=${G}`);
+  check(del.status === 200 && !q1("SELECT COUNT(*) AS n FROM game_players WHERE game_id = ?", Y.data.id).n && (await bot.fetch(new Request(Y.data.tv + "/state"), env, makeCtx())).status === 404, "a deleted game: its links stop working");
+  // ---------------------------------------------------------------- the built-in relay challenges: each reference solution passes its tests
+  const GC = await import("../src/shared/gamecontent.ts");
+  let bankOk = true;
+  for (const t of GC.RELAY_TASKS) { const rr = await GC.runRelay(env, "python", t.solution!, t.fn, t.tests); if (rr.passed !== t.tests.length) { bankOk = false; console.log("relay bank:", t.fn, rr); } }
+  check(bankOk && GC.RELAY_TASKS.filter((t) => t.level !== "easy").length >= 8, "Code Relay: harder built-in challenges, each one checked against its reference solution");
+  check(GC.starterFor({ fn: "cesar", params: ["texte", "decalage"] }, "python") === "def cesar(texte, decalage):\n    pass\n" && GC.starterFor({ fn: "cesar", params: ["texte", "decalage"] }, "php").includes("function cesar($texte, $decalage)")
+    && GC.literal({ a: [true, null] }, "python") === '{"a": [True, None]}' && GC.literal({ a: 1 }, "php") === '["a" => 1]', "the starter code and the examples in the chosen language");
+  const phpR = await GC.runRelay(env, "php", "<?php\nfunction somme($t) { return array_sum($t); }", "somme", [{ args: [[1, 2, 3]], expect: 6 }, { args: [[]], expect: 1 }]);
+  const pyErr = await GC.runRelay(env, "python", "def somme(t:\n", "somme", [{ args: [[1]], expect: 1 }]);
+  check(phpR.passed === 1 && phpR.total === 2 && !phpR.details[1].ok && pyErr.passed === 0 && /Syntax|invalid/i.test(pyErr.error || ""), "PHP and Python run on the code runner: per-test results, an error said clearly");
+  // ---------------------------------------------------------------- AI challenges and cases, checked by running them
+  const ait = await api("POST", `/api/games/task?g=${G}`, { prompt: "doubler des nombres", level: "medium" });
+  check(ait.status === 200 && ait.data.task.fn === "doubler" && ait.data.task.tests.length === 5 && !ait.data.task.tests.some((t: any) => JSON.stringify(t.expect) === "[99]") && ait.data.task.by === "ai", "an AI challenge: its solution runs on its tests, the wrong test is dropped");
+  const aic = await api("POST", `/api/games/case?g=${G}`, { prompt: "un cookie", level: "easy" });
+  check(aic.status === 200 && aic.data.case.steps.length === 2 && aic.data.dropped.length === 1 && aic.data.case.steps[0].expect.rows === 2 && aic.data.case.steps[1].expect.all.length === 2 && aic.data.case.culprit.includes("ali ben") && aic.data.case.culprit.includes("ben ali"), "an AI case: its queries run on its database (SQLite), the broken step dropped, the expected results computed");
+  const own = await api("POST", `/api/games/case?g=${G}`, { case: { title: "Mon enquête", schema: "CREATE TABLE t (nom TEXT); INSERT INTO t VALUES ('A'),('B');", culprit: "A", steps: [{ clue: "Tout", ref: "SELECT nom FROM t" }, { clue: "Le A", ref: "SELECT nom FROM t WHERE nom = 'A'" }] } });
+  const bad = await api("POST", `/api/games/case?g=${G}`, { case: { schema: "CREATE TABLE t (x", culprit: "A", steps: [{ clue: "a", ref: "SELECT 1" }, { clue: "b", ref: "SELECT 2" }] } });
+  check(own.status === 200 && own.data.case.steps[1].expect.rows === 1 && bad.status === 400 && /database has an error|error/i.test(bad.data.error), "the teacher's own case: checked the same way (a broken database is refused)");
+  const CG = await api("POST", `/api/games?g=${G}`, { kind: "sql", mode: "solo", case: aic.data.case });
+  const cgp = game(CG.data);
+  await cgp.play("join", dev(1), { pid: U.alice.id }); await cgp.tv("act", { a: "start" });
+  const cgc = await bot.fetch(new Request(CG.data.join + "/case"), env, makeCtx());
+  const cgj = await cgc.json() as any;
+  const c1 = await cgp.play("check", dev(1), { step: 0, rows: [["Ali Ben"], ["Sara Lou"]] });
+  const c2 = await cgp.play("check", dev(1), { step: 1, rows: [["10:05", "Ali Ben", "profs"]] });
+  check(CG.status === 200 && cgj.title === "Le cookie disparu" && !JSON.stringify(cgj).includes("ali ben") && c1.data.ok && c2.data.ok && (await cgp.play("accuse", dev(1), { name: "Ben Ali" })).data.ok, "a game with the AI case: the clues found, the culprit named");
+  const RG = await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "random", task: ait.data.task, settings: { codeLang: "python", size: 2, total: 60 } });
+  check(RG.status === 200 && RG.data.content.starter === "def doubler(tableau):\n    pass\n" && RG.data.content.lang === "Python", "a Python relay with the AI challenge");
+  const rg = game(RG.data);
+  await rg.play("join", dev(1), { pid: U.alice.id }); await rg.play("join", dev(2), { pid: U.bob.id });
+  const rgs = await rg.tv("act", { a: "start" });
+  const wr = rgs.data.teams[0].writer, wk = dev(wr === U.alice.id ? 1 : 2);
+  const pv = await rg.play("state", wk);
+  check(pv.data.codeLang === "python" && pv.data.task.shown[0].call === "doubler([1, 2])" && pv.data.code.startsWith("def doubler"), "the students see Python: the starter, the examples written in Python");
+  const tr = await rg.play("try", wk, { code: "def doubler(tableau):\n    return [x * 2 for x in tableau]\n" });
+  check(tr.status === 200 && tr.data.passed === 2 && (await rg.play("try", wk, { code: "x" })).status === 409, "try the examples on the code runner (once every few seconds)");
+  await rg.play("code", wk, { turn: 0, code: "def doubler(tableau):\n    return [x * 2 for x in tableau]\n" });
+  clock.advance(70);
+  await rg.tv("state");
+  const rt = await rg.tv("act", { a: "runtests" });
+  check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
+  const list = await api("GET", `/api/games?g=${G}`);
+  check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 4) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
 
 section("slash command definitions are valid for Discord");
