@@ -9,7 +9,8 @@
 // player, one per squad (its progress) and the answers. Clocks are timestamps, so every screen agrees.
 import type { Env, GuildRow } from "./types.ts";
 import { addPoints, all, now, one, run } from "./db.ts";
-import { COLORS, send } from "./discord.ts";
+import { COLORS, btn, row, send } from "./discord.ts";
+import { signText } from "./integrity.ts";
 import { arenaChannel } from "./arena.ts";
 import { SQL_CASES, caseForPlayers, checkResult, culpritOk } from "./sqlcases.ts";
 import type { SqlCase } from "./sqlcases.ts";
@@ -40,8 +41,10 @@ export interface GState {
   seq: number; startAt: number | null; rewarded?: boolean;
   // royale
   step?: number; order?: number[]; qAt?: number; qEnd?: number;
-  last?: { out: string[]; everyone: boolean; right: number; dist: number[]; final: boolean } | null;
+  last?: { out: string[]; everyone: boolean; right: number; dist: number[]; final: boolean; wiped?: number[] } | null;
   winners?: string[]; winSquad?: number | null;
+  banned?: string[];   // removed by the teacher: their Discord link doesn't let them back in
+  posted?: number;     // when the join button was last posted in Discord
   // sql / relay
   endAt?: number | null; feed?: { at: number; squad: number; text: string }[];
   totalMs?: number; results?: Record<string, { passed: number; total: number; error?: string; details?: { ok: boolean; got: string }[] }>;
@@ -191,26 +194,57 @@ const teamStart = (kind: GKind, members: string[], set: GSettings): any =>
   kind === "royale" ? { pts: 0 } : kind === "sql" ? { step: 0, times: [], hints: [], wrong: 0, done: null, penalty: 0, lock: 0 } : { order: shuffle(members), code: null, savedAt: null, savedBy: null, turnSaved: -1, strikes: 0, out: false, noise: {}, sens: set.sensitivity };
 
 // ------------------------------------------------------------------ joining
-export async function rosterOf(env: Env, gm: Game) {
-  const names = await all<{ pid: string; name: string | null }>(env, "SELECT discord_id AS pid, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", gm.guild_id);
-  const taken = new Set((await all<{ pid: string }>(env, "SELECT pid FROM game_players WHERE game_id = ?", gm.id)).map((r) => r.pid));
-  const inSquads = new Set(gm.squads.flatMap((q) => q.members));
-  return names.map((x) => ({ pid: x.pid, name: x.name || x.pid, taken: taken.has(x.pid), squad: inSquads.has(x.pid) }))
-    .sort((a, b) => Number(b.squad) - Number(a.squad) || a.name.localeCompare(b.name));
+/** A student's own pass to a game (from Discord: /play or the 🎮 button): who they are, signed, valid 12 hours. */
+export async function gamePass(env: Env, gameId: number, pid: string, hours = 12): Promise<string> {
+  const exp = Math.floor(Date.now() / 1000) + hours * 3600;
+  return `${pid}.${exp}.${await signText(env, `game:${gameId}.${pid}.${exp}`)}`;
+}
+export async function readGamePass(env: Env, gameId: number, pass: string): Promise<string | null> {
+  const m = String(pass || "").match(/^(\d{1,25})\.(\d{9,11})\.([A-Za-z0-9_-]{32})$/);
+  if (!m || Number(m[2]) < Date.now() / 1000) return null;
+  const want = await signText(env, `game:${gameId}.${m[1]}.${m[2]}`);
+  let diff = want.length ^ m[3].length;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ (m[3].charCodeAt(i) || 0);
+  return diff ? null : m[1];
+}
+/** The student's private link: the play page, with the pass after # (never sent to a server log). */
+export async function playLink(env: Env, gm: { id: number; join_code: string }, pid: string) {
+  return `${joinUrl(env, gm)}#p=${await gamePass(env, gm.id, pid)}`;
+}
+/** The 🎮 button in Discord (#arena): each student who clicks it gets their own link. */
+export async function postJoin(env: Env, gm: Game) {
+  const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", gm.guild_id);
+  const ch = g ? await arenaChannel(env, g) : null;
+  if (!ch) throw new GameError("No #arena channel to post in: students can type /play in Discord.");
+  const fr = gm.settings.lang !== "en";
+  await send(env, ch, {
+    embeds: [{ title: `${GAME_KINDS[gm.kind].emoji} ${gm.title}`, color: COLORS.purple,
+      description: fr ? "La partie va commencer ! Clique sur **🎮 Rejoindre** : tu reçois ton lien personnel (lié à ton compte Discord), ouvre-le sur ton téléphone ou ton PC.\n-# Ou tape `/play`."
+        : "The game is about to start! Click **🎮 Join**: you get your own link (linked to your Discord account), open it on your phone or laptop.\n-# Or type `/play`." }],
+    components: [row(btn(fr ? "Rejoindre" : "Join", `gjoin:${gm.id}`, 1, "🎮"))],
+  });
+  await run(env, "UPDATE games SET state = json_set(state, '$.posted', ?) WHERE id = ?", Date.now(), gm.id);
+  gm.state.posted = Date.now();
 }
 export async function playerByKey(env: Env, gameId: number, key: string): Promise<Player | null> {
   if (!key || key.length < 16) return null;
   return one<Player>(env, "SELECT * FROM game_players WHERE game_id = ? AND key = ?", gameId, key.slice(0, 64));
 }
-/** A student opens the link and taps their name: this device plays for them (another device needs the teacher). */
+/** A student opens their own link from Discord (the pass says who they are): this device plays for them.
+ *  The same student on another device: the new device takes over (the old one stops). */
 export async function joinGame(env: Env, gm: Game, key: string, pid: string): Promise<Player> {
   if (!key || key.length < 16) throw new GameError("This browser can't join (no key).");
+  if ((gm.state.banned ?? []).includes(pid)) throw new GameError("Your teacher removed you from this game.");
   const mine = await playerByKey(env, gm.id, key);
-  if (mine) return mine;
+  if (mine && mine.pid === pid) return mine;
+  if (mine) await run(env, "UPDATE game_players SET key = ? WHERE game_id = ? AND pid = ?", "x" + key.slice(1, 64) + "-" + Date.now(), gm.id, mine.pid);   // this device was someone else's
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", gm.guild_id, pid);
-  if (!p) throw new GameError("Pick your name in the list.");
+  if (!p) throw new GameError("You're not in this class: type /link in Discord first.");
   const had = await one<Player>(env, "SELECT * FROM game_players WHERE game_id = ? AND pid = ?", gm.id, pid);
-  if (had) throw new GameError("This name already plays on another device. Ask your teacher to free it (on the TV, click the name).");
+  if (had) {
+    await run(env, "UPDATE game_players SET key = ?, seen = ? WHERE game_id = ? AND pid = ?", key.slice(0, 64), now(), gm.id, pid);
+    return (await playerByKey(env, gm.id, key))!;
+  }
   const late = gm.state.phase !== "lobby";
   if (late && gm.kind === "relay") throw new GameError("The relay has started: wait for the next game.");
   let squad = -1;
@@ -256,14 +290,37 @@ export function squadList(gm: Game, players: Player[]): GSquad[] {
 }
 
 // ------------------------------------------------------------------ the teacher's buttons (on the TV)
-export type GAction = { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "pardon"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
+export type GAction = { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "unban"; pid: string } | { a: "announce" } | { a: "pardon"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
+export const COUNTDOWN_MS = 5000, NEXT_MS = 3000;
 export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()): Promise<Game> {
   const st: GState = structuredClone(gm.state), readSeq = gm.state.seq;
   const players = await playersOf(env, gm.id);
   switch (x.a) {
     case "kick": {
-      // free a name (a wrong device, a student who left): they can join again
-      await run(env, "DELETE FROM game_players WHERE game_id = ? AND pid = ?", gm.id, s(x.pid, 25));
+      // the teacher removes a student: out of the game, and their link no longer lets them back in
+      const pid = s(x.pid, 25);
+      await run(env, "DELETE FROM game_players WHERE game_id = ? AND pid = ?", gm.id, pid);
+      await run(env, "DELETE FROM game_moves WHERE game_id = ? AND pid = ?", gm.id, pid);
+      for (let i = 0; i < 4; i++) {
+        const cur = (await getGame(env, gm.id))!;
+        const n = structuredClone(cur.state);
+        n.banned = [...new Set([...(n.banned ?? []), pid])];
+        if (await saveState(env, cur, n, cur.state.seq)) { Object.assign(gm, cur); return gm; }
+      }
+      throw new GameError("Too many changes at once: try again.");
+    }
+    case "unban": {
+      const pid = s(x.pid, 25);
+      for (let i = 0; i < 4; i++) {
+        const cur = (await getGame(env, gm.id))!;
+        const n = structuredClone(cur.state);
+        n.banned = (n.banned ?? []).filter((b) => b !== pid);
+        if (await saveState(env, cur, n, cur.state.seq)) { Object.assign(gm, cur); return gm; }
+      }
+      throw new GameError("Too many changes at once: try again.");
+    }
+    case "announce": {
+      await postJoin(env, gm);
       await bump(env, gm);
       return gm;
     }
@@ -275,7 +332,7 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
     }
     case "start": {
       if (st.phase !== "lobby") throw new GameError("The game has started.");
-      if (!players.length) throw new GameError("Nobody has joined yet: the students scan the QR code.");
+      if (!players.length) throw new GameError("Nobody has joined yet: the students click 🎮 Join in Discord (or type /play).");
       if (gm.mode === "random") {
         const n = Math.max(1, Math.round(players.length / gm.settings.size));
         const mixed = shuffle(players);
@@ -297,7 +354,8 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
       st.startAt = at;
       if (gm.kind === "royale") {
         st.order = shuffle(gm.content.questions.map((_: unknown, i: number) => i));
-        st.step = 1; st.phase = "question"; st.qAt = at + 3000; st.qEnd = at + 3000 + gm.settings.seconds * 1000; st.last = null;
+        // a countdown on every screen before the first question (5 s), then 3 s before each next one
+        st.step = 1; st.phase = "question"; st.qAt = at + COUNTDOWN_MS; st.qEnd = at + COUNTDOWN_MS + gm.settings.seconds * 1000; st.last = null;
       } else if (gm.kind === "sql") {
         st.phase = "playing"; st.feed = []; st.endAt = null;
       } else {
@@ -315,7 +373,7 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
     case "next": {
       if (gm.kind !== "royale" || st.phase !== "reveal") throw new GameError("Nothing to go on to.");
       if (st.last?.final) { st.phase = "over"; break; }
-      st.step = (st.step ?? 0) + 1; st.phase = "question"; st.qAt = at + 2500; st.qEnd = at + 2500 + gm.settings.seconds * 1000; st.last = null;
+      st.step = (st.step ?? 0) + 1; st.phase = "question"; st.qAt = at + NEXT_MS; st.qEnd = at + NEXT_MS + gm.settings.seconds * 1000; st.last = null;
       break;
     }
     case "runtests": {
@@ -366,7 +424,7 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
       if (gm.mode === "solo") {
         for (const p of players) await run(env, "UPDATE game_teams SET data = ?, seq = seq + 1 WHERE game_id = ? AND squad = ?", JSON.stringify(teamStart(gm.kind, [p.pid], gm.settings)), gm.id, p.squad);
       } else await run(env, "DELETE FROM game_teams WHERE game_id = ?", gm.id);
-      const n = newState(); n.seq = readSeq;
+      const n = newState(); n.seq = readSeq; n.banned = st.banned; n.posted = st.posted;
       if (!(await saveState(env, gm, n, readSeq))) throw new GameError("Already done (the screen changed).");
       return gm;
     }
@@ -397,8 +455,10 @@ async function revealRoyale(env: Env, gm: Game, players: Player[], at: number): 
   const lastQ = (st.step ?? 0) >= gm.content.questions.length;
   const oneSquadLeft = gm.mode !== "solo" && new Set(stay.map((p) => p.squad)).size <= 1;
   const final = stay.length <= 1 || lastQ || oneSquadLeft;
+  // the squads whose last members just fell: wiped out (nobody is left to bring them back)
+  const wiped = gm.mode === "solo" ? [] : [...new Set(alive.map((p) => p.squad))].filter((sq) => sq >= 0 && !stay.some((p) => p.squad === sq));
   st.phase = "reveal";
-  st.last = { out: out.map((p) => p.pid), everyone, right: right.length, dist, final };
+  st.last = { out: out.map((p) => p.pid), everyone, right: right.length, dist, final, wiped };
   if (final) { st.winners = stay.map((p) => p.pid); st.winSquad = gm.mode === "solo" ? null : bestSquad(stay); }
   // the state first (only one request reveals), then the players
   if (!(await saveState(env, gm, st, readSeq))) { const fresh = await getGame(env, gm.id); if (fresh) Object.assign(gm, fresh); return gm; }
@@ -597,7 +657,8 @@ export async function tvView(env: Env, gm: Game, at = Date.now()) {
     join: joinUrl(env, gm), code: gm.join_code,
     squads: squads.map((q, i) => (q ? { i, name: q.name, emoji: q.emoji, color: q.color } : null)),
     players: players.map((p) => ({ pid: p.pid, name: p.name, squad: p.squad, alive: !!p.alive, out: p.out_step, score: p.score, mic: p.mic })),
-    winSquad: st.winSquad ?? null, ranking: st.ranking ?? null,
+    winSquad: st.winSquad ?? null, ranking: st.ranking ?? null, posted: st.posted ?? null,
+    banned: st.banned?.length ? (await all<{ pid: string; name: string | null }>(env, `SELECT discord_id AS pid, name FROM players WHERE guild_id = ? AND discord_id IN (${st.banned.map(() => "?").join(",")})`, gm.guild_id, ...st.banned)).map((b) => ({ pid: b.pid, name: b.name || b.pid })) : [],
   };
   if (gm.kind === "royale") {
     const qs: RQ[] = gm.content.questions;
@@ -638,7 +699,8 @@ export async function playerView(env: Env, gm: Game, p: Player, at = Date.now())
     const team = p.squad >= 0 && gm.mode !== "solo" ? await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad) : null;
     return { ...base, step: st.step ?? 0, total: qs.length, qAt: st.qAt, qEnd: st.qEnd, picked: mine ? Number(mine.value) : null,
       q: q && (st.phase === "question" || st.phase === "reveal") ? { prompt: q.prompt, code: q.code ?? null, options: q.options, ...(st.phase === "reveal" ? { answer: q.answer } : {}) } : null,
-      last: st.phase === "reveal" ? { out: (st.last?.out ?? []).includes(p.pid), everyone: !!st.last?.everyone, final: !!st.last?.final } : null,
+      last: st.phase === "reveal" ? { out: (st.last?.out ?? []).includes(p.pid), everyone: !!st.last?.everyone, final: !!st.last?.final, wiped: (st.last?.wiped ?? []).includes(p.squad), wipedN: (st.last?.wiped ?? []).length } : null,
+      alive: players.filter((x) => x.alive).length, squadsLeft: gm.mode === "solo" ? null : new Set(players.filter((x) => x.alive && x.squad >= 0).map((x) => x.squad)).size,
       pts: team ? JSON.parse(team.data).pts || 0 : 0, reviveCost: gm.settings.reviveCost, maxRevives: gm.settings.maxRevives, winners: st.phase === "over" ? st.winners ?? [] : [] };
   }
   const team = p.squad >= 0 ? await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad) : null;

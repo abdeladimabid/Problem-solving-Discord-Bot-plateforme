@@ -1,6 +1,6 @@
 /* ClassBot dashboard: 🎮 Class games. A hub (#/games) and a page per game (#/games/royale | sql | relay; the squad
    battle keeps its own page). Battle Royale quiz, SQL Detective and Code Relay play on the class TV and the students'
-   own phones / laptops (they scan the QR code on the TV and tap their name). Loaded after battle.js. */
+   own phones / laptops (each one opens their own link from Discord: the 🎮 Join button or /play). Loaded after battle.js. */
 "use strict";
 
 Object.assign(REASON, { game: "Class game" });
@@ -11,7 +11,7 @@ const GM_INFO = {
   royale: { name: "Battle Royale", art: "👑", tag: "Quiz · everyone at once", device: "Phones",
     pitch: "Everyone answers the same question on their phone. A wrong answer knocks you out; <b>the last one standing wins.</b> In squads, right answers earn points to bring a teammate back.",
     learn: "Quick recall of any topic, under pressure",
-    steps: [["🧩", "Pick the questions", "The AI writes them on your topics, or take an assessment's multiple-choice questions."], ["📺", "Open the TV screen", "Full screen, sound on. The students scan the QR code and tap their name."], ["💀", "Survive!", "A countdown per question; the TV shows the votes and who is out. Space bar = next question."]] },
+    steps: [["🧩", "Pick the questions", "The AI writes them on your topics, or take an assessment's multiple-choice questions."], ["📺", "Open the TV screen", "Full screen, sound on. The students click 🎮 Join in Discord (or type /play): their own link, under their name."], ["💀", "Survive!", "A countdown per question; the TV shows the votes and who is out. Space bar = next question."]] },
   sql: { name: "SQL Detective", art: "🕵️", tag: "SQL · investigation", device: "Laptops",
     pitch: "A mystery hidden in a database. Squads run <b>real SQL</b> in the browser; each right result unlocks the next clue. <b>Name the culprit first to win.</b>",
     learn: "SELECT, WHERE, JOIN, GROUP BY, HAVING",
@@ -48,7 +48,7 @@ async function viewGames() {
       <div class="bt-hero-text">
         <span class="bt-kicker">🎮 Play and learn · on the TV and their devices</span>
         <h1>Class games</h1>
-        <p>Pick a game, show it on the class TV, and the students join by <b>scanning the QR code</b> and tapping their name. Solo, with the class's squads, or random squads. <b>The winners get points.</b></p>
+        <p>Pick a game, show it on the class TV, and the students join from <b>Discord</b> (🎮 Join or <code>/play</code>) with their own link, so nobody can play as someone else. Solo, with the class's squads, or random squads. <b>The winners get points.</b></p>
       </div>
       <div class="bt-hero-art" aria-hidden="true"><div class="gm-art">👑</div><div class="gm-art b">🕵️</div><div class="gm-art c">🏃</div><div class="gm-art d">⚔️</div></div>
     </section>
@@ -304,10 +304,10 @@ async function viewGame(id) {
     <div class="bt-launch">
       <section class="panel bt-step"><div class="bt-num">1</div><div><h2>📺 Show it on the TV</h2><p class="small muted">Open it on the computer connected to the class TV, in <b>full screen</b>, sound on. Your buttons (start, next, end) are at the bottom of the TV screen.</p>
         <div class="toolbar" style="margin:0"><a class="btn primary" href="${esc(G.tv)}" target="_blank" rel="noopener">📺 Open the TV screen</a><button class="btn" id="gm-cptv">Copy the link</button></div></div></section>
-      <section class="panel bt-step"><div class="bt-num">2</div><div class="bt-judge"><div><h2>📱 The students join</h2><p class="small muted">They scan the QR code on the TV ${G.kind === "royale" ? "with their phone" : "(a laptop is better)"} and tap their name. Or share the link:</p>
-          <div class="toolbar" style="margin:0"><button class="btn small" id="gm-cpj">Copy the join link</button></div>
+      <section class="panel bt-step"><div class="bt-num">2</div><div class="bt-judge"><div><h2>📱 The students join from Discord</h2><p class="small muted">When the TV screen opens, the bot posts a <b>🎮 Join</b> button in #arena. Each student clicks it (or types <code>/play</code>) and gets their <b>own link</b>, tied to their Discord account, to open ${G.kind === "royale" ? "on their phone" : "on a laptop"}. Nobody can play under someone else's name.</p>
+          <p class="small muted">To remove a student: click their name on the TV (or 👥 at the bottom). Their link stops working; you can let them back in.</p>
           ${G.kind === "relay" && G.settings.noise ? `<p class="small muted">🎤 Their browser asks for the microphone: they must allow it.</p>` : ""}</div>
-        <div class="bt-qr">${G.qr}</div></div></section>
+        </div></section>
       <section class="panel bt-step"><div class="bt-num">3</div><div style="flex:1"><h2>🎮 Live</h2><div id="gm-live">${gameLive(G, L)}</div></div></section>
     </div>
     ${G.kind === "royale" ? `<section class="panel"><h2>Questions <span class="muted">${G.content.questions.length}</span></h2><div class="bt-qs">${G.content.questions.map((q) => `<div class="bt-q"><span class="bt-k">❓</span><div><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}<div class="small">${q.options.map((o, k) => `${k === q.answer ? "✅ <b>" : ""}${"ABCD"[k]}. ${esc(o)}${k === q.answer ? "</b>" : ""}`).join(" · ")}</div></div></div>`).join("")}</div></section>` : ""}
@@ -318,7 +318,6 @@ async function viewGame(id) {
       <div class="small">${G.content.task.tests.map((t, i) => `${i < 2 ? "👁 " : "🔒 "}<code>${esc(G.content.task.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div>
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
   $("#gm-cptv").onclick = () => copyText(G.tv, "TV link copied");
-  $("#gm-cpj").onclick = () => copyText(G.join, "Join link copied");
   $("#gm-del").onclick = () => confirmDialog("Delete this game?", "The TV and the join links stop working.", "Delete", async () => { await api(`/games/${id}`, { method: "DELETE" }); location.hash = `#/games/${G.kind}`; }, true);
   clearInterval(gmTimer);
   gmTimer = setInterval(async () => {

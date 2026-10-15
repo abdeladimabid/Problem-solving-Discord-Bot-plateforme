@@ -28,6 +28,7 @@ import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
 import { activityChoices, cmdActivity } from "./actcmd.ts";
+import { playLinks } from "./gamecmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
 import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
 import {
@@ -113,6 +114,7 @@ async function command(ix: Ix): Promise<Response> {
     case "github": return cmdGithub(ix);
     case "brief": return cmdBrief(ix, sub ?? "list", o);
     case "activity": return cmdActivity(ix, sub ?? "list", o);
+    case "play": return playLinks(ix, null);
     case "league": return cmdLeague(ix);
     case "profile": return cmdProfile(ix, o.member ?? ix.userId);
     case "leaderboard": return cmdLeaderboard(ix, o.board ?? "season");
@@ -819,6 +821,7 @@ async function component(ix: Ix): Promise<Response> {
     case "skills": return cmdSkills(ix, ix.userId);
     case "qz": return quizButton(ix, id, Number(y), String(String(ix.raw.data.custom_id).split(":")[3] ?? ""));
     case "boss": return bossButton(ix, id);
+    case "gjoin": return playLinks(ix, id);
     case "bty": return bountyButton(ix, id);
     case "shop": return shopButton(ix, x);
     case "shopm": case "shopmc": return shopButton(ix, String(ix.raw.data.values?.[0] ?? ""));
