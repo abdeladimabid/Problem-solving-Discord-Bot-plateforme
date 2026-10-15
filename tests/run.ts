@@ -1554,8 +1554,37 @@ section("✨ AI helper for boss battles and bounties");
   check(post.status === 200, "the AI bounty can be posted");
   await api("POST", `/api/bounties/${post.data.id}/cancel`, { g: G });
   const old = ai.mode; ai.mode = "broken";
-  check((await api("POST", `/api/events/ai?g=${G}`, { kind: "boss" })).status === 503, "AI down: a clear error, nothing created");
+  const nBefore = q1("SELECT COUNT(*) AS n FROM challenges").n;
+  check((await api("POST", `/api/events/ai?g=${G}`, { kind: "bounty", qtype: "mcq" })).status === 503 && q1("SELECT COUNT(*) AS n FROM challenges").n === nBefore, "AI down: a clear error for a bounty, nothing created");
+  const fb = await api("POST", `/api/events/ai?g=${G}`, { kind: "boss", skill: "graphs" });
+  check(fb.status === 200 && fb.data.fallback === true && fb.data.bank === "ogre-maze" && fb.data.lore?.hits.length === 6 && fb.data.challenge?.kind === "write", "AI down: the boss falls back to a ready-made one (same skill), not an error");
   ai.mode = old;
+}
+
+section("📚 Ready-made bosses");
+{
+  const { BOSS_BANK } = await import("../src/shared/bossbank.ts");
+  const RN = await import("../src/shared/runner.ts");
+  const list = await api("GET", `/api/bosses/bank?g=${G}`);
+  check(list.status === 200 && list.data.bosses.length === BOSS_BANK.length && list.data.bosses.length >= 6, "the dialog lists the ready-made bosses");
+  check(list.data.bosses.every((b: any) => b.name && b.emoji && b.skill_name && ["easy", "medium", "hard"].includes(b.difficulty) && b.intro), "each with a name, an emoji, a skill, a difficulty and its intro");
+  for (const b of BOSS_BANK) {
+    check(b.tests.filter((t) => t.sample).length >= 1 && b.tests.some((t) => t.gen) && b.lore.fr.hits.length === 6 && b.lore.en.hits.every((h) => h.includes("{hero}") && h.includes("{dmg}")), `${b.id}: samples, big tests, a story in both languages`);
+  }
+  const made = await api("POST", `/api/bosses/bank/tide-kraken?g=${G}`, {});
+  const c = q1("SELECT * FROM challenges WHERE id = ?", made.data.challenge.id);
+  check(made.status === 200 && made.data.bank === "tide-kraken" && made.data.lore.intro && made.data.hp >= 120 && c.kind === "write" && c.solution && c.test_set, "a ready-made boss: its quest saved in the bank with its tests");
+  check(c.skills === "sorting", "tagged with its skill");
+  const again = await api("POST", `/api/bosses/bank/tide-kraken?g=${G}`, {});
+  check(again.data.challenge.id === c.id, "picked twice: the same challenge, no duplicate");
+  const tests = q("SELECT idx, input, gen, expected, sample FROM challenge_tests WHERE test_set = ? ORDER BY idx", c.test_set);
+  const j = await RN.judge(env, c.solution, "python", tests as any, c.time_limit);
+  check(j.verdict === "accepted" && j.passed === j.total, "its reference solution passes all its tests on the runner");
+  const wrong = await RN.judge(env, "print(0)", "python", tests as any, c.time_limit);
+  check(wrong.passed < wrong.total, "a wrong answer fails");
+  const rel = await api("POST", "/api/bosses", { g: G, challenge_id: made.data.challenge.id, name: made.data.name, hp: made.data.hp, hours: made.data.hours, reward: made.data.reward, coins: made.data.coins, lore: made.data.lore });
+  check(rel.status === 200, "it can be released like an AI boss");
+  check((await api("POST", `/api/bosses/bank/nope?g=${G}`, {})).status === 404, "unknown ready-made boss: 404");
 }
 
 section("2 vs 2 duels, coin shop, peer help, streak freeze");
@@ -2658,8 +2687,12 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore === pts && wl.status === 200, "finalizing again doesn't give points twice");
   const ro = await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
   check(ro.data.status === "draft" && !q1("SELECT COUNT(*) AS n FROM competency_results WHERE discord_id = ? AND source = 'brief' AND ref = ?", U.alice.id, id).n, "reopen takes the competencies back");
-  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the points and skill evidence");
-  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore + pts && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the skill evidence; the points stay until it's finalized again");
+  // reopen, change something, save, finalize again: the points once (and the history shows one entry)
+  await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: false } } });
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
+  const ledgerB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id));
+  check(ledgerB.reduce((s: number, r: any) => s + r.amount, 0) === pts && ledgerB.length === 1, "reopen, change, finalize again: the points once, one line in the history");
   const cls = await api("GET", `/api/competencies?g=${G}`);
   check(cls.data.cells.some((c: any) => c.discord_id === U.alice.id && c.code === "C3" && c.best === 1), "class competency matrix");
   const sb = det.data.learning.briefs.find((b: any) => b.review?.status === "final");
@@ -4108,7 +4141,8 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const game = (created: any) => {
     const play = (path: string, key: string, body?: any) => bot.fetch(new Request(created.join + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-player-key": key }, body: body ? JSON.stringify({ key, ...body }) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
     const tv = (path: string, body?: any) => bot.fetch(new Request(created.tv + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
-    return { play, tv };
+    const join = async (k: number, pid: string) => play("join", dev(k), { pass: await GM.gamePass(env, created.id, pid) });
+    return { play, tv, join };
   };
 
   // ---------------------------------------------------------------- 👑 royale, squads
@@ -4121,22 +4155,41 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   let parsed = true;
   try { new Function(scriptOf(tvHtml)); new Function(scriptOf(plHtml)); } catch (e) { parsed = false; console.log(e); }
   check(parsed, "the TV and the student pages' scripts are valid JavaScript (royale)");
-  const ros = await r.play("roster", "");
-  check(ros.status === 200 && ros.data.names.some((n: any) => n.name === "Alice" && n.squad) && ros.data.names.find((n: any) => n.pid === U.alice.id)?.taken === false, "the student picks their name (squad members first)");
-  check((await r.play("state", dev(1))).status === 403, "no name yet: the page asks for it");
-  const ja = await r.play("join", dev(1), { pid: U.alice.id });
-  check(ja.status === 200 && ja.data.me.name === "Alice" && ja.data.squad.name === "Les Requins", "Alice joins: her squad");
-  check((await r.play("join", dev(9), { pid: U.alice.id })).status === 409, "the same name on another device is refused");
-  await r.play("join", dev(2), { pid: U.bob.id }); await r.play("join", dev(3), { pid: U.carol.id });
-  const e1 = await r.play("join", dev(4), { pid: "104" });
+  check((await r.play("state", dev(1))).status === 403, "not linked yet: the page sends the student to Discord");
+  check((await r.play("join", dev(1), { pid: U.alice.id })).status === 403 && (await r.play("join", dev(1), { pass: "123.9999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" })).status === 403, "no name picking: only a signed pass from Discord lets a device in");
+  const otherGamePass = await GM.gamePass(env, R.data.id + 999, U.alice.id);
+  check((await r.play("join", dev(1), { pass: otherGamePass })).status === 403, "a pass for another game doesn't work here");
+  const ja = await r.join(1, U.alice.id);
+  check(ja.status === 200 && ja.data.me.name === "Alice" && ja.data.squad.name === "Les Requins", "Alice joins with her own link: her squad");
+  const moved = await r.join(9, U.alice.id);
+  check(moved.status === 200 && moved.data.me.pid === U.alice.id && (await r.play("state", dev(1))).status === 403, "her link opened on another device: that device takes over, the old one stops");
+  await r.join(1, U.alice.id);
+  await r.join(2, U.bob.id); await r.join(3, U.carol.id);
+  const e1 = await r.join(4, "104");
   check(e1.data.squad.name === "Les Flammes", "a student in no squad goes to the smallest one");
-  await r.play("join", dev(5), { pid: "105" });
+  await r.join(5, "105");
   const kick = await r.tv("act", { a: "kick", pid: "105" });
-  check(kick.status === 200 && !kick.data.players.some((p: any) => p.pid === "105"), "the teacher frees a name from the TV");
+  check(kick.status === 200 && !kick.data.players.some((p: any) => p.pid === "105") && kick.data.banned.some((b: any) => b.pid === "105" && b.name), "the teacher removes a student from the TV");
+  check((await r.play("state", dev(5))).status === 403 && (await r.join(6, "105")).status === 409, "a removed student can't come back with their link");
+  const unb = await r.tv("act", { a: "unban", pid: "105" });
+  check(unb.status === 200 && !unb.data.banned.length, "…until the teacher lets them back in");
+  await r.tv("act", { a: "kick", pid: "105" });
+  check(discordCalls.some((c) => c.method === "POST" && JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "the TV's first opening posts the 🎮 Join button in #arena");
+  const pl = await slash(U.carol, "play");
+  const url = (pl?.data?.components?.[0]?.components?.[0]?.url ?? "") as string;
+  check(url.includes(`/play/${R.data.id}.`) && url.includes("#p=") && (await GM.readGamePass(env, R.data.id, url.split("#p=")[1])) === U.carol.id && (pl.data.flags & 64) === 64, "/play: a private link, signed for this student");
+  const bt = await click(U.carol, `gjoin:${R.data.id}`);
+  check(String(bt?.data?.components?.[0]?.components?.[0]?.url ?? "").includes("#p="), "the 🎮 Join button gives the same private link");
+  check(text(await slash({ id: "105", name: "Eve", teacher: false } as any, "play")).includes("removed"), "a removed student is told so in Discord");
+  const pc0 = discordCalls.length;
+  check((await r.tv("act", { a: "announce" })).status === 200 && discordCalls.slice(pc0).some((c) => JSON.stringify(c.body).includes("gjoin:")), "the teacher can post the button again");
   const st = await r.tv("act", { a: "start" });
   check(st.status === 200 && st.data.phase === "question" && st.data.q && st.data.q.answer === undefined && st.data.players.length === 4, "start: the first question, never its answer on the TV");
   check((await r.play("answer", dev(1), { step: 1, choice: 0 })).status === 409, "too early: wait for the question");
-  clock.advance(4);
+  check(st.data.qAt - st.data.now >= 4900 && st.data.qAt - st.data.now <= 5100, "a 5-second countdown before the first question");
+  clock.advance(3);
+  check((await r.play("answer", dev(1), { step: 1, choice: 0 })).status === 409, "still counting down: no answer yet");
+  clock.advance(3);
   const order = q1("SELECT state FROM games WHERE id = ?", R.data.id);
   const qi = JSON.parse(order.state).order[0];
   const pa = await r.play("answer", dev(1), { step: 1, choice: qs[qi].answer });
@@ -4167,6 +4220,9 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   await r.play("answer", dev(1), { step: 3, choice: qs[qi3].answer }); await r.play("answer", dev(2), { step: 3, choice: qs[qi3].answer }); await r.play("answer", dev(3), { step: 3, choice: 3 });
   const rv3 = await r.tv("act", { a: "reveal" });
   check(rv3.data.last.final && rv3.data.winSquad === 0, "only one squad left standing: it wins");
+  check(JSON.stringify(rv3.data.last.wiped) === "[1]" && JSON.stringify(rv.data.last.wiped) === "[]", "the squad whose last member fell is marked wiped out (for the animation)");
+  const cv = await r.play("state", dev(3));
+  check(cv.data.last.wiped === true, "its players see it on their phone too");
   const before = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'game'", U.bob.id)?.n ?? 0;
   const ov = await r.tv("act", { a: "next" });
   const after = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'game'", U.bob.id)?.n ?? 0;
@@ -4182,7 +4238,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   let parsed2 = true;
   try { for (const u of [Q.data.tv, Q.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsed2 = false; console.log(e); }
   check(parsed2 && (await (await bot.fetch(new Request(Q.data.join), env, makeCtx())).text()).includes("cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"), "SQL Detective pages: valid scripts, sql.js from cdnjs");
-  await sq.play("join", dev(1), { pid: U.alice.id }); await sq.play("join", dev(2), { pid: U.bob.id });
+  await sq.join(1, U.alice.id); await sq.join(2, U.bob.id);
   const cs = await bot.fetch(new Request(Q.data.join + "/case"), env, makeCtx());
   const cj = await cs.json() as any;
   check(cs.status === 200 && cj.schema.includes("CREATE TABLE badges") && cj.steps.length === 4 && !JSON.stringify(cj).includes("Omar Tazi\", \"tazi") && !("culprit" in cj), "the case for the browser: story, database, clues");
@@ -4216,10 +4272,10 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   let parsed3 = true;
   try { for (const u of [Y.data.tv, Y.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsed3 = false; console.log(e); }
   check(parsed3, "Code Relay pages: valid scripts");
-  for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id], [4, "104"]] as [number, string][]) await ry.play("join", dev(k), { pid });
+  for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id], [4, "104"]] as [number, string][]) await ry.join(k, pid);
   const ys = await ry.tv("act", { a: "start" });
   check(ys.data.phase === "playing" && ys.data.teams.length === 2 && ys.data.teams.every((t: any) => t.order.length === 2), "start: random squads of 2, each with its order");
-  check((await ry.play("join", dev(5), { pid: "105" })).status === 409, "nobody joins a relay once it runs");
+  check((await ry.join(5, "105")).status === 409, "nobody joins a relay once it runs");
   const tA = ys.data.teams[0];
   const keyOf = (pid: string) => dev([U.alice.id, U.bob.id, U.carol.id, "104"].indexOf(pid) + 1);
   const w0 = tA.order[0], w1p = tA.order[1];
@@ -4292,7 +4348,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(own.status === 200 && own.data.case.steps[1].expect.rows === 1 && bad.status === 400 && /database has an error|error/i.test(bad.data.error), "the teacher's own case: checked the same way (a broken database is refused)");
   const CG = await api("POST", `/api/games?g=${G}`, { kind: "sql", mode: "solo", case: aic.data.case });
   const cgp = game(CG.data);
-  await cgp.play("join", dev(1), { pid: U.alice.id }); await cgp.tv("act", { a: "start" });
+  await cgp.join(1, U.alice.id); await cgp.tv("act", { a: "start" });
   const cgc = await bot.fetch(new Request(CG.data.join + "/case"), env, makeCtx());
   const cgj = await cgc.json() as any;
   const c1 = await cgp.play("check", dev(1), { step: 0, rows: [["Ali Ben"], ["Sara Lou"]] });
@@ -4301,7 +4357,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const RG = await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "random", task: ait.data.task, settings: { codeLang: "python", size: 2, total: 60 } });
   check(RG.status === 200 && RG.data.content.starter === "def doubler(tableau):\n    pass\n" && RG.data.content.lang === "Python", "a Python relay with the AI challenge");
   const rg = game(RG.data);
-  await rg.play("join", dev(1), { pid: U.alice.id }); await rg.play("join", dev(2), { pid: U.bob.id });
+  await rg.join(1, U.alice.id); await rg.join(2, U.bob.id);
   const rgs = await rg.tv("act", { a: "start" });
   const wr = rgs.data.teams[0].writer, wk = dev(wr === U.alice.id ? 1 : 2);
   const pv = await rg.play("state", wk);
