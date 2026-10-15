@@ -98,6 +98,13 @@ export async function addPoints(
   );
 }
 
+/** Challenges give as many coins as points (a solve, a regrade, the held half after the explanation); taking the
+ *  points back takes the coins back too, never below 0. */
+export async function challengeCoins(env: Env, guild: GuildRow, discordId: string | null | undefined, amount: number) {
+  if (!discordId || !amount) return;
+  await run(env, "UPDATE players SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND discord_id = ?", Math.round(amount), guild.id, discordId);
+}
+
 export async function totalPoints(env: Env, guildId: string, discordId: string): Promise<number> {
   const r = await one<{ s: number }>(env, "SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", guildId, discordId);
   return r?.s ?? 0;
