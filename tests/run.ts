@@ -4317,6 +4317,90 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(pg.status === 200, "student page still fine");
 }
 
+section("📚 shared library: the A1 classes share activities, assessments, quizzes and games content");
+{
+  const { libraryHub } = await import("./harness.ts");
+  const pub0 = env.PUBLIC_URL; env.PUBLIC_URL = "https://bot.example.workers.dev";
+  const G2 = "g-a1-b", G3 = "g-a1-c";
+  for (const [id, name] of [[G2, "A1 Group B"], [G3, "A1 Group C"]]) run1("INSERT OR IGNORE INTO guilds (id, name, lang, season, created_at) VALUES (?, ?, 'fr', 'S1', ?)", id, name, clock.now());
+  const act = (gid: string, day: string, kind: string, title: string, md: string) => run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", gid, day, kind, title, md, clock.now(), clock.now());
+  act(G, "2032-01-05", "veille", "Le DOM", "# Le DOM\n\nVersion A");
+  act(G, "2032-01-06", "live", "Une todo list", "# Live\n\nVersion A");
+  const asg = await api("POST", `/api/assessments?g=${G}`, { title: "Évaluation JS", questions: [{ type: "mcq", prompt: "2 + 2 ?", choices: ["3", "4"], answer: 1, points: 2 }], settings: { minutes: 30 } });
+  // create: hosted here; what the class has goes in
+  check((await api("POST", `/api/library?g=${G}`, { create: true, name: "" })).status === 200, "a library is created (a default name)");
+  const st = await api("GET", `/api/library?g=${G}`);
+  const link = st.data.link as string;
+  check(st.data.connected && st.data.hostedHere && /\/library\/[a-f0-9]{12}\.[\w-]{32}$/.test(link) && st.data.counts.activity >= 2 && st.data.recent.some((r: any) => r.title === "Le DOM") && db.prepare("SELECT 1 FROM library_items WHERE title = 'Évaluation JS'").get(), "the class's activities and assessment are in the library");
+  // join on the same ClassBot: everything comes in
+  const j = await api("POST", `/api/library?g=${G2}`, { link });
+  check(j.status === 200 && q1("SELECT md FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G2)?.md.includes("Version A"), "another class joins: the activities come in");
+  const as2 = q1("SELECT * FROM assessments WHERE guild_id = ? AND lib_key IS NOT NULL AND title = 'Évaluation JS'", G2);
+  check(as2 && as2.title === "Évaluation JS" && as2.status === "draft", "…and the assessment (a draft of its own: invitations stay in each class)");
+  // one shared copy: an edit in B reaches A
+  const idB = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G2).id;
+  const ed = await api("PUT", `/api/activities/${idB}?g=${G2}`, { md: "# Le DOM\n\nVersion B, corrigée" });
+  check(ed.status === 200, "B edits the veille");
+  clock.advance(30);
+  await api("GET", `/api/activities?g=${G}&from=2032-01-05&to=2032-01-09`);
+  check(q1("SELECT md FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G).md.includes("Version B"), "A gets B's edit (one shared copy)");
+  // the other way: A edits the assessment, B gets it; papers stay in each class
+  await api("PUT", `/api/assessments/${asg.data.assessment.id}?g=${G}`, { title: "Évaluation JS (v2)", questions: asg.data.assessment.questions });
+  clock.advance(30);
+  const lb = await api("GET", `/api/assessments?g=${G2}`);
+  check(lb.data.items.some((a: any) => a.title === "Évaluation JS (v2)" && a.lib_key), "B gets A's new assessment version");
+  // delete in A: gone in B (unless B's students present it)
+  const liveA = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2032-01-06' AND kind = 'live'", G).id;
+  await api("DELETE", `/api/activities/${liveA}?g=${G}`);
+  clock.advance(30);
+  await api("GET", `/api/activities?g=${G2}&from=2032-01-05&to=2032-01-09`);
+  check(!q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2032-01-06' AND kind = 'live'", G2), "a deleted activity is deleted in every class");
+  // live quiz: shared as a template, the other class uses it (its own challenges)
+  const mcqs = db.prepare("SELECT id FROM challenges WHERE kind = 'mcq' AND status = 'active' AND guild_id IS NULL LIMIT 3").all() as any[];
+  const qz = await api("POST", `/api/quizzes?g=${G}`, { title: "Quiz DOM", challenge_ids: mcqs.map((c) => c.id), seconds: 20 });
+  if (qz.status === 200) await api("POST", `/api/quizzes/${qz.data.id}/end?g=${G}`);
+  clock.advance(30);
+  run1("UPDATE guilds SET arena_channel = 'arena-b' WHERE id = ?", G2);
+  const tq = await api("GET", `/api/library/templates?g=${G2}&kind=quiz`);
+  check(qz.status === 200 && tq.data.items.some((x: any) => x.title === "Quiz DOM" && x.data.questions.length === 3), "a live quiz goes to the library (its questions with it)");
+  const uq = await api("POST", `/api/quizzes?g=${G2}`, { template: tq.data.items.find((x: any) => x.title === "Quiz DOM").key });
+  check(uq.status === 200 && JSON.parse(uq.data.questions).length === 3 && uq.data.title === "Quiz DOM", "the other class starts it from the library");
+  // games: a written relay challenge is shared
+  const task = { title: "Somme des pairs", text: "Renvoie la somme des nombres pairs.", fn: "sommePairs", params: ["t"], tests: [{ args: [[1, 2, 4]], expected: 6 }, { args: [[3]], expected: 0 }], by: "teacher" };
+  const gm = await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "random", settings: { size: 3 }, task });
+  clock.advance(30);
+  const gB = await api("GET", `/api/games?g=${G2}`);
+  check(gm.status === 200 && gB.data.myTasks.some((t: any) => t.fn === "sommePairs" && t.shared), "a relay challenge written in A appears in B (📚 shared)");
+  // another ClassBot joins through the internet
+  libraryHub.target = "https://bot.example.workers.dev";
+  libraryHub.handler = (r) => bot.fetch(r, env, makeCtx());
+  const remote = link.replace("https://bot.example.workers.dev", "https://hub.classbot.test");
+  // on another ClassBot the hub isn't "here": pretend this one has another address
+  env.PUBLIC_URL = "https://other-bot.example.workers.dev";
+  const j3 = await api("POST", `/api/library?g=${G3}`, { link: remote });
+  check(j3.status === 200 && !j3.data.hostedHere && q1("SELECT md FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G3)?.md.includes("Version B"), "a class on another ClassBot joins with the link (through the internet)");
+  const idC = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G3).id;
+  await api("PUT", `/api/activities/${idC}?g=${G3}`, { md: "# Le DOM\n\nVersion C" });
+  env.PUBLIC_URL = "https://bot.example.workers.dev";
+  clock.advance(30);
+  await api("GET", `/api/activities?g=${G}&from=2032-01-05&to=2032-01-09`);
+  check(q1("SELECT md FROM activities WHERE guild_id = ? AND day = '2032-01-05' AND kind = 'veille'", G).md.includes("Version C"), "…and its edits reach the host's classes");
+  libraryHub.down = true; env.PUBLIC_URL = "https://other-bot.example.workers.dev";
+  clock.advance(30);
+  const offline = await api("GET", `/api/activities?g=${G3}&from=2032-01-05&to=2032-01-09`);
+  check(offline.status === 200 && (await api("GET", `/api/library?g=${G3}`)).data.error, "the hub down: the page still works, the error is shown in Settings");
+  libraryHub.down = false; env.PUBLIC_URL = "https://bot.example.workers.dev";
+  check((await api("POST", `/api/library?g=${G3}`, { link: "https://example.com/nope" })).status === 400, "only library links can be joined");
+  check((await bot.fetch(new Request(link.replace(/\.[\w-]{32}$/, "." + "x".repeat(32))), env, makeCtx())).status === 404, "a wrong secret reads nothing");
+  // leave: the class keeps its copy
+  const lv = await api("DELETE", `/api/library?g=${G2}`);
+  check(!lv.data.connected && q1("SELECT COUNT(*) AS n FROM activities WHERE guild_id = ?", G2).n >= 1 && !q1("SELECT 1 AS x FROM library_cache WHERE guild_id = ?", G2), "leaving keeps the class's copy");
+  const items = JSON.stringify(db.prepare("SELECT data FROM library_items").all());
+  check(!items.includes(U.alice.name) && !items.includes(U.bob.name), "no student name in the library");
+  await api("DELETE", `/api/library?g=${G}`); await api("DELETE", `/api/library?g=${G3}`);
+  libraryHub.handler = null; env.PUBLIC_URL = pub0;
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;

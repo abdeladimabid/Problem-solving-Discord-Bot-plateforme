@@ -33,7 +33,7 @@ async function viewActivities() {
   view.innerHTML = `
     <div class="page-head"><div><h1>Activités</h1>
       <p class="sub">The daily <b>veilles</b> (09:15 · 30 min) and <b>live codings</b> (11:00 · 45 min) of a period, written from the programme, the sprint and the briefs of those days, in the format of the YouCode template.</p></div>
-      <div class="toolbar" style="margin:0"><a class="btn" href="#/presentations">🎤 Presentations</a><button class="btn" id="ac-this">This week</button><button class="btn" id="ac-next">Next week</button></div></div>
+      <div class="toolbar" style="margin:0"><span id="ac-lib"></span><a class="btn" href="#/presentations">🎤 Presentations</a><button class="btn" id="ac-this">This week</button><button class="btn" id="ac-next">Next week</button></div></div>
     <div class="act-top">
       <section class="panel act-cal" id="ac-cal" aria-label="Calendar"><div class="skeleton" style="height:320px"></div></section>
       <div class="act-sum" id="ac-sum"></div>
@@ -144,6 +144,8 @@ async function actLoadSel() {
   try { ACT.sel = await api(`/activities?from=${ACT.from}&to=${ACT.to}`); }
   catch (e) { toast(e.message, true); return; }
   ACT.live = Object.fromEntries(ACT.sel.weeks.map((w) => [w.monday, [...w.live]]));
+  const lb = $("#ac-lib");
+  if (lb) lb.innerHTML = ACT.sel.library ? `<a class="lib-tag" href="#/settings/library" title="Shared with the other classes of the library: what you generate or edit here, they get too">📚 ${esc(ACT.sel.library)}</a>` : "";
   actSummary();
   actResults();
 }

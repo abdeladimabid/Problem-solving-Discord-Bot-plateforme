@@ -84,9 +84,9 @@ async function viewGameKind(kind) {
     ${mine.length ? `<div class="panel-head" style="margin:6px 0 10px"><h2 style="margin:0">Your ${esc(I.name)} games</h2></div><div class="bt-list">${mine.map((x) => gameItem(d, x)).join("")}</div>`
       : `<section class="bt-empty"><div class="bt-dice">${I.art}</div><h2>No ${esc(I.name)} yet</h2><p class="muted">Create one: it takes a minute.</p><button class="bt-cta gm-cta gm-cta-${kind}" id="gm-new2">＋ Create the first one</button></section>`}
     ${kind === "sql" ? `<div class="panel-head" style="margin:22px 0 10px"><h2 style="margin:0">Cases</h2><span class="small muted">built-in, and the ones you wrote or generated</span></div>
-      <div class="gm-lib">${[...d.cases.map((c) => ({ ...c, by: "builtin" })), ...(d.myCases || []).map((c, i) => ({ ...c, mine: i, steps: c.steps.length }))].map((c) => `<div class="gm-libcard"><div><b>${esc(c.title)}</b> <span class="tag">${c.mine != null ? "✍️ yours" : GM_LEVEL[c.level] || ""}</span></div><p class="small muted">${c.steps} clues · ${(c.notions || []).map(esc).join(", ")}</p><p class="small">${esc((c.story || "").slice(0, 180))}${(c.story || "").length > 180 ? "…" : ""}</p><button class="btn small" ${c.mine != null ? `data-playcase="${c.mine}"` : `data-playbuilt="${esc(c.id)}"`}>▶ Play this case</button></div>`).join("")}</div>` : ""}
+      <div class="gm-lib">${[...d.cases.map((c) => ({ ...c, by: "builtin" })), ...(d.myCases || []).map((c, i) => ({ ...c, mine: i, steps: c.steps.length }))].map((c) => `<div class="gm-libcard"><div><b>${esc(c.title)}</b> <span class="tag">${c.shared ? `📚 ${esc(typeof c.shared === "string" ? c.shared : "shared")}` : c.mine != null ? "✍️ yours" : GM_LEVEL[c.level] || ""}</span></div><p class="small muted">${c.steps} clues · ${(c.notions || []).map(esc).join(", ")}</p><p class="small">${esc((c.story || "").slice(0, 180))}${(c.story || "").length > 180 ? "…" : ""}</p><button class="btn small" ${c.mine != null ? `data-playcase="${c.mine}"` : `data-playbuilt="${esc(c.id)}"`}>▶ Play this case</button></div>`).join("")}</div>` : ""}
     ${kind === "relay" ? `<div class="panel-head" style="margin:22px 0 10px"><h2 style="margin:0">Challenges</h2><span class="small muted">built-in, and the ones you wrote or generated</span></div>
-      <div class="gm-lib">${[...d.tasks.map((t) => ({ ...t })), ...(d.myTasks || []).map((t, i) => ({ ...t, mine: i, tests: t.tests.length }))].map((t) => `<div class="gm-libcard"><div><b>${esc(t.title)}</b> <span class="tag">${t.mine != null ? (t.by === "ai" ? "✨ AI" : "✍️ yours") : GM_LEVEL[t.level] || ""}</span></div><p class="small muted"><code>${esc(t.fn)}()</code> · ${t.tests} tests</p><p class="small">${esc((t.text || "").slice(0, 170))}${(t.text || "").length > 170 ? "…" : ""}</p><button class="btn small" ${t.mine != null ? `data-playtask="${t.mine}"` : `data-playbuilt="${t.i}"`}>▶ Play this challenge</button></div>`).join("")}</div>` : ""}`;
+      <div class="gm-lib">${[...d.tasks.map((t) => ({ ...t })), ...(d.myTasks || []).map((t, i) => ({ ...t, mine: i, tests: t.tests.length }))].map((t) => `<div class="gm-libcard"><div><b>${esc(t.title)}</b> <span class="tag">${t.shared ? `📚 ${esc(typeof t.shared === "string" ? t.shared : "shared")}` : t.mine != null ? (t.by === "ai" ? "✨ AI" : "✍️ yours") : GM_LEVEL[t.level] || ""}</span></div><p class="small muted"><code>${esc(t.fn)}()</code> · ${t.tests} tests</p><p class="small">${esc((t.text || "").slice(0, 170))}${(t.text || "").length > 170 ? "…" : ""}</p><button class="btn small" ${t.mine != null ? `data-playtask="${t.mine}"` : `data-playbuilt="${t.i}"`}>▶ Play this challenge</button></div>`).join("")}</div>` : ""}`;
   const open = (pre) => gameDialog(d, kind, pre);
   $("#gm-new").onclick = () => open();
   if ($("#gm-new2")) $("#gm-new2").onclick = () => open();
@@ -111,10 +111,11 @@ function gameDialog(d, kind, pre = {}) {
     <div id="gm-size" hidden><label for="gm-sz">Players per squad</label><select id="gm-sz">${[2, 3, 4, 5, 6].map((n) => `<option ${n === 4 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
     ${kind === "royale" ? `
       <label>Questions</label>
-      <div class="chips" id="gm-src"><button type="button" class="chip" data-src="ai" aria-pressed="true">✨ AI on topics</button>${d.assessments.length ? `<button type="button" class="chip" data-src="assess" aria-pressed="false">📝 From an assessment</button>` : ""}</div>
+      <div class="chips" id="gm-src"><button type="button" class="chip" data-src="ai" aria-pressed="true">✨ AI on topics</button>${d.assessments.length ? `<button type="button" class="chip" data-src="assess" aria-pressed="false">📝 From an assessment</button>` : ""}${(d.royaleSets || []).length ? `<button type="button" class="chip" data-src="lib" aria-pressed="false">📚 Shared library</button>` : ""}</div>
       <div id="gm-ai">${tagSelect("gm-topics", topicOpts, ["HTML", "CSS", "JavaScript"].filter((x) => d.topics.includes(x)), { allowNew: true, placeholder: "Add a topic (e.g. Flexbox, SQL joins)…" })}
         <div class="field-row"><div><label for="gm-n">How many</label><select id="gm-n">${[15, 20, 30, 40].map((n) => `<option ${n === 20 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div><label for="gm-lvl">Level</label><select id="gm-lvl"><option value="easy">Easy</option><option value="medium">Medium</option></select></div></div></div>
+      <div id="gm-lib" hidden><label for="gm-lsel">Question set <span class="muted">(made in your classes and the other classes of the library)</span></label><select id="gm-lsel">${(d.royaleSets || []).map((x, i) => `<option value="${i}">${esc(x.title || "Questions")} · ${x.n} questions${x.by ? ` · ${esc(x.by)}` : ""}</option>`).join("")}</select></div>
       <div id="gm-as" hidden><label for="gm-asel">Assessment <span class="muted">(its multiple-choice questions with one right answer)</span></label><select id="gm-asel">${d.assessments.map((a) => `<option value="${a.id}">${esc(a.title)} · ${a.mcq} question${a.mcq > 1 ? "s" : ""}</option>`).join("")}</select></div>
       <div class="field-row"><div><label for="gm-sec">Time per question</label><select id="gm-sec">${[10, 15, 20, 30, 45].map((s) => `<option value="${s}" ${s === 20 ? "selected" : ""}>${s} s</option>`).join("")}</select></div>
         <div><label for="gm-rc">Bring a teammate back</label><select id="gm-rc">${[2, 3, 4, 5].map((s) => `<option value="${s}" ${s === 3 ? "selected" : ""}>${s} squad points</option>`).join("")}</select></div></div>` : ""}
@@ -172,6 +173,10 @@ function gameDialog(d, kind, pre = {}) {
     if (kind === "royale") {
       Object.assign(settings, { seconds: Number($("#gm-sec").value), reviveCost: Number($("#gm-rc").value) });
       const fromAs = $("[data-src=assess][aria-pressed=true]", dlg);
+      const fromLib = $("[data-src=lib][aria-pressed=true]", dlg);
+      if (fromLib) { body.questions = d.royaleSets[Number($("#gm-lsel").value)].questions; body.fromLibrary = true; }
+      else {
+      body.fromAssessment = !!fromAs;
       $("#gm-st").textContent = fromAs ? "⏳ Reading the assessment…" : "⏳ Writing the questions…";
       try {
         const q = await api("/games/questions", { method: "POST", body: fromAs ? { assessment: Number($("#gm-asel").value) } : { topics: tagValues(dlg, "gm-topics"), count: Number($("#gm-n").value), level: $("#gm-lvl").value, lang: settings.lang } });
@@ -179,6 +184,7 @@ function gameDialog(d, kind, pre = {}) {
         body.questions = q.questions;
         if (!fromAs && !q.ai) toast("The AI wasn't available: built-in questions are used");
       } catch (e) { $("#gm-st").textContent = ""; throw e; }
+      }
     }
     if (kind === "sql") {
       Object.assign(settings, { hintPenalty: Number($("#gm-hp").value), wrongPenalty: Number($("#gm-wp").value) });
@@ -210,7 +216,7 @@ function gameDialog(d, kind, pre = {}) {
   if ($("#gm-set")) { $("#gm-set").onchange = sqText; sqText(); }
   $$("[data-src]", dlg).forEach((b) => b.onclick = () => {
     $$("[data-src]", dlg).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    $("#gm-ai").hidden = b.dataset.src !== "ai"; $("#gm-as").hidden = b.dataset.src !== "assess";
+    $("#gm-ai").hidden = b.dataset.src !== "ai"; $("#gm-as").hidden = b.dataset.src !== "assess"; if ($("#gm-lib")) $("#gm-lib").hidden = b.dataset.src !== "lib";
   });
   // the source chips (built-in / AI / my own / made before) show their pane
   function pane(id) { return $(`[data-${id}][aria-pressed=true]`, dlg)?.getAttribute(`data-${id}`); }

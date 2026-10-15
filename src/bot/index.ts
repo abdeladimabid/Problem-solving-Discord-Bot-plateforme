@@ -6,6 +6,7 @@
 //   GET  /quiz/:token      a student's assessment (full screen)
 //   GET  /github/connect   a student links GitHub (from /github); POST /github/webhook: the class's GitHub App
 //   cron every minute      contests, duels, assignments, daily, weekly recap
+import { libraryRoute } from "../shared/library.ts";
 import type { Ctx, Env } from "../shared/types.ts";
 import { verifyDiscord } from "../shared/discord.ts";
 import { handleInteraction } from "./interactions.ts";
@@ -71,6 +72,8 @@ export default {
     if (gp) return handleGame(request, env, "play", Number(gp[1]), gp[2], gp[3]);
     const shr = url.pathname.match(/^\/share\/assessment\/(\d{1,9})\.([A-Za-z0-9_-]{32})\/?$/);
     if (shr && request.method === "GET") return sharePage(request, env, Number(shr[1]), shr[2]);
+    const lib = url.pathname.match(/^\/library\/([a-f0-9]{12})\.([A-Za-z0-9_-]{32})\/?$/);
+    if (lib && (request.method === "GET" || request.method === "POST")) return libraryRoute(request, env, lib[1], lib[2]);
     const lgf = url.pathname.match(/^\/league\/feed\/([\w-]{1,30})\.([a-f0-9]{24})$/);
     if (lgf && request.method === "GET") return leagueFeed(env, lgf[1], lgf[2]);
     const ghw = url.pathname.match(/^\/github\/webhook(?:\/([\w-]{1,30}))?$/);

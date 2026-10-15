@@ -7,6 +7,7 @@
 //     in one answer gets cut. Every item is checked (sections, sizes, a déroulé of 45 min, the code, the links) and
 //     asked again once with what's wrong; still wrong, it's kept with its warnings for the teacher.
 //   • the markdown is written here from the JSON, so every item has the template's sections, in its order.
+import { libGone } from "./library.ts";
 import type { Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "./db.ts";
 import { extractJson, groqChat, hasKeyedAi, workersChat } from "./ai.ts";
@@ -759,7 +760,7 @@ export async function setLiveDays(env: Env, g: GuildRow, monday: string, live: s
   const keep = live.filter((x) => isIso(x) && dayInfo(p, x, ov).kind === "work" && mondayOf(x) === monday).sort();
   await run(env, "UPDATE activities SET data = ?, updated_at = ? WHERE id = ?", JSON.stringify({ ...d, live: keep }), now(), wk.id);
   const gone = (await weekRows(env, g.id, monday)).filter((r) => r.kind === "live" && !keep.includes(r.day));
-  for (const r of gone) await run(env, "DELETE FROM activities WHERE id = ?", r.id);
+  for (const r of gone) { await run(env, "DELETE FROM activities WHERE id = ?", r.id); await libGone(env, g.id, "activity", `${r.day}:${r.kind}`); }
   await refreshWeek(env, g, p, monday, ov);
   return { live: keep, removed: gone.map((r) => r.day) };
 }
@@ -776,5 +777,6 @@ export async function deleteItem(env: Env, g: GuildRow, id: number) {
   const r = await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ? AND guild_id = ?", id, g.id);
   if (!r) return;
   await run(env, "DELETE FROM activities WHERE id = ?", id);
+  await libGone(env, g.id, "activity", `${r.day}:${r.kind}`);
   if (r.kind !== "week") await refreshWeek(env, g, await programOf(env, g), mondayOf(r.day), await overridesOf(env, g.id));
 }

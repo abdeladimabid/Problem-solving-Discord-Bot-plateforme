@@ -31,6 +31,7 @@ import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
 import { levelsOf } from "../shared/actsignup.ts";
+import { LibraryError, createLibrary, joinLibrary, leaveLibrary, libCfg, libRemoveTemplate, libStatus, libTemplate, libTemplates, syncLibrary } from "../shared/library.ts";
 import { QUIZ_KINDS, cleanLore, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
 import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
@@ -174,6 +175,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/events" && method === "GET") return ok(await eventsState(env, await guild()));
     if (path === "/quizzes" && method === "POST") {
       const g = await guild();
+      // a quiz from the shared library: its questions become this class's challenges (the same ones are reused)
+      if (body.template) {
+        const tpl = (await libTemplates(env, g.id, "quiz")).find((x) => x.key === String(body.template));
+        if (!tpl) throw new HttpError(404, "This quiz isn't in the shared library anymore.");
+        body.challenge_ids = await quizChallengesFor(env, g, tpl.data?.questions || [], user.email);
+        body.title = body.title || tpl.title;
+        body.seconds = body.seconds || tpl.data?.seconds;
+      }
       const ids = (Array.isArray(body.challenge_ids) ? body.challenge_ids : []).map(Number).filter((x: number) => x > 0).slice(0, 30);
       if (ids.length < 1) throw new HttpError(400, "choose at least one question");
       const found = await all<{ id: number; kind: string; choices: string | null }>(env, `SELECT id, kind, choices FROM challenges WHERE id IN (${ids.map(() => "?").join(", ")}) AND (guild_id IS NULL OR guild_id = ?) AND status != 'archived'`, ...ids, g.id);
@@ -182,6 +191,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const seconds = Math.min(120, Math.max(10, Math.round(Number(body.seconds) || 20)));
       const q = await createQuiz(env, g, { title: String(body.title ?? "").trim().slice(0, 80) || "Live quiz", questions: ids, seconds, channelId: body.channel_id || null, givePoints: body.give_points !== false });
       if (!q.channel_id) throw new HttpError(400, "no arena channel: run /teacher setup in Discord first");
+      if (!body.template) await libTemplate(env, g, "quiz", q.title, { seconds, questions: await quizContentOf(env, ids) }).catch(() => null);
       return ok(q);
     }
     const qzM = path.match(/^\/quizzes\/(\d+)(?:\/(next|reveal|end))?$/);
@@ -453,6 +463,19 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (path === "/settings/ai/legacy" && method === "DELETE") { await saveAiSettings(env, { clear: true }); return ok(await view()); }
       } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
     }
+    // -------------------------------------------------------------- 📚 shared library (with the other classes)
+    if (path === "/library" || path.startsWith("/library/")) {
+      const g = await guild();
+      try {
+        if (path === "/library" && method === "GET") { await syncLibrary(env, g).catch(() => null); return ok(await libStatus(env, g)); }
+        if (path === "/library" && method === "POST") return ok(body.create ? await createLibrary(env, g, String(body.name || "")) : await joinLibrary(env, g, String(body.link || "")));
+        if (path === "/library" && method === "DELETE") return ok(await leaveLibrary(env, g));
+        if (path === "/library/sync" && method === "POST") { await syncLibrary(env, g, { force: true, shareAll: !!body.shareAll }); return ok(await libStatus(env, g)); }
+        if (path === "/library/templates" && method === "GET") { await syncLibrary(env, g).catch(() => null); return ok({ items: await libTemplates(env, g.id, String(url.searchParams.get("kind") || "")) }); }
+        const tm = path.match(/^\/library\/templates\/(quiz|case|task|royale)\/([\w-]{1,60})$/);
+        if (tm && method === "DELETE") { await libRemoveTemplate(env, g, tm[1], tm[2]); return ok({ items: await libTemplates(env, g.id, tm[1]) }); }
+      } catch (e) { if (e instanceof LibraryError) throw new HttpError(400, e.message); throw e; }
+    }
     // -------------------------------------------------------------- 🧩 squads by sprint
     if (path === "/squads" || path.startsWith("/squads/")) {
       const g = await guild();
@@ -494,6 +517,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
             tv: gameTvUrl(env, x), join: gameJoinUrl(env, x), code: x.join_code, qr: qrSvg(gameJoinUrl(env, x), { dark: "#0b1020" }), live: await gameTvView(env, x) };
         };
         if (path === "/games" && method === "GET") {
+          await syncLibrary(env, g).catch(() => null);
           const assess = await all<{ id: number; title: string; questions: string }>(env, "SELECT id, title, questions FROM assessments WHERE guild_id = ? ORDER BY id DESC LIMIT 40", g.id).catch(() => []);
           return ok({ items: await listGames(env, g), kinds: GAME_KINDS, lang: g.lang, squads: await squadSources(g),
             cases: SQL_CASES.map((c) => ({ id: c.id, title: c.title, level: c.level, notions: c.notions, steps: c.steps.length, story: c.story })),
@@ -508,7 +532,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
                 if (r.kind === "relay" && c.task && c.task.by && c.task.by !== "builtin" && !seen.has("t" + c.task.fn + c.task.title)) { seen.add("t" + c.task.fn + c.task.title); myTasks.push(c.task); }
                 if (r.kind === "sql" && c.case && !seen.has("c" + c.case.title)) { seen.add("c" + c.case.title); myCases.push(c.case); }
               }
-              return { myTasks: myTasks.slice(0, 20), myCases: myCases.slice(0, 20) };
+              // the shared library's cases, challenges and question sets (from the other classes too)
+              const libCases = (await libTemplates(env, g.id, "case")).filter((x) => x.data?.title && !seen.has("c" + x.data.title)).map((x) => ({ ...x.data, shared: x.by || true, libKey: x.key }));
+              const libTasks = (await libTemplates(env, g.id, "task")).filter((x) => x.data?.fn && !seen.has("t" + x.data.fn + x.data.title)).map((x) => ({ ...x.data, shared: x.by || true, libKey: x.key }));
+              const royaleSets = (await libTemplates(env, g.id, "royale")).filter((x) => Array.isArray(x.data?.questions)).map((x) => ({ key: x.key, title: x.title, by: x.by, n: x.data.questions.length, questions: x.data.questions }));
+              return { myTasks: [...myTasks.slice(0, 20), ...libTasks.slice(0, 30)], myCases: [...myCases.slice(0, 20), ...libCases.slice(0, 30)], royaleSets: royaleSets.slice(0, 30), library: !!(await libCfg(env, g.id)) };
             })()),
             battles: await listBattles(env, g),
             assessments: assess.map((a) => { let qs: any[] = []; try { qs = JSON.parse(a.questions || "[]"); } catch { qs = []; } return { id: a.id, title: a.title, mcq: fromAssessment(qs).length }; }).filter((a) => a.mcq > 0),
@@ -536,7 +564,15 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (!r.case) throw new HttpError(400, r.error || "No case: try again.");
           return ok({ case: r.case, dropped: r.dropped });
         }
-        if (path === "/games" && method === "POST") return ok(await gview(await createGame(env, g, body)));
+        if (path === "/games" && method === "POST") {
+          const id = await createGame(env, g, body);
+          // what the teacher wrote or generated goes to the shared library (the built-in ones are already everywhere)
+          const x = await getGame(env, id, g.id);
+          if (x?.kind === "sql" && x.content.case) await libTemplate(env, g, "case", x.content.case.title, x.content.case).catch(() => null);
+          if (x?.kind === "relay" && x.content.task && x.content.task.by && x.content.task.by !== "builtin") await libTemplate(env, g, "task", x.content.task.title, x.content.task).catch(() => null);
+          if (x?.kind === "royale" && !body.fromLibrary && !body.fromAssessment) await libTemplate(env, g, "royale", String(body.setTitle || x.title).slice(0, 80), { questions: x.content.questions }).catch(() => null);
+          return ok(await gview(id));
+        }
         const gm = path.match(/^\/games\/(\d+)$/);
         if (gm) {
           const id = Number(gm[1]);
@@ -1031,6 +1067,28 @@ function cleanChallenge(b: any) {
     out.answer = answer;
   }
   return out;
+}
+
+/** A live quiz's questions as content (to share them through the library). */
+async function quizContentOf(env: Env, ids: number[]) {
+  const rows = ids.length ? await all<ChallengeRow>(env, `SELECT * FROM challenges WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids) : [];
+  return ids.map((id) => rows.find((r) => r.id === id)).filter(Boolean).map((c) => ({
+    kind: c!.kind, difficulty: c!.difficulty, lang: c!.lang, code_lang: c!.code_lang, title: c!.title, question: c!.question, code: c!.code,
+    choices: (() => { try { return JSON.parse(c!.choices || "null"); } catch { return null; } })(), answer: c!.answer, hint: c!.hint, explanation: c!.explanation, topic: c!.topic,
+  }));
+}
+/** The library quiz's questions in this class: the same challenge if it's already here, else a new one. */
+async function quizChallengesFor(env: Env, g: GuildRow, qs: any[], by: string) {
+  const ids: number[] = [];
+  for (const q of qs.slice(0, 30)) {
+    if (!q || !QUIZ_KINDS.includes(q.kind)) continue;
+    const found = await one<{ id: number }>(env, `SELECT id FROM challenges WHERE (guild_id IS NULL OR guild_id = ?) AND kind = ? AND title = ? AND COALESCE(question, '') = ? AND COALESCE(code, '') = ? AND answer = ? AND status != 'archived' LIMIT 1`,
+      g.id, q.kind, q.title, q.question ?? "", q.code ?? "", q.answer);
+    if (found) { ids.push(found.id); continue; }
+    const c: any = await createChallenge(env, g, { ...q, source: "ai" }, by).catch(() => null);
+    if (c?.id) ids.push(c.id);
+  }
+  return ids;
 }
 
 /** ✨ AI helper for a boss battle or a bounty: a name and an angle from the teacher's idea, a new checked challenge, and settings sized to the class. */

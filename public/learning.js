@@ -1406,7 +1406,7 @@ async function viewAssessments() {
       <div class="figure"><span class="ico">✅</span><div><b>${r.items.reduce((s, a) => s + a.done, 0)}</b><span>papers handed in</span></div></div>
     </div>
     <section class="panel">${table([
-      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}` },
+      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}${a.lib_key ? ` <span class="lib-tag" title="In the shared library: the other classes have it too">📚 shared</span>` : ""}` },
       { label: "Status", sort: "status", html: (a) => status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status) },
       { label: "Questions", num: true, sort: "n", html: (a) => `${a.n}` },
       { label: "Done", num: true, html: (a) => `${a.done}/${a.takers}${a.locked ? ` <span class="pill-inline">${a.locked} stopped</span>` : ""}` },
