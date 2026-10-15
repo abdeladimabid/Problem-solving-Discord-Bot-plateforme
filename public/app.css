@@ -1760,6 +1760,17 @@ a.gm-card:hover { text-decoration: none; }
 .act-md th { background: var(--surface-2); font-weight: 650; }
 .act-md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .act-edit { width: 100%; min-height: 260px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; resize: vertical; }
+.act-off { display: inline-block; }
+.act-off.k-holiday { color: var(--down); }
+.act-off.k-off { color: var(--warn); }
+/* Regenerate from the teacher's proposal */
+.act-cur { display: flex; align-items: baseline; gap: 10px; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); margin-bottom: 12px; }
+.act-cur b { min-width: 0; }
+.act-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.act-chip:hover { border-color: var(--blue); color: var(--blue); }
+.act-cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+.act-cmp .act-kind { display: block; margin-bottom: 6px; }
+.act-scroll { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
 @media (max-width: 1000px) { .act-top { grid-template-columns: 1fr; } .act-cal { position: static; max-width: 460px; } }
 @media (max-width: 640px) {
   .act-day { grid-template-columns: 1fr; gap: 6px; }
