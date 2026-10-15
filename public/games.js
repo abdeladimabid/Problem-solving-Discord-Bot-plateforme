@@ -118,7 +118,8 @@ function gameDialog(d, kind, pre = {}) {
       <div id="gm-lib" hidden><label for="gm-lsel">Question set <span class="muted">(made in your classes and the other classes of the library)</span></label><select id="gm-lsel">${(d.royaleSets || []).map((x, i) => `<option value="${i}">${esc(x.title || "Questions")} · ${x.n} questions${x.by ? ` · ${esc(x.by)}` : ""}</option>`).join("")}</select></div>
       <div id="gm-as" hidden><label for="gm-asel">Assessment <span class="muted">(its multiple-choice questions with one right answer)</span></label><select id="gm-asel">${d.assessments.map((a) => `<option value="${a.id}">${esc(a.title)} · ${a.mcq} question${a.mcq > 1 ? "s" : ""}</option>`).join("")}</select></div>
       <div class="field-row"><div><label for="gm-sec">Time per question</label><select id="gm-sec">${[10, 15, 20, 30, 45].map((s) => `<option value="${s}" ${s === 20 ? "selected" : ""}>${s} s</option>`).join("")}</select></div>
-        <div><label for="gm-rc">Bring a teammate back</label><select id="gm-rc">${[2, 3, 4, 5].map((s) => `<option value="${s}" ${s === 3 ? "selected" : ""}>${s} squad points</option>`).join("")}</select></div></div>` : ""}
+        <div><label for="gm-rc">Bring a teammate back</label><select id="gm-rc">${[2, 3, 4, 5].map((s) => `<option value="${s}" ${s === 3 ? "selected" : ""}>${s} squad points</option>`).join("")}</select></div></div>
+      <label class="check"><input type="checkbox" id="gm-auto" checked> The next question comes by itself <span class="muted small">(6 to 20 s after the answer: more when someone fell and can be brought back; ⏸ Pause on the TV)</span></label>` : ""}
     ${kind === "sql" ? `
       <label>The case</label>
       ${srcChips("csrc", [["built", "📚 Built-in"], ["ai", "✨ Generate with AI"], ["own", "✍️ Write my own"], ...((d.myCases || []).length ? [["mine", "🗂 Made before"]] : [])])}
@@ -171,7 +172,7 @@ function gameDialog(d, kind, pre = {}) {
       body.squads = set.squads;
     }
     if (kind === "royale") {
-      Object.assign(settings, { seconds: Number($("#gm-sec").value), reviveCost: Number($("#gm-rc").value) });
+      Object.assign(settings, { seconds: Number($("#gm-sec").value), reviveCost: Number($("#gm-rc").value), autoNext: $("#gm-auto").checked });
       const fromAs = $("[data-src=assess][aria-pressed=true]", dlg);
       const fromLib = $("[data-src=lib][aria-pressed=true]", dlg);
       if (fromLib) { body.questions = d.royaleSets[Number($("#gm-lsel").value)].questions; body.fromLibrary = true; }
@@ -301,15 +302,16 @@ async function viewGame(id) {
       <h1>${info.art} ${esc(G.title)}</h1>
       <p class="sub">${GM_MODES[G.mode][0]} ${GM_MODES[G.mode][1]} · ${esc(sub)}${G.settings.reward ? ` · winners +${G.settings.reward} pts` : ""}</p></div>
       <div class="toolbar" style="margin:0"><button class="btn danger" id="gm-del">Delete</button></div></div>
-    <div class="bt-launch">
-      <section class="panel bt-step"><div class="bt-num">1</div><div><h2>📺 Show it on the TV</h2><p class="small muted">Open it on the computer connected to the class TV, in <b>full screen</b>, sound on. Your buttons (start, next, end) are at the bottom of the TV screen.</p>
+    <div class="gm-top">
+      <section class="panel gm-card"><div class="gm-ic" aria-hidden="true">📺</div><div>
+        <h2>Show it on the TV</h2>
+        <p class="small muted">Open it on the class computer, in <b>full screen</b>, sound on. Your buttons (start, next, end, 👥 players) are at the bottom of the TV.</p>
         <div class="toolbar" style="margin:0"><a class="btn primary" href="${esc(G.tv)}" target="_blank" rel="noopener">📺 Open the TV screen</a><button class="btn" id="gm-cptv">Copy the link</button></div></div></section>
-      <section class="panel bt-step"><div class="bt-num">2</div><div class="bt-judge"><div><h2>📱 The students join from Discord</h2><p class="small muted">When the TV screen opens, the bot posts a <b>🎮 Join</b> button in #arena. Each student clicks it (or types <code>/play</code>) and gets their <b>own link</b>, tied to their Discord account, to open ${G.kind === "royale" ? "on their phone" : "on a laptop"}. Nobody can play under someone else's name.</p>
-          <p class="small muted">To remove a student: click their name on the TV (or 👥 at the bottom). Their link stops working; you can let them back in.</p>
-          ${G.kind === "relay" && G.settings.noise ? `<p class="small muted">🎤 Their browser asks for the microphone: they must allow it.</p>` : ""}</div>
-        </div></section>
-      <section class="panel bt-step"><div class="bt-num">3</div><div style="flex:1"><h2>🎮 Live</h2><div id="gm-live">${gameLive(G, L)}</div></div></section>
+      <section class="panel gm-card"><div class="gm-ic" aria-hidden="true">📱</div><div>
+        <h2>The students join from Discord</h2>
+        <p class="small muted">When the TV opens, the bot posts a <b>🎮 Join</b> button in #arena (or they type <code>/play</code>). Each one gets their <b>own link</b>, tied to their Discord account${G.kind === "royale" ? ", to open on their phone" : ", to open on a laptop"}.${G.kind === "relay" && G.settings.noise ? " 🎤 They must allow the microphone." : ""}</p></div></section>
     </div>
+    <section class="panel gm-livep"><div class="panel-head" style="margin-bottom:6px"><h2 style="margin:0">🎮 Live</h2><span class="small muted">Updates by itself</span></div><div id="gm-live">${gameLive(G, L)}</div></section>
     ${G.kind === "royale" ? `<section class="panel"><h2>Questions <span class="muted">${G.content.questions.length}</span></h2><div class="bt-qs">${G.content.questions.map((q) => `<div class="bt-q"><span class="bt-k">❓</span><div><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}<div class="small">${q.options.map((o, k) => `${k === q.answer ? "✅ <b>" : ""}${"ABCD"[k]}. ${esc(o)}${k === q.answer ? "</b>" : ""}`).join(" · ")}</div></div></div>`).join("")}</div></section>` : ""}
     ${G.kind === "sql" && G.content.case ? `<section class="panel"><h2>🕵️ The case <span class="muted">(your answer key)</span></h2><p>${esc(G.content.case.story)}</p>
       <ol>${G.content.case.steps.map((s) => `<li><b>${esc(s.title)}</b> · ${esc(s.clue)}<pre class="code small">${esc(s.ref)}</pre></li>`).join("")}</ol>
@@ -319,6 +321,28 @@ async function viewGame(id) {
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
   $("#gm-cptv").onclick = () => copyText(G.tv, "TV link copied");
   $("#gm-del").onclick = () => confirmDialog("Delete this game?", "The TV and the join links stop working.", "Delete", async () => { await api(`/games/${id}`, { method: "DELETE" }); location.hash = `#/games/${G.kind}`; }, true);
+  // reuse the game: free the players, remove one, other squads (the TV and the phones follow by themselves)
+  const live = $("#gm-live");
+  const redraw = (x) => { if (x?.live) live.innerHTML = gameLive(x, x.live); };
+  live.onclick = (ev) => {
+    const rm = ev.target.closest("[data-rmp]");
+    if (rm) return confirmDialog(`Remove ${rm.dataset.n} from this game?`, "They leave the game now. Their Discord link still works: they can join again.", "Remove",
+      async () => { redraw(await api(`/games/${id}/remove`, { method: "POST", body: { pid: rm.dataset.rmp } })); toast("Removed"); }, true);
+    if (ev.target.closest("[data-gclear]")) return confirmDialog("Free all the players?", "Everyone leaves this game and it goes back to the start, with its questions and settings: another group (or the same one) joins again from Discord. The points already given stay.", "Free them",
+      async () => { redraw(await api(`/games/${id}/clear`, { method: "POST" })); toast("The game is ready for another group"); }, true);
+    if (ev.target.closest("[data-gsq]")) return (async () => {
+      const d = await api("/games");
+      const srcs = (d.squads || []).filter((x) => x.squads.length >= 2);
+      if (!srcs.length) return toast("No squads to load: make them in Teams & squads", true);
+      openDialog("Change the squads", `<label for="gm-sqs">Squads</label><select id="gm-sqs" style="width:100%">${srcs.map((x, i) => `<option value="${i}">${esc((x.week ? `S${x.week} · ` : "") + x.from)} (${x.squads.length} squads)</option>`).join("")}</select>
+        <p class="small muted">The players already in go to their squad in the new ones (a player in none goes to the smallest).</p>`,
+      [{ label: "Load them", primary: true, action: async () => {
+        const src = srcs[Number($("#gm-sqs", dlg).value)];
+        redraw(await api(`/games/${id}/squads`, { method: "PUT", body: { squads: src.squads } }));
+        dlg.close(); toast("Squads changed");
+      } }]);
+    })();
+  };
   clearInterval(gmTimer);
   gmTimer = setInterval(async () => {
     if (!document.body.contains($("#gm-live"))) { clearInterval(gmTimer); return; }
@@ -328,14 +352,32 @@ async function viewGame(id) {
 function gameLive(G, L) {
   const [cls, lbl] = GM_PHASE[L.phase] || ["pending", L.phase];
   const sq = (i) => L.squads[i] || { name: "?", emoji: "", color: "#888" };
-  let more = "";
-  if (G.kind === "royale" && L.phase !== "lobby") more = `${L.players.filter((p) => p.alive).length} alive of ${L.players.length} · question ${L.step}/${L.total}`;
-  if (G.kind === "sql" && L.teams?.length) more = L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)} ${t.done ? "🎯" : `${t.step}/${L.case.steps.length}`}`).join(" · ");
-  if (G.kind === "relay" && L.teams?.length) more = L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)}${t.strikes ? ` 🗣️${t.strikes}` : ""}${t.out ? " (out)" : ""}${L.results?.[t.squad] ? ` · ${L.results[t.squad].passed}/${L.results[t.squad].total} ✓` : ""}`).join(" · ");
-  const win = L.phase === "over" ? (L.winSquad != null ? `🏆 <b>${esc(sq(L.winSquad).emoji + " " + sq(L.winSquad).name)}</b>` : L.winners?.length ? `🏆 <b>${L.players.filter((p) => L.winners.includes(p.pid)).map((p) => esc(p.name)).join(", ")}</b>` : "") : "";
-  return `<div class="small">${status(cls, lbl)} <span>👥 ${L.players.length} player${L.players.length === 1 ? "" : "s"}</span> ${win}</div>
-    ${more ? `<p class="small" style="margin:8px 0 0">${more}</p>` : ""}
-    <div class="gm-who">${L.players.map((p) => `<span class="tag" style="${p.squad >= 0 && G.mode !== "solo" && L.squads[p.squad] ? `border-color:${esc(L.squads[p.squad].color)}` : ""}">${p.alive === false ? "💀 " : ""}${G.kind === "relay" ? (p.mic === 1 ? "🎤 " : p.mic === 0 ? "🔇 " : "") : ""}${esc(p.name)}</span>`).join("")}</div>`;
+  const playing = L.phase !== "lobby";
+  const alive = L.players.filter((p) => p.alive).length;
+  const ini = (n) => String(n || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+  const chip = (p) => `<span class="gm-pl${playing && G.kind === "royale" && p.alive === false ? " out" : ""}"><span class="gm-av" style="--c:${esc(p.squad >= 0 && G.mode !== "solo" ? sq(p.squad).color : "#64748b")}">${esc(ini(p.name))}</span><span class="gm-nm">${G.kind === "relay" ? (p.mic === 1 ? "🎤 " : p.mic === 0 ? "🔇 " : "") : ""}${esc(p.name)}</span><button type="button" class="gm-x" data-rmp="${esc(p.pid)}" data-n="${esc(p.name)}" title="Remove from this game" aria-label="Remove ${esc(p.name)}">×</button></span>`;
+  // the facts of the moment
+  const facts = [`<span class="gm-fact">${status(cls, lbl)}</span>`, `<span class="gm-fact"><b>${L.players.length}</b> player${L.players.length === 1 ? "" : "s"}</span>`];
+  if (G.kind === "royale" && playing) facts.push(`<span class="gm-fact"><b>${alive}</b> alive</span>`, `<span class="gm-fact gm-q">Question <b>${L.step}</b>/${L.total}<span class="gm-bar"><i style="width:${Math.round((100 * (L.step || 0)) / (L.total || 1))}%"></i></span></span>`);
+  if (G.kind === "sql" && L.teams?.length) facts.push(`<span class="gm-fact">${L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)} ${t.done ? "🎯" : `${t.step}/${L.case.steps.length}`}`).join(" · ")}</span>`);
+  if (G.kind === "relay" && L.teams?.length) facts.push(`<span class="gm-fact">${L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)}${t.strikes ? ` 🗣️${t.strikes}` : ""}${t.out ? " (out)" : ""}${L.results?.[t.squad] ? ` · ${L.results[t.squad].passed}/${L.results[t.squad].total} ✓` : ""}`).join(" · ")}</span>`);
+  const win = L.phase === "over" ? (L.winSquad != null ? `${esc(sq(L.winSquad).emoji + " " + sq(L.winSquad).name)} <span class="muted">· ${L.players.filter((p) => L.winners?.includes(p.pid) || p.squad === L.winSquad).map((p) => esc(p.name)).join(", ")}</span>` : L.winners?.length ? L.players.filter((p) => L.winners.includes(p.pid)).map((p) => esc(p.name)).join(", ") : "") : "";
+  // the players: by squad (with their colour), or all together
+  const bySquad = G.mode !== "solo" && L.squads.some(Boolean);
+  const groups = bySquad ? L.squads.map((q, i) => (q ? { q, i, list: L.players.filter((p) => p.squad === i) } : null)).filter((x) => x && x.list.length) : [];
+  const loose = bySquad ? L.players.filter((p) => !groups.some((g) => g.i === p.squad)) : L.players;
+  const players = !L.players.length ? `<div class="gm-empty">⏳ Nobody has joined yet: open the TV screen, the 🎮 Join button goes to #arena.</div>`
+    : `<div class="gm-squads">${groups.map((g) => { const al = g.list.filter((p) => p.alive).length;
+        return `<div class="gm-sq" style="--c:${esc(g.q.color)}"><div class="gm-sqh"><b>${esc(g.q.emoji + " " + g.q.name)}</b>${G.kind === "royale" && playing ? `<span class="small ${al ? "" : "gm-dead"}">${al ? `❤️ ${al}/${g.list.length}` : "💀 out"}</span>` : `<span class="small muted">${g.list.length}</span>`}</div><div class="gm-pls">${g.list.map(chip).join("")}</div></div>`; }).join("")}
+        ${loose.length ? `<div class="gm-sq${bySquad ? "" : " gm-all"}" style="--c:#94a3b8">${bySquad ? `<div class="gm-sqh"><b>No squad</b></div>` : ""}<div class="gm-pls">${loose.map(chip).join("")}</div></div>` : ""}</div>`;
+  return `<div class="gm-facts">${facts.join("")}</div>
+    ${win ? `<div class="gm-win">🏆 <b>${win}</b></div>` : ""}
+    ${players}
+    <div class="gm-tools">
+      ${L.players.length ? `<button class="btn small" data-gclear="1" title="Everyone leaves: the game is ready for another group">🧹 Free all the players</button>` : ""}
+      ${G.mode === "squads" && ["lobby", "over"].includes(L.phase) ? `<button class="btn small" data-gsq="1">🛡️ Change the squads</button>` : ""}
+      <span class="small muted">× on a name removes that player (their link still works).</span>
+    </div>`;
 }
 
 Object.assign(routes, { games: (k) => (k && GM_INFO[k] ? viewGameKind(k) : viewGames()), game: (id) => viewGame(Number(id)) });

@@ -31,7 +31,7 @@ export const GAME_KINDS: Record<GKind, { emoji: string; en: string; fr: string; 
 export interface GSquad { name: string; emoji: string; color: string; members: string[] }
 export interface GSettings {
   lang: "fr" | "en"; reward: number; announce: boolean; size: number;
-  seconds: number; reviveCost: number; maxRevives: number;                    // royale
+  seconds: number; reviveCost: number; maxRevives: number; autoNext: boolean; // royale (autoNext: the next question comes by itself)
   caseId: string; hintPenalty: number; wrongPenalty: number;                  // sql (seconds)
   total: number; rounds: number; noise: boolean; sensitivity: "low" | "medium" | "high"; strikes: number; codeLang: RelayLang;   // relay
 }
@@ -43,6 +43,7 @@ export interface GState {
   step?: number; order?: number[]; qAt?: number; qEnd?: number;
   last?: { out: string[]; everyone: boolean; right: number; dist: number[]; final: boolean; wiped?: number[] } | null;
   winners?: string[]; winSquad?: number | null;
+  nextAt?: number | null; paused?: boolean;   // royale: when the next question comes by itself (after the answer is shown)
   banned?: string[];   // removed by the teacher: their Discord link doesn't let them back in
   posted?: number;     // when the join button was last posted in Discord
   // sql / relay
@@ -63,7 +64,7 @@ export function cleanSettings(v: any, lang: string): GSettings {
   const n = (x: unknown, d: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Number.isFinite(Number(x)) && x !== null && x !== "" ? Number(x) : d));
   return {
     lang: (v?.lang || lang) === "en" ? "en" : "fr", reward: n(v?.reward, 20, 0, 200), announce: v?.announce !== false, size: n(v?.size, 4, 2, 8),
-    seconds: n(v?.seconds, 20, 8, 90), reviveCost: n(v?.reviveCost, 3, 1, 20), maxRevives: n(v?.maxRevives, 1, 0, 5),
+    seconds: n(v?.seconds, 20, 8, 90), reviveCost: n(v?.reviveCost, 3, 1, 20), maxRevives: n(v?.maxRevives, 1, 0, 5), autoNext: v?.autoNext !== false,
     caseId: SQL_CASES.some((c) => c.id === v?.caseId) ? v.caseId : SQL_CASES[0].id, hintPenalty: n(v?.hintPenalty, 60, 0, 600), wrongPenalty: n(v?.wrongPenalty, 120, 0, 900),
     total: n(v?.total, 300, 60, 1800), rounds: n(v?.rounds, 1, 1, 4), noise: v?.noise !== false, sensitivity: ["low", "medium", "high"].includes(v?.sensitivity) ? v.sensitivity : "medium", strikes: n(v?.strikes, 3, 1, 10),
     codeLang: (v?.codeLang && v.codeLang in RELAY_LANGS ? v.codeLang : "javascript") as RelayLang,
@@ -276,6 +277,47 @@ export async function joinGame(env: Env, gm: Game, key: string, pid: string): Pr
   await bump(env, gm);
   return (await playerByKey(env, gm.id, key))!;
 }
+// ------------------------------------------------------------------ the teacher's dashboard: reuse a game
+/** Everyone leaves: the game is back at the start, ready for another group (they join again with /play). */
+export async function clearPlayers(env: Env, gm: Game) {
+  for (const t of ["game_moves", "game_teams", "game_players"]) await run(env, `DELETE FROM ${t} WHERE game_id = ?`, gm.id);
+  const n = newState(); n.seq = gm.state.seq + 1; n.posted = gm.state.posted;
+  await run(env, "UPDATE games SET state = ?, status = 'ready', updated_at = ?, finished_at = NULL WHERE id = ?", JSON.stringify(n), now(), gm.id);
+  gm.state = n;
+}
+/** One player leaves (not banned: their link lets them come back). */
+export async function removePlayer(env: Env, gm: Game, pid: string) {
+  await run(env, "DELETE FROM game_players WHERE game_id = ? AND pid = ?", gm.id, s(pid, 25));
+  await run(env, "DELETE FROM game_moves WHERE game_id = ? AND pid = ?", gm.id, s(pid, 25));
+  await bump(env, gm);
+}
+/** Other squads (before the game starts, or after it ends): the players already in are put in their new squad. */
+export async function setSquads(env: Env, gm: Game, v: unknown) {
+  if (gm.mode !== "squads") throw new GameError("This game isn't played with the class's squads.");
+  if (!["lobby", "over"].includes(gm.state.phase)) throw new GameError("Change the squads before the game starts (or once it's over).");
+  const squads = cleanSquads(v);
+  if (squads.length < 2) throw new GameError("Pick the squads (at least two).");
+  const players = await playersOf(env, gm.id);
+  for (const p of players) {
+    let i = squads.findIndex((q) => q.members.includes(p.pid));
+    if (i < 0) { const c = squads.map((q) => q.members.length); i = c.indexOf(Math.min(...c)); squads[i].members.push(p.pid); }
+    await run(env, "UPDATE game_players SET squad = ? WHERE game_id = ? AND pid = ?", i, gm.id, p.pid);
+  }
+  await run(env, "UPDATE games SET squads = ? WHERE id = ?", JSON.stringify(squads), gm.id);
+  await run(env, "DELETE FROM game_teams WHERE game_id = ?", gm.id);
+  gm.squads = squads;
+  await bump(env, gm);
+}
+/** 🙏 A player who is out asks their squad to bring them back (their teammates see it on their phone). */
+export async function pleaRoyale(env: Env, gm: Game, p: Player) {
+  if (gm.kind !== "royale" || gm.mode === "solo") throw new GameError("Only in squads.");
+  if (p.alive) throw new GameError("You're still in the game!");
+  if (gm.state.phase === "over" || gm.state.last?.final) throw new GameError("The game is over.");
+  const d = await updateTeam(env, gm.id, p.squad, (x) => ({ ...x, pleas: { ...(x.pleas || {}), [p.pid]: Date.now() } }));
+  if (!d) throw new GameError("Your squad isn't in the game.");
+  await bump(env, gm);
+}
+
 /** Something the TV shows changed (a player joined…): a new seq so the screens reload. */
 async function bump(env: Env, gm: Game) {
   await run(env, "UPDATE games SET state = json_set(state, '$.seq', json_extract(state, '$.seq') + 1), updated_at = ? WHERE id = ?", now(), gm.id);
@@ -290,7 +332,7 @@ export function squadList(gm: Game, players: Player[]): GSquad[] {
 }
 
 // ------------------------------------------------------------------ the teacher's buttons (on the TV)
-export type GAction = { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "unban"; pid: string } | { a: "announce" } | { a: "pardon"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
+export type GAction = { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "hold" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "unban"; pid: string } | { a: "announce" } | { a: "pardon"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
 export const COUNTDOWN_MS = 5000, NEXT_MS = 3000;
 export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()): Promise<Game> {
   const st: GState = structuredClone(gm.state), readSeq = gm.state.seq;
@@ -373,7 +415,14 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
     case "next": {
       if (gm.kind !== "royale" || st.phase !== "reveal") throw new GameError("Nothing to go on to.");
       if (st.last?.final) { st.phase = "over"; break; }
-      st.step = (st.step ?? 0) + 1; st.phase = "question"; st.qAt = at + NEXT_MS; st.qEnd = at + NEXT_MS + gm.settings.seconds * 1000; st.last = null;
+      st.step = (st.step ?? 0) + 1; st.phase = "question"; st.qAt = at + NEXT_MS; st.qEnd = at + NEXT_MS + gm.settings.seconds * 1000; st.last = null; st.nextAt = null; st.paused = false;
+      break;
+    }
+    case "hold": {
+      // the teacher wants to talk about the answer: the next question waits (and comes 4 s after Resume)
+      if (gm.kind !== "royale" || st.phase !== "reveal") throw new GameError("Nothing to pause.");
+      st.paused = !st.paused;
+      if (!st.paused) st.nextAt = at + 4000;
       break;
     }
     case "runtests": {
@@ -459,6 +508,11 @@ async function revealRoyale(env: Env, gm: Game, players: Player[], at: number): 
   const wiped = gm.mode === "solo" ? [] : [...new Set(alive.map((p) => p.squad))].filter((sq) => sq >= 0 && !stay.some((p) => p.squad === sq));
   st.phase = "reveal";
   st.last = { out: out.map((p) => p.pid), everyone, right: right.length, dist, final, wiped };
+  // the next question by itself: time to read the answer, to watch the fallen (and the squads wiped out), and, in
+  // squads, to bring a teammate back — not more
+  const revivable = gm.mode !== "solo" && !final && players.some((p) => !p.alive || out.includes(p)) && stay.length > 0;
+  st.nextAt = gm.settings.autoNext !== false ? at + Math.min(20000, 6000 + (out.length ? 2500 : 0) + wiped.length * 3500 + (revivable ? 5000 : 0)) : null;
+  st.paused = false;
   if (final) { st.winners = stay.map((p) => p.pid); st.winSquad = gm.mode === "solo" ? null : bestSquad(stay); }
   // the state first (only one request reveals), then the players
   if (!(await saveState(env, gm, st, readSeq))) { const fresh = await getGame(env, gm.id); if (fresh) Object.assign(gm, fresh); return gm; }
@@ -494,6 +548,9 @@ export async function reviveRoyale(env: Env, gm: Game, p: Player, target: string
   const d = await updateTeam(env, gm.id, p.squad, (x) => ((x.pts || 0) >= cost ? { ...x, pts: x.pts - cost } : null));
   if (!d) throw new GameError(`Your squad needs ${cost} points.`);
   await run(env, "UPDATE game_players SET alive = 1, out_step = NULL, revived = revived + 1 WHERE game_id = ? AND pid = ?", gm.id, target);
+  await updateTeam(env, gm.id, p.squad, (x) => { const pl = { ...(x.pleas || {}) }; delete pl[target]; return { ...x, pleas: pl }; }).catch(() => null);
+  // someone was just brought back: the others get a few seconds more before the next question
+  await run(env, "UPDATE games SET state = json_set(state, '$.nextAt', ?) WHERE id = ? AND json_extract(state, '$.nextAt') IS NOT NULL AND json_extract(state, '$.nextAt') < ?", Date.now() + 3000, gm.id, Date.now() + 3000);
   await bump(env, gm);
 }
 
@@ -613,6 +670,11 @@ export async function liveGame(env: Env, gm: Game, at = Date.now()): Promise<Gam
   if (gm.kind === "royale" && st.phase === "question" && st.qEnd && at >= st.qEnd + 4000) {
     await revealRoyale(env, gm, await playersOf(env, gm.id), at);
   }
+  // the answer was shown long enough: the next question (or the results) by itself — one request does it, the others see it
+  if (gm.kind === "royale" && gm.state.phase === "reveal" && gm.state.nextAt && !gm.state.paused && at >= gm.state.nextAt) {
+    try { await hostAction(env, gm, { a: "next" }, at); }
+    catch (e) { if (!(e instanceof GameError)) throw e; const f = await getGame(env, gm.id); if (f) Object.assign(gm, f); }
+  }
   return gm;
 }
 
@@ -664,7 +726,7 @@ export async function tvView(env: Env, gm: Game, at = Date.now()) {
     const qs: RQ[] = gm.content.questions;
     const q = st.order && st.step ? qs[st.order[(st.step - 1) % st.order.length]] : null;
     const answered = st.phase === "question" ? (await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM game_moves WHERE game_id = ? AND step = ?", gm.id, st.step))?.n ?? 0 : 0;
-    return { ...base, step: st.step ?? 0, total: qs.length, qAt: st.qAt, qEnd: st.qEnd, seconds: gm.settings.seconds, answered,
+    return { ...base, step: st.step ?? 0, total: qs.length, qAt: st.qAt, qEnd: st.qEnd, seconds: gm.settings.seconds, answered, nextAt: st.phase === "reveal" ? st.nextAt ?? null : null, paused: !!st.paused,
       q: q && (st.phase === "question" || st.phase === "reveal") ? { prompt: q.prompt, code: q.code ?? null, options: q.options, topic: q.topic ?? null, ...(st.phase === "reveal" ? { answer: q.answer } : {}) } : null,
       last: st.phase === "reveal" ? st.last : null, winners: st.winners ?? [], pts: Object.fromEntries(teams.map((t) => [t.squad, t.data.pts || 0])) };
   }
@@ -697,11 +759,14 @@ export async function playerView(env: Env, gm: Game, p: Player, at = Date.now())
     const q = st.order && st.step ? qs[st.order[(st.step - 1) % st.order.length]] : null;
     const mine = st.step ? await one<{ value: string }>(env, "SELECT value FROM game_moves WHERE game_id = ? AND pid = ? AND step = ?", gm.id, p.pid, st.step) : null;
     const team = p.squad >= 0 && gm.mode !== "solo" ? await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad) : null;
-    return { ...base, step: st.step ?? 0, total: qs.length, qAt: st.qAt, qEnd: st.qEnd, picked: mine ? Number(mine.value) : null,
+    return { ...base, step: st.step ?? 0, total: qs.length, qAt: st.qAt, qEnd: st.qEnd, picked: mine ? Number(mine.value) : null, nextAt: st.phase === "reveal" && !st.paused ? st.nextAt ?? null : null,
       q: q && (st.phase === "question" || st.phase === "reveal") ? { prompt: q.prompt, code: q.code ?? null, options: q.options, ...(st.phase === "reveal" ? { answer: q.answer } : {}) } : null,
       last: st.phase === "reveal" ? { out: (st.last?.out ?? []).includes(p.pid), everyone: !!st.last?.everyone, final: !!st.last?.final, wiped: (st.last?.wiped ?? []).includes(p.squad), wipedN: (st.last?.wiped ?? []).length } : null,
       alive: players.filter((x) => x.alive).length, squadsLeft: gm.mode === "solo" ? null : new Set(players.filter((x) => x.alive && x.squad >= 0).map((x) => x.squad)).size,
-      pts: team ? JSON.parse(team.data).pts || 0 : 0, reviveCost: gm.settings.reviveCost, maxRevives: gm.settings.maxRevives, winners: st.phase === "over" ? st.winners ?? [] : [] };
+      pts: team ? JSON.parse(team.data).pts || 0 : 0, reviveCost: gm.settings.reviveCost, maxRevives: gm.settings.maxRevives, winners: st.phase === "over" ? st.winners ?? [] : [],
+      // 🙏 who of my squad asked to be brought back (and still is out); the question they fell on
+      pleas: team ? Object.keys(JSON.parse(team.data).pleas || {}).filter((pid) => mates.some((m) => m.pid === pid && !m.alive)) : [],
+      outStep: p.out_step, revived: p.revived };
   }
   const team = p.squad >= 0 ? await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad) : null;
   const d = team ? JSON.parse(team.data) : null;

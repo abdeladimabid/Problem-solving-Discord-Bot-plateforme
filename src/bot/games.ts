@@ -8,7 +8,7 @@
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { COUNTDOWN_MS, GameError, NEXT_MS, accuseSql, answerRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, NEXT_MS, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -18,7 +18,7 @@ const html = (body: string) => new Response(body, { headers: { "content-type": "
 const esc = (s: string) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]!));
 const GONE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Class game</title>
 <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#0b1020;color:#e7edf8;font:18px system-ui,sans-serif;text-align:center"><div><div style="font-size:64px">🎮</div><p>This game doesn't exist anymore.<br>Ask your teacher for the new link.</p></div></body>`;
-const HOST_ACTIONS = ["start", "reveal", "next", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
+const HOST_ACTIONS = ["start", "reveal", "next", "hold", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
 
 async function body(request: Request): Promise<any> { try { return await request.json(); } catch { return {}; } }
 
@@ -78,6 +78,7 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
     switch (action) {
       case "answer": await answerRoyale(env, gm, p, Number(b.step), Number(b.choice)); return json(await fresh());
       case "revive": await reviveRoyale(env, gm, p, String(b.target || "")); return json(await fresh());
+      case "plea": await pleaRoyale(env, gm, p); return json(await fresh());
       case "check": return json(await checkSql(env, gm, p, Number(b.step), Array.isArray(b.rows) ? b.rows : []));
       case "hint": return json(await hintSql(env, gm, p));
       case "accuse": return json(await accuseSql(env, gm, p, String(b.name || "").slice(0, 80)));
@@ -245,6 +246,18 @@ kbd{font:800 1.3vw/1 "JetBrains Mono",Consolas,monospace;padding:.5vh .7vw;borde
 .sqcard .e{font-size:1.6vw}.sqcard .hp{letter-spacing:.1vw;font-size:1vw}
 .sqcard.dead{filter:grayscale(1);opacity:.35;transform:scale(.94)}
 .sqcard .pts{padding:.2vh .6vw;border-radius:999px;background:rgba(0,0,0,.25);font-size:.95vw}
+/* ---- one card per player knocked out */
+.deaths{position:fixed;inset:0;z-index:28;display:grid;place-items:center;align-content:center;gap:2.4vh;background:radial-gradient(circle at center,rgba(127,29,29,.8),rgba(0,0,0,.94) 70%);animation:wipein .3s ease-out;pointer-events:auto}
+.deaths h1{margin:0;font-size:4.4vw;letter-spacing:.08em;color:#fecaca;text-shadow:0 0 30px rgba(239,68,68,.8);animation:rise .4s both}
+.dgrid{display:flex;flex-wrap:wrap;justify-content:center;gap:1.4vw;max-width:88vw}
+.dcard{position:relative;display:grid;justify-items:center;gap:.8vh;width:12vw;padding:2vh 1vw 1.6vh;border-radius:22px;background:linear-gradient(180deg,color-mix(in srgb,var(--c) 45%,#1f2937),#111827);border:2px solid var(--c);box-shadow:0 0 30px color-mix(in srgb,var(--c) 50%,transparent);opacity:0;animation:slam .45s cubic-bezier(.2,1.6,.4,1) forwards,die 1s forwards;animation-delay:var(--d),calc(var(--d) + .7s)}
+.dcard .dav{width:6vw;height:6vw;border-radius:50%;display:grid;place-items:center;font-size:2.4vw;font-weight:900;color:#fff;background:var(--c);position:relative}
+.dcard .dav::after{content:"💀";position:absolute;inset:0;display:grid;place-items:center;font-size:4.4vw;opacity:0;animation:stamp .35s forwards;animation-delay:calc(var(--d) + .55s)}
+.dcard b{font-size:1.35vw;max-width:11vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dcard small{font-size:1vw;color:#fca5a5;font-weight:700}
+@keyframes slam{0%{opacity:0;transform:scale(1.8) rotate(-8deg)}60%{opacity:1;transform:scale(.92) rotate(2deg)}100%{opacity:1;transform:scale(1) rotate(0)}}
+@keyframes die{0%{filter:none}30%{filter:brightness(2.2) saturate(0)}100%{filter:grayscale(1) brightness(.75);transform:translateY(.8vh) rotate(-3deg)}}
+@keyframes stamp{0%{opacity:0;transform:scale(2.4)}70%{opacity:1;transform:scale(.9)}100%{opacity:1;transform:scale(1)}}
 /* ---- wiped squad */
 .wipe{position:fixed;inset:0;z-index:30;display:grid;place-items:center;align-content:center;gap:1.6vh;text-align:center;background:radial-gradient(circle at center,color-mix(in srgb,var(--c) 40%,#000) 0%,#000 70%);animation:wipein .35s ease-out,shake .5s .35s 2;overflow:hidden}
 @keyframes wipein{from{opacity:0}}
@@ -310,7 +323,7 @@ async function act(a, extra) {
 function take(d) { if (d.same) { off = d.now - Date.now(); return; } off = d.now - Date.now(); S = d; render(); }
 async function poll() {
   try { const r = await fetch(BASE + "/state?seq=" + (S ? S.seq : 0)); if (r.ok) take(await r.json()); } catch (x) {}
-  setTimeout(poll, S && S.phase === "question" ? 900 : 1500);
+  setTimeout(poll, S && (S.phase === "question" || (S.phase === "reveal" && S.nextAt && S.nextAt - nowMs() < 2000)) ? 800 : 1500);
 }
 let manage = "", panel = false;
 const initials = (n) => String(n || "?").trim().split(/\\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
@@ -405,6 +418,19 @@ function royale() {
     (reveal ? banner : '<div class="ansbar"><span>✍️ ' + S.answered + "/" + alive.length + T(" ont répondu", " answered") + '</span><div class="pbar"><i style="width:' + Math.round(100 * S.answered / (alive.length || 1)) + '%"></i></div></div>') +
     (S.mode !== "solo" ? squadArena(reveal) : reveal ? "" : '<div class="alive">' + players(alive) + "</div>") + "</div>";
 }
+// every player knocked out by this question: one card each, slammed in then struck down (the TV's sound with each)
+function showDeaths(outs, then) {
+  if (!outs.length) { if (then) then(); return; }
+  const shown = outs.slice(0, 24), step = Math.min(.35, 3 / shown.length);
+  const d = document.createElement("div"); d.className = "deaths";
+  d.innerHTML = "<h1>💀 " + outs.length + " " + (outs.length > 1 ? T("ÉLIMINÉS", "KNOCKED OUT") : T("ÉLIMINÉ", "KNOCKED OUT")) + "</h1><div class=\\"dgrid\\">" + shown.map((p, i) => '<div class="dcard" style="--c:' + (p.squad >= 0 && S.mode !== "solo" ? sq(p.squad).color : "#ef4444") + ";--d:" + (0.3 + i * step).toFixed(2) + 's"><div class="dav">' + e(initials(p.name)) + "</div><b>" + e(p.name) + "</b>" + (p.squad >= 0 && S.mode !== "solo" ? "<small>" + e(sq(p.squad).emoji + " " + sq(p.squad).name) + "</small>" : "<small>" + p.score + " ✓</small>") + "</div>").join("") + (outs.length > shown.length ? '<div class="dcard" style="--c:#475569;--d:' + (0.3 + shown.length * step).toFixed(2) + 's"><div class="dav">+' + (outs.length - shown.length) + "</div><b>" + T("et d'autres", "and more") + "</b></div>" : "") + "</div>";
+  document.body.append(d);
+  shown.forEach((_, i) => setTimeout(() => { beep(220 - Math.min(i, 8) * 12, .22, "square"); }, (0.3 + i * step) * 1000 + 550));
+  const total = (0.3 + shown.length * step) * 1000 + 1500;
+  let done = false;
+  const end = () => { if (done) return; done = true; d.style.transition = "opacity .35s"; d.style.opacity = "0"; setTimeout(() => { d.remove(); if (then) then(); }, 350); };
+  d.onclick = end; setTimeout(end, total);
+}
 // a squad whose last members just fell: the whole screen tells it
 function showWipes(list) {
   const i = list.shift(); if (i == null) return;
@@ -494,7 +520,10 @@ function controls() {
   if (S.phase === "lobby") b.push('<button class="btn primary" data-act="start">▶ ' + T("Lancer", "Start") + "</button>");
   if (S.phase === "lobby") b.push('<button class="btn" data-act="announce" title="' + T("Publie le bouton 🎮 Rejoindre dans #arena", "Posts the 🎮 Join button in #arena") + '">📣 ' + T("Bouton dans Discord", "Button in Discord") + "</button>");
   if (S.kind === "royale" && S.phase === "question" && !pre) b.push('<button class="btn" data-act="reveal">👁 ' + T("Révéler", "Reveal") + "</button>");
-  if (S.kind === "royale" && S.phase === "reveal") b.push('<button class="btn primary" data-act="next">' + (S.last && S.last.final ? "🏆 " + T("Résultat", "Result") : "▶ " + T("Question suivante", "Next question")) + " <span class=muted>(␣)</span></button>");
+  if (S.kind === "royale" && S.phase === "reveal") {
+    if (S.nextAt || S.paused) b.push('<span class="pill" id="nxt"></span><button class="btn" data-act="hold">' + (S.paused ? "▶ " + T("Reprendre", "Resume") : "⏸ " + T("Pause", "Pause")) + "</button>");
+    b.push('<button class="btn primary" data-act="next">' + (S.last && S.last.final ? "🏆 " + T("Résultat", "Result") : "▶ " + T("Question suivante", "Next question")) + " <span class=muted>(␣)</span></button>");
+  }
   if (!["lobby", "over"].includes(S.phase)) b.push('<button class="btn danger" data-act="stop">⏹ ' + T("Terminer", "End") + "</button>");
   if (S.kind === "relay" && S.phase === "testing") b.push('<button class="btn" id="rerun">🧪 ' + T("Relancer les tests", "Run the tests again") + "</button>");
   if (S.phase === "over") b.push('<button class="btn" data-act="reset">🔁 ' + T("Rejouer", "Play again") + "</button>");
@@ -511,7 +540,7 @@ function render() {
     if (S.phase === "question" && !pre) beep(660, .15);
     if (S.phase === "reveal") {
       beep(S.last && S.last.out.length ? 196 : 880, .4, "triangle");
-      if (S.last && S.last.wiped && S.last.wiped.length && wipedShown !== S.step) { wipedShown = S.step; setTimeout(() => showWipes(S.last.wiped.slice()), 700); }
+      if (S.last && wipedShown !== S.step) { wipedShown = S.step; const outs = S.players.filter((p) => S.last.out.includes(p.pid)), wiped = (S.last.wiped || []).slice(); setTimeout(() => showDeaths(outs, () => showWipes(wiped)), 600); }
     }
     if (S.phase === "over") { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .25), i * 140)); confetti(); }
     shownStep = S.step; shownPhase = S.phase;
@@ -549,6 +578,8 @@ setInterval(() => {
     if ((left <= -300 || (alive && S.answered >= alive && nowMs() > S.qAt)) && !busy && Date.now() - (window.__rv || 0) > 1500) { window.__rv = Date.now(); act("reveal"); }
     else if (left > 0 && left < 5200 && Math.ceil(left / 1000) !== window.__tick) { window.__tick = Math.ceil(left / 1000); beep(440, .06); }
   }
+  const nxt = $("#nxt");
+  if (nxt && S.kind === "royale" && S.phase === "reveal") nxt.textContent = S.paused ? "⏸ " + T("En pause", "Paused") : S.nextAt ? (S.last && S.last.final ? "🏆 " + T("Résultats dans ", "Results in ") : "⏭ " + T("Suivante dans ", "Next in ")) + Math.max(0, Math.ceil((S.nextAt - nowMs()) / 1000)) + " s" : "";
   const clk = $("#clk");
   if (clk && S.kind === "sql") clk.textContent = "⏱ " + mmss(nowMs() - S.startAt);
   if (clk && S.kind === "relay" && S.endAt) clk.textContent = "⏱ " + mmss(S.endAt - nowMs());
@@ -616,6 +647,26 @@ header{position:sticky;top:0;z-index:5;padding:8px 0;backdrop-filter:blur(8px)}
 .pwipe{position:fixed;inset:0;z-index:30;display:grid;place-items:center;align-content:center;gap:10px;text-align:center;padding:20px;background:radial-gradient(circle,color-mix(in srgb,var(--c) 45%,#000),#000 75%);animation:shake .5s 2}
 .pwipe .we{font-size:110px;animation:pop .5s}.pwipe h1{margin:0;font-size:34px;letter-spacing:.05em;text-shadow:3px 0 #ef4444,-3px 0 #06b6d4}.pwipe p{color:#dbe4fb;margin:0}
 canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
+.death{border-color:rgba(239,68,68,.45);background:radial-gradient(120% 80% at 50% 0%,rgba(239,68,68,.22),rgba(255,255,255,.03))}
+.dskull{font-size:78px;line-height:1;display:inline-block;animation:dsk 2.6s ease-in-out infinite;filter:drop-shadow(0 0 18px rgba(239,68,68,.6))}
+@keyframes dsk{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg) translateY(-4px)}}
+.death h2{font-size:26px;margin:6px 0 2px;color:#fecaca}
+.dhelp{margin:14px 0 4px;font-size:15px;color:#e2e8f0}
+.dpts{margin:10px auto 4px;max-width:320px;text-align:left}
+.dpts .lbl{display:flex;justify-content:space-between;font-size:13px;color:var(--soft);margin-bottom:5px}
+.dpts .bar{height:10px;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden}.dpts .bar i{display:block;height:100%;background:linear-gradient(90deg,#f59e0b,#22c55e);transition:width .5s}
+.amates{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:10px 0}
+.amates span{padding:6px 12px;border-radius:999px;background:rgba(34,197,94,.16);border:1px solid rgba(34,197,94,.45);font-weight:700;font-size:14px}
+.amates span.gone{background:rgba(255,255,255,.05);border-color:var(--line);color:var(--soft);text-decoration:line-through}
+.pleab{width:100%;margin-top:10px;font-size:17px;padding:16px;background:linear-gradient(90deg,#f59e0b,#ef4444);animation:pulseb 1.6s ease-in-out infinite}
+.pleab:disabled{animation:none;background:rgba(255,255,255,.1);opacity:1}
+@keyframes pulseb{50%{box-shadow:0 0 0 8px rgba(245,158,11,.18)}}
+.plea{border-color:#f59e0b;background:linear-gradient(180deg,rgba(245,158,11,.2),rgba(255,255,255,.03));animation:pop .4s}
+.plea h3{margin:0 0 6px;font-size:17px}
+.nxq{text-align:center;font-weight:700;color:var(--soft);margin:0 0 10px;font-variant-numeric:tabular-nums}
+.pdead{position:fixed;inset:0;z-index:29;display:grid;place-items:center;align-content:center;gap:8px;text-align:center;background:radial-gradient(circle,rgba(127,29,29,.9),#000 75%);animation:shake .45s 2}
+.pdead .s{font-size:120px;animation:stampp .5s cubic-bezier(.2,1.6,.4,1)}.pdead h1{margin:0;font-size:38px;letter-spacing:.08em;color:#fecaca}
+@keyframes stampp{0%{transform:scale(2.6);opacity:0}100%{transform:scale(1);opacity:1}}
 </style></head><body>
 <header><b>${esc(gm.title)}</b><span class="me" id="me"></span></header>
 <div id="app"><div class="card center muted">…</div></div>
@@ -657,6 +708,7 @@ async function poll() {
     }
   }
   if (S && S.phase === "over") wait = 5000;
+  if (S && S.phase === "reveal" && S.nextAt && S.nextAt - nowMs() < 2500) wait = 900;
   setTimeout(poll, wait);
 }
 // ---------------------------------------------------------------- not linked yet: the way in is Discord
@@ -670,10 +722,32 @@ let wipedSeen = -1, overSeen = false;
 async function pick(i) { try { take(await call("answer", { step: S.step, choice: i })); if (navigator.vibrate) navigator.vibrate(40); } catch (x) { alert(x.message); } }
 async function revive(pid) { try { take(await call("revive", { target: pid })); } catch (x) { alert(x.message); } }
 function squadCard() {
-  if (!S.squad || S.mode === "solo") return "";
+  if (!S.squad || S.mode === "solo" || !S.me.alive) return "";
   const dead = S.squad.mates.filter((m) => !m.alive && m.pid !== S.me.pid);
-  return '<div class="card" style="border-color:' + S.squad.color + '"><b>' + e(S.squad.emoji + " " + S.squad.name) + "</b> · " + S.pts + ' pts<div class="mates" style="margin-top:8px">' + S.squad.mates.map((m) => '<span class="chip">' + (m.alive ? "❤️ " : "💀 ") + e(m.name) + "</span>").join("") + "</div>" +
-    (S.phase === "reveal" && S.me.alive && !(S.last && S.last.final) && dead.length ? '<p class="muted">' + T("Ramène un coéquipier (", "Bring a teammate back (") + S.reviveCost + T(" pts) :", " pts):") + "</p>" + dead.map((m) => '<button class="btn primary" style="margin:4px" data-revive="' + e(m.pid) + '"' + (S.pts < S.reviveCost || m.revived >= S.maxRevives ? " disabled" : "") + ">💖 " + e(m.name) + "</button>").join("") : "") + "</div>";
+  const canNow = S.phase === "reveal" && !(S.last && S.last.final);
+  const btn = (m) => '<button class="btn primary" style="margin:4px" data-revive="' + e(m.pid) + '"' + (!canNow || S.pts < S.reviveCost || m.revived >= S.maxRevives ? " disabled" : "") + ">💖 " + e(m.name) + "</button>";
+  // 🙏 a teammate asked to be brought back: first, in big
+  const asking = dead.filter((m) => (S.pleas || []).includes(m.pid));
+  const plea = asking.length ? '<div class="card plea center"><h3>🙏 ' + asking.map((m) => e(m.name)).join(", ") + (asking.length > 1 ? T(" vous demandent de les ramener !", " ask you to bring them back!") : T(" te demande de le ramener !", " asks you to bring them back!")) + "</h3>" +
+    (canNow ? (S.pts >= S.reviveCost ? asking.map(btn).join("") : '<p class="muted">' + T("Il faut ", "You need ") + S.reviveCost + T(" pts : répondez juste pour en gagner.", " pts: answer right to earn them.") + "</p>") : '<p class="muted">' + T("Tu pourras le faire juste après cette question.", "You can do it right after this question.") + "</p>") + "</div>" : "";
+  const others = dead.filter((m) => !asking.includes(m));
+  return plea + '<div class="card" style="border-color:' + S.squad.color + '"><b>' + e(S.squad.emoji + " " + S.squad.name) + "</b> · " + S.pts + ' pts<div class="mates" style="margin-top:8px">' + S.squad.mates.map((m) => '<span class="chip">' + (m.alive ? "❤️ " : "💀 ") + e(m.name) + "</span>").join("") + "</div>" +
+    (canNow && others.length ? '<p class="muted">' + T("Ramène un coéquipier (", "Bring a teammate back (") + S.reviveCost + T(" pts) :", " pts):") + "</p>" + others.map(btn).join("") : "") + "</div>";
+}
+/** Out of the game: in squads, who can still bring me back, the squad's points, and a button to ask them. */
+function deathCard() {
+  const q = S.q, ans = S.phase === "reveal" && q ? '<p class="muted">' + T("La réponse : ", "The answer: ") + "<b>" + SH[q.answer] + " " + e(q.options[q.answer]) + "</b></p>" : "";
+  const head = '<div class="dskull">💀</div><h2>' + T("Éliminé", "You're out") + "</h2>" + (S.outStep ? '<p class="muted" style="margin:0">' + T("à la question ", "on question ") + S.outStep + "</p>" : "") + ans;
+  if (!S.squad || S.mode === "solo") return '<div class="card center death">' + head + '<p class="dhelp">' + T("Regarde la TV et encourage les autres : qui sera le dernier debout ?", "Watch the TV and cheer the others on: who will be the last one standing?") + "</p>" + stats() + "</div>";
+  const mates = S.squad.mates.filter((m) => m.pid !== S.me.pid), alive = mates.filter((m) => m.alive);
+  if (!alive.length) return '<div class="card center death">' + head + '<p class="dhelp">' + T("Tout ton squad est tombé 😢 Regarde la fin sur la TV.", "Your whole squad fell 😢 Watch the end on the TV.") + "</p>" + stats() + "</div>";
+  const asked = (S.pleas || []).includes(S.me.pid), used = S.revived >= S.maxRevives, enough = S.pts >= S.reviveCost;
+  const pts = '<div class="dpts"><div class="lbl"><span>' + e(S.squad.emoji + " " + S.squad.name) + " : <b>" + S.pts + " pts</b></span><span>" + T("il en faut ", "needs ") + S.reviveCost + '</span></div><div class="bar"><i style="width:' + Math.min(100, Math.round((100 * S.pts) / Math.max(1, S.reviveCost))) + '%"></i></div>' +
+    (enough ? '<div class="small" style="color:#86efac;margin-top:5px">✓ ' + T("Ils ont assez de points pour te ramener !", "They have enough points to bring you back!") + "</div>" : '<div class="small muted" style="margin-top:5px">' + T("Leurs bonnes réponses rapportent des points.", "Their right answers earn points.") + "</div>") + "</div>";
+  const ask = '<button class="btn pleab" id="plea"' + (asked ? " disabled" : "") + ">" + (asked ? "✓ " + T("Demande envoyée : ton squad la voit", "Asked: your squad sees it") : "🙏 " + T("Demander à mon squad de me ramener", "Ask my squad to bring me back")) + "</button>";
+  const help = used ? '<p class="dhelp">' + T("Tu as déjà été ramené une fois : cette fois c'est fini. Encourage ton squad !", "You were already brought back once: this time it's over. Cheer your squad on!") + "</p>"
+    : '<p class="dhelp">' + T("Ton squad peut te ramener entre deux questions. Demande-le-leur !", "Your squad can bring you back between two questions. Ask them!") + "</p>" + pts + ask;
+  return '<div class="card center death">' + head + help + '<p class="muted" style="margin:14px 0 0">' + T("Encore en vie dans ton squad :", "Still alive in your squad:") + '</p><div class="amates">' + mates.map((m) => '<span class="' + (m.alive ? "" : "gone") + '">' + (m.alive ? "❤️ " : "💀 ") + e(m.name) + "</span>").join("") + "</div>" + stats() + "</div>";
 }
 const stats = () => '<div class="stat"><span>❤️ ' + S.alive + T(" en vie", " alive") + "</span>" + (S.squadsLeft != null ? "<span>🛡️ " + S.squadsLeft + " squad" + (S.squadsLeft > 1 ? "s" : "") + "</span>" : "") + "<span>✓ " + S.me.score + "</span></div>";
 function royale() {
@@ -683,7 +757,7 @@ function royale() {
     const won = S.winners.includes(S.me.pid) || (S.winSquad != null && S.me.squad === S.winSquad);
     return '<div class="card center resc' + (won ? " ok" : "") + '"><div class="big">' + (won ? "🏆" : "🎮") + "</div><h2>" + (won ? T("Victoire !", "You win!") : T("Partie terminée", "Game over")) + '</h2><p class="muted">' + S.me.score + T(" bonne(s) réponse(s)", " right answer(s)") + "</p></div>";
   }
-  if (!S.me.alive && S.phase === "question") return '<div class="card center resc out"><div class="big">💀</div><h2>' + T("Éliminé", "You're out") + '</h2><p class="muted">' + T("Regarde la TV" + (S.mode !== "solo" ? " : un coéquipier peut te ramener." : "."), "Watch the TV" + (S.mode !== "solo" ? ": a teammate can bring you back." : ".")) + "</p>" + stats() + "</div>" + h;
+  if (!S.me.alive && (S.phase === "question" || S.phase === "reveal")) return deathCard();
   const q = S.q; if (!q) return h;
   if (S.phase === "question" && nowMs() < S.qAt) return '<div class="card center"><h2>' + (S.step === 1 ? T("Prépare-toi…", "Get ready…") : T("Question ", "Question ") + S.step) + '</h2><div class="pcd tick" id="pcd">' + Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000)) + "</div>" + stats() + "</div>" + h;
   if (S.phase === "question") {
@@ -705,7 +779,13 @@ function royaleEffects() {
       d.innerHTML = '<div class="we">' + e(S.squad ? S.squad.emoji : "💀") + "</div><h1>" + T("SQUAD ÉLIMINÉ", "SQUAD WIPED OUT") + "</h1><p>" + T("Tout ton squad est tombé. Regarde la fin sur la TV !", "Your whole squad fell. Watch the end on the TV!") + "</p>";
       document.body.append(d); if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 300]);
       d.onclick = () => d.remove(); setTimeout(() => d.remove(), 3500);
-    } else if (S.last.out && navigator.vibrate) navigator.vibrate([200, 80, 200]);
+    } else if (S.last.out) {
+      // I just fell: a short, loud moment, then the screen to ask my squad for help
+      const d = document.createElement("div"); d.className = "pdead";
+      d.innerHTML = '<div class="s">💀</div><h1>' + T("ÉLIMINÉ", "KNOCKED OUT") + "</h1>";
+      document.body.append(d); if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
+      d.onclick = () => d.remove(); setTimeout(() => d.remove(), 1800);
+    }
   }
   if (S.phase === "over" && !overSeen) { overSeen = true; if (S.winners.includes(S.me.pid) || (S.winSquad != null && S.me.squad === S.winSquad)) confetti(); }
   if (S.phase !== "over") overSeen = false;
@@ -826,6 +906,7 @@ function draw() {
   const k = KIND === "sql" ? sqlView : KIND === "relay" ? relayView : royale;
   const keep = $("#sql") ? $("#sql").value : null;
   $("#app").innerHTML = k();
+  if (KIND === "royale" && S.phase === "reveal" && S.nextAt) $("#app").insertAdjacentHTML("afterbegin", '<div class="nxq" id="nxq"></div>');
   if (keep != null && $("#sql")) $("#sql").value = keep;
   wire();
 }
@@ -837,7 +918,7 @@ function render() {
   }
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
   if (KIND === "royale") royaleEffects();
-  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0);
+  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "");
   if (key === lastKey) return;
   lastKey = key;
   if (KIND === "relay" && S.writing && $("#code")) return;   // never redraw the editor under the writer's fingers
@@ -846,6 +927,7 @@ function render() {
 function wire() {
   document.querySelectorAll("[data-pick]").forEach((b) => b.onclick = () => pick(Number(b.dataset.pick)));
   document.querySelectorAll("[data-revive]").forEach((b) => b.onclick = () => revive(b.dataset.revive));
+  if ($("#plea")) $("#plea").onclick = async () => { try { take(await call("plea", {})); if (navigator.vibrate) navigator.vibrate(30); } catch (x) { alert(x.message); } };
   if ($("#run")) $("#run").onclick = runSql;
   if ($("#sql")) $("#sql").onkeydown = (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") { ev.preventDefault(); runSql(); } };
   document.querySelectorAll("[data-ins]").forEach((c) => c.onclick = () => { const t = $("#sql"); if (t) { const p = t.selectionStart; t.value = t.value.slice(0, p) + c.dataset.ins + t.value.slice(t.selectionEnd); t.focus(); } });
@@ -861,6 +943,8 @@ function wire() {
 }
 setInterval(() => {
   if (!S) return;
+  const nq = $("#nxq");
+  if (nq && S.nextAt) nq.textContent = (S.last && S.last.final ? "🏆 " + T("Résultats dans ", "Results in ") : "⏭ " + T("Question suivante dans ", "Next question in ")) + Math.max(0, Math.ceil((S.nextAt - nowMs()) / 1000)) + " s";
   if (KIND === "royale" && S.phase === "question") {
     if (nowMs() < S.qAt) {
       const n = Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000)), el = $("#pcd");

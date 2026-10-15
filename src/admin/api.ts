@@ -38,7 +38,7 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { GAME_KINDS, GameError, RELAY_TASKS, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, tvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, removePlayer, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, tvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
 import { SQL_CASES } from "../shared/sqlcases.ts";
 import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
@@ -587,6 +587,16 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (x?.kind === "relay" && x.content.task && x.content.task.by && x.content.task.by !== "builtin") await libTemplate(env, g, "task", x.content.task.title, x.content.task).catch(() => null);
           if (x?.kind === "royale" && !body.fromLibrary && !body.fromAssessment) await libTemplate(env, g, "royale", String(body.setTitle || x.title).slice(0, 80), { questions: x.content.questions }).catch(() => null);
           return ok(await gview(id));
+        }
+        // reuse a game: free everyone, remove one player, change the squads
+        const gr = path.match(/^\/games\/(\d+)\/(clear|remove|squads)$/);
+        if (gr && method !== "GET") {
+          const x = await getGame(env, Number(gr[1]), g.id);
+          if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
+          if (gr[2] === "clear") await clearPlayers(env, x);
+          else if (gr[2] === "remove") await removePlayer(env, x, String(body.pid || ""));
+          else await setSquads(env, x, body.squads);
+          return ok(await gview(x.id));
         }
         const gm = path.match(/^\/games\/(\d+)$/);
         if (gm) {
