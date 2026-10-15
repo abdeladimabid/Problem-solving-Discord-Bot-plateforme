@@ -3014,5 +3014,11 @@ window.CB_FR = {
 "Replaced, with {n} points to check": "Remplacée, avec {n} points à vérifier",
 "Plan the week": "Planifier la semaine",
 "Plan the weeks": "Planifier les semaines",
-"{n} saved": "{n} enregistrées"
+"{n} saved": "{n} enregistrées",
+// Presentations: shared week by week
+"{n} free": "{n} libres",
+"Share the week ({n})": "Partager la semaine ({n})",
+"Assign the week at random": "Assigner la semaine au hasard",
+"{n} activities of the week of {s} shared in Discord": "{n} activités de la semaine du {s} partagées sur Discord",
+"{n} activity of the week of {s} shared in Discord": "{n} activité de la semaine du {s} partagée sur Discord"
 };
