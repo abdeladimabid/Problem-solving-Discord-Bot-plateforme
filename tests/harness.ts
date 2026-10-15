@@ -297,16 +297,18 @@ export const ai = {
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
 };
 
-// Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript
+// Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
+// with the teacher's proposal, its own title (and what was left out, when the proposal goes beyond the programme)
 function activityAnswer(user: string): string {
+  const proposal = user.includes("PROPOSITION DU FORMATEUR"), outside = user.includes("pas encore au programme à ce moment");
   if (user.includes("PLANNING DE LA SEMAINE À PRÉPARER")) {
     const days = [...user.matchAll(/^- (\d{4}-\d{2}-\d{2}) \([^)]*\) : veille( \+ live coding)?/gm)];
     return JSON.stringify({ resume: "Rendre la page interactive pas à pas.",
-      jours: days.map((m, i) => ({ date: m[1], veille: `Veille ${i + 1} : le DOM`, focus: "Sélectionner et modifier des éléments.", avancement: `Partie ${i + 1} du brief`, live: m[2] ? `Live ${i + 1} : une liste de produits` : "", live_focus: m[2] ? "Afficher des cartes." : "" })),
+      jours: days.map((m, i) => ({ date: m[1], veille: `Veille ${i + 1} : le DOM`, focus: "Sélectionner et modifier des éléments.", progression: `Notion ${i + 1} du programme`, live: m[2] ? `Live ${i + 1} : une liste de produits` : "", live_focus: m[2] ? "Afficher des cartes." : "" })),
       besoins: [{ besoin: "Sélectionner un élément", ou: "Veille Lun" }, { besoin: "Réagir à un clic", ou: "LC1" }], hors_perimetre: ["fetch", "async/await"], points_ouverts: ["Le starter est-il donné ?"] });
   }
   if (user.includes("VEILLE À ÉCRIRE")) {
-    return JSON.stringify({ titre: "Sélectionner et modifier le DOM 🚀", contexte: "Tu sais écrire une page HTML. Le brief demande de la rendre vivante. Le DOM est la page vue par JavaScript. Tu vas apprendre à le lire et à le changer.",
+    return JSON.stringify({ titre: proposal ? "Veille sur mesure : le DOM" : "Sélectionner et modifier le DOM 🚀", ecarte: outside ? ["fetch et async/await"] : [], contexte: "Tu sais écrire une page HTML. La semaine demande de la rendre vivante. Le DOM est la page vue par JavaScript. Tu vas apprendre à le lire et à le changer.",
       objectifs: ["Expliquer ce qu'est le DOM", "Utiliser `querySelector` pour trouver un élément", "Modifier le texte et les classes d'un élément"],
       plan: [{ titre: "Le DOM", points: ["Arbre des éléments", "Nœuds et éléments", "Outils du navigateur"] }, { titre: "Sélectionner", points: ["`querySelector`", "`querySelectorAll`", "Parcourir les enfants"] }],
       questions: ["Pourquoi `querySelector` renvoie-t-il null parfois ?", "Quand préférer `classList` à `style` ?"],
@@ -321,7 +323,7 @@ function activityAnswer(user: string): string {
       "const liste = document.querySelector(\"#liste\");", "", "function afficher() {", "  liste.innerHTML = \"\";", "  for (const p of produits) {", "    const li = document.createElement(\"li\");",
       "    li.textContent = `${p.nom} : ${p.prix} DH`;", "    liste.append(li);", "  }", "}", "", "function ajouter(e) {", "  e.preventDefault();", "  const nom = document.querySelector(\"#nom\").value;",
       "  produits.push({ nom, prix: 0 });", "  afficher();", "}", "", "document.querySelector(\"form\").addEventListener(\"submit\", ajouter);", "afficher();", ...(bad ? ["fetch(\"/menu\");"] : [])].join("\n");
-    return JSON.stringify({ titre: "Afficher le menu du food truck", objectifs: ["Créer des éléments avec `createElement`", "Parcourir un tableau avec `for...of`", "Réagir à l'envoi d'un formulaire"],
+    return JSON.stringify({ titre: proposal ? "Live sur mesure : le menu" : "Afficher le menu du food truck", ecarte: outside ? ["fetch"] : [], objectifs: ["Créer des éléments avec `createElement`", "Parcourir un tableau avec `for...of`", "Réagir à l'envoi d'un formulaire"],
       contexte: "Le food truck veut afficher son menu. On construit la liste à partir d'un tableau. C'est la partie 2 du brief.",
       deroule: [{ minutes: 5, etape: "Présenter le besoin et le starter", notions: "HTML" }, { minutes: 15, etape: "Un produit à la main", notions: "createElement" }, { minutes: 10, etape: "Généraliser avec une boucle", notions: "for...of" },
         { minutes: bad ? 5 : 10, etape: "Ajouter un produit", notions: "submit" }, { minutes: 5, etape: "Tester en direct, récap", notions: "" }],

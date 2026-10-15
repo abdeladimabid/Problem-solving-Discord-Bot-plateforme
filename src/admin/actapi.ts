@@ -5,7 +5,7 @@ import type { Env, GuildRow } from "../shared/types.ts";
 import { aiStatus } from "../shared/aikeys.ts";
 import { libCfg, syncLibrary } from "../shared/library.ts";
 import { SignupError, presentationsView, assignActivity, cancelClaim, decideClaim, dropSignups, gradeClaim, randomAssign, saveSignupCfg, setMembers, setSlot, shareActivities, signupStats, signupView } from "../shared/actsignup.ts";
-import { ActivityError, activitiesView, deleteItem, editItem, generateItem, generateWeek, setDay, setLiveDays } from "../shared/activities.ts";
+import { ActivityError, activitiesView, deleteItem, editItem, generateItem, generateWeek, keepItem, setDay, setLiveDays } from "../shared/activities.ts";
 
 const ok = (data: unknown) => Response.json(data);
 
@@ -45,8 +45,13 @@ async function route(env: Env, path: string, method: string, body: any, url: URL
     return ok(await setLiveDays(env, g, String(body.monday || ""), Array.isArray(body.live) ? body.live.map(String) : []) ?? { live: null, removed: [] });
   }
   if (path === "/activities/item" && method === "POST") {
+    // with the teacher's proposal (Regenerate), and as a preview first: { draft } instead of { item }
     const g = await guild();
-    return ok({ item: await generateItem(env, g, { day: String(body.day || ""), kind: String(body.kind || "") }) });
+    return ok(await generateItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), proposal: body.proposal, preview: !!body.preview }));
+  }
+  if (path === "/activities/item/keep" && method === "POST") {
+    const g = await guild();
+    return ok({ item: await keepItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), data: body.data, proposal: body.proposal, model: body.model }) });
   }
   if ((m = path.match(/^\/activities\/(\d+)$/))) {
     const g = await guild();
