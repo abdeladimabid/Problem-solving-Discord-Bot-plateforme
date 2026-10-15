@@ -887,7 +887,7 @@ async function viewChallenges(arg) {
   $("#pill-reports").textContent = reports.length;
   view.innerHTML = `
     <div class="page-head"><div><h1>Challenges</h1><p class="sub">${rows.length} in the bank: built-in, yours, AI-generated and HackerRank problems</p></div>
-      <button class="btn primary" id="new">New challenge</button></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="bulk">✨ Generate in bulk</button><button class="btn primary" id="new">New challenge</button></div></div>
     <div class="stack">
       ${proposed.length ? `<section class="panel"><h2>Written by students <span class="pill-inline">${proposed.length}</span></h2>
         <p class="muted small">Approve to put it in rotation: the author gets ${10} points now and 3 every time a classmate solves it (up to 20 solvers).</p>
@@ -947,6 +947,7 @@ async function viewChallenges(arg) {
     toast("Levels updated"); S.challenges = null; viewChallenges();
   });
   $("#new").onclick = () => newChallenge();
+  $("#bulk").onclick = () => bulkGenerateDialog(() => { S.challenges = null; viewChallenges(); });
   if (arg === "new" || arg === "ai") { newChallenge(arg === "ai" ? "ai" : "write"); history.replaceState(null, "", "#/challenges"); }
   $$("[data-open]").forEach((b) => b.onclick = () => editChallenge(Number(b.dataset.open), true));
   $$("[data-keep]").forEach((b) => b.onclick = () => busy(b, async () => { await api("/reports/resolve", { method: "POST", body: { challenge_id: Number(b.dataset.keep), action: "keep" } }); toast("Back in rotation"); viewChallenges(); }));

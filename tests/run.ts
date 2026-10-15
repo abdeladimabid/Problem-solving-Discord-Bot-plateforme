@@ -4592,6 +4592,21 @@ section("📚 shared library: the A1 classes share activities, assessments, quiz
   libraryHub.handler = null; env.PUBLIC_URL = pub0;
 }
 
+section("AI keys: a request too large for the per-minute token limit is sent again, asking for fewer tokens");
+{
+  const AK = await import("../src/shared/aikeys.ts");
+  const real = globalThis.fetch, asked: number[] = [];
+  (globalThis as any).fetch = async (_u: string, init: any) => {
+    const b = JSON.parse(init.body); asked.push(b.max_tokens);
+    if (b.max_tokens > 5000) return new Response(JSON.stringify({ error: { message: "Request too large on tokens per minute (TPM): Limit 6000, Requested 7400" } }), { status: 413 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":1}' } }] }), { status: 200 });
+  };
+  try {
+    const t = await AK.callStep({ id: "g", label: "Groq", type: "groq", key: "k", model: "m", base: "https://api.groq.com/openai/v1", source: "class" } as any, [{ role: "user", content: "hi" }], { maxTokens: 6000, temperature: 0.5, json: true });
+    check(t === '{"ok":1}' && asked.join() === "6000,4300", "413 'Limit 6000, Requested 7400': sent again with 4300 tokens, and it answers");
+  } finally { (globalThis as any).fetch = real; }
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;

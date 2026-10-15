@@ -1816,6 +1816,15 @@ a.gm-card:hover { text-decoration: none; }
 .sg-grade .seg label:has(input:checked) { border-color: var(--blue); background: var(--blue-50); color: var(--blue); font-weight: 600; }
 .pr-share { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .pr-share h2 { margin: 0 0 4px; } .pr-share p { margin: 0; }
+.bulk-chips { margin-bottom: 6px; max-height: 132px; overflow: auto; }
+.bulk-chips .chip { cursor: pointer; }
+.bulk-chips .chip[aria-pressed="true"] { background: color-mix(in srgb, var(--blue) 14%, var(--surface)); border-color: var(--blue); color: var(--blue); }
+.bulk-chips .chip:disabled { opacity: .55; cursor: default; }
+.bulk-prog { display: flex; align-items: center; gap: 10px; margin: 12px 0 6px; }
+.bulk-prog .pbar { flex: 1; height: 8px; border-radius: 9px; background: var(--surface-2); overflow: hidden; }
+.bulk-prog .pbar i { display: block; height: 100%; background: var(--blue); transition: width .4s; }
+.bulk-log { max-height: 220px; overflow: auto; display: grid; gap: 4px; }
+.bulk-log > div { padding: 4px 0; border-bottom: 1px dashed var(--line); }
 .db-go { min-width: 108px; justify-content: center; }
 .db-go.done { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
 .db-go.done:hover { color: var(--ink, inherit); border-color: var(--line-strong); }

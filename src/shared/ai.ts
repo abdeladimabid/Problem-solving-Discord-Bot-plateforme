@@ -270,12 +270,18 @@ const GEN_HEADER = `def gen():
 const indent = (body: string) => body.replace(/\r/g, "").split("\n").map((l) => (l.trim() ? "    " + l : "")).join("\n");
 export const makeGen = (body: string, seed: number) => GEN_HEADER.replace("__SEED__", String(seed)) + indent(body);
 
+/** Why the last generateWrite gave nothing (shown to the teacher instead of a vague "busy"). */
+let writeFail = "";
+export const whyWriteFailed = () => writeFail || "no reason recorded";
 /** Ask the AI for a full problem, then PROVE it by running its solutions on the code runner. */
 export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic?: string | null; lang: string; quest?: string | null }): Promise<GeneratedWrite | null> {
   const language = o.lang === "fr" ? "French" : "English";
   const limit = o.difficulty === "hard" ? 3 : 2;
-  for (let attempt = 0; attempt < (o.quest ? 3 : 2); attempt++) {
-    if (!(await aiBudgetOk(env, AI_COST.write))) return null;
+  writeFail = "";
+  const why: string[] = [];
+  const fail = (x: string) => { why.push(x); writeFail = [...new Set(why)].join(" · ").slice(0, 300); };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!(await aiBudgetOk(env, AI_COST.write))) { fail("the class's daily AI budget is used up"); return null; }
     await aiBudgetUse(env, AI_COST.write);
     const system = [
       "You design programming problems for a class, in the style of HackerRank / Codeforces: a short story, then precise Input, Output and Constraints sections. Students read stdin and write stdout.",
@@ -293,14 +299,15 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
     const user = `Create one ${o.difficulty.toUpperCase()} problem${o.topic ? ` about: ${o.topic}` : ""}. Make it original (not a famous LeetCode title).`;
     let j: any;
     try {
-      j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: o.quest ? 12000 : 9000, temperature: 0.8, timeoutMs: 150000 });
-    } catch { continue; }
+      // 6-7k is plenty for a problem with its two solutions, and stays under the free keys' per-minute token limits
+      j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: o.quest ? 7000 : 6000, temperature: 0.8, timeoutMs: 150000 });
+    } catch (e) { fail(`the AI didn't answer (${String((e as Error)?.message ?? e).slice(0, 140)})`); continue; }
     const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
     const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500), reference = s(j?.reference, 6000), brute = s(j?.brute, 6000);
     const samples: string[] = Array.isArray(j?.samples) ? j.samples.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 3) : [];
     const small: string[] = Array.isArray(j?.small) ? j.small.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 6) : [];
     const gens: string[] = Array.isArray(j?.big_gens) ? j.big_gens.filter((x: unknown) => typeof x === "string" && x.includes("return")).slice(0, 2) : [];
-    if (!title || !statement || !reference || !brute || samples.length < 1 || small.length < 3) continue;
+    if (!title || !statement || !reference || !brute || samples.length < 1 || small.length < 3) { fail("the AI's answer was incomplete"); continue; }
     const withNl = (x: string) => (x.endsWith("\n") ? x : x + "\n");
     const lits = [...samples, ...small].map(withNl);
     const bigs = gens.map((b, i) => makeGen(b, 1000 + i * 7919 + Math.floor(Math.random() * 100000)));
@@ -310,14 +317,14 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
         runPythonTests(env, reference, all, limit * 2, 2500),
         runPythonTests(env, brute, lits.map((input) => ({ input, gen: null })), 10, 2500),
       ]);
-      if (ref.compile || br.compile || ref.rows.length !== all.length) continue;
+      if (ref.compile || br.compile || ref.rows.length !== all.length) { fail(ref.compile || br.compile ? "its solution didn't compile" : "the runner didn't run every test"); continue; }
       let ok = true;
       const keep: number[] = [];
       for (let i = 0; i < all.length; i++) {
         const r = ref.rows[i];
         if (i < lits.length) {
-          if (r.s !== "ok" || !r.o || r.n > 2000) { ok = false; break; }
-          if (br.rows[i]?.s !== "ok" || br.rows[i].o !== r.o) { ok = false; break; }   // brute must agree
+          if (r.s !== "ok" || !r.o || r.n > 2000) { ok = false; fail("its solution crashed or printed nothing on a small test"); break; }
+          if (br.rows[i]?.s !== "ok" || normOut(br.rows[i].o) !== normOut(r.o)) { ok = false; fail("its two solutions disagreed on a small test"); break; }   // brute must agree
           keep.push(i);
         } else if (r.s === "ok" && r.o && r.n <= 2000 && r.t <= limit * 0.4) keep.push(i);  // a big test that fails or is slow is dropped, not the problem
       }
@@ -328,7 +335,8 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
         tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
       };
     } catch (e) {
-      if (e instanceof RunnerUnavailable) return null;
+      if (e instanceof RunnerUnavailable) { fail("the code runner is unreachable"); return null; }
+      fail(`checking failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
     }
   }
   return null;
