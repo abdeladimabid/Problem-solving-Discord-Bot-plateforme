@@ -18,8 +18,8 @@ import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText 
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
-import { BUILTIN, techOfWeek } from "../src/shared/program.ts";
-import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, dayInfo as actDayInfo, holidayOf as actHolidayOf, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
+import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
+import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2435,6 +2435,15 @@ section("🧩 squads by sprint (Teams & squads), loaded by briefs and squad batt
   check(bl.data.squads[0].from.startsWith("Sprint 2") && bl.data.squads[0].squads[0].name === "Atlas", "squad battle: fill a team from the current squads");
   await api("PUT", `/api/squads/${id1}?g=${G}`, { active: true });
   check((await api("GET", `/api/squads?g=${G}`)).data.sets[0].id === id1, "older squads can become the current ones again");
+  // 📨 each student gets their squad by DM (one squad per request)
+  const dm0 = discordCalls.length;
+  const n0 = await api("POST", `/api/squads/${id1}/notify?g=${G}`, { note: "Rendez-vous lundi", only: 0, last: false });
+  const dms = discordCalls.slice(dm0).filter((c) => c.method === "POST" && /\/channels\/.+\/messages/.test(c.path) && JSON.stringify(c.body).includes("Atlas"));
+  const toAlice = dms.map((c) => JSON.stringify(c.body)).find((b) => b.includes(`<@${U.bob.id}>`) && b.includes("scrum master") && !b.includes(`<@${U.alice.id}>`));
+  check(n0.status === 200 && n0.data.sent === 2 && dms.length === 2 && !!toAlice && toAlice.includes("Rendez-vous lundi") && !n0.data.sets, "squad DM: each member gets their squad, their teammates (not themselves), the scrum master and the note");
+  const n1 = await api("POST", `/api/squads/${id1}/notify?g=${G}`, { only: 1 });
+  check(n1.data.sent === 1 && n1.data.sets.find((x: any) => x.id === id1).sent_at > 0, "squad by squad; the set shows when it was sent");
+  check(JSON.stringify(discordCalls.slice(-1)[0]?.body ?? "").includes("seul") || JSON.stringify(discordCalls.slice(-1)[0]?.body ?? "").includes("alone"), "a student alone in a squad is told so");
   // 🤝 squad buddy from the shop: once per season, shown on the squads board, used when they're together
   const { buy } = await import("../src/shared/shop.ts");
   run1("UPDATE players SET coins = 2000 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
@@ -2899,16 +2908,16 @@ section("activités: days, holidays, live coding days, weeks, checks, the templa
 {
   const P = BUILTIN[0];
   const kind = (d: string, ov = {}) => actDayInfo(P, d, ov).kind;
-  check(kind("2026-10-12") === "work" && actDayInfo(P, "2026-10-12").label === "S2 · Sprint 1 · Brief 2", "a weekday of a brief week is a working day (week, sprint, brief)");
+  check(kind("2026-10-12") === "work" && actDayInfo(P, "2026-10-12").label === "S2 · Sprint 1", "a weekday of a teaching week is a working day (week and sprint of the programme)");
   check(kind("2026-10-17") === "weekend" && kind("2026-11-06") === "holiday" && actDayInfo(P, "2026-11-06").label.includes("Marche Verte"), "weekends and public holidays have no activity");
   check(kind("2026-11-25") === "break" && kind("2026-12-01") === "crossdefense" && kind("2027-04-20") === "certification" && kind("2026-09-01") === "outside", "breaks, cross defenses, certification and days outside the programme");
   check(kind("2026-10-13", { "2026-10-13": "off" }) === "off" && kind("2026-11-06", { "2026-11-06": "on" }) === "work", "the teacher marks a day off, or works on a holiday");
   check(actHolidayOf("2027-03-10")?.approx === true && actHolidayOf("2026-11-18")?.approx === false && !actHolidayOf("2026-11-19"), "the Islamic holidays are marked as estimated");
   const full = actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", null);
   check(full.work.length === 5 && full.live.join() === "2026-10-13,2026-10-15", "a full week: 5 veilles, live codings on Tuesday and Thursday");
-  check(full.submission.join() === "2026-10-16" && full.next?.n === 3, "Friday is the submission day; the next brief week is out of scope");
+  check(full.closing.join() === "2026-10-16" && full.next?.n === 3, "Friday closes the programme week (lighter veille); the next week is out of scope");
   const split = actWeekFacts(P, "2026-11-02", "2026-11-02", "2026-11-06", null);
-  check(split.weeks.map((w) => w.n).join() === "5,6" && split.submission.includes("2026-11-04") && !split.work.includes("2026-11-06"), "a week across two briefs: each day follows its own, brief 5 ends Wednesday, Friday 6/11 is a holiday");
+  check(split.weeks.map((w) => w.n).join() === "5,6" && split.closing.includes("2026-11-04") && !split.work.includes("2026-11-06"), "a week across two programme weeks: each day follows its own, S5 ends Wednesday, Friday 6/11 is a holiday");
   check(actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", ["2026-10-12", "2026-10-17", "2026-10-14"]).live.join() === "2026-10-12,2026-10-14", "the teacher's live coding days (working days only)");
   const weeks = actSplitWeeks(actRangeDays(P, "2026-10-14", "2026-10-25"));
   check(weeks.length === 2 && weeks[0].days.length === 3 && weeks[1].days.length === 5, "a range is cut in weeks (Monday → Friday)");
@@ -2945,14 +2954,14 @@ section("activités: the page's API generates a week item by item, checks, retri
   check(v0.status === 200 && v0.data.days.length === 5 && v0.data.weeks.length === 1 && v0.data.weeks[0].live.join() === "2026-10-20,2026-10-22", "a range: its days and its week, with live codings on Tuesday and Thursday");
   check(v0.data.weeks[0].weeks[0].n === 3 && v0.data.weeks[0].sprint.n === 2 && v0.data.weeks[0].next.n === 4 && v0.data.weeks[0].weeks[0].competencies.includes("C4N1"), "the summary: programme week, sprint, competencies, the week out of scope");
   check((await api("GET", `/api/activities?g=${G}&from=2026-10-01&to=2027-01-31`)).status === 400, "a range too long is refused");
-  check((await api("POST", "/api/activities/item", { g: G, day: "2026-10-19", kind: "veille" })).data.error?.includes("week's plan"), "an item needs the week's plan first");
+  check((await api("POST", "/api/activities/item", { g: G, day: "2026-10-21", kind: "live" })).data.error?.includes("No live coding planned"), "no live coding on a day without one (Wednesday)");
   const w = await api("POST", "/api/activities/week", { g: G, monday: from, from, to });
   check(w.status === 200 && w.data.item.md.startsWith("## Analyse de la semaine") && w.data.item.md.includes("| Mar 20/10 | Veille 2 : le DOM | LC1 : Live 2 : une liste de produits |"), "the week's overview from the template, with LC1 on Tuesday");
-  check(w.data.item.md.includes("| Ven 23/10 | Veille 5 : le DOM | — | Finitions, README, déploiement, soumission avant 23:59 |") && w.data.item.md.includes("**Hors périmètre cette semaine** (S4"), "Friday is the submission day; the next week is out of scope");
+  check(w.data.item.md.includes("| Ven 23/10 | Veille 5 : le DOM | — | Consolidation de la semaine : bonnes pratiques, débogage, qualité |") && w.data.item.md.includes("| Lun 19/10 | Veille 1 : le DOM | — | Notion 1 du programme |") && w.data.item.md.includes("**Hors périmètre cette semaine** (S4 du programme"), "the programme's progression each day, the lighter last day, the next week out of scope");
   const u0 = ai.users.length;
   const ve = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille" });
   check(ve.status === 200 && ve.data.item.md.startsWith("## Lundi 19/10 — Veille : Sélectionner et modifier le DOM") && !ve.data.item.md.includes("🚀") && !ve.data.item.md.includes("example.com") && !ve.data.item.warnings.length, "a veille: checked, no emoji in the text, the invented link dropped");
-  check(ai.users.slice(u0).join("\n").includes("MÉTIER DES LIVE CODINGS") && ai.users.slice(u0).join("\n").includes("HORS PÉRIMÈTRE"), "the AI gets the métier and what's out of scope");
+  check(!/MÉTIER|argan|riad|\b(un|le|du) client\b/i.test(ai.users.slice(u0).join("\n")) && ai.users.slice(u0).join("\n").includes("HORS PÉRIMÈTRE") && ai.users.slice(u0).join("\n").includes("Compétences visées"), "the AI gets the programme and what's out of scope: no métier, no client");
   ai.actBad = 1;
   const u1 = ai.users.length;
   const lc = await api("POST", "/api/activities/item", { g: G, day: "2026-10-20", kind: "live" });
@@ -2978,6 +2987,114 @@ section("activités: the page's API generates a week item by item, checks, retri
   check(lv.data.removed.join() === "2026-10-22" && after.items.filter((x: any) => x.kind === "live").length === 1 && after.weeks[0].live.join() === "2026-10-20", "live coding only on Tuesday: Thursday's is removed");
   check((await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`)).status === 200 && !(await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.some((x: any) => x.kind === "live"), "an item is deleted");
   check((await api("GET", `/api/activities?g=g-unknown&from=${from}&to=${to}`)).status === 404, "another class's range: unknown class");
+}
+
+section("activités: the programme only (never a brief), inspiration topics, the teacher's proposal");
+{
+  const P = BUILTIN[0];
+  // the context of a week: the programme, never a brief
+  const f3 = actWeekFacts(P, "2026-10-19", "2026-10-19", "2026-10-23", null);
+  const ctx = actWeekContext(P, f3, ["Le HTML sémantique"]);
+  check(!/brief/i.test(ctx) && ctx.includes("Objectif de la semaine") && ctx.includes("Concepts et exigences techniques") && /Compétences visées[^:]*: C1N1/.test(ctx) && ctx.includes("Technologies de la semaine : ") && ctx.includes("DOM"),
+    "the AI's context is the programme week: objective, concepts, competencies, technologies, no brief");
+  check(!/MÉTIER|argan|riad|\b(un|le|du) client\b/i.test(ctx) && ctx.includes("sprint 2 «") && ctx.includes("Compétences du sprint") && ctx.includes("HORS PÉRIMÈTRE (semaine 4 du programme") && ctx.includes("DÉJÀ COUVERT EN VEILLE") && ctx.includes("- Le DOM en JavaScript"),
+    "the sprint, its competencies, the next week out of scope, the topics done, ideas of earlier promotions; no métier, no client");
+  check(!actWeekContext(P, actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", null)).includes("Le DOM en JavaScript"), "no idea from a later week (no DOM topic in the HTML/CSS week)");
+  const t3 = actTopicsFor([P.weeks[2]]), tc = actTopicsFor([P.weeks[2]], true);
+  check(t3.includes("Le DOM en JavaScript") && !t3.includes("Eloquent") && !t3.includes("La notation Big O") && tc.includes("La notation Big O"), "inspiration: the week's technologies only, the culture topics on the lighter day");
+  // the doc and the code have the same topics
+  const doc = readFileSync(join(ROOT, "docs/activities/VEILLE_INSPIRATION_DWWM.md"), "utf8").replace(/\r/g, "");
+  const fromDoc: Record<string, string[]> = {};
+  let head = "";
+  for (const l of doc.split("\n")) { const h = l.match(/^## (.+)$/); if (h) { head = h[1].trim(); fromDoc[head] = []; } else if (head && /^- /.test(l)) fromDoc[head].push(l.slice(2).trim()); }
+  check(JSON.stringify(fromDoc) === JSON.stringify(actInspiration), "docs/activities/VEILLE_INSPIRATION_DWWM.md and INSPIRATION are the same");
+  check(Object.keys(actInspiration).every((k) => k === "Culture" || TECHS.some((t) => t.name === k)), "each group of topics is a technology of the programme");
+  // the analysis of the week: the programme's progression, no brief
+  const plan = actCleanPlan({ jours: [{ date: "2026-10-19", veille: "V1", progression: "Sélectionner un élément", avancement: "Partie 1 du brief Riad" }], besoins: [], hors: ["fetch"] }, ["2026-10-19"]);
+  const md = actRenderWeek(plan, f3, actWeekLabels(P, f3));
+  check(md.includes("| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Progression attendue (programme) |") && md.includes("| Lun 19/10 | V1 | — | Sélectionner un élément |") && !/brief/i.test(md),
+    "the overview shows the programme's progression; an old brief step is not read");
+  check(md.includes("Semaine 3 du programme (19–23/10/2026), sprint 2") && md.includes("Objectif : ") && md.includes("(S4 du programme, à partir du 26/10)") && md.includes("Consolidation de la semaine"), "the overview: week, sprint, competencies, objective, next week, the lighter last day");
+  // the teacher's proposal: the main instruction, within the programme
+  const allowed = techSoFar(P, P.weeks[2]);
+  const out = actProposalOutside("Une veille sur fetch et async/await pour charger les produits", allowed);
+  const vp = actVeillePrompt(ctx, plan, f3, "2026-10-19", "Une veille sur fetch et async/await pour charger les produits", out);
+  check(out.includes("Fetch / API") && vp.includes("PROPOSITION DU FORMATEUR") && vp.includes("charger les produits") && vp.includes("ATTENTION : elle demande Fetch / API") && vp.indexOf("PROPOSITION") < vp.indexOf("Réponds UNIQUEMENT"),
+    "a proposal beyond the programme: the AI is told what to leave out");
+  // the proposal decides the subject and the data: the planned title is left out
+  const plan2 = actCleanPlan({ jours: [{ date: "2026-10-20", veille: "V2", progression: "p", live: "CRUD de produits d'argan", live_focus: "des produits" }] }, ["2026-10-20"]);
+  const lp = actLivePrompt(ctx, plan2, f3, "2026-10-20", "js", [], "CRUD users", []), lp0 = actLivePrompt(ctx, plan2, f3, "2026-10-20", "js", []);
+  check(!lp.includes("argan") && lp.includes("<<<\nCRUD users\n>>>") && lp.includes("remplace le titre prévu") && lp.includes("un CRUD d'utilisateurs") && lp0.includes("titre prévu « CRUD de produits d'argan »"),
+    "a proposal (« CRUD users ») replaces the planned title and theme; without one, the plan's day is used");
+  check(!actProposalOutside("Plus simple, avec un piège sur innerHTML", allowed).length && !actVeillePrompt(ctx, plan, f3, "2026-10-19").includes("PROPOSITION"), "a proposal within the programme passes; no proposal, no block");
+  check(actCleanProposal("x".repeat(3000)).length === 1500, "a proposal is cut at 1500 characters");
+  const vv = actCleanVeille({ titre: "Introduction à fetch", contexte: "a. b. c.", objectifs: ["Expliquer a", "Utiliser b", "Choisir c"], plan: [{ titre: "A", points: ["a", "b", "c"] }, { titre: "B", points: ["a", "b", "c"] }], questions: ["a ?", "b ?"],
+    ressources: [{ titre: "a", url: "https://developer.mozilla.org/fr/docs/Web" }, { titre: "b", url: "https://fr.javascript.info/" }, { titre: "c", url: "https://regex101.com/" }], artefact: "x", demo: "y", criteres: ["a", "b", "c"] });
+  check(actValidateVeille(vv, allowed).some((e) => e.includes("sort du programme")) && !actValidateVeille(vv).length, "a veille about a later week's subject is caught");
+}
+
+section("activités: Regenerate with the teacher's proposal (preview, then Replace), old saves still open");
+{
+  const from = "2026-10-19", to = "2026-10-23";
+  // a brief published in the app for these days: it never goes to the AI
+  run1("INSERT INTO briefs (guild_id, program, week, title, status, source, data, competencies, start_at, due_at, created_at) VALUES (?, 'builtin:dwwm-2026', 3, 'Brief secret du Riad', 'assigned', 'manual', '{}', '', ?, ?, ?)",
+    G, Date.parse("2026-10-19T09:00:00Z") / 1000, Date.parse("2026-10-23T23:59:00Z") / 1000, clock.now());
+  const u0 = ai.users.length;
+  await api("POST", "/api/activities/week", { g: G, monday: from, from, to });
+  const ve0 = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille" });
+  const v = await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`);
+  check(ve0.status === 200 && !ai.users.slice(u0).some((x) => x.includes("Brief secret du Riad")) && !JSON.stringify(v.data.weeks).includes("Brief secret"), "a published brief is never in the prompts nor in the page's summary");
+  check(v.data.weeks[0].weeks[0].tech.includes("DOM") && v.data.weeks[0].weeks[0].objective && !("briefs" in v.data.weeks[0]) && !("brief" in v.data.weeks[0].weeks[0]), "the summary: the programme only (objective, technologies…)");
+  const before = q1("SELECT md, data FROM activities WHERE guild_id = ? AND day = ? AND kind = 'veille'", G, from);
+  const u1 = ai.users.length;
+  const pv = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille", preview: true, proposal: "Plus simple, avec un exemple de riad et un piège sur innerHTML" });
+  check(pv.status === 200 && pv.data.draft.title === "Veille sur mesure : le DOM" && pv.data.draft.md.startsWith("## Lundi 19/10 — Veille : Veille sur mesure") && ai.users.slice(u1)[0].includes("piège sur innerHTML"), "Regenerate with a proposal: a preview written from it");
+  const after = q1("SELECT md, data FROM activities WHERE guild_id = ? AND day = ? AND kind = 'veille'", G, from);
+  check(after.md === before.md && after.data === before.data, "the preview changes nothing until Replace (Keep the old one)");
+  const kept = await api("POST", "/api/activities/item/keep", { g: G, day: from, kind: "veille", data: { ...pv.data.draft.data, ressources: [...pv.data.draft.data.ressources, { titre: "x", url: "https://evil.example/" }] }, proposal: "Plus simple, avec un exemple de riad et un piège sur innerHTML", model: pv.data.draft.model });
+  check(kept.status === 200 && kept.data.item.title === "Veille sur mesure : le DOM" && kept.data.item.proposal.includes("riad") && !kept.data.item.md.includes("evil.example"), "Replace saves it with the proposal (checked again: a link added in between is dropped)");
+  check((await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.find((x: any) => x.kind === "veille" && x.day === from).proposal.includes("riad"), "the proposal comes back with the item (to reuse it)");
+  check((await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.find((x: any) => x.kind === "week").md.includes("| Lun 19/10 | Veille sur mesure : le DOM |"), "the week's overview has the new title");
+  const far = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille", preview: true, proposal: "Une veille sur fetch et async/await" });
+  check(far.data.draft.ecarte.some((x: string) => x.includes("Fetch / API")) && far.data.draft.ecarte.includes("fetch et async/await"), "a proposal beyond the programme: what was left out is said");
+  const lv = await api("POST", "/api/activities/item", { g: G, day: "2026-10-20", kind: "live", preview: true, proposal: "Plus pratique" });
+  check(lv.data.draft.title === "Live sur mesure : le menu" && lv.data.draft.md.includes("Live coding 1 : Live sur mesure"), "the same for a live coding");
+  check((await api("POST", "/api/activities/item/keep", { g: G, day: "2026-10-20", kind: "live", data: {}, proposal: "x" })).status === 400, "an empty version is refused");
+  // a totally different one: the current title is to be avoided, the teacher's theme decides
+  const u2 = ai.users.length;
+  const nw = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille", preview: true, mode: "new", theme: "les événements clavier" });
+  const pr = ai.users.slice(u2)[0] || "";
+  check(nw.status === 200 && pr.includes("TOTALEMENT DIFFÉRENTE") && pr.includes("« Veille sur mesure : le DOM »") && pr.includes("les événements clavier") && !pr.includes("titre prévu"), "Regenerate → a different one: the AI is told to leave the current subject, with the teacher's theme");
+  const u3 = ai.users.length;
+  const sm = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille", preview: true, mode: "same", proposal: "plus de code" });
+  check(sm.status === 200 && sm.data.draft.title === "Veille sur mesure : le DOM" && (ai.users.slice(u3)[0] || "").includes("MÊME SUJET"), "Regenerate → same subject: the title stays");
+  // the teacher edits the title and the content
+  const cur = (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.find((x: any) => x.kind === "veille" && x.day === from);
+  const ed2 = await api("PUT", `/api/activities/${cur.id}`, { g: G, md: cur.md.replace("Contexte", "Contexte revu"), title: "Les événements clavier" });
+  check(ed2.status === 200 && ed2.data.item.title === "Les événements clavier" && ed2.data.item.md.startsWith("## Lundi 19/10 — Veille : Les événements clavier") && ed2.data.item.md.includes("Contexte revu") && ed2.data.item.edited, "Edit: the title can be changed too (the heading follows)");
+  const wk2 = (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.find((x: any) => x.kind === "week");
+  check(wk2.md.includes("| Lun 19/10 | Les événements clavier |"), "…and the week's overview");
+  const u4 = ai.users.length;
+  await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille", preview: true, mode: "same" });
+  check((ai.users.slice(u4)[0] || "").includes("« Les événements clavier »"), "…and the next Regenerate starts from the new title");
+  check((await api("PUT", `/api/activities/${cur.id}`, { g: G, md: "x", title: "  " })).status === 400, "an empty title is refused");
+  // items without a plan for their week (from the shared library, or written before): regenerated from the programme
+  run1("INSERT INTO activities (guild_id, program, day, kind, week, title, data, md, warnings, edited, created_at) VALUES (?, 'builtin:dwwm-2026', '2026-11-03', 'live', 5, 'LC partagé', '{}', '## LC', '[]', 0, ?)", G, clock.now());
+  const np = await api("POST", "/api/activities/item", { g: G, day: "2026-11-03", kind: "live", preview: true, proposal: "Plus simple" });
+  const nv = await api("POST", "/api/activities/item", { g: G, day: "2026-11-02", kind: "veille" });
+  check(np.status === 200 && np.data.draft.md.includes("Live coding 1") && nv.status === 200 && nv.data.item.md.startsWith("## Lundi 02/11 — Veille"), "no plan for the week: a veille or a live coding is still (re)generated from the programme");
+  // a week saved before, with the brief's steps: it still opens, and the brief is left out when it's written again
+  const mon = "2026-10-26";
+  run1("INSERT INTO activities (guild_id, program, day, kind, week, title, data, md, warnings, edited, created_at) VALUES (?, 'builtin:dwwm-2026', ?, 'week', 4, 'Semaine du 26/10', ?, '## Analyse de la semaine (ancienne)', '[]', 0, ?)",
+    G, mon, JSON.stringify({ plan: { jours: [{ date: mon, veille: "Les modules ES6", avancement: "Partie 1 du brief Riad" }], besoins: [], hors: [] }, live: [], from: mon, to: "2026-10-30" }), clock.now());
+  const old = await api("GET", `/api/activities?g=${G}&from=${mon}&to=2026-10-30`);
+  check(old.status === 200 && old.data.items.find((x: any) => x.kind === "week").md === "## Analyse de la semaine (ancienne)", "an activity saved before still opens");
+  await api("PUT", "/api/activities/live", { g: G, monday: mon, live: [] });
+  const re = q1("SELECT md FROM activities WHERE guild_id = ? AND day = ? AND kind = 'week'", G, mon).md;
+  check(re.includes("| Lun 26/10 | Les modules ES6 | — |") && !re.includes("brief Riad"), "written again: its brief steps are ignored");
+  // leave the class as the next sections expect it (the shared library lists its latest activities)
+  run1("DELETE FROM activities WHERE guild_id = ? AND day IN ('2026-10-26', '2026-11-02', '2026-11-03')", G);
+  run1("DELETE FROM briefs WHERE guild_id = ? AND title = 'Brief secret du Riad'", G);
 }
 
 section("programme from an Excel workbook (ClassBot template or YouCode planning)");
@@ -4296,6 +4413,8 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   const before = discordCalls.length;
   const sh = await api("POST", `/api/activities/share?g=${G}`, { ids: [v1, v2, l1], channel: "555000111" });
   check(sh.status === 200 && sh.data.shared === 3 && discordCalls.slice(before).some((c) => c.path === "/channels/555000111/messages" && JSON.stringify(c.body).includes("Sélecteurs DOM modernes")), "teacher shares the activities in the channel chosen");
+  const shMsg = discordCalls.slice(before).find((c) => c.path === "/channels/555000111/messages");
+  check(/(week of|semaine du) 03\/03/.test(JSON.stringify(shMsg?.body?.embeds?.[0]?.title ?? "")), "shared week by week: the message's title names the week");
   const ls = text(await slash(U.alice, "activity", {}, "list"));
   check(ls.includes("Gestion des événements") && !ls.includes("Formulaires et validation"), "/activity list: the shared ones only");
   // a veille needs a binôme

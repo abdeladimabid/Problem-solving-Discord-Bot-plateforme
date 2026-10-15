@@ -204,6 +204,8 @@ async function squadsSection(box) {
           <input type="text" id="sq-name" value="${esc(set.name)}" maxlength="60" aria-label="Name (e.g. Sprint 3)">
           ${set.active ? `<span class="tag lang">Current squads</span>` : `<button class="btn small" id="sq-cur">Make them the current squads</button>`}
           <span class="small muted" id="sq-state">${dirty ? "…" : "Saved automatically"}</span>
+          <button class="btn small" id="sq-send" title="Each student gets a DM with their squad and their teammates">📨 Send to the students</button>
+          ${set.sent_at ? `<span class="small muted">✓ sent ${esc(fmtDateTime(set.sent_at))}</span>` : ""}
           <button class="btn small danger" id="sq-del" style="margin-left:auto">Delete</button></div>
         <div id="sq-board"></div>`
         : `<div class="sq-empty"><div style="font-size:44px">🧩</div><p><b>No squads yet.</b> Make the squads of this sprint: drag the students into squads, or let ClassBot make balanced ones (the same mix of levels in each, new teammates every sprint).</p><button class="btn primary" id="sq-first">Make the squads</button></div>`}
@@ -214,6 +216,7 @@ async function squadsSection(box) {
     if ($("#sq-name", box)) $("#sq-name", box).oninput = (e) => { set.name = e.target.value; soon(); };
     if ($("#sq-cur", box)) $("#sq-cur", box).onclick = (e) => busy(e.currentTarget, async () => { if (dirty) await save(); d = await api(`/squads/${set.id}`, { method: "PUT", body: { active: true } }); set = d.sets.find((x) => x.id === set.id); toast("These are now the current squads"); render(); });
     if ($("#sq-del", box)) $("#sq-del", box).onclick = () => confirmDialog(`Delete “${set.name}”?`, "The briefs that already loaded these squads keep their own copy.", "Delete", async () => { d = await api(`/squads/${set.id}`, { method: "DELETE" }); set = d.sets.find((x) => x.active) || d.sets[0] || null; render(); }, true);
+    if ($("#sq-send", box)) $("#sq-send", box).onclick = async () => { if (dirty) await save(); sendDialog(); };
     const create = () => openDialog("New squads", `
       <label for="ns-name">Name</label><input type="text" id="ns-name" style="width:100%" maxlength="60" placeholder="e.g. Sprint 3" value="Sprint ${d.sets.length + 1}">
       <label>Start from</label>${segHtml("ns-from", [...(set ? [["copy", `A copy of “${set.name}”`]] : []), ["empty", "Empty"]], set ? "copy" : "empty")}
@@ -225,6 +228,36 @@ async function squadsSection(box) {
     } }]);
     $("#sq-new", box).onclick = () => { create(); wireSeg(dlg, "ns-from"); };
     if ($("#sq-first", box)) $("#sq-first", box).onclick = () => { create(); wireSeg(dlg, "ns-from"); };
+  };
+  // 📨 each student gets their squad by DM: one squad per request (Discord calls stay few), with the progress shown
+  const sendDialog = () => {
+    const full = set.squads.map((q, i) => ({ q, i })).filter((x) => x.q.members.length);
+    if (!full.length) return toast("These squads have nobody in them yet.", true);
+    const nameOf = (id) => d.students.find((x) => x.id === id)?.name || id;
+    const n = full.reduce((a, x) => a + x.q.members.length, 0);
+    const ex = full[0].q, me = ex.members[0];
+    const sample = `<div class="sq-dm"><b>🧩 ${esc(set.name)} · ${esc(ex.name)}</b><p>Here is your squad for <b>${esc(set.name)}</b>: <b>${esc(ex.name)}</b>.</p>${ex.members.length > 1 ? `<p><b>Your teammates:</b></p><ul>${ex.members.filter((m) => m !== me).map((m) => `<li>@${esc(nameOf(m))}${m === ex.sm ? " · 🎯 scrum master" : ""}</li>`).join("")}</ul>` : ""}<p class="sq-dm-note" id="sd-prev" hidden></p></div>`;
+    openDialog(`Send “${set.name}” to the students`, `
+      <p class="small muted" style="margin-top:0">${n} student${n > 1 ? "s" : ""} in ${full.length} squad${full.length > 1 ? "s" : ""} get a Discord DM with their squad, the names of their teammates (and the scrum master). ${set.sent_at ? `<b>Already sent ${esc(fmtDateTime(set.sent_at))}</b>: they get it again.` : ""}</p>
+      <label class="small">What ${esc(nameOf(me))} gets</label>${sample}
+      <label for="sd-note">A word for them <span class="muted">(optional)</span></label>
+      <textarea id="sd-note" rows="2" maxlength="500" style="width:100%" placeholder="e.g. Meet your squad before Monday's stand-up."></textarea>
+      <p class="small act-status" id="sd-st" role="status" hidden></p>`,
+    [{ label: "Cancel", action: () => dlg.close() }, { label: "📨 Send", primary: true, action: async () => {
+      const note = $("#sd-note", dlg).value.trim(), st = $("#sd-st", dlg);
+      st.hidden = false;
+      let sent = 0; const failed = [];
+      for (let k = 0; k < full.length; k++) {
+        st.textContent = `Sending… ${k + 1}/${full.length} · ${full[k].q.name}`;
+        const r = await api(`/squads/${set.id}/notify`, { method: "POST", body: { note, only: full[k].i, last: k === full.length - 1 } });
+        sent += r.sent; failed.push(...r.failed);
+        if (r.sets) { d = r; set = d.sets.find((x) => x.id === set.id) || set; }
+      }
+      dlg.close(); render();
+      toast(failed.length ? `${sent} sent · couldn't reach ${failed.join(", ")} (DMs closed)` : `Sent to ${sent} student${sent > 1 ? "s" : ""}`, !!failed.length);
+    } }]);
+    const note = $("#sd-note", dlg), prev = $("#sd-prev", dlg);
+    note.oninput = () => { prev.hidden = !note.value.trim(); prev.textContent = "💬 " + note.value.trim(); };
   };
   render();
   window.addEventListener("hashchange", () => { if (dirty) save(); }, { once: true });

@@ -1,6 +1,7 @@
 // The class's squads, by sprint, separate from the briefs: a brief (or a squad battle) loads them.
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
+import { COLORS, dm } from "./discord.ts";
 import { cleanSquads } from "./review/debrief.ts";
 import type { Squad } from "./review/debrief.ts";
 
@@ -58,4 +59,52 @@ export async function useBuddies(env: Env, g: GuildRow, squads: Squad[]) {
   for (const b of await pendingBuddies(env, g)) {
     if (squads.some((s) => s.members.includes(b.buyer) && s.members.includes(b.mate))) await run(env, "UPDATE purchases SET status = 'given' WHERE id = ?", b.id);
   }
+}
+
+// ------------------------------------------------------------------ 📨 telling the students
+const sentKey = (id: number) => `squads_sent:${id}`;
+/** When a set was last sent to the students by DM (null: never). */
+export async function sentAt(env: Env, ids: number[]): Promise<Record<number, number>> {
+  if (!ids.length) return {};
+  const rows = await all<{ k: string; updated_at: number }>(env, `SELECT k, updated_at FROM app_settings WHERE k IN (${ids.map(() => "?").join(",")})`, ...ids.map(sentKey));
+  return Object.fromEntries(rows.map((r) => [Number(r.k.split(":")[1]), r.updated_at]));
+}
+/** The DM a student gets: their squad, who is with them (and the scrum master), the teacher's note. */
+export function squadDm(lang: string, setName: string, sq: Squad, me: string, names: Map<string, string>, note: string) {
+  const fr = lang !== "en";
+  const mates = sq.members.filter((m) => m !== me);
+  const who = (id: string) => `<@${id}> (${names.get(id) || "?"})${id === sq.sm ? (fr ? " · 🎯 scrum master" : " · 🎯 scrum master") : ""}`;
+  return {
+    embeds: [{
+      title: `🧩 ${setName} · ${sq.name}`,
+      color: COLORS.purple,
+      description: [
+        fr ? `Voici ton squad pour **${setName}** : **${sq.name}**.` : `Here is your squad for **${setName}**: **${sq.name}**.`,
+        "",
+        mates.length ? (fr ? "**Tes coéquipiers :**" : "**Your teammates:**") : (fr ? "Tu es seul dans ce squad pour l'instant." : "You're alone in this squad for now."),
+        ...mates.map((m) => `• ${who(m)}`),
+        sq.sm === me ? (fr ? "\n🎯 **Tu es le scrum master** de ce squad." : "\n🎯 **You're the scrum master** of this squad.") : "",
+        note ? `\n💬 ${note}` : "",
+      ].filter((x) => x !== "").join("\n"),
+    }],
+    allowed_mentions: { parse: [] },
+  };
+}
+/** Sends each student of a set their squad by DM. Returns who got it and who couldn't (DMs closed). */
+/** `only`: one squad (its index), so a request stays small (each DM is 2 calls to Discord); the page sends them one after the other. */
+export async function notifySquads(env: Env, g: GuildRow, id: number, note: unknown, only: number | null = null) {
+  const cur = await one(env, "SELECT * FROM squad_sets WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!cur) throw new SquadError("These squads don't exist anymore.");
+  const set = parse(cur);
+  const squads = (only != null ? [set.squads[only]].filter(Boolean) : set.squads).filter((s) => s.members.length);
+  if (!squads.length && only == null) throw new SquadError("These squads have nobody in them yet.");
+  const n = String(note ?? "").trim().slice(0, 500);
+  const names = new Map((await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ?", g.id)).map((r) => [r.id, r.name || r.id]));
+  const sent: string[] = [], failed: string[] = [];
+  for (const sq of squads) for (const m of sq.members) {
+    if (m === g.teacher_id) continue;
+    (await dm(env, m, squadDm(g.lang, set.name, sq, m, names, n)) ? sent : failed).push(m);
+  }
+  await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", sentKey(id), JSON.stringify({ sent: sent.length, failed }), now());
+  return { sent: sent.length, failed: failed.map((m) => names.get(m) || m) };
 }
