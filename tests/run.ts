@@ -1526,6 +1526,26 @@ section("events: live quiz from the dashboard, boss battle, bounties");
   check(ev.data.bosses.length === 2 && ev.data.bounties[0].winner_id === U.carol.id && !ev.data.live, "dashboard Events page data");
 }
 
+section("✨ AI helper for boss battles and bounties");
+{
+  const bossAi = await api("POST", `/api/events/ai?g=${G}`, { kind: "boss", idea: "a dragon guarding running totals", skill: "prefix" });
+  check(bossAi.status === 200 && bossAi.data.name === "Lord Segfault" && bossAi.data.challenge?.kind === "write", "AI boss: a name and a new write-code problem");
+  check(q1("SELECT status, solution IS NOT NULL AS sol FROM challenges WHERE id = ?", bossAi.data.challenge.id).sol === 1, "the boss's problem was checked and saved with its solution");
+  check(bossAi.data.hp === bossAi.data.fighters * 40 && bossAi.data.hp >= 120 && bossAi.data.reward === 40, "health sized to the active class, hard rewards");
+  check(ai.users.some((u) => u.includes("a dragon guarding running totals")), "the teacher's idea reaches the AI");
+  const rel = await api("POST", "/api/bosses", { g: G, challenge_id: bossAi.data.challenge.id, name: bossAi.data.name, hp: bossAi.data.hp, hours: bossAi.data.hours, reward: bossAi.data.reward, coins: bossAi.data.coins });
+  check(rel.status === 200, "the AI boss can be released");
+  await api("POST", `/api/bosses/${rel.data.id}/cancel`, { g: G });
+  const btyAi = await api("POST", `/api/events/ai?g=${G}`, { kind: "bounty", difficulty: "easy", qtype: "mcq" });
+  check(btyAi.status === 200 && btyAi.data.challenge?.kind === "mcq" && btyAi.data.points === 25 && !btyAi.data.name, "AI bounty: a new multiple-choice challenge, easy points");
+  const post = await api("POST", "/api/bounties", { g: G, challenge_id: btyAi.data.challenge.id, points: btyAi.data.points, coins: btyAi.data.coins, hours: btyAi.data.hours });
+  check(post.status === 200, "the AI bounty can be posted");
+  await api("POST", `/api/bounties/${post.data.id}/cancel`, { g: G });
+  const old = ai.mode; ai.mode = "broken";
+  check((await api("POST", `/api/events/ai?g=${G}`, { kind: "boss" })).status === 503, "AI down: a clear error, nothing created");
+  ai.mode = old;
+}
+
 section("2 vs 2 duels, coin shop, peer help, streak freeze");
 {
   const more = { gina: { id: "107", name: "Gina", teacher: false }, hugo: { id: "108", name: "Hugo", teacher: false }, ines: { id: "109", name: "Ines", teacher: false }, jad: { id: "110", name: "Jad", teacher: false } };

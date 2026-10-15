@@ -6,7 +6,7 @@ import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
 import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
-import { aiHealth, aiProviderLabel, generateQuick, generateWrite } from "../shared/ai.ts";
+import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite } from "../shared/ai.ts";
 import { bankExamples, guildLangs, loadTests, pickGuildLang, regrade, saveGeneratedWrite } from "../shared/challenges.ts";
 import { stopContest, trackContest, trackingEmbed } from "../shared/contests.ts";
 import { fetchChallenge, hackerrankHealth, parseChallengeSlug } from "../shared/hackerrank.ts";
@@ -200,6 +200,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       try {
         return ok(await createBoss(env, g, { challengeId: Number(body.challenge_id), name: String(body.name ?? "").trim().slice(0, 60) || "The Bug King", hp: n(body.hp, 40, 5000, 200), hours: n(body.hours, 1, 336, 48), reward: n(body.reward, 0, 200, 30), coins: n(body.coins, 0, 500, 20), channelId: body.channel_id || null }));
       } catch (e: any) { throw new HttpError(400, e.message); }
+    }
+    if (path === "/events/ai" && method === "POST") {
+      try { return ok(await eventWithAi(env, await guild(), body, user.email)); }
+      catch (e) {
+        if (e instanceof RunnerUnavailable) throw new HttpError(503, "The code runner is unreachable right now, so the challenge can't be checked. Try again later.");
+        throw e;
+      }
     }
     if (path === "/bounties" && method === "POST") {
       const g = await guild();
@@ -1016,6 +1023,61 @@ function cleanChallenge(b: any) {
     out.answer = answer;
   }
   return out;
+}
+
+/** ✨ AI helper for a boss battle or a bounty: a name and an angle from the teacher's idea, a new checked challenge, and settings sized to the class. */
+async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
+  const boss = b.kind === "boss";
+  const difficulty = (DIFFS.includes(b.difficulty) ? b.difficulty : boss ? "hard" : "medium") as Difficulty;
+  const qtype = boss ? "write" : ["write", "mcq", "output", "bug", "complexity"].includes(b.qtype) ? b.qtype : "write";
+  const skill = SKILLS.find((x) => x.key === b.skill);
+  const idea = String(b.idea ?? "").trim().slice(0, 300);
+  const lang = g.lang === "fr" ? "fr" : "en";
+  // who plays: the students active in the last 2 weeks (at least 4)
+  const act = await one<{ n: number }>(env, "SELECT COUNT(DISTINCT discord_id) AS n FROM attempts WHERE guild_id = ? AND started_at >= ?", g.id, now() - 14 * 86400);
+  const players = Math.max(4, Number(act?.n) || 0);
+
+  // 1. a name, a story line and a precise topic (one small AI call; a plain fallback if it fails)
+  let plan: any = null;
+  try {
+    plan = await chatJson(env, [
+      { role: "system", content: [
+        `You help a programming teacher prepare a class ${boss ? "boss battle (the whole class fights one hard coding problem together)" : "bounty (the first student to solve a problem wins)"}.`,
+        `Write in ${lang === "fr" ? "French" : "English"}. Answer with JSON only: {${boss ? '"name": "a fun boss name, 2-4 words, coding-themed (e.g. The Null Pointer, Lord Segfault)", ' : ""}"topic": "one precise programming topic for the problem, in English, under 12 words", "why": "one sentence for the teacher: what the students will practise"}.`,
+        "The topic must fit a self-contained problem that reads input and prints output (no web, no files, no libraries).",
+      ].join("\n") },
+      { role: "user", content: `Difficulty: ${difficulty}. ${skill ? `Skill: ${skill.en}. ` : ""}${idea ? `Teacher's idea: ${idea}` : "No idea given: pick a classic but interesting topic for this level."}` },
+    ], { maxTokens: 300, temperature: 0.9, timeoutMs: 30000 });
+  } catch { /* the fallback below */ }
+  const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : "");
+  const NAMES = ["The Bug King", "The Null Pointer", "Lord Segfault", "The Infinite Loop", "The Off-By-One Ogre"];
+  const name = str(plan?.name, 60) || NAMES[Math.floor(Math.random() * NAMES.length)];
+  const topic = [skill?.en, str(plan?.topic, 120) || idea].filter(Boolean).join(": ") || null;
+  const why = str(plan?.why, 300);
+
+  // 2. the challenge: written, then checked (write-code runs on the runner) and saved in the bank
+  let ch: any;
+  if (qtype === "write") {
+    const w = await generateWrite(env, { difficulty, topic, lang });
+    if (!w) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+    ch = await saveGeneratedWrite(env, { ...g, lang }, w, difficulty, by, "ai");
+  } else {
+    const codeLang = guildLangs({ code_lang: b.code_lang || "" }).includes(b.code_lang) ? b.code_lang : pickGuildLang(g);
+    const gen = await generateQuick(env, { difficulty, kind: qtype, topic, lang, codeLang, examples: await bankExamples(env, { ...g, lang }, qtype, difficulty, codeLang) });
+    if (!gen) throw new HttpError(503, "The AI couldn't produce a checked challenge right now (busy or daily limit reached). Try again.");
+    ch = await createChallenge(env, g, { ...gen, difficulty, code_lang: codeLang, lang, source: "ai" }, by);
+  }
+  if (!ch) throw new HttpError(503, "The AI couldn't produce a checked challenge right now (busy or daily limit reached). Try again.");
+  if (skill) await setSkills(env, ch.id, [skill.key]);
+  const challenge = { id: ch.id, title: ch.title, difficulty: ch.difficulty, kind: ch.kind };
+
+  // 3. settings sized to the class
+  const lvl = { easy: 0, medium: 1, hard: 2 }[difficulty as "easy" | "medium" | "hard"] ?? 1;
+  if (boss) {
+    const fighters = Math.max(3, Math.round(players * 0.6)); // about 60% of the active class must hit it
+    return { name, why, challenge, players, fighters, hp: Math.min(5000, fighters * 40), hours: lvl === 2 ? 48 : 24, reward: [15, 25, 40][lvl], coins: [10, 15, 25][lvl] };
+  }
+  return { why, challenge, players, points: [25, 40, 60][lvl], coins: [15, 25, 40][lvl], hours: lvl === 2 ? 48 : 24 };
 }
 
 async function createChallenge(env: Env, g: GuildRow, b: any, by: string) {

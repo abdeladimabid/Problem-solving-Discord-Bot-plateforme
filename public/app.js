@@ -2401,13 +2401,33 @@ async function quizDialog() {
 }
 
 async function eventDialog(kind) {
-  await Promise.all([loadDiscord(), loadChallenges()]);
+  await Promise.all([loadDiscord(), loadChallenges(), loadSkillDefs()]);
   const boss = kind === "boss";
   const st = boss ? { name: "The Bug King", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
+  const ai = { open: false, idea: "", difficulty: boss ? "hard" : "medium", skill: "", qtype: "write", why: "" };
   const ids = boss ? ["name", "hp", "hours", "reward", "coins", "ch"] : ["points", "coins", "hours", "ch"];
-  const save = () => ids.forEach((k) => (st[k] = $(`#ev-${k}`, dlg).value));
+  const save = () => {
+    ids.forEach((k) => (st[k] = $(`#ev-${k}`, dlg).value));
+    if (ai.open) ["idea", "difficulty", "skill", "qtype"].forEach((k) => { const el = $(`#ea-${k}`, dlg); if (el) ai[k] = el.value; });
+  };
+  const skillOpts = () => `<option value="">Any skill</option>${(S.skillDefs || []).filter((d) => !["sql", "regex", "git"].includes(d.key)).map((d) => `<option value="${d.key}" ${ai.skill === d.key ? "selected" : ""}>${esc(d.emoji + " " + d.en)}</option>`).join("")}`;
+  const aiPanel = () => ai.open ? `
+      <div class="ev-ai">
+        <label for="ea-idea">Your idea <span class="muted">(optional: a theme, a concept, a story)</span></label>
+        <input type="text" id="ea-idea" style="width:100%" maxlength="300" value="${esc(ai.idea)}" placeholder="${boss ? "e.g. a dragon that guards a maze: shortest path in a grid" : "e.g. something on dictionaries and counting"}">
+        <div class="field-row">
+          <div><label for="ea-difficulty">Difficulty</label><select id="ea-difficulty">${Object.entries(DIFF).map(([k, v]) => `<option value="${k}" ${ai.difficulty === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+          <div><label for="ea-skill">Skill</label><select id="ea-skill">${skillOpts()}</select></div>
+          ${boss ? "" : `<div><label for="ea-qtype">Type</label><select id="ea-qtype">${[["write", "Write code"], ["mcq", "Multiple choice"], ["output", "Predict the output"], ["bug", "Find the bug"], ["complexity", "Complexity"]].map(([k, v]) => `<option value="${k}" ${ai.qtype === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>`}
+        </div>
+        <p class="toolbar" style="margin:4px 0 0"><button type="button" class="btn primary small" id="ea-go">✨ Create it with AI</button>
+          <span class="muted small">${boss ? "The AI names the boss, writes a new write-code problem, runs it on its tests, and sizes the health and rewards to your class." : "The AI writes a new challenge, checks it, and suggests points and coins for its difficulty."}</span></p>
+      </div>` : "";
   const open = () => {
     openDialog(boss ? "New boss battle" : "New bounty", `
+      <p class="toolbar" style="margin:0 0 6px"><button type="button" class="btn small" id="ev-ai">${ai.open ? "Hide the AI helper" : "✨ Help me with AI"}</button></p>
+      ${aiPanel()}
+      ${ai.why ? `<p class="notice small">💡 ${esc(ai.why)}</p>` : ""}
       ${boss ? `<label for="ev-name">Boss name</label><input type="text" id="ev-name" style="width:100%" maxlength="60" value="${esc(st.name)}">` : ""}
       <label>Challenge</label>
       <p class="toolbar" style="margin:0">${st.c ? `<span class="chip">${esc(st.c.title)} ${diffTag(st.c.difficulty)}</span>` : `<span class="muted small">None yet.</span>`}<button type="button" class="btn small" id="ev-pick">${st.c ? "Change" : "Choose"}</button></p>
@@ -2430,6 +2450,24 @@ async function eventDialog(kind) {
       viewEvents();
     } }]);
     $("#ev-pick", dlg).onclick = async () => { save(); const c = await pickChallengeDialog("Choose a challenge", { kinds: boss ? ["write"] : ["write", "mcq", "output", "bug", "complexity", "sql", "regex"] }); if (c) st.c = c; open(); };
+    $("#ev-ai", dlg).onclick = () => { save(); ai.open = !ai.open; open(); };
+    const go = $("#ea-go", dlg);
+    if (go) go.onclick = () => busy(go, async () => {
+      save();
+      go.textContent = "⏳ Writing and testing… (up to 2 min)";
+      try {
+        const r = await api("/events/ai", { method: "POST", body: { kind, idea: ai.idea, difficulty: ai.difficulty, skill: ai.skill || undefined, qtype: ai.qtype } });
+        st.c = r.challenge;
+        st.hours = String(r.hours ?? st.hours); st.coins = String(r.coins);
+        if (boss) { st.name = r.name; st.hp = String(r.hp); st.reward = String(r.reward); }
+        else st.points = String(r.points);
+        ai.why = [r.why, boss ? `Sized for ${r.players} active students: about ${r.fighters} of them must hit it.` : ""].filter(Boolean).join(" ");
+        ai.open = false;
+        await loadChallenges(true).catch(() => {});
+        open();
+        toast(`"${r.challenge.title}" is ready: check the settings, then ${boss ? "release the boss" : "post the bounty"}`);
+      } finally { if (go.isConnected) go.textContent = "✨ Create it with AI"; }
+    });
   };
   open();
 }
