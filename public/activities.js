@@ -336,7 +336,7 @@ async function actOne(kind, day) {
 
 // ================================================================ Regenerate from the teacher's proposal
 // quick requests added to the proposal (French: they go to the AI as they are)
-const ACT_CHIPS = ["plus simple", "plus pratique", "exemple du métier", "ajouter un piège à montrer", "moins de théorie", "plus de code à taper"];
+const ACT_CHIPS = ["plus simple", "plus pratique", "un exemple concret", "ajouter un piège à montrer", "moins de théorie", "plus de code à taper"];
 /** Step 1: the teacher's proposal (the last one is there again); step 2: the new version next to the current one. */
 function actPropose(kind, day, text = null) {
   if (ACT.running) return;

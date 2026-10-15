@@ -19,7 +19,7 @@ import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
-import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
+import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2919,7 +2919,7 @@ section("activités: the page's API generates a week item by item, checks, retri
   const u0 = ai.users.length;
   const ve = await api("POST", "/api/activities/item", { g: G, day: from, kind: "veille" });
   check(ve.status === 200 && ve.data.item.md.startsWith("## Lundi 19/10 — Veille : Sélectionner et modifier le DOM") && !ve.data.item.md.includes("🚀") && !ve.data.item.md.includes("example.com") && !ve.data.item.warnings.length, "a veille: checked, no emoji in the text, the invented link dropped");
-  check(ai.users.slice(u0).join("\n").includes("MÉTIER DES LIVE CODINGS") && ai.users.slice(u0).join("\n").includes("HORS PÉRIMÈTRE"), "the AI gets the métier and what's out of scope");
+  check(!/MÉTIER|argan|riad|\b(un|le|du) client\b/i.test(ai.users.slice(u0).join("\n")) && ai.users.slice(u0).join("\n").includes("HORS PÉRIMÈTRE") && ai.users.slice(u0).join("\n").includes("Compétences visées"), "the AI gets the programme and what's out of scope: no métier, no client");
   ai.actBad = 1;
   const u1 = ai.users.length;
   const lc = await api("POST", "/api/activities/item", { g: G, day: "2026-10-20", kind: "live" });
@@ -2953,9 +2953,10 @@ section("activités: the programme only (never a brief), inspiration topics, the
   // the context of a week: the programme, never a brief
   const f3 = actWeekFacts(P, "2026-10-19", "2026-10-19", "2026-10-23", null);
   const ctx = actWeekContext(P, f3, ["Le HTML sémantique"]);
-  check(!/brief/i.test(ctx) && ctx.includes("Objectif de la semaine") && ctx.includes("Concepts et exigences techniques") && ctx.includes("Compétences visées : C1N1") && ctx.includes("Technologies de la semaine : ") && ctx.includes("DOM"),
+  check(!/brief/i.test(ctx) && ctx.includes("Objectif de la semaine") && ctx.includes("Concepts et exigences techniques") && /Compétences visées[^:]*: C1N1/.test(ctx) && ctx.includes("Technologies de la semaine : ") && ctx.includes("DOM"),
     "the AI's context is the programme week: objective, concepts, competencies, technologies, no brief");
-  check(ctx.includes("MÉTIER DES LIVE CODINGS (sprint 2)") && ctx.includes("HORS PÉRIMÈTRE (semaine 4 du programme") && ctx.includes("DÉJÀ COUVERT EN VEILLE") && ctx.includes("- Le DOM en JavaScript"), "the sprint's métier, the next week out of scope, the topics done, ideas of earlier promotions");
+  check(!/MÉTIER|argan|riad|\b(un|le|du) client\b/i.test(ctx) && ctx.includes("sprint 2 «") && ctx.includes("Compétences du sprint") && ctx.includes("HORS PÉRIMÈTRE (semaine 4 du programme") && ctx.includes("DÉJÀ COUVERT EN VEILLE") && ctx.includes("- Le DOM en JavaScript"),
+    "the sprint, its competencies, the next week out of scope, the topics done, ideas of earlier promotions; no métier, no client");
   check(!actWeekContext(P, actWeekFacts(P, "2026-10-12", "2026-10-12", "2026-10-16", null)).includes("Le DOM en JavaScript"), "no idea from a later week (no DOM topic in the HTML/CSS week)");
   const t3 = actTopicsFor([P.weeks[2]]), tc = actTopicsFor([P.weeks[2]], true);
   check(t3.includes("Le DOM en JavaScript") && !t3.includes("Eloquent") && !t3.includes("La notation Big O") && tc.includes("La notation Big O"), "inspiration: the week's technologies only, the culture topics on the lighter day");
@@ -2978,6 +2979,11 @@ section("activités: the programme only (never a brief), inspiration topics, the
   const vp = actVeillePrompt(ctx, plan, f3, "2026-10-19", "Une veille sur fetch et async/await pour charger les produits", out);
   check(out.includes("Fetch / API") && vp.includes("PROPOSITION DU FORMATEUR") && vp.includes("charger les produits") && vp.includes("ATTENTION : elle demande Fetch / API") && vp.indexOf("PROPOSITION") < vp.indexOf("Réponds UNIQUEMENT"),
     "a proposal beyond the programme: the AI is told what to leave out");
+  // the proposal decides the subject and the data: the planned title is left out
+  const plan2 = actCleanPlan({ jours: [{ date: "2026-10-20", veille: "V2", progression: "p", live: "CRUD de produits d'argan", live_focus: "des produits" }] }, ["2026-10-20"]);
+  const lp = actLivePrompt(ctx, plan2, f3, "2026-10-20", "js", [], "CRUD users", []), lp0 = actLivePrompt(ctx, plan2, f3, "2026-10-20", "js", []);
+  check(!lp.includes("argan") && lp.includes("<<<\nCRUD users\n>>>") && lp.includes("remplace le titre prévu") && lp.includes("un CRUD d'utilisateurs") && lp0.includes("titre prévu « CRUD de produits d'argan »"),
+    "a proposal (« CRUD users ») replaces the planned title and theme; without one, the plan's day is used");
   check(!actProposalOutside("Plus simple, avec un piège sur innerHTML", allowed).length && !actVeillePrompt(ctx, plan, f3, "2026-10-19").includes("PROPOSITION"), "a proposal within the programme passes; no proposal, no block");
   check(actCleanProposal("x".repeat(3000)).length === 1500, "a proposal is cut at 1500 characters");
   const vv = actCleanVeille({ titre: "Introduction à fetch", contexte: "a. b. c.", objectifs: ["Expliquer a", "Utiliser b", "Choisir c"], plan: [{ titre: "A", points: ["a", "b", "c"] }, { titre: "B", points: ["a", "b", "c"] }], questions: ["a ?", "b ?"],

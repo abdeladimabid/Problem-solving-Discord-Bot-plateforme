@@ -139,19 +139,6 @@ const FENCE: Record<string, string> = { html: "html", css: "css", js: "javascrip
 const extOf = (file: string) => (file.match(/\.([a-z]+)$/i)?.[1] ?? "").toLowerCase();
 const fenceOf = (file: string) => (/\.blade\.php$/i.test(file) ? "blade" : FENCE[extOf(file)] ?? "");
 
-// The métier of the live codings: one per sprint (fictional, Moroccan context), the same for every class of the programme.
-export const METIERS = [
-  "un riad à Marrakech (chambres, réservations, avis des clients)",
-  "une coopérative d'huile d'argan à Agadir (produits, commandes, prix en DH)",
-  "une auto-école à Casablanca (candidats, séances de conduite, moniteurs)",
-  "une salle de sport à Rabat (cours collectifs, abonnements, coachs)",
-  "une pharmacie de quartier à Fès (médicaments, stock, ordonnances)",
-  "un food truck de msemen et harira à Tanger (menu, commandes, horaires)",
-  "une agence de location de voitures à Oujda (véhicules, locations, clients)",
-  "une librairie-café à Meknès (livres, événements, réservations de tables)",
-];
-export const metierOf = (sprint: number | null) => METIERS[(Math.max(1, sprint || 1) - 1) % METIERS.length];
-
 // Veille topics of the earlier promotions (docs/activities/VEILLE_INSPIRATION_DWWM.md, keep both the same), by the
 // technology of the programme they belong to (the names of TECHS in program.ts). Only inspiration: the AI sees the
 // ones of the week's technologies and may use, reword or ignore them; the programme stays the only scope. "Culture"
@@ -201,8 +188,9 @@ export const proposalOutside = (proposal: string, allowed: string[]) => (proposa
 export function proposalBlock(proposal: string, outside: string[]): string {
   if (!proposal) return "";
   return [
-    "PROPOSITION DU FORMATEUR (c'est la consigne principale : suis-la en priorité pour le sujet, les notions, l'exemple, le piège ou le niveau demandés) :",
+    "PROPOSITION DU FORMATEUR (c'est la consigne principale : elle décide du sujet, des notions, de l'exemple, des données, du piège ou du niveau ; elle remplace le titre prévu dans le plan) :",
     `<<<\n${proposal}\n>>>`,
+    "Suis-la à la lettre : si elle nomme un exemple ou des données (ex. « CRUD users » = un CRUD d'utilisateurs), utilise exactement celui-là, pas un autre thème.",
     "Elle ne change ni le format du JSON, ni les règles ci-dessus, ni le périmètre du programme.",
     outside.length ? `ATTENTION : elle demande ${outside.join(", ")}, pas encore au programme à ce moment de l'année. Ne l'utilise pas : reste dans le périmètre et dis-le dans "ecarte".` : "",
     `Si une partie de la proposition sort du programme de la semaine (une notion d'une semaine suivante), laisse-la de côté et écris-la dans "ecarte" (une ligne courte par élément laissé de côté). Sinon "ecarte": [].`,
@@ -454,7 +442,7 @@ export function weekFacts(p: Program, monday: string, from: string, to: string, 
 /** Open points the teacher should look at (found without the AI). */
 export function weekNotes(f: WeekFacts): string[] {
   const out: string[] = [];
-  for (const w of f.weeks) if (w.kind === "brief" && w.concepts.trim().length < 40) out.push(`S${w.n} : le programme ne détaille pas les concepts de cette semaine ; les activités suivent son objectif et son intitulé.`);
+  for (const w of f.weeks) if (w.kind === "brief" && w.concepts.trim().length < 40) out.push(`S${w.n} : le programme ne détaille pas les concepts de cette semaine ; les activités suivent son objectif, son sprint et ses compétences.`);
   if (f.weeks.length > 1) out.push(`Cette semaine couvre ${f.weeks.map((w) => `S${w.n}`).join(" et ")} du programme : chaque jour suit les concepts de sa semaine.`);
   for (const d of f.days) {
     if (d.day < f.from || d.day > f.to) continue;
@@ -483,8 +471,9 @@ export function programmeBlock(p: Program, w: ProgramWeek): string {
   return [
     `SEMAINE ${w.n} DU PROGRAMME (${w.start} → ${w.end})${sp ? `, sprint ${sp.n} « ${sp.title} »` : ""}`,
     w.objective ? `Objectif de la semaine : ${w.objective}` : "",
-    w.concepts ? `Concepts et exigences techniques :\n${w.concepts}` : `Intitulé de la semaine : ${w.title}`,
-    comps.length ? `Compétences visées : ${comps.join(", ")}` : "",
+    w.concepts ? `Concepts et exigences techniques :\n${w.concepts}` : "",
+    comps.length ? `Compétences visées (chaque activité en fait pratiquer au moins une) : ${comps.join(", ")}` : "",
+    sp && sp.tech.length + sp.soft.length ? `Compétences du sprint : ${weekComps([{ competencies: sp.tech, soft: sp.soft } as ProgramWeek]).join(", ")}` : "",
     tech.length ? `Technologies de la semaine : ${tech.join(", ")}` : "",
     sp?.situation ? `Situation du sprint :\n${sp.situation.slice(0, 800)}` : "",
   ].filter(Boolean).join("\n");
@@ -571,20 +560,20 @@ const SYS = `Tu prépares les activités quotidiennes d'une promotion de dévelo
 - Veille : 09:15, 30 minutes. Les apprenants la préparent et la présentent. On s'adresse à l'apprenant avec « tu ».
 - Live coding : 11:00, 45 minutes. Le formateur code au clavier, les apprenants codent en parallèle : chaque étape doit pouvoir être tapée en direct dans le temps donné.
 Règles communes :
-- Tout part du PROGRAMME de la semaine (objectif, concepts, compétences, technologies) : plusieurs classes suivent ce programme avec des projets différents, donc ne parle d'aucun projet ni brief en particulier.
+- Tout part du PROGRAMME : le sprint, la semaine du planning (objectif, concepts et exigences techniques, technologies) et les compétences visées. Plusieurs classes suivent ce programme avec des projets différents : ne parle d'aucun projet, brief, client ni entreprise.
+- Exemples et données : simples et fictifs, choisis pour faire pratiquer le concept de la semaine (une liste d'utilisateurs, de tâches, de notes, de livres…), jamais le client ou le projet d'une classe. Prénoms marocains fictifs ; s'il y a des prix, en DH ; téléphones en 06/07.
 - En français, phrases simples, aucun jargon sans explication. Les noms de code entre backticks (\`querySelector\`). Aucun emoji.
 - N'exige jamais une notion d'une semaine suivante (voir HORS PÉRIMÈTRE) ni une notion pas encore vue.
-- Noms fictifs, contexte marocain, prix en DH, téléphones en 06/07.
 - Liens : uniquement des pages dont tu es CERTAIN qu'elles existent, en français d'abord, sur ces sites seulement : ${SITES}. N'invente jamais d'URL.
 Réponds UNIQUEMENT avec un objet JSON, sans texte autour.`;
 
 const PLAN_SHAPE = `{"resume": "1 phrase : l'enjeu de la semaine pour les apprenants",
- "jours": [{"date": "AAAA-MM-JJ", "veille": "titre court de la veille", "focus": "ce qu'elle couvre (1 phrase)", "progression": "la notion du programme que la classe doit atteindre à la fin du jour", "live": "titre du live coding, seulement les jours avec live coding, sinon \\"\\"", "live_focus": "ce qu'on construit (1 phrase), sinon \\"\\""}],
+ "jours": [{"date": "AAAA-MM-JJ", "veille": "titre court de la veille (un concept du programme)", "focus": "ce qu'elle couvre (1 phrase)", "progression": "la notion du programme que la classe doit atteindre à la fin du jour, avec la compétence visée (ex. Sélectionner et modifier le DOM — C4N1)", "live": "titre du live coding (le concept pratiqué, pas un client), seulement les jours avec live coding, sinon \\"\\"", "live_focus": "ce qu'on construit pour pratiquer le concept (1 phrase), sinon \\"\\""}],
  "besoins": [{"besoin": "ce dont les apprenants auront besoin cette semaine (une notion du programme)", "ou": "où c'est couvert (ex. Veille Lun 12/10, LC1)"}],
  "hors_perimetre": ["notion de la semaine suivante à ne pas exiger"],
  "points_ouverts": ["question à valider par le formateur"]}`;
 const VEILLE_SHAPE = `{"titre": "titre de la veille",
- "contexte": "3 à 5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, le lien avec les concepts de la semaine",
+ "contexte": "3 à 5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, le lien avec les concepts et les compétences de la semaine",
  "objectifs": ["3 à 5 objectifs, chacun commence par un verbe d'action à l'infinitif (Expliquer, Utiliser, Choisir, Distinguer, Mettre en place…)"],
  "plan": [{"titre": "partie 1", "points": ["3 à 4 points à explorer"]}, {"titre": "partie 2", "points": ["3 à 4 points"]}, {"titre": "partie 3 (optionnelle)", "points": ["1 à 4 points"]}],
  "questions": ["2 à 3 questions qui font réfléchir (pourquoi, quand, que se passe-t-il si…), pas des définitions, chacune finit par ?"],
@@ -596,9 +585,9 @@ const VEILLE_SHAPE = `{"titre": "titre de la veille",
 "ressources" : 3 à 4 liens, MDN en français et JavaScript.info en français d'abord (selon le sujet), plus un outil si utile.`;
 const liveShape = (s: Stack) => {
   const S = STACKS[s];
-  return `{"titre": "titre du live coding",
+  return `{"titre": "titre du live coding (le concept pratiqué)",
  "objectifs": ["3 objectifs, chacun commence par un verbe d'action à l'infinitif"],
- "contexte": "2 à 4 phrases : le besoin du client du métier, ce qu'on construit, le concept du programme travaillé",
+ "contexte": "2 à 4 phrases : le concept du programme travaillé, la compétence visée, ce qu'on construit pour le pratiquer",
  "deroule": [{"minutes": 5, "etape": "Présenter le besoin et le starter", "notions": "…"}, {"minutes": 15, "etape": "un seul élément ou champ « à la main »", "notions": "…"}, {"minutes": 10, "etape": "généraliser (fonction, boucle…)", "notions": "…"}, {"minutes": 10, "etape": "cas particulier, envoi ou état", "notions": "…"}, {"minutes": 5, "etape": "Tester en direct, récap", "notions": ""}],
  "starter": {"fichier": "${S.starter}", "code": "…"},
  "support": ${S.support ? `{"fichier": "${S.support}", "code": "…"} (ou null)` : "null"},
@@ -611,7 +600,7 @@ const liveShape = (s: Stack) => {
  "ecarte": []}
 Règles du live coding :
 - Langage de la semaine : ${S.label}. ${S.hint}
-- Un seul petit objectif concret, réutilisable dans les projets de la semaine (quel que soit le projet de chaque classe). Construis progressivement : d'abord un élément « à la main », puis généralise.
+- Un seul petit objectif concret qui fait pratiquer un concept et une compétence de la semaine, réutilisable dans n'importe quel projet de la semaine. Construis progressivement : d'abord un élément « à la main », puis généralise.
 - 4 ou 5 étapes dont les minutes font EXACTEMENT 45 au total.
 - Données : 5 éléments maximum dans une liste, 3 propriétés maximum par objet ; formulaire de 3 champs maximum.
 - Code final : 60 lignes maximum${S.fns ? ", 2 fonctions nommées maximum, avec `function`, `for...of` et des `if` simples" : ""}. Pas de motif avancé (objet de fonctions, DocumentFragment, lookahead dans une Regex, chaînages astucieux).
@@ -622,14 +611,13 @@ Règles du live coding :
 };
 
 /**
- * What the AI knows about a week: the programme (weeks, sprint, objective, concepts, competencies, technologies),
- * the métier of the live codings, what's out of scope, the topics already done, ideas from earlier promotions.
- * Never a brief: the classes of the programme run different ones.
+ * What the AI knows about a week: the programme (sprint, weeks of the planning with their objective, concepts and
+ * technologies, competencies), what's out of scope, the topics already done, ideas from earlier promotions.
+ * Never a brief, a client or a theme: the classes of the programme run different projects.
  */
 export function weekContext(p: Program, f: WeekFacts, done: string[] = []): string {
   const parts = f.weeks.map((w) => programmeBlock(p, w));
-  parts.push(`MÉTIER DES LIVE CODINGS (sprint ${f.sprint?.n ?? "—"}) : ${metierOf(f.sprint?.n ?? null)}. Garde ce métier toute la semaine.`);
-  if (f.next) parts.push(`HORS PÉRIMÈTRE (semaine ${f.next.n} du programme, à ne jamais exiger) :\n${(f.next.concepts || f.next.objective || f.next.title).slice(0, 1200)}`);
+  if (f.next) parts.push(`HORS PÉRIMÈTRE (semaine ${f.next.n} du programme, à ne jamais exiger) :\n${(f.next.concepts || f.next.objective).slice(0, 1200)}`);
   const ideas = topicsFor(f.weeks, f.closing.length > 0);
   if (ideas.length) parts.push(`IDÉES DE SUJETS (veilles des promotions précédentes, simple inspiration : tu peux t'en servir, les reformuler ou en choisir d'autres ; le programme de la semaine reste la seule référence) :\n${ideas.map((x) => "- " + x).join("\n")}`);
   if (done.length) parts.push(`DÉJÀ COUVERT EN VEILLE (ne refais pas ces sujets) :\n${done.map((x) => "- " + x).join("\n")}`);
@@ -641,26 +629,31 @@ export function weekPrompt(ctx: string, f: WeekFacts, kept: { day: string; kind:
   const off = f.days.filter((d) => d.day >= f.from && d.day <= f.to && d.kind !== "work").map((d) => `- ${d.day} (${dayFr(d.day)}) : ${d.label}, aucune activité`);
   return [
     ctx,
-    `PLANNING DE LA SEMAINE À PRÉPARER (une veille par jour ouvré, dans l'ordre où les concepts du programme s'enchaînent ; chaque live coding applique la veille du jour ou de la veille ; ne refais pas un sujet déjà couvert) :\n${f.work.map(dayLine).join("\n")}${off.length ? "\n" + off.join("\n") : ""}`,
+    `PLANNING DE LA SEMAINE À PRÉPARER (une veille par jour ouvré, dans l'ordre où les concepts du programme s'enchaînent ; chaque jour fait progresser vers les compétences visées ; chaque live coding applique la veille du jour ou de la veille ; ne refais pas un sujet déjà couvert) :\n${f.work.map(dayLine).join("\n")}${off.length ? "\n" + off.join("\n") : ""}`,
     kept.length ? `DÉJÀ ÉCRITS (garde exactement ces titres) :\n${kept.map((r) => `- ${r.day} ${r.kind === "live" ? "live coding" : "veille"} : « ${r.title} »`).join("\n")}` : "",
     `Réponds UNIQUEMENT avec ce JSON :\n${PLAN_SHAPE}`,
   ].filter(Boolean).join("\n\n");
 }
-const planLines = (plan: WeekPlan) => `PLAN DE LA SEMAINE :\n${plan.jours.map((x) => `- ${dayFr(x.date)} : veille « ${x.veille} »${x.live ? ` ; live coding « ${x.live} »` : ""}`).join("\n")}`;
+const planLines = (plan: WeekPlan, day: string) => `LES AUTRES JOURS DE LA SEMAINE (seulement pour ne pas répéter leurs sujets) :\n${plan.jours.filter((x) => x.date !== day).map((x) => `- ${dayFr(x.date)} : veille « ${x.veille} »${x.live ? ` ; live coding « ${x.live} »` : ""}`).join("\n") || "- (aucun)"}`;
+/** What to write: with a proposal, the planned title is left out (the proposal decides); otherwise the plan's day. */
+const target = (what: string, day: string, title: string, focus: string, proposal: string, more = "") =>
+  proposal ? `${what} : ${dayFr(day)} (${day}). Le sujet, l'exemple et les données viennent de la PROPOSITION DU FORMATEUR ci-dessous, dans les concepts de la semaine.${more}`
+    : `${what} : ${dayFr(day)} (${day})${title ? `, titre prévu « ${title} », ${focus}` : ", choisis un sujet cohérent avec les concepts de la semaine, sans répéter les autres jours"}.${more}`;
 /** The prompt of one veille (with the teacher's proposal, when there is one). */
 export function veillePrompt(ctx: string, plan: WeekPlan, f: WeekFacts, day: string, proposal = "", outside: string[] = []): string {
   const j = plan.jours.find((x) => x.date === day);
-  return [ctx, planLines(plan),
-    `VEILLE À ÉCRIRE : ${dayFr(day)} (${day})${j ? `, titre prévu « ${j.veille} », focus : ${j.focus}${j.progression ? `, la classe doit atteindre : ${j.progression}` : ""}` : ", choisis un sujet cohérent avec le plan, sans répéter les autres jours"}.${f.closing.includes(day) ? " C'est le dernier jour de la semaine du programme : sujet plus léger (bonnes pratiques, débogage, qualité)." : ""}`,
+  return [ctx, planLines(plan, day),
+    target("VEILLE À ÉCRIRE", day, j?.veille || "", `focus : ${j?.focus || "—"}${j?.progression ? `, la classe doit atteindre : ${j.progression}` : ""}`, proposal,
+      f.closing.includes(day) ? " C'est le dernier jour de la semaine du programme : sujet plus léger (bonnes pratiques, débogage, qualité)." : ""),
     proposalBlock(proposal, outside),
     `Réponds UNIQUEMENT avec ce JSON :\n${VEILLE_SHAPE}`].filter(Boolean).join("\n\n");
 }
 /** The prompt of one live coding: it knows the veilles of the week up to its day. */
 export function livePrompt(ctx: string, plan: WeekPlan, f: WeekFacts, day: string, stack: Stack, veilles: string[], proposal = "", outside: string[] = []): string {
   const j = plan.jours.find((x) => x.date === day);
-  return [ctx, planLines(plan),
+  return [ctx, planLines(plan, day),
     `VEILLES DE LA SEMAINE JUSQU'À CE JOUR (le live coding n'utilise que ces notions et celles d'avant) :\n${veilles.join("\n") || "- (aucune)"}`,
-    `LIVE CODING À ÉCRIRE : LC${f.live.indexOf(day) + 1 || 1}, ${dayFr(day)} (${day})${j?.live ? `, titre prévu « ${j.live} », ce qu'on construit : ${j.live_focus}` : ", choisis un sujet cohérent avec la veille du jour"}.`,
+    target(`LIVE CODING À ÉCRIRE (LC${f.live.indexOf(day) + 1 || 1})`, day, j?.live || "", `ce qu'on construit : ${j?.live_focus || "—"}`, proposal),
     proposalBlock(proposal, outside),
     `Réponds UNIQUEMENT avec ce JSON :\n${liveShape(stack)}`].filter(Boolean).join("\n\n");
 }
