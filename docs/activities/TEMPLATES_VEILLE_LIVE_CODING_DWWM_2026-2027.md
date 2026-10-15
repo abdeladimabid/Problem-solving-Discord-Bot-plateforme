@@ -6,6 +6,10 @@
 >
 > ClassBot's **Activités** page (dashboard → Projects → Activités) follows this file: `src/shared/activities.ts` checks every item
 > against the rules below and writes the markdown from the AI's JSON with these exact sections. Change both together.
+>
+> **Programme only:** the classes of a programme run different briefs but study the same concepts (and share these
+> activities), so everything comes from the programme week: objective, *Concepts & Exigences techniques*, competencies,
+> technologies. No brief is used. Topic ideas: `VEILLE_INSPIRATION_DWWM.md` (inspiration only).
 
 ---
 
@@ -13,10 +17,10 @@
 
 - **One veille per day** (Monday → Friday), **09:15, 30 min**. Learners prepare and present it.
 - **Two live codings per week**, **11:00, 45 min**, by default on **Tuesday and Thursday** (the day *after* or *of* the veille they apply).
-- Order the veilles **in the order the week's brief needs them** (read the planning row: *Concepts & Exigences techniques*).
+- Order the veilles **in the order the week's concepts build on each other** (read the planning row: *Concepts & Exigences techniques*).
 - Skip any topic already covered as an introduction (e.g. "intro DOM done this week" → next week starts at the next step).
-- Friday veille = lighter topic (good practices, debugging, quality), since it is the brief's submission day.
-- **Never require a concept taught in a later brief** (check the next planning row and list it as *Hors périmètre*).
+- The last day of the programme week (usually Friday) = lighter topic (good practices, debugging, quality): the week's work is handed in.
+- **Never require a concept taught in a later week** (check the next planning row and list it as *Hors périmètre*).
 - Public holidays / vacation days → no veille, no live coding that day.
 
 ### Week overview block (start of the document)
@@ -24,20 +28,20 @@
 ```markdown
 ## Analyse de la semaine
 
-{1–2 phrases : semaine N (JJ–JJ/MM/AAAA), sprint, brief, mode, compétences.}
+{1–2 phrases : semaine N du programme (JJ–JJ/MM/AAAA), sprint, compétences, objectif.}
 
-| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Avancement attendu du brief |
+| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Progression attendue (programme) |
 | --- | --- | --- | --- |
-| Lun JJ/MM | {titre} | — | {étape du brief} |
-| Mar JJ/MM | {titre} | LC1 : {titre} | {étape du brief} |
-| Mer JJ/MM | {titre} | — | {étape du brief} |
-| Jeu JJ/MM | {titre} | LC2 : {titre} | {étape du brief} |
-| Ven JJ/MM | {titre} | — | Finitions, README, déploiement, soumission avant 23:59 |
+| Lun JJ/MM | {titre} | — | {notion du programme atteinte} |
+| Mar JJ/MM | {titre} | LC1 : {titre} | {notion du programme atteinte} |
+| Mer JJ/MM | {titre} | — | {notion du programme atteinte} |
+| Jeu JJ/MM | {titre} | LC2 : {titre} | {notion du programme atteinte} |
+| Ven JJ/MM | {titre} | — | Consolidation de la semaine : bonnes pratiques, débogage, qualité |
 
 **Ce dont les apprenants auront besoin (et où c'est couvert)**
 - {besoin} : {veille / live coding}
 
-**Hors périmètre cette semaine** ({brief suivant}) : {notions à ne pas exiger}.
+**Hors périmètre cette semaine** ({semaine suivante du programme}) : {notions à ne pas exiger}.
 
 **Points ouverts**
 - {question à valider par le formateur}
@@ -50,7 +54,7 @@
 ### Rules
 
 - **Length:** fits a 30-min learner presentation → 3–5 objectives, plan in 2–3 parts (3–4 bullets each), 2–3 reflection questions.
-- **Contexte:** 3–5 sentences, links the topic to what learners already know and to the current brief. No jargon without explanation.
+- **Contexte:** 3–5 sentences, links the topic to what learners already know and to the week's concepts. No jargon without explanation.
 - **Objectifs:** each starts with an action verb (*Expliquer, Utiliser, Choisir, Distinguer, Mettre en place…*).
 - **Questions de réflexion:** questions that make learners think (why / when / what if), not definitions.
 - **Ressources:** 3–4 links, French first: MDN (fr) and JavaScript.info (fr), plus one tool if useful (regex101, DevTools docs). Never invent a URL.
@@ -67,7 +71,7 @@
 
 **📌 Contexte**
 
-{3–5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, lien avec le brief.}
+{3–5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, lien avec les concepts de la semaine.}
 
 **🎯 Objectifs d'apprentissage**
 
@@ -127,7 +131,7 @@ Tu dois répondre à ces questions dans ta présentation :
 ### Rules — keep it simple (learners are beginners)
 
 - **Trainer at the keyboard, learners code in parallel** → every step must be typeable live in the time given.
-- **One small, concrete goal** per live coding, directly reusable in the brief.
+- **One small, concrete goal** per live coding, directly reusable in the week's projects (whatever brief each class runs).
 - **Small dataset / small form:** max 4–5 items in a data array, max 3 form fields, max 3–4 properties per object.
 - **Code size:** `app.js` ≈ 40–60 lines max; HTML starter ≈ 25 lines; CSS minimal (5–6 rules), given ready-made.
 - **At most 2 named functions.** Plain `function`, `for...of`, simple `if`. No advanced patterns (no objects of functions, no `DocumentFragment`, no lookaheads in Regex, no chaining tricks) unless the week explicitly teaches them.
@@ -153,7 +157,7 @@ Tu dois répondre à ces questions dans ta présentation :
 
 **📌 Contexte général**
 
-{2–4 phrases : le besoin du client du métier, ce qu'on va construire, lien avec la partie du brief concernée.}
+{2–4 phrases : le besoin du client du métier, ce qu'on va construire, le concept du programme travaillé.}
 
 **⏱️ Déroulé**
 
@@ -213,8 +217,8 @@ Tu dois répondre à ces questions dans ta présentation :
 
 ## 4. Pre-delivery checklist
 
-1. Veilles follow the brief's order of needs; no topic already covered as intro.
-2. No concept from a later brief is required (checked against the next planning row).
+1. Veilles follow the order of the week's concepts; no topic already covered as intro.
+2. No concept from a later week is required (checked against the next planning row).
 3. Each veille has all 8 sections in the template order, with a live demo in the deliverable.
 4. Each live coding: déroulé totals 45 min, ≤ 60 lines of JS, ≤ 2 functions, ≤ 5 data items / ≤ 3 fields.
 5. Live coding uses only notions from the week's veilles (or earlier).
