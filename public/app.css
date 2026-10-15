@@ -1816,6 +1816,11 @@ a.gm-card:hover { text-decoration: none; }
 .sg-grade .seg label:has(input:checked) { border-color: var(--blue); background: var(--blue-50); color: var(--blue); font-weight: 600; }
 .pr-share { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .pr-share h2 { margin: 0 0 4px; } .pr-share p { margin: 0; }
+.db-go { min-width: 108px; justify-content: center; }
+.db-go.done { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+.db-go.done:hover { color: var(--ink, inherit); border-color: var(--line-strong); }
+.act-fold { border: 0; background: none; color: var(--blue); font: inherit; font-weight: 600; font-size: 13px; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+.act-fold:hover { background: var(--surface-2); }
 .pr-kc { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .pr-kc b { font-size: 15px; min-width: 1ch; text-align: right; }
 .pr-kc .small { color: var(--muted); }

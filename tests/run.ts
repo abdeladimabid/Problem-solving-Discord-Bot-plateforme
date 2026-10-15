@@ -2995,7 +2995,7 @@ section("activités: the programme only (never a brief), inspiration topics, the
   // the context of a week: the programme, never a brief
   const f3 = actWeekFacts(P, "2026-10-19", "2026-10-19", "2026-10-23", null);
   const ctx = actWeekContext(P, f3, ["Le HTML sémantique"]);
-  check(!/brief/i.test(ctx) && ctx.includes("Objectif de la semaine") && ctx.includes("Concepts et exigences techniques") && /Compétences visées[^:]*: C1N1/.test(ctx) && ctx.includes("Technologies de la semaine : ") && ctx.includes("DOM"),
+  check(!/brief/i.test(ctx) && ctx.includes("Objectifs de la semaine (ceux du sprint") && ctx.includes("Gérer les événements, formulaires et validations") && !ctx.includes("Transformer une interface Web statique") && ctx.includes("Concepts et exigences techniques") && /Compétences visées[^:]*: C1N1/.test(ctx) && ctx.includes("Technologies de la semaine : ") && ctx.includes("DOM"),
     "the AI's context is the programme week: objective, concepts, competencies, technologies, no brief");
   check(!/MÉTIER|argan|riad|\b(un|le|du) client\b/i.test(ctx) && ctx.includes("sprint 2 «") && ctx.includes("Compétences du sprint") && ctx.includes("HORS PÉRIMÈTRE (semaine 4 du programme") && ctx.includes("DÉJÀ COUVERT EN VEILLE") && ctx.includes("- Le DOM en JavaScript"),
     "the sprint, its competencies, the next week out of scope, the topics done, ideas of earlier promotions; no métier, no client");
@@ -3014,7 +3014,13 @@ section("activités: the programme only (never a brief), inspiration topics, the
   const md = actRenderWeek(plan, f3, actWeekLabels(P, f3));
   check(md.includes("| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Progression attendue (programme) |") && md.includes("| Lun 19/10 | V1 | — | Sélectionner un élément |") && !/brief/i.test(md),
     "the overview shows the programme's progression; an old brief step is not read");
-  check(md.includes("Semaine 3 du programme (19–23/10/2026), sprint 2") && md.includes("Objectif : ") && md.includes("(S4 du programme, à partir du 26/10)") && md.includes("Consolidation de la semaine"), "the overview: week, sprint, competencies, objective, next week, the lighter last day");
+  // the week's objectives are the sprint's, divided over its weeks (the planning's per-week project text is not used)
+  const AO = await import("../src/shared/activities.ts");
+  const w4 = P.weeks.find((w: any) => w.n === 4), w3 = P.weeks.find((w: any) => w.n === 3);
+  const o4 = AO.weekObjectives(P, w4), o3 = AO.weekObjectives(P, w3);
+  check(o4.length === 1 && o4[0].startsWith("Structurer et modulariser") && !o4.join().includes("Single Page") && o3.length === 2 && AO.sprintObjectives(P.sprints.find((x: any) => x.n === 2)).length === 3,
+    "the sprint's objectives are divided over its weeks (S4 = modules ES6+, never the SPA project)");
+  check(md.includes("Semaine 3 du programme (19–23/10/2026), sprint 2") && md.includes("Objectifs (sprint) : Développer une interface Web interactive") && md.includes("(S4 du programme, à partir du 26/10)") && md.includes("Consolidation de la semaine"), "the overview: week, sprint, competencies, objective, next week, the lighter last day");
   // the teacher's proposal: the main instruction, within the programme
   const allowed = techSoFar(P, P.weeks[2]);
   const out = actProposalOutside("Une veille sur fetch et async/await pour charger les produits", allowed);

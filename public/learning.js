@@ -768,9 +768,10 @@ function analyzeAllDialog(root) {
 function briefStudentsTab(root) {
   const { B } = BR, id = B.brief.id;
   const pushCell = (p) => (p === "on" ? `<span class="status solved">pushed</span>` : p === "late" ? `<span class="status late">after the deadline</span>` : `<span class="muted small">—</span>`);
-  // a finalized debrief: "View" in place of "Debrief" (reopening is on the debrief page itself)
-  const actions = (who, h, r) => `<button class="btn small" data-hi="${esc(who)}" data-repo="${esc(h?.repo || "")}" data-plan="${esc(h?.plan || "")}" title="Set or fix the repo">✏️ Repo</button>
-    <a class="btn small primary" href="#/debrief/${id}~${encodeURIComponent(who)}">${r?.status === "final" ? "👁 View" : "Debrief →"}</a>`;
+  // one button: Debrief (to do), or View in gray once it's finalized
+  const actions = (who, h, r) => (r?.status === "final"
+    ? `<a class="btn small db-go done" href="#/debrief/${id}~${encodeURIComponent(who)}" title="Finalized: open it to read it (Reopen is on the debrief)">👁 View</a>`
+    : `<a class="btn small primary db-go" href="#/debrief/${id}~${encodeURIComponent(who)}">Debrief →</a>`);
   let html;
   if (B.kind === "squad") {
     const nameOf = (uid) => B.students.find((s) => s.discord_id === uid)?.name || uid;

@@ -433,6 +433,10 @@ function actResults() {
   }).join("");
   actWire();
 }
+/** Is the week's analysis unfolded? (one choice for all the weeks, kept in this browser) */
+function actWeekOpen(set) {
+  try { if (set !== undefined) localStorage.setItem("actWeekOpen", set ? "1" : "0"); return localStorage.getItem("actWeekOpen") === "1"; } catch { return !!set; }
+}
 function actCard(kind, day) {
   const key = actKey(kind, day), job = ACT.jobs[key], it = actItem(kind, day);
   const wk = actItem("week", kind === "week" ? day : actMonday(day));
@@ -448,13 +452,14 @@ function actCard(kind, day) {
     return `<article class="act-card missing" data-key="${key}">${head(planned || (kind === "week" ? "Not planned yet" : "Not written yet"),
       `<div class="act-btns"><button class="btn small" data-a="gen">✨ ${err ? "Retry" : "Generate"}</button></div>`)}${err}</article>`;
   }
-  const open = kind === "week";
+  // the week's analysis folds (remembered in this browser); a veille or live coding opens with Preview
+  const open = kind === "week" && actWeekOpen();
   const warn = it.warnings || [];
   return `<article class="act-card k-${kind}${warn.length ? " has-warn" : ""}" data-key="${key}" data-id="${it.id}">
-    ${head(kind === "week" ? `Week of ${actDate(day, { day: "numeric", month: "short" })}` : it.title || "", `
+    ${head(kind === "week" ? `Week of ${actDate(day, { day: "numeric", month: "short" })}` : it.title || "", `${kind === "week" ? `<button type="button" class="act-fold" data-a="toggle" aria-expanded="${open}" title="Show or hide the analysis">${open ? "▾" : "▸"} Analysis of the week</button>` : ""}
       <span class="act-tags">${it.edited ? `<span class="tag" title="Changed by hand">edited</span>` : ""}${warn.length ? `<span class="tag medium" title="${esc(warn.join(" · "))}">⚠️ ${warn.length} to check</span>` : ""}</span>
       <div class="act-btns">
-        <button class="btn small" data-a="toggle" aria-expanded="${open}">${open ? "Hide" : "Preview"}</button>
+        ${kind === "week" ? "" : `<button class="btn small" data-a="toggle" aria-expanded="${open}">${open ? "Hide" : "Preview"}</button>`}
         <button class="btn small" data-a="edit">✏️ Edit</button>
         <button class="btn small" data-a="regen" title="Write it again">✨ Regenerate</button>
         <button class="btn small" data-a="copy">📋 Copy</button>
@@ -476,7 +481,9 @@ function actWire() {
       if (a === "copy") return copyText(it.md, `${kind === "week" ? "Overview" : kind === "live" ? "Live coding" : "Veille"} copied`);
       if (a === "toggle") {
         const body = $(".act-body", card), show = body.hidden;
-        body.hidden = !show; b.textContent = show ? "Hide" : "Preview"; b.setAttribute("aria-expanded", String(show));
+        body.hidden = !show; b.setAttribute("aria-expanded", String(show));
+        if (kind === "week") { b.textContent = `${show ? "▾" : "▸"} Analysis of the week`; actWeekOpen(show); }
+        else b.textContent = show ? "Hide" : "Preview";
         return;
       }
       if (a === "edit") actEdit(card, it);
