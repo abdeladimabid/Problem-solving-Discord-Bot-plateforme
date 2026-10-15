@@ -18,6 +18,7 @@ import { certPage, profilePage } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
 import { leagueFeed } from "../shared/league.ts";
 import { handleBattle } from "./battle.ts";
+import { handleGame } from "./games.ts";
 import { sharePage } from "../shared/assessshare.ts";
 import { applyAppSettings } from "../shared/appsettings.ts";
 import { githubPages, githubWebhook } from "../shared/github.ts";
@@ -64,6 +65,10 @@ export default {
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
     const bt = url.pathname.match(/^\/battle\/(tv|judge)\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|claim|act))?\/?$/);
     if (bt) return handleBattle(request, env, bt[1] as "tv" | "judge", Number(bt[2]), bt[3], bt[4]);
+    const gt = url.pathname.match(/^\/game\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|act|codes))?\/?$/);
+    if (gt) return handleGame(request, env, "tv", Number(gt[1]), gt[2], gt[3]);
+    const gp = url.pathname.match(/^\/play\/(\d{1,9})\.([a-z0-9]{8})(?:\/(roster|join|state|answer|revive|check|hint|accuse|code|noise|mic|case|try))?\/?$/);
+    if (gp) return handleGame(request, env, "play", Number(gp[1]), gp[2], gp[3]);
     const shr = url.pathname.match(/^\/share\/assessment\/(\d{1,9})\.([A-Za-z0-9_-]{32})\/?$/);
     if (shr && request.method === "GET") return sharePage(request, env, Number(shr[1]), shr[2]);
     const lgf = url.pathname.match(/^\/league\/feed\/([\w-]{1,30})\.([a-f0-9]{24})$/);

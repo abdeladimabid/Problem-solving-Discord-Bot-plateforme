@@ -6,7 +6,7 @@ const NAV_GROUPS = [
   { key: "projects", icon: "📄", label: "Projects", items: ["#/briefs", "#/github"] },
   { key: "eval", icon: "🎓", label: "Evaluation", items: ["#/sprints", "#/progress", "#/assessments", "#/competencies", "#/integrity", "#/interviews"] },
   { key: "practice", icon: "🧩", label: "Practice", items: ["#/challenges", "#/daily", "#/path", "#/sessions"] },
-  { key: "games", icon: "🎮", label: "Games & rewards", items: ["#/battles", "#/contests", "#/events", "#/points", "#/coins", "#/skills"] },
+  { key: "games", icon: "🎮", label: "Games & rewards", items: ["#/games", "#/battles", "#/contests", "#/events", "#/points", "#/coins", "#/skills"] },
   { key: "setup", icon: "⚙️", label: "Setup", items: ["#/classes", "#/settings"] },
 ];
 const navSimple = () => { try { return localStorage.getItem("cb-simple") === "1"; } catch { return false; } };
@@ -46,7 +46,7 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
 
   const setOpen = (box, open) => { $(".nav-gh", box).setAttribute("aria-expanded", String(open)); box.classList.toggle("closed", !open); };
   // detail pages belong to their list's section (#/student/… → Students)
-  const ALSO = { "#/students": "#/student/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/battles": "#/battle/" };
+  const ALSO = { "#/students": "#/student/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/battles": "#/battle/", "#/games": "#/game/" };
   const isHere = (href) => { const h = location.hash.split("?")[0]; return h === href || h.startsWith(href + "/") || (ALSO[href] && h.startsWith(ALSO[href])); };
   const current = () => $$(".nav-grp", nav).find((b) => $$("a", b).some((a) => isHere(a.getAttribute("href"))));
   const apply = () => {

@@ -424,6 +424,15 @@ function fakeAI() {
       if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
       if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
+      if (sys.includes('"code relay" class game')) return { response: JSON.stringify({ title: "Le double", text: "Écris doubler(tableau) qui double chaque nombre.", fn: "doubler", params: ["tableau"], level: "medium",
+        tests: [{ args: [[1, 2]], expect: [2, 4] }, { args: [[]], expect: [] }, { args: [[0]], expect: [0] }, { args: [[-3]], expect: [-6] }, { args: [[5, 5]], expect: [10, 10] }, { args: [[7]], expect: [99] }],
+        solution: "def doubler(tableau):\n    return [x * 2 for x in tableau]\n" }) };
+      if (sys.includes('"SQL Detective"')) return { response: JSON.stringify({ title: "Le cookie disparu", story: "Le dernier cookie a disparu de la salle des profs.", level: "easy",
+        schema: "CREATE TABLE badges (nom TEXT, salle TEXT, heure TEXT); INSERT INTO badges VALUES ('Ali Ben','profs','10:05'),('Sara Lou','profs','10:20'),('Ali Ben','cour','11:00'),('Tom Ray','cdi','10:10');",
+        steps: [{ title: "La salle", clue: "Qui est entré en salle des profs ?", hint: "WHERE salle = 'profs'", ref: "SELECT nom FROM badges WHERE salle = 'profs'", keys: ["nom"], found: "Ali et Sara." },
+          { title: "Cassé", clue: "x", hint: "y", ref: "SELECT nope FROM rien", keys: ["nope"], found: "z" },
+          { title: "L'heure", clue: "Qui est entré avant 10:10 ?", hint: "heure < '10:10'", ref: "SELECT nom, heure FROM badges WHERE salle = 'profs' AND heure < '10:10'", keys: ["nom", "heure"], found: "Ali, à 10:05." }],
+        question: "Qui a mangé le cookie ?", culprit: "Ali Ben", ending: "C'était Ali." }) };
       if (sys.includes("Tu corriges l’évaluation") || sys.includes("You grade a web development")) {
         const ids = [...user.matchAll(/### Question (\w+)/g)].map((m) => m[1]);
         if (user.includes("TRUNC-TEST")) { const full = JSON.stringify({ notes: ids.map((id) => ({ id, verdict: "correct", score: 100, objectifs: [{ objectif: "balise <h1>", poids: 100, atteint: "oui" }], commentaire: "Bien." })), bilan: "Bien." }); return { response: ids.length > 1 ? full.slice(0, full.indexOf('{"id":"2"') + 30) : full }; }

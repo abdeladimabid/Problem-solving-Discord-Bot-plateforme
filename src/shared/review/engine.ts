@@ -358,8 +358,8 @@ export function buildFeedback(firstName, checks, exigences = [], competences = [
     parts.push(`Voici ce que tu as bien réussi dans ce projet : ${[g0, ...good.slice(1)].join(' ')}`);
   }
   // 2. what to improve in the work
-  if (advice.length === 1) parts.push(`Pour améliorer ton travail, je te conseille ${advice[0]}.`);
-  else if (advice.length) parts.push(`Pour améliorer ton travail, je te conseille de :\n${advice.map((a) => `- ${a.replace(/^(de |d’)/, '')}`).join('\n')}`);
+  // one sentence: "je te conseille d’appliquer …, de … et d’utiliser …"
+  if (advice.length) parts.push(`Pour améliorer ton travail, je te conseille ${andList(advice.map((x) => x.replace(/^d'/, 'd’')))}.`);
   // 3. what needs more attention: the questions of the assessment not answered or wrong, the oral notions, the live task, the rhythm
   const gaps = (assess || []).filter((a) => a.score != null && Array.isArray(a.gaps) && a.gaps.length);
   for (const a of gaps) {

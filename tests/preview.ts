@@ -370,7 +370,7 @@ createServer(async (req, res) => {
   for await (const c of req) chunks.push(c as Buffer);
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
   // public pages of the bot Worker (shared profile, certificates, the assessment page)
-  if (/^\/(u|cert|quiz|battle|league)\//.test(req.url ?? "")) {
+  if (/^\/(u|cert|quiz|battle|league|game|play)\//.test(req.url ?? "")) {
     const r = await bot.fetch(new Request("http://localhost" + req.url, { method: req.method, headers: req.headers as any, body }), env, { waitUntil() {} } as any);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });
     res.end(await r.text());

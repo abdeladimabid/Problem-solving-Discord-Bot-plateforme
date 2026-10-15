@@ -35,6 +35,9 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, tvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { SQL_CASES } from "../shared/sqlcases.ts";
+import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appsettings.ts";
@@ -450,6 +453,87 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (sm && method === "DELETE") { await deleteSquadSet(env, g, Number(sm[1])); return ok(await sview()); }
       } catch (e) { if (e instanceof SquadError) throw new HttpError(400, e.message); throw e; }
     }
+    /** The squads of the class: the squad sets (current first), then each brief's squads (latest first). */
+    async function squadSources(g: GuildRow) {
+      const sq = await all<{ id: number; title: string; week: number | null; squads: string | null }>(env, "SELECT id, title, week, squads FROM briefs WHERE guild_id = ? AND squads IS NOT NULL AND length(squads) > 2 ORDER BY COALESCE(start_at, created_at) DESC, id DESC LIMIT 12", g.id);
+      const squads = sq.map((r) => {
+        let list: any[] = [];
+        try { list = JSON.parse(r.squads || "[]"); } catch { list = []; }
+        return { brief: r.id, from: r.title, week: r.week, squads: list.map((x) => ({ name: String(x.name || "Squad"), members: (x.members || []).map(String) })).filter((x) => x.members.length) };
+      }).filter((x) => x.squads.length);
+      for (const set of (await squadSets(env, g)).reverse()) if (set.squads.length) squads.unshift({ brief: 0, from: `${set.name}${set.active ? " (current)" : ""}`, week: null, squads: set.squads.map((x) => ({ name: x.name, members: x.members })) });
+      return squads;
+    }
+    // -------------------------------------------------------------- 🎮 class games (royale, SQL detective, code relay)
+    if (path === "/games" || path.startsWith("/games/")) {
+      const g = await guild();
+      try {
+        const gview = async (id: number) => {
+          const x = await getGame(env, id, g.id);
+          if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
+          await liveGame(env, x);
+          return { id: x.id, kind: x.kind, mode: x.mode, title: x.title, settings: x.settings, squads: x.squads, status: x.status, created_at: x.created_at,
+            content: x.kind === "royale" ? { questions: x.content.questions } : x.kind === "relay" ? { task: x.content.task, starter: starterFor({ fn: x.content.task.fn, params: x.content.task.params || [] }, x.settings.codeLang || "javascript"), lang: RELAY_LANGS[x.settings.codeLang || "javascript"] }
+              : { caseId: x.content.caseId, case: x.content.case ?? SQL_CASES.find((c) => c.id === x.content.caseId) ?? null },
+            tv: gameTvUrl(env, x), join: gameJoinUrl(env, x), code: x.join_code, qr: qrSvg(gameJoinUrl(env, x), { dark: "#0b1020" }), live: await gameTvView(env, x) };
+        };
+        if (path === "/games" && method === "GET") {
+          const assess = await all<{ id: number; title: string; questions: string }>(env, "SELECT id, title, questions FROM assessments WHERE guild_id = ? ORDER BY id DESC LIMIT 40", g.id).catch(() => []);
+          return ok({ items: await listGames(env, g), kinds: GAME_KINDS, lang: g.lang, squads: await squadSources(g),
+            cases: SQL_CASES.map((c) => ({ id: c.id, title: c.title, level: c.level, notions: c.notions, steps: c.steps.length, story: c.story })),
+            tasks: RELAY_TASKS.map((t, i) => ({ i, title: t.title, text: t.text, fn: t.fn, tests: t.tests.length, level: t.level })), langs: RELAY_LANGS,
+            ...(await (async () => {
+              // what the teacher wrote or generated before: to play it again
+              const rows = await all<{ id: number; kind: string; content: string }>(env, "SELECT id, kind, content FROM games WHERE guild_id = ? AND kind IN ('sql', 'relay') ORDER BY id DESC LIMIT 80", g.id);
+              const myTasks: any[] = [], myCases: any[] = [], seen = new Set<string>();
+              for (const r of rows) {
+                let c: any = {};
+                try { c = JSON.parse(r.content); } catch { continue; }
+                if (r.kind === "relay" && c.task && c.task.by && c.task.by !== "builtin" && !seen.has("t" + c.task.fn + c.task.title)) { seen.add("t" + c.task.fn + c.task.title); myTasks.push(c.task); }
+                if (r.kind === "sql" && c.case && !seen.has("c" + c.case.title)) { seen.add("c" + c.case.title); myCases.push(c.case); }
+              }
+              return { myTasks: myTasks.slice(0, 20), myCases: myCases.slice(0, 20) };
+            })()),
+            battles: await listBattles(env, g),
+            assessments: assess.map((a) => { let qs: any[] = []; try { qs = JSON.parse(a.questions || "[]"); } catch { qs = []; } return { id: a.id, title: a.title, mcq: fromAssessment(qs).length }; }).filter((a) => a.mcq > 0),
+            topics: [...new Set([...BANK_TOPICS, ...TECHS.filter((t) => !t.tool).map((t) => t.name)])] });
+        }
+        if (path === "/games/questions" && method === "POST") {
+          const set = cleanGameSettings(body, g.lang);
+          if (body.assessment) {
+            const a = await one<{ questions: string }>(env, "SELECT questions FROM assessments WHERE id = ? AND guild_id = ?", Number(body.assessment), g.id);
+            if (!a) throw new HttpError(404, "This assessment doesn't exist anymore.");
+            return ok({ questions: fromAssessment(JSON.parse(a.questions || "[]")), ai: false });
+          }
+          const topics = (Array.isArray(body.topics) ? body.topics : []).map((t: unknown) => String(t).slice(0, 40)).filter(Boolean).slice(0, 12);
+          return ok(await royaleQuestions(env, { topics, count: Math.max(5, Math.min(60, Number(body.count) || 20)), level: body.level === "medium" ? "medium" : "easy", lang: set.lang }));
+        }
+        // Code Relay: a challenge by the AI (the teacher's idea or its own), checked by running its solution
+        if (path === "/games/task" && method === "POST") {
+          const r = await generateTask(env, { prompt: String(body.prompt || ""), level: String(body.level || "medium"), lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [] });
+          if (!r.task) throw new HttpError(400, r.error || "No challenge: try again.");
+          return ok({ task: r.task });
+        }
+        // SQL Detective: a case by the AI, or the teacher's own case checked (its queries run on its database)
+        if (path === "/games/case" && method === "POST") {
+          const r = body.case ? await buildCase(env, body.case, "teacher") : await generateCase(env, { prompt: String(body.prompt || ""), level: String(body.level || "easy"), lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [] });
+          if (!r.case) throw new HttpError(400, r.error || "No case: try again.");
+          return ok({ case: r.case, dropped: r.dropped });
+        }
+        if (path === "/games" && method === "POST") return ok(await gview(await createGame(env, g, body)));
+        const gm = path.match(/^\/games\/(\d+)$/);
+        if (gm) {
+          const id = Number(gm[1]);
+          if (method === "GET") return ok(await gview(id));
+          if (method === "DELETE") {
+            if (!(await getGame(env, id, g.id))) throw new HttpError(404, "This game doesn't exist anymore.");
+            for (const t of ["game_players", "game_moves", "game_teams"]) await run(env, `DELETE FROM ${t} WHERE game_id = ?`, id);
+            await run(env, "DELETE FROM games WHERE id = ? AND guild_id = ?", id, g.id);
+            return ok({ ok: true });
+          }
+        }
+      } catch (e) { if (e instanceof GameError) throw new HttpError(400, e.message); throw e; }
+    }
     // -------------------------------------------------------------- ⚔️ squad battles
     if (path === "/battles" || path.startsWith("/battles/")) {
       const g = await guild();
@@ -463,14 +547,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         };
         if (path === "/battles" && method === "GET") {
           const p = await programOf(env, g);
-          // squads change from one brief (sprint) to the next: the latest briefs first
-          const sq = await all<{ id: number; title: string; week: number | null; squads: string | null }>(env, "SELECT id, title, week, squads FROM briefs WHERE guild_id = ? AND squads IS NOT NULL AND length(squads) > 2 ORDER BY COALESCE(start_at, created_at) DESC, id DESC LIMIT 12", g.id);
-          const squads = sq.map((r) => {
-            let list: any[] = [];
-            try { list = JSON.parse(r.squads || "[]"); } catch { list = []; }
-            return { brief: r.id, from: r.title, week: r.week, squads: list.map((x) => ({ name: String(x.name || "Squad"), members: (x.members || []).map(String) })).filter((x) => x.members.length) };
-          }).filter((x) => x.squads.length);
-          for (const set of (await squadSets(env, g)).reverse()) if (set.squads.length) squads.unshift({ brief: 0, from: `${set.name}${set.active ? " (current)" : ""}`, week: null, squads: set.squads.map((x) => ({ name: x.name, members: x.members })) });
+          const squads = await squadSources(g);
           const students = await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
           return ok({ items: await listBattles(env, g), teams: await teams(env, g), squads, students: students.map((x) => ({ id: x.id, name: x.name || x.id })), kinds: QKINDS, topics: [...new Set([...BANK_TOPICS, ...TECHS.filter((t) => !t.tool).map((t) => t.name)])], lang: g.lang, program: p.name });
         }
