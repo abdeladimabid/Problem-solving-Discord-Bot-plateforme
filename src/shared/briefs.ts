@@ -242,7 +242,7 @@ const SHAPE = `{
  }
 }`;
 
-function weekBlock(p: Program, w: ProgramWeek | null): string {
+export function weekBlock(p: Program, w: ProgramWeek | null): string {
   if (!w) return "Aucune semaine du planning choisie.";
   const sp = p.sprints.find((x) => x.n === w.sprint);
   const comps = [...w.competencies, ...w.soft].map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; });

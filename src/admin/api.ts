@@ -48,6 +48,7 @@ import { standings } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
+import { activitiesApi } from "./actapi.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
@@ -89,6 +90,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // programmes, briefs, debriefs, GitHub, assessments
     const learn = await learningApi(env, ctx, path, method, body, url, guild);
     if (learn) return learn;
+    // the daily veilles and live codings (Activités)
+    const acts = await activitiesApi(env, path, method, body, url, guild);
+    if (acts) return acts;
 
     // -------------------------------------------------------------- daily
     if (path === "/daily" && method === "GET") return ok(await dailyOverview(env, await guild()));
