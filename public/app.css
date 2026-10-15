@@ -1774,6 +1774,14 @@ a.gm-card:hover { text-decoration: none; }
 .lang-btn { font-size: 11.5px; font-weight: 700; letter-spacing: .04em; width: auto; padding: 6px 7px; line-height: 16px; }
 .ev-ai { border: 1px dashed var(--line-strong); border-radius: var(--radius-m); padding: 10px 14px 12px; margin: 0 0 10px; background: var(--surface-2, transparent); }
 .ev-ai label:first-child { margin-top: 0; }
+.ev-ready { margin: 0 0 10px; }
+.boss-bank { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.boss-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); color: inherit; font: inherit; cursor: pointer; transition: border-color .15s, transform .15s; }
+.boss-card:hover { border-color: var(--accent, var(--line-strong)); transform: translateY(-1px); }
+.boss-card.on { border-color: var(--accent, var(--line-strong)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #888) 25%, transparent); }
+.boss-card .bc-emoji { font-size: 22px; line-height: 1; }
+.boss-card .bc-name { font-weight: 600; font-size: 13px; line-height: 1.25; }
+.boss-card .bc-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 
 /* Presentations: veilles and live codings presented by the students */
 .sg-pick { max-height: 360px; overflow: auto; display: grid; gap: 2px; }

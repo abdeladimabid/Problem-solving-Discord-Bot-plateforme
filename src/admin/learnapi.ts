@@ -290,7 +290,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!b) throw new ApiError(404, "This brief doesn't exist anymore.");
     const act = m[2];
     if (!act && method === "GET") return ok(await reviewView(env, g, id, who));
-    if (!act && method === "DELETE") { await reopenReview(env, g, id, who); await run(env, "DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who); return ok({ ok: true }); }
+    if (!act && method === "DELETE") { await reopenReview(env, g, id, who, true); await run(env, "DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who); return ok({ ok: true }); }
     if (act === "repos" && method === "GET") {
       let members: PlayerRow[];
       if (who.startsWith("s:")) {

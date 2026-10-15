@@ -117,21 +117,26 @@ async function sendResult(env: Env, g: GuildRow, brief: { id: number; title: str
   return n;
 }
 
-/** Undo a finalize (back to draft): the record keeps nothing from it. */
-export async function reopenReview(env: Env, g: GuildRow, briefId: number, who: string) {
+/** Back to draft to change something. The competencies and skill evidence leave the record until it's finalized
+ *  again; the points and coins stay, and finalizing again only adds or removes the difference (one line in the
+ *  history, never the same points twice). `takeBack` (the debrief is deleted): the points and coins go too. */
+export async function reopenReview(env: Env, g: GuildRow, briefId: number, who: string, takeBack = false) {
   const r = await getReview(env, briefId, who);
   if (!r) return;
   const students: string[] = who.startsWith("s:") ? (r.rec.squad?.members ?? []).map((m: any) => String(m.gid)) : [who.slice(2)];
   for (const uid of students) {
-    const prev = r.rec.awarded?.[uid];
-    if (prev?.pts) await addPoints(env, g, { discordId: uid, amount: -prev.pts, reason: "brief", ref: briefId, note: "reopened" });
-    if (prev?.coins) await run(env, "UPDATE players SET coins = MAX(0, coins - ?) WHERE guild_id = ? AND discord_id = ?", prev.coins, g.id, uid);
+    if (takeBack) {
+      const prev = r.rec.awarded?.[uid];
+      // the debrief's own lines leave the points history (the season total drops by what it gave)
+      await run(env, "DELETE FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'brief' AND ref = ?", g.id, uid, String(briefId));
+      if (prev?.coins) await run(env, "UPDATE players SET coins = MAX(0, coins - ?) WHERE guild_id = ? AND discord_id = ?", prev.coins, g.id, uid);
+    }
     await env.DB.batch([
       env.DB.prepare("DELETE FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'brief' AND ref = ?").bind(g.id, uid, briefId),
       env.DB.prepare("DELETE FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND source = ?").bind(g.id, uid, `brief:${briefId}`),
     ]);
   }
-  r.rec.awarded = {};
+  if (takeBack) r.rec.awarded = {};
   await run(env, "UPDATE brief_reviews SET record = ?, status = 'draft', final_at = NULL WHERE id = ?", JSON.stringify(r.rec), r.id);
 }
 

@@ -2470,9 +2470,22 @@ async function quizDialog() {
 async function eventDialog(kind) {
   await Promise.all([loadDiscord(), loadChallenges(), loadSkillDefs()]);
   const boss = kind === "boss";
-  const st = boss ? { name: "", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null, lore: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
+  const st = boss ? { name: "", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null, lore: null, bank: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
   // a boss is always forged by the AI (its story and its quest); a bounty can come from the bank or the AI
   const ai = { open: boss, idea: "", theme: "", difficulty: boss ? "hard" : "medium", skill: "", qtype: "write", why: "", bank: false };
+  const ready = boss ? ((await api("/bosses/bank").catch(() => null))?.bosses || []) : [];
+  const readyPanel = () => boss && ready.length ? `
+      <div class="ev-ready"><p class="small" style="margin:0 0 6px"><b>📚 Ready-made bosses</b> <span class="muted">— a story and a tested quest, ready at once</span></p>
+        <div class="boss-bank">${ready.map((b) => `<button type="button" class="boss-card${st.bank === b.id ? " on" : ""}" data-boss="${esc(b.id)}" title="${esc(b.intro)}">
+          <span class="bc-emoji" data-emoji aria-hidden="true">${esc(b.emoji)}</span><span class="bc-name">${esc(b.name)}</span>
+          <span class="bc-meta">${diffTag(b.difficulty)} <span class="muted small">${esc(b.skill_name)}</span></span></button>`).join("")}</div></div>` : "";
+  const fill = (r) => {
+    st.c = r.challenge;
+    st.hours = String(r.hours ?? st.hours); st.coins = String(r.coins);
+    if (boss) { st.name = r.name; st.hp = String(r.hp); st.reward = String(r.reward); st.lore = r.lore || null; st.bank = r.bank || null; ai.bank = false; }
+    else st.points = String(r.points);
+    ai.why = [r.fallback ? "The AI couldn't write a quest that passed its tests right now, so here is a ready-made boss instead (you can try the AI again)." : "", r.why, boss ? `Sized for ${r.players} active students: about ${r.fighters} of them must hit it.` : ""].filter(Boolean).join(" ");
+  };
   const ids = boss ? ["name", "hp", "hours", "reward", "coins", "ch"] : ["points", "coins", "hours", "ch"];
   const save = () => {
     ids.forEach((k) => { const el = $(`#ev-${k}`, dlg); if (el) st[k] = el.value; });
@@ -2511,6 +2524,7 @@ async function eventDialog(kind) {
     openDialog(boss ? "New boss battle" : "New bounty", `
       ${boss ? "" : `<p class="toolbar" style="margin:0 0 6px"><button type="button" class="btn small" id="ev-ai">${ai.open ? "Hide the AI helper" : "✨ Help me with AI"}</button></p>`}
       ${aiPanel()}
+      ${readyPanel()}
       ${ai.why ? `<p class="notice small">💡 ${esc(ai.why)}</p>` : ""}
       ${boss && !st.c && !ai.bank ? "" : `
       ${boss ? `<label for="ev-name">Boss name</label><input type="text" id="ev-name" style="width:100%" maxlength="60" value="${esc(st.name || "The Bug King")}">` : ""}
@@ -2548,17 +2562,21 @@ async function eventDialog(kind) {
       go.textContent = boss ? "⏳ Forging the boss and testing its quest… (up to 2 min)" : "⏳ Writing and testing… (up to 2 min)";
       try {
         const r = await api("/events/ai", { method: "POST", body: { kind, idea: ai.idea, theme: ai.theme, difficulty: ai.difficulty, skill: ai.skill || undefined, qtype: ai.qtype } });
-        st.c = r.challenge;
-        st.hours = String(r.hours ?? st.hours); st.coins = String(r.coins);
-        if (boss) { st.name = r.name; st.hp = String(r.hp); st.reward = String(r.reward); st.lore = r.lore || null; ai.bank = false; }
-        else st.points = String(r.points);
-        ai.why = [r.why, boss ? `Sized for ${r.players} active students: about ${r.fighters} of them must hit it.` : ""].filter(Boolean).join(" ");
+        fill(r);
         ai.open = boss;
         await loadChallenges(true).catch(() => {});
         open();
-        toast(`"${r.challenge.title}" is ready: check the settings, then ${boss ? "release the boss" : "post the bounty"}`);
+        toast(r.fallback ? "The AI was not available: a ready-made boss was picked" : `"${r.challenge.title}" is ready: check the settings, then ${boss ? "release the boss" : "post the bounty"}`);
       } finally { if (go.isConnected) go.textContent = boss ? "⚔️ Forge the boss with AI" : "✨ Create it with AI"; }
     });
+    $$("[data-boss]", dlg).forEach((b) => b.onclick = () => busy(b, async () => {
+      save();
+      const r = await api(`/bosses/bank/${b.dataset.boss}`, { method: "POST" });
+      fill(r);
+      await loadChallenges(true).catch(() => {});
+      open();
+      toast(`${r.name} is ready: check the settings, then release the boss`);
+    }));
   };
   open();
 }

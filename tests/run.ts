@@ -1554,8 +1554,37 @@ section("✨ AI helper for boss battles and bounties");
   check(post.status === 200, "the AI bounty can be posted");
   await api("POST", `/api/bounties/${post.data.id}/cancel`, { g: G });
   const old = ai.mode; ai.mode = "broken";
-  check((await api("POST", `/api/events/ai?g=${G}`, { kind: "boss" })).status === 503, "AI down: a clear error, nothing created");
+  const nBefore = q1("SELECT COUNT(*) AS n FROM challenges").n;
+  check((await api("POST", `/api/events/ai?g=${G}`, { kind: "bounty", qtype: "mcq" })).status === 503 && q1("SELECT COUNT(*) AS n FROM challenges").n === nBefore, "AI down: a clear error for a bounty, nothing created");
+  const fb = await api("POST", `/api/events/ai?g=${G}`, { kind: "boss", skill: "graphs" });
+  check(fb.status === 200 && fb.data.fallback === true && fb.data.bank === "ogre-maze" && fb.data.lore?.hits.length === 6 && fb.data.challenge?.kind === "write", "AI down: the boss falls back to a ready-made one (same skill), not an error");
   ai.mode = old;
+}
+
+section("📚 Ready-made bosses");
+{
+  const { BOSS_BANK } = await import("../src/shared/bossbank.ts");
+  const RN = await import("../src/shared/runner.ts");
+  const list = await api("GET", `/api/bosses/bank?g=${G}`);
+  check(list.status === 200 && list.data.bosses.length === BOSS_BANK.length && list.data.bosses.length >= 6, "the dialog lists the ready-made bosses");
+  check(list.data.bosses.every((b: any) => b.name && b.emoji && b.skill_name && ["easy", "medium", "hard"].includes(b.difficulty) && b.intro), "each with a name, an emoji, a skill, a difficulty and its intro");
+  for (const b of BOSS_BANK) {
+    check(b.tests.filter((t) => t.sample).length >= 1 && b.tests.some((t) => t.gen) && b.lore.fr.hits.length === 6 && b.lore.en.hits.every((h) => h.includes("{hero}") && h.includes("{dmg}")), `${b.id}: samples, big tests, a story in both languages`);
+  }
+  const made = await api("POST", `/api/bosses/bank/tide-kraken?g=${G}`, {});
+  const c = q1("SELECT * FROM challenges WHERE id = ?", made.data.challenge.id);
+  check(made.status === 200 && made.data.bank === "tide-kraken" && made.data.lore.intro && made.data.hp >= 120 && c.kind === "write" && c.solution && c.test_set, "a ready-made boss: its quest saved in the bank with its tests");
+  check(c.skills === "sorting", "tagged with its skill");
+  const again = await api("POST", `/api/bosses/bank/tide-kraken?g=${G}`, {});
+  check(again.data.challenge.id === c.id, "picked twice: the same challenge, no duplicate");
+  const tests = q("SELECT idx, input, gen, expected, sample FROM challenge_tests WHERE test_set = ? ORDER BY idx", c.test_set);
+  const j = await RN.judge(env, c.solution, "python", tests as any, c.time_limit);
+  check(j.verdict === "accepted" && j.passed === j.total, "its reference solution passes all its tests on the runner");
+  const wrong = await RN.judge(env, "print(0)", "python", tests as any, c.time_limit);
+  check(wrong.passed < wrong.total, "a wrong answer fails");
+  const rel = await api("POST", "/api/bosses", { g: G, challenge_id: made.data.challenge.id, name: made.data.name, hp: made.data.hp, hours: made.data.hours, reward: made.data.reward, coins: made.data.coins, lore: made.data.lore });
+  check(rel.status === 200, "it can be released like an AI boss");
+  check((await api("POST", `/api/bosses/bank/nope?g=${G}`, {})).status === 404, "unknown ready-made boss: 404");
 }
 
 section("2 vs 2 duels, coin shop, peer help, streak freeze");
@@ -2658,8 +2687,12 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore === pts && wl.status === 200, "finalizing again doesn't give points twice");
   const ro = await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
   check(ro.data.status === "draft" && !q1("SELECT COUNT(*) AS n FROM competency_results WHERE discord_id = ? AND source = 'brief' AND ref = ?", U.alice.id, id).n, "reopen takes the competencies back");
-  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the points and skill evidence");
-  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore + pts && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the skill evidence; the points stay until it's finalized again");
+  // reopen, change something, save, finalize again: the points once (and the history shows one entry)
+  await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: false } } });
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
+  const ledgerB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id));
+  check(ledgerB.reduce((s: number, r: any) => s + r.amount, 0) === pts && ledgerB.length === 1, "reopen, change, finalize again: the points once, one line in the history");
   const cls = await api("GET", `/api/competencies?g=${G}`);
   check(cls.data.cells.some((c: any) => c.discord_id === U.alice.id && c.code === "C3" && c.best === 1), "class competency matrix");
   const sb = det.data.learning.briefs.find((b: any) => b.review?.status === "final");
