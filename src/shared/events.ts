@@ -110,19 +110,35 @@ export async function quizEnd(env: Env, g: GuildRow, q: QuizRow) {
 // ================================================================= boss
 export interface BossRow {
   id: number; guild_id: string; challenge_id: number; name: string; hp: number; deadline: number; reward: number; coins: number;
-  channel_id: string | null; message_id: string | null; status: string; created_at: number; finished_at: number | null;
+  channel_id: string | null; message_id: string | null; status: string; created_at: number; finished_at: number | null; lore?: string | null;
 }
-export const MAX_HIT = 40;   // one student can deal at most this much damage (all tests passed)
+export const MAX_HIT = 40;
+
+/** The boss's story, told like a tabletop RPG: an intro, a line for each hit ({hero}, {dmg}), half health,
+ *  almost dead, victory, escape. */
+export interface BossLore { intro: string; hits: string[]; bloodied: string; dying: string; victory: string; escape: string }
+export function cleanLore(v: any): BossLore | null {
+  if (!v || typeof v !== "object") return null;
+  const s = (x: unknown, n: number) => (typeof x === "string" ? x.trim().slice(0, n) : "");
+  const lore: BossLore = {
+    intro: s(v.intro, 1500), hits: (Array.isArray(v.hits) ? v.hits : []).map((h: unknown) => s(h, 300)).filter(Boolean).slice(0, 10),
+    bloodied: s(v.bloodied, 600), dying: s(v.dying, 600), victory: s(v.victory, 900), escape: s(v.escape, 600),
+  };
+  return lore.intro || lore.hits.length ? lore : null;
+}
+const loreOf = (b: BossRow): BossLore | null => { try { return b.lore ? cleanLore(JSON.parse(b.lore)) : null; } catch { return null; } };
+const tell = (line: string, hero: string, dmg: number) => line.replace(/\{hero\}/g, hero).replace(/\{dmg\}/g, String(dmg));   // one student can deal at most this much damage (all tests passed)
 
 async function bossDamage(env: Env, id: number) {
   return (await one<{ d: number; n: number }>(env, "SELECT COALESCE(SUM(damage), 0) AS d, COUNT(*) AS n FROM boss_hits WHERE boss_id = ? AND damage > 0", id)) ?? { d: 0, n: 0 };
 }
 
 function bossEmbed(g: GuildRow, b: BossRow, c: ChallengeRow, dmg: number, fighters: number) {
-  const L = g.lang, left = Math.max(0, b.hp - dmg);
+  const L = g.lang, left = Math.max(0, b.hp - dmg), lore = loreOf(b);
   return {
     title: t(L, b.status === "won" ? "boss.title_won" : b.status === "lost" ? "boss.title_lost" : "boss.title", { name: b.name }),
     description: [
+      lore?.intro ? `*${lore.intro.replace(/\*/g, "")}*\n` : "",
       t(L, "boss.hp", { bar: hpBar(left, b.hp), left, max: b.hp }),
       "", t(L, "boss.how", { title: c.title, level: t(L, `diff.${c.difficulty}`), max: MAX_HIT }),
       b.status === "active" ? t(L, "boss.deadline", { end: ts(b.deadline) }) : "",
@@ -132,12 +148,13 @@ function bossEmbed(g: GuildRow, b: BossRow, c: ChallengeRow, dmg: number, fighte
   };
 }
 
-export async function createBoss(env: Env, g: GuildRow, o: { challengeId: number; name: string; hp: number; hours: number; reward: number; coins: number; channelId?: string | null }) {
+export async function createBoss(env: Env, g: GuildRow, o: { challengeId: number; name: string; hp: number; hours: number; reward: number; coins: number; channelId?: string | null; lore?: unknown }) {
   const c = await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ?", o.challengeId);
   if (!c || c.kind !== "write") throw new Error("the boss needs a write-code challenge");
   const channel = o.channelId || (await strictArena(env, g)) || (await arenaChannel(env, g));
-  const r = await run(env, "INSERT INTO bosses (guild_id, challenge_id, name, hp, deadline, reward, coins, channel_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    g.id, c.id, o.name, o.hp, now() + o.hours * 3600, o.reward, o.coins, channel, now());
+  const lore = cleanLore(o.lore);
+  const r = await run(env, "INSERT INTO bosses (guild_id, challenge_id, name, hp, deadline, reward, coins, channel_id, created_at, lore) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    g.id, c.id, o.name, o.hp, now() + o.hours * 3600, o.reward, o.coins, channel, now(), lore ? JSON.stringify(lore) : null);
   const b = (await one<BossRow>(env, "SELECT * FROM bosses WHERE id = ?", Number(r.meta.last_row_id)))!;
   if (channel) {
     const msg = await send(env, channel, { content: t(g.lang, "boss.appears", { name: b.name }), embeds: [bossEmbed(g, b, c, 0, 0)], components: [row(btn(t(g.lang, "boss.fight"), `boss:${b.id}`, 4, "⚔️"))] }) as any;
@@ -155,6 +172,16 @@ export async function bossHit(env: Env, g: GuildRow, bossId: number, userId: str
   if (dmg > prev) await run(env, "INSERT INTO boss_hits (boss_id, discord_id, damage, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (boss_id, discord_id) DO UPDATE SET damage = excluded.damage, updated_at = excluded.updated_at", bossId, userId, dmg, now());
   const tot = await bossDamage(env, bossId);
   const c = (await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ?", b.challenge_id))!;
+  // the story goes on in the channel: the hero's strike, then the boss half dead, almost dead
+  const lore = loreOf(b);
+  if (lore && b.channel_id && dmg > prev && tot.d < b.hp) {
+    const before = tot.d - (dmg - prev);
+    const lines = [lore.hits.length ? `⚔️ ${tell(lore.hits[(tot.n - 1 + lore.hits.length) % lore.hits.length], mention(userId), dmg - prev)}` : ""];
+    if (lore.bloodied && before < b.hp / 2 && tot.d >= b.hp / 2 && tot.d < b.hp * 0.8) lines.push(`🩸 ${lore.bloodied}`);
+    if (lore.dying && before < b.hp * 0.8 && tot.d >= b.hp * 0.8) lines.push(`💀 ${lore.dying}`);
+    lines.push(t(g.lang, "boss.hp", { bar: hpBar(Math.max(0, b.hp - tot.d), b.hp), left: Math.max(0, b.hp - tot.d), max: b.hp }));
+    await send(env, b.channel_id, { content: lines.filter(Boolean).join("\n").slice(0, 1900), allowed_mentions: { parse: [] } }).catch(() => {});
+  }
   if (tot.d >= b.hp) {
     const won = await run(env, "UPDATE bosses SET status = 'won', finished_at = ? WHERE id = ? AND status = 'active'", now(), b.id);
     if (won.meta.changes) {
@@ -165,7 +192,8 @@ export async function bossHit(env: Env, g: GuildRow, bossId: number, userId: str
         await run(env, "UPDATE players SET coins = coins + ? WHERE guild_id = ? AND discord_id = ?", b.coins, g.id, f.discord_id);
       }
       if (b.channel_id) await send(env, b.channel_id, {
-        content: t(g.lang, "boss.defeated", { name: b.name, n: fighters.length, reward: b.reward, coins: b.coins, top: fighters[0] ? mention(fighters[0].discord_id) : "?" }),
+        content: [lore?.victory ? `🏆 *${tell(lore.victory, fighters[0] ? mention(fighters[0].discord_id) : "?", fighters[0]?.damage ?? 0).replace(/\*/g, "")}*` : "",
+          t(g.lang, "boss.defeated", { name: b.name, n: fighters.length, reward: b.reward, coins: b.coins, top: fighters[0] ? mention(fighters[0].discord_id) : "?" })].filter(Boolean).join("\n\n").slice(0, 1900),
         allowed_mentions: pingUsers(fighters.slice(0, 50).map((f) => f.discord_id)),
       }).catch(() => {});
     }
@@ -230,7 +258,8 @@ export async function sweepEvents(env: Env) {
     const c = await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ?", b.challenge_id);
     const tot = await bossDamage(env, b.id);
     if (g && c && b.channel_id) {
-      await send(env, b.channel_id, { content: t(g.lang, "boss.escaped", { name: b.name, left: Math.max(0, b.hp - tot.d), max: b.hp }) }).catch(() => {});
+      const lore = loreOf(b);
+      await send(env, b.channel_id, { content: [lore?.escape ? `💨 *${lore.escape.replace(/\*/g, "")}*` : "", t(g.lang, "boss.escaped", { name: b.name, left: Math.max(0, b.hp - tot.d), max: b.hp })].filter(Boolean).join("\n\n").slice(0, 1900) }).catch(() => {});
       if (b.message_id) await editMessage(env, b.channel_id, b.message_id, { embeds: [bossEmbed(g, { ...b, status: "lost" }, c, tot.d, tot.n)], components: [] }).catch(() => {});
     }
   }

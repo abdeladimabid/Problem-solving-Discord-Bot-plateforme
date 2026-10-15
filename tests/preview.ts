@@ -364,6 +364,30 @@ env.ASSETS = {
   }
 }
 
+// ---------------------------------------------------------- Activités: this week's veilles and live codings, some taken
+{
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const mon = new Date(); mon.setUTCDate(mon.getUTCDate() - ((mon.getUTCDay() + 6) % 7) + 7);
+  const day = (n: number) => { const d = new Date(mon); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+  const subj = ["Sélecteurs DOM modernes", "Gestion des événements", "Formulaires et validation", "Propagation et délégation d'événements", "Bonnes pratiques et débogage"];
+  const insA = db.prepare("INSERT INTO activities (guild_id, day, kind, title, md, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+  const ids: number[] = [];
+  subj.forEach((t, i) => ids.push(Number(insA.run(G, day(i), "veille", t, `# ${t}\n\n## Objectif\nPrésenter ${t} en 30 minutes.`, now).lastInsertRowid)));
+  const live = [Number(insA.run(G, day(1), "live", "Catalogue d'huile d'argan interactif", "# Live coding\n\nUn catalogue filtrable.", now).lastInsertRowid),
+    Number(insA.run(G, day(3), "live", "Gestion du panier dynamique", "# Live coding\n\nUn panier en JavaScript.", now).lastInsertRowid)];
+  for (const id of [...ids, ...live]) db.prepare("INSERT INTO activity_slots (activity_id, guild_id, size, shared_at) VALUES (?, ?, ?, ?)").run(id, G, live.includes(id) ? 1 : 2, now - 3600);
+  db.prepare("UPDATE activity_slots SET level = 'hard' WHERE activity_id = ?").run(ids[3]);
+  const claim = db.prepare("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, grades, points, created_at, decided_at, done_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  claim.run(G, ids[0], "veille", '["100","101"]', "100", "approved", null, null, now - 7200, now - 3600, null);
+  claim.run(G, live[0], "live", '["102"]', "teacher", "approved", null, null, now - 7200, now - 3600, null);
+  claim.run(G, ids[1], "veille", '["103","104"]', "103", "pending", null, null, now - 1800, null, null);
+  claim.run(G, ids[1], "veille", '["106","107"]', "106", "pending", null, null, now - 900, null, null);
+  // last week's, presented and graded
+  const old = Number(insA.run(G, day(-5), "veille", "Le DOM en pratique", "# Le DOM", now).lastInsertRowid);
+  claim.run(G, old, "veille", '["105","108"]', "random", "done", '{"105":100,"108":75}', 20, now - 9 * 86400, now - 9 * 86400, now - 5 * 86400);
+  db.prepare("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`actsign:${G}`, JSON.stringify({ channel: null, veille: 20, live: 40 }), now);
+}
+
 createServer(async (req, res) => {
   // public pages of the bot Worker (shared profile, certificates)
   const chunks: Buffer[] = [];

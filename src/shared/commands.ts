@@ -166,6 +166,21 @@ export const COMMANDS: any[] = [
       },
     ],
   },
+  {
+    name: "activity", description: "Veilles and live codings: pick one to present", description_localizations: fr("Veilles et live codings : choisis-en une à présenter"),
+    options: [
+      { type: SUB, name: "list", description: "The activities still free", description_localizations: fr("Les activités encore libres") },
+      {
+        type: SUB, name: "choose", description: "Ask for an activity (your teacher approves it)", description_localizations: fr("Demander une activité (ton formateur l'approuve)"),
+        options: [
+          { type: STRING, name: "activity", description: "Which activity", description_localizations: fr("Quelle activité"), required: true, autocomplete: true },
+          { type: USER, name: "partner", description: "Your binôme (required for a veille)", description_localizations: fr("Ton binôme (obligatoire pour une veille)") },
+          { type: USER, name: "partner2", description: "A third person, if your teacher allows it", description_localizations: fr("Une troisième personne, si ton formateur l'accepte") },
+        ],
+      },
+      { type: SUB, name: "mine", description: "Your activities and their subject", description_localizations: fr("Tes activités et leur sujet") },
+    ],
+  },
   { name: "league", description: "Class vs class: this week's league table", description_localizations: fr("Classe contre classe : le classement de la semaine") },
   {
     name: "help", description: "Everything the bot can do", description_localizations: fr("Tout ce que le bot sait faire"),

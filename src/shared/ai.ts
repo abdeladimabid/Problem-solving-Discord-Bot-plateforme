@@ -271,7 +271,7 @@ const indent = (body: string) => body.replace(/\r/g, "").split("\n").map((l) => 
 export const makeGen = (body: string, seed: number) => GEN_HEADER.replace("__SEED__", String(seed)) + indent(body);
 
 /** Ask the AI for a full problem, then PROVE it by running its solutions on the code runner. */
-export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic?: string | null; lang: string }): Promise<GeneratedWrite | null> {
+export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic?: string | null; lang: string; quest?: string | null }): Promise<GeneratedWrite | null> {
   const language = o.lang === "fr" ? "French" : "English";
   const limit = o.difficulty === "hard" ? 3 : 2;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -281,6 +281,10 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
       "You design programming problems for a class, in the style of HackerRank / Codeforces: a short story, then precise Input, Output and Constraints sections. Students read stdin and write stdout.",
       `Write the title, statement and hint in ${language}. Use Markdown (**bold** section titles, inline code).`,
       WRITE_LEVEL[o.difficulty],
+      ...(o.quest ? [
+        "This problem is a BOSS BATTLE the whole class fights together, told like a tabletop role-playing game (Dungeons & Dragons): the statement opens as an epic quest, in the second person plural (the heroes of the class), with vivid stakes. The story must explain naturally what the input describes and what to compute, then the **Input**, **Output** and **Constraints** sections stay exact and plain.",
+        `The quest's setting: ${o.quest}`,
+      ] : []),
       "The OUTPUT must be short: one or a few numbers / words (at most 200 characters). Never ask to print an array of n values.",
       "Do NOT include examples in the statement: they are added automatically from the sample tests.",
       "Provide: `reference` = a correct, efficient Python 3 solution reading stdin; `brute` = an obviously-correct slow Python 3 solution (used to check the reference on small inputs); `samples` = 2 small input strings; `small` = 5 small input strings (n <= 8) covering edge cases; `big_gens` = 2 Python function BODIES that build and RETURN a big input string at the maximum constraints. In those bodies use only the helper r(lo, hi) (a seeded random integer in [lo, hi], inclusive) and the standard library; no imports of random.",
@@ -292,7 +296,7 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
       j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 9000, temperature: 0.8, timeoutMs: 150000 });
     } catch { continue; }
     const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
-    const title = s(j?.title, 60), statement = s(j?.statement, 3500), reference = s(j?.reference, 6000), brute = s(j?.brute, 6000);
+    const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500), reference = s(j?.reference, 6000), brute = s(j?.brute, 6000);
     const samples: string[] = Array.isArray(j?.samples) ? j.samples.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 3) : [];
     const small: string[] = Array.isArray(j?.small) ? j.small.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 6) : [];
     const gens: string[] = Array.isArray(j?.big_gens) ? j.big_gens.filter((x: unknown) => typeof x === "string" && x.includes("return")).slice(0, 2) : [];

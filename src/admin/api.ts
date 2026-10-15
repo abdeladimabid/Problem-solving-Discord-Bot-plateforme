@@ -30,7 +30,7 @@ import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../s
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
-import { QUIZ_KINDS, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
+import { QUIZ_KINDS, cleanLore, createBoss, createBounty, createQuiz, quizEnd, quizNext, quizReveal, quizStandings, sweepEvents } from "../shared/events.ts";
 import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
@@ -198,7 +198,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       const n = (v: unknown, lo: number, hi: number, d: number) => Math.min(hi, Math.max(lo, Math.round(Number(v) || d)));
       try {
-        return ok(await createBoss(env, g, { challengeId: Number(body.challenge_id), name: String(body.name ?? "").trim().slice(0, 60) || "The Bug King", hp: n(body.hp, 40, 5000, 200), hours: n(body.hours, 1, 336, 48), reward: n(body.reward, 0, 200, 30), coins: n(body.coins, 0, 500, 20), channelId: body.channel_id || null }));
+        return ok(await createBoss(env, g, { challengeId: Number(body.challenge_id), name: String(body.name ?? "").trim().slice(0, 60) || "The Bug King", hp: n(body.hp, 40, 5000, 200), hours: n(body.hours, 1, 336, 48), reward: n(body.reward, 0, 200, 30), coins: n(body.coins, 0, 500, 20), channelId: body.channel_id || null, lore: body.lore }));
       } catch (e: any) { throw new HttpError(400, e.message); }
     }
     if (path === "/events/ai" && method === "POST") {
@@ -702,7 +702,10 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       // work handed in for a brief whose deadline passed, not debriefed yet
       const db = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM brief_handins h JOIN briefs b ON b.id = h.brief_id
         WHERE h.guild_id = ? AND b.status = 'assigned' AND b.due_at < ? AND NOT EXISTS (SELECT 1 FROM brief_reviews r WHERE r.brief_id = h.brief_id AND r.who = h.who AND r.status = 'final')`, g.id, now());
-      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0 });
+      // presentations: requests to approve, and presentations already held that wait for their grade
+      const pr = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM activity_claims c JOIN activities a ON a.id = c.activity_id
+        WHERE c.guild_id = ? AND (c.status = 'pending' OR (c.status = 'approved' AND a.day <= ?))`, g.id, new Date().toISOString().slice(0, 10)).catch(() => null);
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0 });
     }
     // -------------------------------------------------- ✨ AI generation
     if (path === "/path/lesson-ai" && method === "POST") return ok(await writeLesson(env, await guild(), String(body.skill ?? ""), String(body.hint ?? "")));
@@ -1037,28 +1040,38 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
   const act = await one<{ n: number }>(env, "SELECT COUNT(DISTINCT discord_id) AS n FROM attempts WHERE guild_id = ? AND started_at >= ?", g.id, now() - 14 * 86400);
   const players = Math.max(4, Number(act?.n) || 0);
 
-  // 1. a name, a story line and a precise topic (one small AI call; a plain fallback if it fails)
+  // 1. a name, a story and a precise topic (one AI call; a plain fallback if it fails). A boss is told like a
+  //    tabletop RPG: an intro, a line for each hero's strike, half health, almost dead, victory, escape.
+  const theme = String(b.theme ?? "").trim().slice(0, 300);
+  const lg = lang === "fr" ? "French" : "English";
   let plan: any = null;
   try {
     plan = await chatJson(env, [
-      { role: "system", content: [
-        `You help a programming teacher prepare a class ${boss ? "boss battle (the whole class fights one hard coding problem together)" : "bounty (the first student to solve a problem wins)"}.`,
-        `Write in ${lang === "fr" ? "French" : "English"}. Answer with JSON only: {${boss ? '"name": "a fun boss name, 2-4 words, coding-themed (e.g. The Null Pointer, Lord Segfault)", ' : ""}"topic": "one precise programming topic for the problem, in English, under 12 words", "why": "one sentence for the teacher: what the students will practise"}.`,
+      { role: "system", content: (boss ? [
+        "You are the game master of a class boss battle, told like Dungeons & Dragons: the whole class of programming students are the heroes, the boss is a creature they defeat by solving one coding problem together (every hidden test their code passes is a strike).",
+        `Write in ${lg}, epic and vivid but short, for students aged 18-25; no gore. Answer with JSON only:`,
+        '{"name": "the boss, 2-4 words", "topic": "the programming problem in English, one precise sentence under 20 words (a self-contained problem reading input and printing output; no web, files or libraries)", "setting": "the setting of the quest in English, 1-2 sentences, used to write the problem\'s story", "why": "one sentence for the teacher: what the students practise",',
+        '"intro": "the boss appears: 3-5 sentences that set the scene and call the heroes to battle", "hits": ["6 different one-sentence strike descriptions, each with {hero} (the student) and {dmg} (the damage), varied weapons and spells"], "bloodied": "one or two sentences: the boss is at half health, wounded and furious", "dying": "one or two sentences: the boss is almost dead, staggering; one last push", "victory": "2-3 sentences of glory: the heroes win; {hero} is the one who struck hardest", "escape": "1-2 sentences: the boss escapes into the shadows, promising to return"}',
+      ] : [
+        "You help a programming teacher prepare a class bounty (the first student to solve a problem wins).",
+        `Write in ${lg}. Answer with JSON only: {"topic": "one precise programming topic for the problem, in English, under 12 words", "why": "one sentence for the teacher: what the students will practise"}.`,
         "The topic must fit a self-contained problem that reads input and prints output (no web, no files, no libraries).",
-      ].join("\n") },
-      { role: "user", content: `Difficulty: ${difficulty}. ${skill ? `Skill: ${skill.en}. ` : ""}${idea ? `Teacher's idea: ${idea}` : "No idea given: pick a classic but interesting topic for this level."}` },
-    ], { maxTokens: 300, temperature: 0.9, timeoutMs: 30000 });
+      ]).join("\n") },
+      { role: "user", content: `Difficulty: ${difficulty}. ${skill ? `Skill: ${skill.en}. ` : ""}${boss && theme ? `Theme of the story: ${theme}. ` : ""}${idea ? `Teacher's idea: ${idea}` : boss ? "" : "No idea given: pick a classic but interesting topic for this level."}` },
+    ], { maxTokens: boss ? 1600 : 300, temperature: 0.9, timeoutMs: 45000 });
   } catch { /* the fallback below */ }
   const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : "");
   const NAMES = ["The Bug King", "The Null Pointer", "Lord Segfault", "The Infinite Loop", "The Off-By-One Ogre"];
   const name = str(plan?.name, 60) || NAMES[Math.floor(Math.random() * NAMES.length)];
-  const topic = [skill?.en, str(plan?.topic, 120) || idea].filter(Boolean).join(": ") || null;
+  const topic = [skill?.en, str(plan?.topic, 160) || idea].filter(Boolean).join(": ") || null;
   const why = str(plan?.why, 300);
+  const lore = boss ? cleanLore(plan) : null;
+  const quest = boss ? [theme, str(plan?.setting, 400), lore?.intro ? `The boss: ${name}. ${lore.intro}` : `The boss: ${name}.`].filter(Boolean).join(" ") : null;
 
   // 2. the challenge: written, then checked (write-code runs on the runner) and saved in the bank
   let ch: any;
   if (qtype === "write") {
-    const w = await generateWrite(env, { difficulty, topic, lang });
+    const w = await generateWrite(env, { difficulty, topic, lang, quest });
     if (!w) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
     ch = await saveGeneratedWrite(env, { ...g, lang }, w, difficulty, by, "ai");
   } else {
@@ -1075,7 +1088,7 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
   const lvl = { easy: 0, medium: 1, hard: 2 }[difficulty as "easy" | "medium" | "hard"] ?? 1;
   if (boss) {
     const fighters = Math.max(3, Math.round(players * 0.6)); // about 60% of the active class must hit it
-    return { name, why, challenge, players, fighters, hp: Math.min(5000, fighters * 40), hours: lvl === 2 ? 48 : 24, reward: [15, 25, 40][lvl], coins: [10, 15, 25][lvl] };
+    return { name, why, lore, challenge, players, fighters, hp: Math.min(5000, fighters * 40), hours: lvl === 2 ? 48 : 24, reward: [15, 25, 40][lvl], coins: [10, 15, 25][lvl] };
   }
   return { why, challenge, players, points: [25, 40, 60][lvl], coins: [15, 25, 40][lvl], hours: lvl === 2 ? 48 : 24 };
 }

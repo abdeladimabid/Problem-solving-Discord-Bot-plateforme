@@ -1533,9 +1533,21 @@ section("✨ AI helper for boss battles and bounties");
   check(q1("SELECT status, solution IS NOT NULL AS sol FROM challenges WHERE id = ?", bossAi.data.challenge.id).sol === 1, "the boss's problem was checked and saved with its solution");
   check(bossAi.data.hp === bossAi.data.fighters * 40 && bossAi.data.hp >= 120 && bossAi.data.reward === 40, "health sized to the active class, hard rewards");
   check(ai.users.some((u) => u.includes("a dragon guarding running totals")), "the teacher's idea reaches the AI");
-  const rel = await api("POST", "/api/bosses", { g: G, challenge_id: bossAi.data.challenge.id, name: bossAi.data.name, hp: bossAi.data.hp, hours: bossAi.data.hours, reward: bossAi.data.reward, coins: bossAi.data.coins });
-  check(rel.status === 200, "the AI boss can be released");
-  await api("POST", `/api/bosses/${rel.data.id}/cancel`, { g: G });
+  check(bossAi.data.lore?.intro.includes("Atlas") && bossAi.data.lore.hits.length === 2 && bossAi.data.lore.dying, "the boss comes with its story (intro, strikes, half health, almost dead, victory, escape)");
+  check(ai.prompts.some((p) => p.includes("BOSS BATTLE") && p.includes("tabletop role-playing") && p.includes("cursed vault")), "the problem itself is written as a quest in that story");
+  const pc = discordCalls.length;
+  const rel = await api("POST", "/api/bosses", { g: G, challenge_id: bossAi.data.challenge.id, name: bossAi.data.name, hp: 80, hours: bossAi.data.hours, reward: bossAi.data.reward, coins: bossAi.data.coins, lore: bossAi.data.lore });
+  check(rel.status === 200 && discordCalls.slice(pc).some((c) => JSON.stringify(c.body).includes("Lord Segfault awakens")), "the AI boss is released with its intro in Discord");
+  const EV = await import("../src/shared/events.ts");
+  const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const h0 = discordCalls.length;
+  await EV.bossHit(env, gRow, rel.data.id, U.alice.id, { passed: 1, total: 1 } as any);
+  const told = discordCalls.slice(h0).map((c) => JSON.stringify(c.body)).join(" ");
+  check(told.includes("damage!") && told.includes(`<@${U.alice.id}>`) && told.includes("40") && told.includes("half of his armour"), "a strike is told in the story, and the boss at half health roars");
+  const h1 = discordCalls.length;
+  await EV.bossHit(env, gRow, rel.data.id, U.bob.id, { passed: 1, total: 1 } as any);
+  const won = discordCalls.slice(h1).map((c) => JSON.stringify(c.body)).join(" ");
+  check(won.includes("The vault falls silent") && q1("SELECT status FROM bosses WHERE id = ?", rel.data.id).status === "won", "the victory is told as a glory story");
   const btyAi = await api("POST", `/api/events/ai?g=${G}`, { kind: "bounty", difficulty: "easy", qtype: "mcq" });
   check(btyAi.status === 200 && btyAi.data.challenge?.kind === "mcq" && btyAi.data.points === 25 && !btyAi.data.name, "AI bounty: a new multiple-choice challenge, easy points");
   const post = await api("POST", "/api/bounties", { g: G, challenge_id: btyAi.data.challenge.id, points: btyAi.data.points, coins: btyAi.data.coins, hours: btyAi.data.hours });
@@ -4213,6 +4225,96 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
   const list = await api("GET", `/api/games?g=${G}`);
   check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 4) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
+}
+
+section("🎤 Activités: shared in Discord, /activity choose with a binôme, approved, graded; fair random presenters");
+{
+  run1("UPDATE guilds SET teacher_id = ? WHERE id = ?", U.prof.id, G);
+  const extra = [{ id: "131", name: "Hind", teacher: false }, { id: "132", name: "Ilyas", teacher: false }, { id: "133", name: "Jad", teacher: false }, { id: "134", name: "Kenza", teacher: false }];
+  for (const u of extra) await slash(u, "help");
+  const add = (day: string, kind: string, title: string) => Number(run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at) VALUES (?, ?, ?, ?, ?, ?)", G, day, kind, title, `# ${title}\n\n## Objectif\nPrésenter ${title}.\n\n## Ressources\n- MDN`, clock.now()).lastInsertRowid);
+  const v1 = add("2031-03-03", "veille", "Sélecteurs DOM modernes"), v2 = add("2031-03-04", "veille", "Gestion des événements"), l1 = add("2031-03-04", "live", "Catalogue interactif"), v3 = add("2031-03-05", "veille", "Formulaires et validation");
+  // nothing is open before the teacher shares
+  check(text(await slash(U.alice, "activity", {}, "list")).includes("No activity is open"), "/activity list: nothing before the teacher shares");
+  check((await api("POST", `/api/activities/share?g=${G}`, { ids: [v1, v2, l1] })).status === 400, "sharing needs a channel");
+  const before = discordCalls.length;
+  const sh = await api("POST", `/api/activities/share?g=${G}`, { ids: [v1, v2, l1], channel: "555000111" });
+  check(sh.status === 200 && sh.data.shared === 3 && discordCalls.slice(before).some((c) => c.path === "/channels/555000111/messages" && JSON.stringify(c.body).includes("Sélecteurs DOM modernes")), "teacher shares the activities in the channel chosen");
+  const ls = text(await slash(U.alice, "activity", {}, "list"));
+  check(ls.includes("Gestion des événements") && !ls.includes("Formulaires et validation"), "/activity list: the shared ones only");
+  // a veille needs a binôme
+  await slash(U.alice, "activity", { activity: String(v1) }, "choose");
+  check(JSON.stringify(lastPatch()).includes("binôme"), "a veille without a partner is refused");
+  const dm0 = discordCalls.length;
+  await slash(U.alice, "activity", { activity: String(v1), partner: U.bob.id }, "choose");
+  check(JSON.stringify(lastPatch()).includes("Request sent") && q1("SELECT COUNT(*) AS n FROM activity_claims WHERE activity_id = ? AND status = 'pending'", v1).n === 1, "Alice asks for a veille with Bob: pending");
+  check(discordCalls.slice(dm0).some((c) => c.path === `/channels/dm-${U.prof.id}/messages` && JSON.stringify(c.body).includes("Alice") && JSON.stringify(c.body).includes("veille(s)")), "the teacher gets a DM with each student's count");
+  await slash(U.alice, "activity", { activity: String(v2), partner: U.carol.id }, "choose");
+  check(JSON.stringify(lastPatch()).includes("already have a request waiting"), "one request at a time: no hogging");
+  await slash(U.carol, "activity", { activity: String(v1), partner: U.bob.id }, "choose");
+  check(JSON.stringify(lastPatch()).includes("Bob") || JSON.stringify(lastPatch()).includes(U.bob.id), "the partner already has a request waiting");
+  await slash(U.carol, "activity", { activity: String(v1), partner: extra[0].id }, "choose");
+  const view0 = await api("GET", `/api/activities/signups?g=${G}&from=2031-03-02&to=2031-03-08`);
+  check(view0.data.pending.length === 2 && view0.data.pending[0].members.length === 2, "two requests for the same veille wait for the teacher");
+  // approve one: the other is denied, the subject leaves the list
+  const ok1 = await api("POST", `/api/activities/claims/${view0.data.pending[0].id}/decide?g=${G}`, { approve: true });
+  check(ok1.status === 200 && q1("SELECT status FROM activity_claims WHERE id = ?", view0.data.pending[1].id).status === "denied", "approved; the other request for it is denied");
+  check(discordCalls.some((c) => c.path === `/channels/dm-${U.bob.id}/messages` && JSON.stringify(c.body).includes("approved")), "both presenters get a DM");
+  check(!text(await slash(U.carol, "activity", {}, "list")).includes("Sélecteurs DOM modernes"), "a taken activity isn't listed anymore");
+  await slash(U.carol, "activity", { activity: String(v1), partner: extra[1].id }, "choose");
+  check(JSON.stringify(lastPatch()).includes("already taken"), "nobody else can take it");
+  await slash(U.bob, "activity", {}, "mine");
+  check(JSON.stringify(lastPatch()).includes("Présenter Sélecteurs DOM modernes"), "/activity mine: the subject once it's approved");
+  // the teacher adds a third person, then grades
+  const claim = ok1.data && q1("SELECT id FROM activity_claims WHERE activity_id = ? AND status = 'approved'", v1).id;
+  check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id] })).status === 200, "a third person added to the binôme");
+  check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id, extra[0].id] })).status === 400, "4 people: refused");
+  const pts = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'activity'", id).n;
+  check(pts(U.alice.id) === 0, "no points before the presentation");
+  const gr = await api("POST", `/api/activities/claims/${claim}/grade?g=${G}`, { grades: { [U.alice.id]: 100, [U.bob.id]: 50, [U.carol.id]: 0 }, note: "Clair et bien illustré" });
+  check(gr.status === 200 && pts(U.alice.id) === 20 && pts(U.bob.id) === 10 && pts(U.carol.id) === 0, "graded: points by how well each one presented");
+  await api("POST", `/api/activities/claims/${claim}/grade?g=${G}`, { grades: { [U.alice.id]: 100, [U.bob.id]: 100, [U.carol.id]: 0 } });
+  check(pts(U.bob.id) === 20 && pts(U.alice.id) === 20, "a new grade only adds the difference");
+  check((await api("POST", `/api/activities/claims/${claim}/cancel?g=${G}`)).status === 400, "a graded presentation can't be freed");
+  // a live coding: alone is fine, 3 is too many; it's worth more
+  await slash(extra[2], "activity", { activity: String(l1) }, "choose");
+  check(JSON.stringify(lastPatch()).includes("Request sent"), "a live coding can be led alone");
+  const lc = q1("SELECT id FROM activity_claims WHERE activity_id = ? AND status = 'pending'", l1).id;
+  await api("POST", `/api/activities/claims/${lc}/decide?g=${G}`, { approve: true });
+  await api("POST", `/api/activities/claims/${lc}/grade?g=${G}`, { grades: { [extra[2].id]: 100 } });
+  check(pts(extra[2].id) === 40, "a live coding gives more points (40)");
+  // the teacher assigns by hand, and frees it
+  const asg = await api("POST", `/api/activities/${v2}/assign?g=${G}`, { members: [extra[3].id, extra[1].id] });
+  check(asg.status === 200 && discordCalls.some((c) => c.path === `/channels/dm-${extra[3].id}/messages` && JSON.stringify(c.body).includes("gave you")), "teacher assigns a veille to two students (DM)");
+  check((await api("POST", `/api/activities/${v2}/assign?g=${G}`, { members: [U.alice.id, U.bob.id] })).status === 400, "an assigned activity can't be assigned twice");
+  await api("POST", `/api/activities/claims/${asg.data.id}/cancel?g=${G}`);
+  check(q1("SELECT status FROM activity_claims WHERE id = ?", asg.data.id).status === "cancelled", "freed again");
+  // fairness: counts, behind, random picks the fewest first and keeps hard subjects from Faible / Critique students
+  const st = await api("GET", `/api/activities/stats?g=${G}`);
+  const row = (id: string) => st.data.rows.find((r: any) => r.discord_id === id);
+  check(row(U.alice.id).vDone === 1 && row(extra[2].id).lDone === 1 && row(extra[0].id).total === 0 && row(extra[0].id).behind === (st.data.avg >= 0.5), "who presented what; nobody is 'behind' while the class average is under one half");
+  const bid = Number(run1("INSERT INTO briefs (guild_id, title, status, data, kind, created_at) VALUES (?, 'Zz last', 'assigned', '{}', 'solo', ?)", G, 9e9).lastInsertRowid);
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, level, status) VALUES (?, ?, ?, '{}', 'faible', 'final')", bid, G, `u:${extra[0].id}`);
+  await api("PUT", `/api/activities/${v3}/slot?g=${G}`, { level: "hard" });
+  let neverHard = true, filled = true;
+  for (let i = 0; i < 12; i++) {
+    const rp = await api("POST", `/api/activities/random?g=${G}`, { ids: [v2, v3] });
+    const hard = rp.data.plan.find((p: any) => p.activity_id === v3), easy = rp.data.plan.find((p: any) => p.activity_id === v2);
+    if (hard.members.includes(extra[0].id)) neverHard = false;
+    if (hard.members.length !== 2 || easy.members.length !== 2 || hard.members.some((m: string) => easy.members.includes(m) && false)) filled = false;
+  }
+  check(neverHard && filled, "random: a hard subject never goes to a Faible student; each veille gets a binôme");
+  const rp = await api("POST", `/api/activities/random?g=${G}`, { ids: [v2] });
+  const fewest = Math.min(...st.data.rows.map((r: any) => r.veille));
+  check(rp.data.plan[0].members.every((m: string) => row(m).veille === fewest), "random: the students with the fewest veilles first");
+  check((await api("PUT", `/api/activities/${l1}/slot?g=${G}`, { size: 3 })).status === 400, "a live coding: 2 people at most");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id = ?", bid);
+  // deleting the activity frees its requests
+  await slash(extra[1], "activity", { activity: String(v2), partner: extra[3].id }, "choose");
+  await api("DELETE", `/api/activities/${v2}?g=${G}`);
+  check(q1("SELECT COUNT(*) AS n FROM activity_claims WHERE activity_id = ? AND status IN ('pending', 'approved')", v2).n === 0, "a deleted activity takes its requests with it");
+  const pg = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
+  check(pg.status === 200, "student page still fine");
 }
 
 section("slash command definitions are valid for Discord");

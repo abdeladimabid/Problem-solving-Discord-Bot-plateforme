@@ -27,6 +27,7 @@ import { pickForSkill } from "../shared/coach.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
+import { activityChoices, cmdActivity } from "./actcmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
 import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
 import {
@@ -111,6 +112,7 @@ async function command(ix: Ix): Promise<Response> {
     case "interview": return cmdInterview(ix, (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
     case "github": return cmdGithub(ix);
     case "brief": return cmdBrief(ix, sub ?? "list", o);
+    case "activity": return cmdActivity(ix, sub ?? "list", o);
     case "league": return cmdLeague(ix);
     case "profile": return cmdProfile(ix, o.member ?? ix.userId);
     case "leaderboard": return cmdLeaderboard(ix, o.board ?? "season");
@@ -1077,6 +1079,8 @@ async function autocomplete(ix: Ix): Promise<Response> {
     names = [...set];
   } else if (ix.raw.data.name === "brief") {
     return json({ type: 8, data: { choices: await briefChoices(ix, cur) } });
+  } else if (ix.raw.data.name === "activity") {
+    return json({ type: 8, data: { choices: await activityChoices(ix, cur) } });
   } else if (ix.raw.data.name === "contest" || ix.raw.data.name === "teacher") {
     names = (await activeContests(ix.env, ix.guild.id)).map((c) => c.slug);
   }
