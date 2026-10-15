@@ -333,6 +333,76 @@ function genForSkillDialog(skill, level = "medium", after = null) {
   } }]);
 }
 
+/**
+ * ✨ Many challenges at once: the skills, levels and types picked are mixed in turn, one challenge per request
+ * (each is written AND checked like a single one), with the progress shown and a Stop button.
+ */
+function bulkGenerateDialog(done = null) {
+  const skills = (S.skillDefs || []).filter((d) => !NO_AI_SKILLS.includes(d.key));
+  const lang = (S.guild?.code_lang || "python").split(",")[0];
+  const chips = (name, list, on) => `<div class="chips bulk-chips" data-bulk="${name}">${list.map(([v, l]) => `<button type="button" class="chip" data-v="${esc(v)}" aria-pressed="${on.includes(v)}">${esc(l)}</button>`).join("")}</div>`;
+  let stop = false, running = false;
+  openDialog("✨ Generate challenges in bulk", `
+    <p class="muted small" style="margin-top:0">The AI writes them one after the other and <b>checks each one before it's saved</b> (like a single challenge). Write code takes up to 2 minutes each, the other types about one: keep this window open. You can stop at any time; what's done stays.</p>
+    <label>Skills <span class="muted">(none = any skill of the class)</span></label>
+    ${chips("skill", skills.map((d) => [d.key, `${d.emoji} ${d.en}`]), [])}
+    <label>Levels</label>${chips("level", Object.entries(DIFF), ["medium"])}
+    <label>Types</label>${chips("kind", Object.entries(GEN_KINDS), ["write", "mcq"])}
+    <div class="field-row">
+      <div><label for="bk-n">How many in all</label><select id="bk-n">${[5, 10, 15, 20, 30].map((n) => `<option ${n === 10 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+      <div><label for="bk-topic">Focus <span class="muted">(optional)</span></label><input type="text" id="bk-topic" maxlength="120" placeholder="e.g. arrays of objects"></div>
+    </div>
+    <p class="small muted">Code in <b>${esc(LANG[lang] || lang)}</b>, the class's language. Skills that can't run on the judge (React, Express…) get multiple choice and find-the-bug instead.</p>
+    <div class="bulk-prog" id="bk-prog" hidden><div class="pbar"><i id="bk-bar" style="width:0"></i></div><span class="small" id="bk-st"></span></div>
+    <div id="bk-log" class="small bulk-log"></div>`,
+  // the run isn't awaited by the button (the dialog would disable it): the same button then stops it
+  [{ label: "Close", action: () => { stop = true; dlg.close(); } }, { label: "✨ Generate", primary: true, action: () => { if (running) { stop = true; return; } run(); } }]);
+  const run = async () => {
+    const pick = (name) => $$(`[data-bulk="${name}"] [aria-pressed="true"]`, dlg).map((b) => b.dataset.v);
+    const sk = pick("skill"), lv = pick("level"), kd = pick("kind");
+    if (!lv.length || !kd.length) return toast("Pick at least one level and one type", true);
+    const n = Number($("#bk-n", dlg).value), topic = $("#bk-topic", dlg).value;
+    // the plan: every (skill, level, type) in turn, shuffled skills so a short run still mixes them
+    const sks = sk.length ? sk.sort(() => Math.random() - 0.5) : [null];
+    const plan = [];
+    for (let i = 0; plan.length < n && i < n * 4; i++) {
+      const skill = sks[i % sks.length], level = lv[Math.floor(i / sks.length) % lv.length], kind0 = kd[i % kd.length];
+      const kind = skill && NO_RUN_SKILLS.includes(skill) && !["mcq", "bug"].includes(kind0) ? (i % 2 ? "bug" : "mcq") : kind0;
+      plan.push({ skill, level, kind });
+    }
+    running = true; stop = false;
+    const go = $('[data-b="1"]', dlg);
+    if (go) go.textContent = "■ Stop";
+    $$(".bulk-chips button, #bk-n, #bk-topic", dlg).forEach((x) => (x.disabled = true));
+    const log = $("#bk-log", dlg), st = $("#bk-st", dlg), bar = $("#bk-bar", dlg);
+    $("#bk-prog", dlg).hidden = false;
+    let made = 0, failed = 0, inRow = 0;
+    for (let i = 0; i < plan.length && !stop && dlg.open; i++) {
+      const p = plan[i];
+      st.textContent = `${i + 1}/${plan.length} · ${made} saved${failed ? ` · ${failed} failed` : ""}`;
+      bar.style.width = `${Math.round((100 * i) / plan.length)}%`;
+      log.insertAdjacentHTML("afterbegin", `<div id="bk-${i}">⏳ ${esc(GEN_KINDS[p.kind] || p.kind)} · ${esc(DIFF[p.level])}${p.skill ? ` · ${esc(skillLabel(p.skill))}` : ""}…</div>`);
+      try {
+        const r = await api("/ai/challenge", { method: "POST", body: { skill: p.skill, difficulty: p.level, kind: p.kind, code_lang: lang, topic } });
+        made++; inRow = 0;
+        $(`#bk-${i}`, dlg).innerHTML = `✅ ${esc(r.challenge.title)} ${diffTag(r.challenge.difficulty)} <span class="muted">${esc(KIND[r.challenge.kind] || r.challenge.kind)}</span>`;
+      } catch (e) {
+        failed++; inRow++;
+        $(`#bk-${i}`, dlg).innerHTML = `⚠️ ${esc(GEN_KINDS[p.kind] || p.kind)}${p.skill ? ` · ${esc(skillLabel(p.skill))}` : ""}: ${esc(e.message)}`;
+        if (/budget|unreachable/i.test(e.message)) { log.insertAdjacentHTML("afterbegin", `<div class="notice warn">Stopped: ${esc(e.message)}</div>`); break; }
+        if (inRow >= 4) { log.insertAdjacentHTML("afterbegin", `<div class="notice warn">Stopped after 4 failures in a row: the AI seems busy or limited. Try again later (what's done is saved).</div>`); break; }
+      }
+    }
+    bar.style.width = "100%";
+    st.textContent = `${stop ? "Stopped · " : "Done · "}${made} saved${failed ? ` · ${failed} failed` : ""}`;
+    running = false;
+    if (go) go.textContent = "✨ Generate";
+    $$(".bulk-chips button, #bk-n, #bk-topic", dlg).forEach((x) => (x.disabled = false));
+    if (made) { toast(`${made} new challenge${made > 1 ? "s" : ""} added to the bank`); if (done) done(); }
+  };
+  $$(".bulk-chips button", dlg).forEach((b) => b.onclick = () => b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true")));
+}
+
 // ======================================================= path & lessons
 async function viewPathPage() {
   const d = await api("/path");

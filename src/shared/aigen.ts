@@ -6,7 +6,7 @@
 // plus how many challenges the bank has for each skill and level.
 import type { ChallengeRow, Difficulty, Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all } from "./db.ts";
-import { chat, extractJson, generateQuick, generateWrite } from "./ai.ts";
+import { chat, extractJson, generateQuick, generateWrite, whyWriteFailed } from "./ai.ts";
 import { bankExamples, guildLangs, pickGuildLang, saveGeneratedQuick, saveGeneratedWrite } from "./challenges.ts";
 import { SKILLS, guessSkills, setSkills, skillsOf } from "./skills.ts";
 import { LANGS, RunnerUnavailable, runOnce } from "./runner.ts";
@@ -74,7 +74,7 @@ export async function challengeForSkill(env: Env, g: GuildRow, o: { skill?: stri
   try {
     if (o.kind === "write") {
       const w = await generateWrite(env, { difficulty, topic, lang: g.lang });
-      if (!w) throw new GenError("The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+      if (!w) throw new GenError(`The AI couldn't produce a problem that passed its own checks: ${whyWriteFailed()}. Try again.`);
       c = await saveGeneratedWrite(env, g, w, difficulty, "ai", "ai");
     } else {
       const codeLang = o.codeLang && guildLangs(g).includes(o.codeLang) ? o.codeLang : pickGuildLang(g);

@@ -155,7 +155,7 @@ const modelProblem = (e: unknown) => e instanceof AiCallError && (e.status === 4
 // ------------------------------------------------------------ calling one AI
 export class AiCallError extends Error { status: number; constructor(msg: string, status = 0) { super(msg); this.status = status; } }
 
-async function callStep(s: Step, messages: Msg[], o: ChatOpts, model = s.model): Promise<string> {
+export async function callStep(s: Step, messages: Msg[], o: ChatOpts, model = s.model): Promise<string> {
   const timeout = o.timeoutMs ?? 90000;
   if (PRESETS[s.type]?.anthropic) {
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n") + (o.json ? "\n\nAnswer with one JSON object only." : "");
@@ -175,6 +175,15 @@ async function callStep(s: Step, messages: Msg[], o: ChatOpts, model = s.model):
   // some models refuse JSON mode, max_tokens or temperature: try again with the basics
   if (res.status === 400 && o.json) res = await send(full(false));
   if (res.status === 400) res = await send(JSON.stringify({ model, messages, max_completion_tokens: o.maxTokens }));
+  // "Request too large … tokens per minute (TPM): Limit 6000, Requested 10500": the same request, asking for fewer tokens
+  if (res.status === 413 || res.status === 429) {
+    const body = await res.clone().text().catch(() => "");
+    const lim = body.match(/Limit\s*:?\s*(\d+)[^0-9]+Requested\s*:?\s*(\d+)/i);
+    if (lim && /token/i.test(body)) {
+      const fit = o.maxTokens - (Number(lim[2]) - Number(lim[1])) - 300;
+      if (fit >= 1500) res = await send(JSON.stringify({ model, messages, max_tokens: fit, temperature: o.temperature, ...reasoning, ...(o.json ? { response_format: { type: "json_object" } } : {}) }));
+    }
+  }
   if (!res.ok) throw new AiCallError(await errText(res), res.status);
   return pick(await res.json());
 }

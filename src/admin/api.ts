@@ -6,7 +6,7 @@ import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
 import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
-import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite } from "../shared/ai.ts";
+import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite, whyWriteFailed } from "../shared/ai.ts";
 import { bankExamples, guildLangs, loadTests, pickGuildLang, regrade, saveGeneratedWrite } from "../shared/challenges.ts";
 import { stopContest, trackContest, trackingEmbed } from "../shared/contests.ts";
 import { fetchChallenge, hackerrankHealth, parseChallengeSlug } from "../shared/hackerrank.ts";
@@ -384,7 +384,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (body.kind === "write") {
           // checked on the runner, then saved (the tests are part of the problem)
           const w = await generateWrite(env, { difficulty, topic: body.topic || null, lang });
-          if (!w) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+          if (!w) throw new HttpError(503, `The AI couldn't produce a problem that passed its own checks: ${whyWriteFailed()}. Try again.`);
           const c = await saveGeneratedWrite(env, { ...g, lang }, w, difficulty, user.email, "ai");
           if (skill && c) await setSkills(env, c.id, [skill.key]);
           return ok({ saved: true, challenge: c });
@@ -1151,7 +1151,7 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
   if (qtype === "write") {
     const w = await generateWrite(env, { difficulty, topic, lang, quest });
     if (!w) {
-      if (!boss) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+      if (!boss) throw new HttpError(503, `The AI couldn't produce a problem that passed its own checks: ${whyWriteFailed()}. Try again.`);
       // no checked problem from the AI: a ready-made boss instead (same skill if there is one), so the battle can still start
       const pick = BOSS_BANK.filter((x) => x.skill === skill?.key);
       const pool = pick.length ? pick : BOSS_BANK.filter((x) => x.difficulty === difficulty).length ? BOSS_BANK.filter((x) => x.difficulty === difficulty) : BOSS_BANK;
