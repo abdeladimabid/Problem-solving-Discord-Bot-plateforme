@@ -351,7 +351,10 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
-      if (sys.includes("You help a programming teacher prepare a class")) return { response: JSON.stringify({ name: sys.includes("boss battle") ? "Lord Segfault" : undefined, topic: "running totals with prefix sums", why: "They practise prefix sums on a real input." }) };
+      if (sys.includes("You help a programming teacher prepare a class")) return { response: JSON.stringify({ topic: "running totals with prefix sums", why: "They practise prefix sums on a real input." }) };
+      if (sys.includes("game master of a class boss battle")) return { response: JSON.stringify({ name: "Lord Segfault", topic: "running totals with prefix sums", setting: "A cursed vault under the Atlas.", why: "They practise prefix sums on a real input.",
+        intro: "Deep under the Atlas, the vault trembles. Lord Segfault awakens, hungry for your memory. Heroes, draw your keyboards!", hits: ["{hero} casts a loop of fire: {dmg} damage!", "{hero} strikes with a sharp index: {dmg} damage!"],
+        bloodied: "Lord Segfault roars, half of his armour in pieces.", dying: "Lord Segfault staggers: one last strike!", victory: "The vault falls silent. {hero} landed the mightiest blow.", escape: "Lord Segfault slips into the shadows... for now." }) };
       if (sys.includes("see what a student really built")) {
         const sha = (user.match(/^([0-9a-f]{7}) \|/m) || [])[1] || "abc1234";
         return { response: JSON.stringify({ overview: "Built the contact page step by step.", repos: [{ repo: "carol/site", features: [{ title: "Contact form with validation", commits: [sha], status: "done" }] }],

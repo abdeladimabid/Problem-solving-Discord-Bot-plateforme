@@ -107,7 +107,7 @@ const codeView = (a) => {
 const ORIGIN = { practice: "Practice", daily: "Daily", assignment: "Assignment", duel: "Duel", session: "Class session", plan: "Daily plan", path: "Path", exam: "Exam", bounty: "Bounty", boss: "Boss battle" };
 const STATUS = { review: "Waiting for review", solved: "Solved", claimed: "Self-reported", failed: "Failed", expired: "Not finished", pending: "In progress", done: "Done", late: "Done late", missed: "Missed", open: "Open", active: "Live", finished: "Finished", cancelled: "Cancelled", flagged: "Reported", archived: "Archived" };
 const TREND = { up: "↑ improving", down: "↓ slipping", flat: "→ steady", inactive: "⏸ inactive", new: "✦ new" };
-const REASON = { plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
+const REASON = { activity: "Presentation", plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
 const diffTag = (d) => `<span class="tag ${esc(d)}">${esc(DIFF[d] || d)}</span>`;
 const status = (s, label) => `<span class="status ${esc(s)}">${esc(label || STATUS[s] || s)}</span>`;
 const trend = (t) => `<span class="trend ${esc(t)}">${esc(TREND[t] || t)}</span>`;
@@ -2403,34 +2403,53 @@ async function quizDialog() {
 async function eventDialog(kind) {
   await Promise.all([loadDiscord(), loadChallenges(), loadSkillDefs()]);
   const boss = kind === "boss";
-  const st = boss ? { name: "The Bug King", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
-  const ai = { open: false, idea: "", difficulty: boss ? "hard" : "medium", skill: "", qtype: "write", why: "" };
+  const st = boss ? { name: "", hp: "200", hours: "48", reward: "30", coins: "20", ch: "", c: null, lore: null } : { points: "40", coins: "30", hours: "24", ch: "", c: null };
+  // a boss is always forged by the AI (its story and its quest); a bounty can come from the bank or the AI
+  const ai = { open: boss, idea: "", theme: "", difficulty: boss ? "hard" : "medium", skill: "", qtype: "write", why: "", bank: false };
   const ids = boss ? ["name", "hp", "hours", "reward", "coins", "ch"] : ["points", "coins", "hours", "ch"];
   const save = () => {
-    ids.forEach((k) => (st[k] = $(`#ev-${k}`, dlg).value));
-    if (ai.open) ["idea", "difficulty", "skill", "qtype"].forEach((k) => { const el = $(`#ea-${k}`, dlg); if (el) ai[k] = el.value; });
+    ids.forEach((k) => { const el = $(`#ev-${k}`, dlg); if (el) st[k] = el.value; });
+    ["idea", "theme", "difficulty", "skill", "qtype"].forEach((k) => { const el = $(`#ea-${k}`, dlg); if (el) ai[k] = el.value; });
+    const intro = $("#ev-intro", dlg);
+    if (intro && st.lore) st.lore.intro = intro.value;
   };
   const skillOpts = () => `<option value="">Any skill</option>${(S.skillDefs || []).filter((d) => !["sql", "regex", "git"].includes(d.key)).map((d) => `<option value="${d.key}" ${ai.skill === d.key ? "selected" : ""}>${esc(d.emoji + " " + d.en)}</option>`).join("")}`;
   const aiPanel = () => ai.open ? `
       <div class="ev-ai">
-        <label for="ea-idea">Your idea <span class="muted">(optional: a theme, a concept, a story)</span></label>
-        <input type="text" id="ea-idea" style="width:100%" maxlength="300" value="${esc(ai.idea)}" placeholder="${boss ? "e.g. a dragon that guards a maze: shortest path in a grid" : "e.g. something on dictionaries and counting"}">
+        ${boss ? `<label for="ea-theme">The story's theme <span class="muted">(optional: a world, a place, a legend)</span></label>
+        <input type="text" id="ea-theme" style="width:100%" maxlength="300" value="${esc(ai.theme)}" placeholder="e.g. a dragon sleeping under the Atlas mountains, a haunted Riad in Marrakech, a pirate ship">` : ""}
+        <label for="ea-idea">${boss ? "What they must code" : "Your idea"} <span class="muted">(optional: ${boss ? "a concept, e.g. shortest path in a grid, prefix sums" : "a theme, a concept, a story"})</span></label>
+        <input type="text" id="ea-idea" style="width:100%" maxlength="300" value="${esc(ai.idea)}" placeholder="${boss ? "e.g. counting with dictionaries" : "e.g. something on dictionaries and counting"}">
         <div class="field-row">
           <div><label for="ea-difficulty">Difficulty</label><select id="ea-difficulty">${Object.entries(DIFF).map(([k, v]) => `<option value="${k}" ${ai.difficulty === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>
           <div><label for="ea-skill">Skill</label><select id="ea-skill">${skillOpts()}</select></div>
           ${boss ? "" : `<div><label for="ea-qtype">Type</label><select id="ea-qtype">${[["write", "Write code"], ["mcq", "Multiple choice"], ["output", "Predict the output"], ["bug", "Find the bug"], ["complexity", "Complexity"]].map(([k, v]) => `<option value="${k}" ${ai.qtype === k ? "selected" : ""}>${v}</option>`).join("")}</select></div>`}
         </div>
-        <p class="toolbar" style="margin:4px 0 0"><button type="button" class="btn primary small" id="ea-go">✨ Create it with AI</button>
-          <span class="muted small">${boss ? "The AI names the boss, writes a new write-code problem, runs it on its tests, and sizes the health and rewards to your class." : "The AI writes a new challenge, checks it, and suggests points and coins for its difficulty."}</span></p>
+        <p class="toolbar" style="margin:4px 0 0"><button type="button" class="btn primary small" id="ea-go">${boss ? (st.c ? "⚔️ Forge another boss" : "⚔️ Forge the boss with AI") : "✨ Create it with AI"}</button>
+          <span class="muted small">${boss ? "The AI writes the boss and its story like a role-playing game, then the problem as a quest. It runs the problem on its tests, then sizes the health and rewards to your class." : "The AI writes a new challenge, checks it, and suggests points and coins for its difficulty."}</span></p>
       </div>` : "";
+  const story = () => {
+    if (!boss || !st.lore) return "";
+    const L = st.lore;
+    return `<label for="ev-intro">The boss appears <span class="muted">(posted in Discord, you can change it)</span></label>
+      <textarea id="ev-intro" style="width:100%;min-height:96px">${esc(L.intro || "")}</textarea>
+      <details class="ev-lore"><summary>How the battle is told in Discord</summary>
+        <ul class="small">${(L.hits || []).map((h) => `<li>⚔️ ${esc(h)}</li>`).join("")}
+        ${L.bloodied ? `<li>🩸 <b>Half health:</b> ${esc(L.bloodied)}</li>` : ""}${L.dying ? `<li>💀 <b>Almost dead:</b> ${esc(L.dying)}</li>` : ""}
+        ${L.victory ? `<li>🏆 <b>Victory:</b> ${esc(L.victory)}</li>` : ""}${L.escape ? `<li>💨 <b>If it escapes:</b> ${esc(L.escape)}</li>` : ""}</ul>
+        <p class="small muted">{hero} becomes the student who strikes, {dmg} the damage.</p></details>`;
+  };
   const open = () => {
+    const bossReady = !boss || st.c;
     openDialog(boss ? "New boss battle" : "New bounty", `
-      <p class="toolbar" style="margin:0 0 6px"><button type="button" class="btn small" id="ev-ai">${ai.open ? "Hide the AI helper" : "✨ Help me with AI"}</button></p>
+      ${boss ? "" : `<p class="toolbar" style="margin:0 0 6px"><button type="button" class="btn small" id="ev-ai">${ai.open ? "Hide the AI helper" : "✨ Help me with AI"}</button></p>`}
       ${aiPanel()}
       ${ai.why ? `<p class="notice small">💡 ${esc(ai.why)}</p>` : ""}
-      ${boss ? `<label for="ev-name">Boss name</label><input type="text" id="ev-name" style="width:100%" maxlength="60" value="${esc(st.name)}">` : ""}
-      <label>Challenge</label>
-      <p class="toolbar" style="margin:0">${st.c ? `<span class="chip">${esc(st.c.title)} ${diffTag(st.c.difficulty)}</span>` : `<span class="muted small">None yet.</span>`}<button type="button" class="btn small" id="ev-pick">${st.c ? "Change" : "Choose"}</button></p>
+      ${boss && !st.c && !ai.bank ? "" : `
+      ${boss ? `<label for="ev-name">Boss name</label><input type="text" id="ev-name" style="width:100%" maxlength="60" value="${esc(st.name || "The Bug King")}">` : ""}
+      ${story()}
+      <label>${boss ? "The quest" : "Challenge"}</label>
+      <p class="toolbar" style="margin:0">${st.c ? `<span class="chip">${esc(st.c.title)} ${diffTag(st.c.difficulty)}</span>` : `<span class="muted small">None yet.</span>`}${boss && !ai.bank ? "" : `<button type="button" class="btn small" id="ev-pick">${st.c ? "Change" : "Choose"}</button>`}</p>
       <div class="field-row">
         ${boss ? `<div><label for="ev-hp">Health (HP)</label><input type="number" id="ev-hp" min="40" max="5000" value="${esc(st.hp)}"></div>` : ""}
         <div><label for="ev-hours">${boss ? "Hours to beat it" : "Hours open (empty = no limit)"}</label><input type="number" id="ev-hours" min="1" max="720" value="${esc(st.hours)}"></div>
@@ -2440,33 +2459,38 @@ async function eventDialog(kind) {
         <div><label for="ev-coins">Coins ${boss ? "for each fighter" : "for the winner"}</label><input type="number" id="ev-coins" min="0" max="500" value="${esc(st.coins)}"></div>
       </div>
       <label for="ev-ch">Post in</label><select id="ev-ch" style="width:100%"><option value="">#arena (automatic)</option>${channelOptions(st.ch)}</select>
-      <p class="muted small">${boss ? `One student deals at most 40 damage, so ${Math.ceil(Number(st.hp) / 40) || 5}+ students must solve it (or get close) to win. Pick a hard write-code challenge.` : "The first correct solution wins. Pick any challenge solved in Discord."}</p>`,
-    [{ label: boss ? "Release the boss" : "Post the bounty", primary: true, action: async () => {
+      <p class="muted small">${boss ? `One student deals at most 40 damage, so ${Math.ceil(Number(st.hp) / 40) || 5}+ students must solve it (or get close) to win.` : "The first correct solution wins. Pick any challenge solved in Discord."}</p>`}
+      ${boss && !st.c ? `<p class="small" style="margin-top:10px"><button type="button" class="linkish" id="ev-bank">${ai.bank ? "Back to the AI" : "Or use a write-code challenge from the bank"}</button></p>` : ""}`,
+    bossReady || ai.bank ? [{ label: boss ? "Release the boss" : "Post the bounty", primary: true, action: async () => {
       save();
-      if (!st.c) throw new Error("Choose a challenge");
+      if (!st.c) throw new Error(boss ? "Forge the boss first" : "Choose a challenge");
       await api(boss ? "/bosses" : "/bounties", { method: "POST", body: { ...st, challenge_id: st.c.id, channel_id: st.ch || null, c: undefined } });
       dlg.close();
       toast(boss ? "The boss is in #arena" : "Bounty posted");
       viewEvents();
-    } }]);
-    $("#ev-pick", dlg).onclick = async () => { save(); const c = await pickChallengeDialog("Choose a challenge", { kinds: boss ? ["write"] : ["write", "mcq", "output", "bug", "complexity", "sql", "regex"] }); if (c) st.c = c; open(); };
-    $("#ev-ai", dlg).onclick = () => { save(); ai.open = !ai.open; open(); };
+    } }] : []);
+    const pick = $("#ev-pick", dlg);
+    if (pick) pick.onclick = async () => { save(); const c = await pickChallengeDialog("Choose a challenge", { kinds: boss ? ["write"] : ["write", "mcq", "output", "bug", "complexity", "sql", "regex"] }); if (c) { st.c = c; st.lore = null; } open(); };
+    const tog = $("#ev-ai", dlg);
+    if (tog) tog.onclick = () => { save(); ai.open = !ai.open; open(); };
+    const bank = $("#ev-bank", dlg);
+    if (bank) bank.onclick = () => { save(); ai.bank = !ai.bank; ai.open = !ai.bank; open(); };
     const go = $("#ea-go", dlg);
     if (go) go.onclick = () => busy(go, async () => {
       save();
-      go.textContent = "⏳ Writing and testing… (up to 2 min)";
+      go.textContent = boss ? "⏳ Forging the boss and testing its quest… (up to 2 min)" : "⏳ Writing and testing… (up to 2 min)";
       try {
-        const r = await api("/events/ai", { method: "POST", body: { kind, idea: ai.idea, difficulty: ai.difficulty, skill: ai.skill || undefined, qtype: ai.qtype } });
+        const r = await api("/events/ai", { method: "POST", body: { kind, idea: ai.idea, theme: ai.theme, difficulty: ai.difficulty, skill: ai.skill || undefined, qtype: ai.qtype } });
         st.c = r.challenge;
         st.hours = String(r.hours ?? st.hours); st.coins = String(r.coins);
-        if (boss) { st.name = r.name; st.hp = String(r.hp); st.reward = String(r.reward); }
+        if (boss) { st.name = r.name; st.hp = String(r.hp); st.reward = String(r.reward); st.lore = r.lore || null; ai.bank = false; }
         else st.points = String(r.points);
         ai.why = [r.why, boss ? `Sized for ${r.players} active students: about ${r.fighters} of them must hit it.` : ""].filter(Boolean).join(" ");
-        ai.open = false;
+        ai.open = boss;
         await loadChallenges(true).catch(() => {});
         open();
         toast(`"${r.challenge.title}" is ready: check the settings, then ${boss ? "release the boss" : "post the bounty"}`);
-      } finally { if (go.isConnected) go.textContent = "✨ Create it with AI"; }
+      } finally { if (go.isConnected) go.textContent = boss ? "⚔️ Forge the boss with AI" : "✨ Create it with AI"; }
     });
   };
   open();
