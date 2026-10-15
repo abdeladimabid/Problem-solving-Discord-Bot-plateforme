@@ -598,7 +598,7 @@ function assignBriefDialog() {
     <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (in #general)</label>`,
     [{ label: b.status === "assigned" ? "Save" : "Assign", primary: true, action: async () => {
       const keep = squads.filter((x) => x.members.length);
-      if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Random squads, or load the class squads).");
+      if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Balanced squads, or load the class squads).");
       await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...(live && live !== d.modalities.mode ? { data: { ...d, modalities: { ...d.modalities, mode: live } } } : {}) } });
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Assigned to the class"); renderBrief();

@@ -314,7 +314,7 @@ async function countsFor(env: Env, gid: string): Promise<Map<string, Count>> {
   return m;
 }
 /** The students' last debrief level (Faible / Critique matter for random picks). */
-async function levelsOf(env: Env, g: GuildRow): Promise<Map<string, string>> {
+export async function levelsOf(env: Env, g: GuildRow): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   try {
     const P = await progressView(env, g);
