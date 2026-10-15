@@ -4241,10 +4241,24 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const bobView = await r.play("state", dev(2));
   check(bobView.data.me.alive === false && bobView.data.last.out === true, "Bob sees he's out");
   check((await r.play("revive", dev(3), { target: U.bob.id })).status === 409, "a player can only bring back their own squad");
+  check((await r.play("plea", dev(1), {})).status === 409, "only a player who is out can ask to be brought back");
+  const plq = await r.play("plea", dev(2), {});
+  const av = await r.play("state", dev(1));
+  check(plq.status === 200 && plq.data.pleas.includes(U.bob.id) && av.data.pleas.includes(U.bob.id) && !(await r.play("state", dev(3))).data.pleas.length, "🙏 Bob asks his squad to bring him back: Alice sees it, the other squad doesn't");
   const rb = await r.play("revive", dev(1), { target: U.bob.id });
   check(rb.status === 200 && rb.data.pts === 0 && rb.data.squad.mates.find((m: any) => m.pid === U.bob.id).alive, "Alice spends her squad's point: Bob is back");
   check((await r.play("revive", dev(1), { target: U.bob.id })).status === 409, "…once");
-  await r.tv("act", { a: "next" });
+  check(!(await r.play("state", dev(1))).data.pleas.length, "brought back: the plea is gone");
+  // the next question by itself: a pause long enough to read and bring a teammate back, the teacher can hold it
+  check(rv.data.nextAt - rv.data.now >= 6000 && rv.data.nextAt - rv.data.now <= 20000 && (await r.play("state", dev(1))).data.nextAt === rv.data.nextAt, "after the answer: the next question comes by itself in 6-20 s (shown on the TV and the phones)");
+  const hold = await r.tv("act", { a: "hold" });
+  clock.advance(30);
+  check(hold.data.paused && (await r.tv("state")).data.phase === "reveal", "⏸ Pause: it waits as long as the teacher wants");
+  const resm = await r.tv("act", { a: "hold" });
+  check(!resm.data.paused && resm.data.nextAt - resm.data.now <= 4100, "▶ Resume: the next question 4 s later");
+  clock.advance(5);
+  const auto = await r.tv("state");
+  check(auto.data.phase === "question" && auto.data.step === 2, "…then the next question by itself, without clicking");
   clock.advance(4);
   const qi2 = JSON.parse(q1("SELECT state FROM games WHERE id = ?", R.data.id).state).order[1];
   for (const k of [1, 2, 3]) await r.play("answer", dev(k), { step: 2, choice: (qs[qi2].answer + 1) % 4 });   // everyone wrong
@@ -4266,6 +4280,13 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   await r.tv("act", { a: "stop" }).catch(() => null);
   const again = await r.tv("act", { a: "reset" });
   check(again.data.phase === "lobby" && again.data.players.length === 4 && again.data.players.every((p: any) => p.alive), "play again: the same players, everyone back");
+  // reuse the game from the dashboard: change the squads, remove one player, free everyone
+  const chq = await api("PUT", `/api/games/${R.data.id}/squads?g=${G}`, { squads: [{ name: "Nord", members: [U.alice.id, U.carol.id] }, { name: "Sud", members: [U.bob.id] }] });
+  check(chq.status === 200 && chq.data.squads.map((x: any) => x.name).join() === "Nord,Sud" && chq.data.live.players.find((p: any) => p.pid === U.carol.id).squad === 0 && chq.data.live.players.find((p: any) => p.pid === "104").squad === 1, "other squads: the players already in are moved (one in none goes to the smallest)");
+  const rmv = await api("POST", `/api/games/${R.data.id}/remove?g=${G}`, { pid: "104" });
+  check(rmv.status === 200 && !rmv.data.live.players.some((p: any) => p.pid === "104") && (await r.join(4, "104")).status === 200, "remove one player (not banned: their link lets them back in)");
+  const clr = await api("POST", `/api/games/${R.data.id}/clear?g=${G}`, {});
+  check(clr.status === 200 && clr.data.live.players.length === 0 && clr.data.live.phase === "lobby" && (await r.play("state", dev(1))).status === 403 && clr.data.content.questions.length === 5, "free all the players: an empty lobby with the same questions; the old phones are sent to Discord");
 
   // ---------------------------------------------------------------- 🕵️ sql, solo
   const Q = await api("POST", `/api/games?g=${G}`, { kind: "sql", mode: "solo", settings: { caseId: "cafe", hintPenalty: 60, wrongPenalty: 120, reward: 10 } });
@@ -4406,7 +4427,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const rt = await rg.tv("act", { a: "runtests" });
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
   const list = await api("GET", `/api/games?g=${G}`);
-  check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 4) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
+  check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 0) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
 
 section("🎤 Activités: shared in Discord, /activity choose with a binôme, approved, graded; fair random presenters");
