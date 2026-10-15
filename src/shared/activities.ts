@@ -464,13 +464,53 @@ export function weekComps(weeks: ProgramWeek[]): string[] {
   return out;
 }
 /** One week of the programme for the prompts: objective, concepts, competencies, technologies. Never a brief. */
+// ------------------------------------------------------------------ the week's objectives: the sprint's, divided over its weeks
+const STOP = new Set("avec dans pour une des les aux sur par son ses leur leurs cette ainsi entre plus tout tous toutes être faire selon côté type types base bases moderne modernes web site sites application applications interface interfaces projet données".split(" "));
+const words = (t: string) => new Set(t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").split(/[^a-z0-9+#.]+/).filter((x) => x.length >= 4 && !STOP.has(x)));
+/** The sprint's objectives (its "objectives", else the bullets of its "situation"), one per line. */
+export function sprintObjectives(sp: ProgramSprint | null | undefined): string[] {
+  const src = (sp?.objectives || "").trim() || (sp?.situation || "").trim();
+  return src.split(/\n+/).map((x) => x.replace(/^\s*(?:[•\-*–·]|\d+[.)])\s*/, "").trim()).filter((x) => x.length > 3);
+}
+/**
+ * The objectives of a programme week: the sprint's own objectives, divided over the sprint's weeks — each one goes
+ * to the week whose title and concepts speak of it (in order when nothing tells them apart). Nothing is invented:
+ * the week's "objective" column of a planning (often the brief's project) is not used.
+ */
+export function weekObjectives(p: Program, w: ProgramWeek): string[] {
+  const sp = p.sprints.find((x) => x.n === w.sprint);
+  const obj = sprintObjectives(sp);
+  if (!sp || !obj.length) return [];
+  const sw = p.weeks.filter((x) => x.sprint === sp.n && x.kind === "brief").sort((a, b) => a.n - b.n);
+  if (sw.length <= 1) return obj;
+  const vocab = sw.map((x) => words(`${x.title}\n${x.concepts}`));
+  const score = (o: string, k: number) => { let n = 0; for (const t of words(o)) if (vocab[k].has(t)) n++; return n; };
+  const of: number[][] = sw.map(() => []);
+  obj.forEach((o, i) => {
+    const by = sw.map((_, k) => score(o, k));
+    const best = Math.max(...by);
+    const near = Math.min(sw.length - 1, Math.floor((i * sw.length) / obj.length));   // its place in the list
+    const k = best > 0 ? (by[near] === best ? near : by.indexOf(best)) : near;
+    of[k].push(i);
+  });
+  // a week left with nothing: the objective that speaks of it the most (shared with its first week)
+  sw.forEach((_, k) => {
+    if (of[k].length) return;
+    const by = obj.map((o, i) => [score(o, k), -Math.abs(Math.floor((i * sw.length) / obj.length) - k)] as const);
+    let bi = 0; by.forEach((b, i) => { if (b[0] > by[bi][0] || (b[0] === by[bi][0] && b[1] > by[bi][1])) bi = i; });
+    of[k].push(bi);
+  });
+  const me = sw.findIndex((x) => x.n === w.n);
+  return me < 0 ? obj : of[me].sort((a, b) => a - b).map((i) => obj[i]);
+}
+
 export function programmeBlock(p: Program, w: ProgramWeek): string {
   const sp = p.sprints.find((x) => x.n === w.sprint);
   const comps = [...w.competencies, ...w.soft].map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; });
   const tech = techOfWeek(w);
   return [
     `SEMAINE ${w.n} DU PROGRAMME (${w.start} → ${w.end})${sp ? `, sprint ${sp.n} « ${sp.title} »` : ""}`,
-    w.objective ? `Objectif de la semaine : ${w.objective}` : "",
+    (() => { const o = weekObjectives(p, w); return o.length ? `Objectifs de la semaine (ceux du sprint pour cette semaine : la semaine poursuit UNIQUEMENT ceux-là, n'en invente pas d'autres et ne parle d'aucun projet) :\n${o.map((x) => "- " + x).join("\n")}` : ""; })(),
     w.concepts ? `Concepts et exigences techniques :\n${w.concepts}` : "",
     comps.length ? `Compétences visées (chaque activité en fait pratiquer au moins une) : ${comps.join(", ")}` : "",
     sp && sp.tech.length + sp.soft.length ? `Compétences du sprint : ${weekComps([{ competencies: sp.tech, soft: sp.soft } as ProgramWeek]).join(", ")}` : "",
@@ -482,7 +522,7 @@ export function programmeBlock(p: Program, w: ProgramWeek): string {
 // ------------------------------------------------------------------ markdown (the template)
 export interface WeekLabels { sprint: string; comps: string[]; objective: string }
 export function weekLabels(p: Program, f: WeekFacts): WeekLabels {
-  const obj = f.weeks.map((w) => w.objective).filter(Boolean).join(" Puis : ");
+  const obj = [...new Set(f.weeks.flatMap((w) => weekObjectives(p, w)))].map((x) => x.replace(/[.;\s]+$/, "")).join(" ; ");
   return {
     sprint: f.sprint ? `sprint ${f.sprint.n} « ${f.sprint.title} »` : "",
     comps: weekComps(f.weeks),
@@ -506,7 +546,7 @@ export function renderWeek(pl: WeekPlan, f: WeekFacts, lb: WeekLabels, titles: {
   const points = [...notes, ...pl.points];
   return [
     "## Analyse de la semaine", "",
-    [head, lb.objective ? `Objectif : ${lb.objective}` : "", pl.resume].filter(Boolean).join(" "), "",
+    [head, lb.objective ? `Objectifs (sprint) : ${lb.objective}.` : "", pl.resume].filter(Boolean).join(" ").replace(/\.\./g, "."), "",
     "| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Progression attendue (programme) |",
     "| --- | --- | --- | --- |",
     ...rows, "",
@@ -567,7 +607,7 @@ Règles communes :
 - Liens : uniquement des pages dont tu es CERTAIN qu'elles existent, en français d'abord, sur ces sites seulement : ${SITES}. N'invente jamais d'URL.
 Réponds UNIQUEMENT avec un objet JSON, sans texte autour.`;
 
-const PLAN_SHAPE = `{"resume": "1 phrase : l'enjeu de la semaine pour les apprenants",
+const PLAN_SHAPE = `{"resume": "1 phrase : l'enjeu de la semaine pour les apprenants, à partir de ses objectifs ci-dessus (aucun nouvel objectif, aucun projet)",
  "jours": [{"date": "AAAA-MM-JJ", "veille": "titre court de la veille (un concept du programme)", "focus": "ce qu'elle couvre (1 phrase)", "progression": "la notion du programme que la classe doit atteindre à la fin du jour, avec la compétence visée (ex. Sélectionner et modifier le DOM — C4N1)", "live": "titre du live coding (le concept pratiqué, pas un client), seulement les jours avec live coding, sinon \\"\\"", "live_focus": "ce qu'on construit pour pratiquer le concept (1 phrase), sinon \\"\\""}],
  "besoins": [{"besoin": "ce dont les apprenants auront besoin cette semaine (une notion du programme)", "ou": "où c'est couvert (ex. Veille Lun 12/10, LC1)"}],
  "hors_perimetre": ["notion de la semaine suivante à ne pas exiger"],
@@ -760,7 +800,7 @@ export async function activitiesView(env: Env, g: GuildRow, from: string, to: st
     const f = weekFacts(p, monday, from, to, saved ? parse(saved.data, {}).live ?? null : null, ov);
     return {
       monday, from: f.from, to: f.to, work: f.work, live: f.live, closing: f.closing,
-      weeks: f.weeks.map((w) => ({ n: w.n, start: w.start, end: w.end, kind: w.kind, sprint: w.sprint, objective: w.objective, concepts: w.concepts, competencies: w.competencies, soft: w.soft,
+      weeks: f.weeks.map((w) => ({ n: w.n, start: w.start, end: w.end, kind: w.kind, sprint: w.sprint, objective: weekObjectives(p, w).join(" · "), concepts: w.concepts, competencies: w.competencies, soft: w.soft,
         tech: techOfWeek(w), stack: STACKS[stackOf(techOfWeek(w))].label })),
       sprint: f.sprint ? { n: f.sprint.n, title: f.sprint.title } : null,
       // the weekdays of the range without activity, and why
