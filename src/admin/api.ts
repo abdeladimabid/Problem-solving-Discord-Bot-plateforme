@@ -44,7 +44,7 @@ import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appsettings.ts";
-import { SquadError, createSquadSet, deleteSquadSet, pendingBuddies, squadSets, updateSquadSet } from "../shared/squads.ts";
+import { SquadError, createSquadSet, deleteSquadSet, notifySquads, pendingBuddies, sentAt, squadSets, updateSquadSet } from "../shared/squads.ts";
 import { LeagueError, addRemote, compareClasses, leagueLink, leagueOf, leagueTable, refreshRemotes, remoteRows, removeRemote, setLeague, weekStart } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
 import { standings } from "../shared/db.ts";
@@ -494,7 +494,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       // each student's last debrief level, so balanced squads mix the levels
       const sview = async () => {
         const lv = await levelsOf(env, g);
-        return { sets: await squadSets(env, g), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => x.id !== g.teacher_id || lv.has(x.id)).map((x) => ({ id: x.id, name: x.name || x.id, lv: lv.get(x.id) || null })) };
+        const sets = await squadSets(env, g), sent = await sentAt(env, sets.map((x) => x.id));
+        return { sets: sets.map((x) => ({ ...x, sent_at: sent[x.id] ?? null })), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => x.id !== g.teacher_id || lv.has(x.id)).map((x) => ({ id: x.id, name: x.name || x.id, lv: lv.get(x.id) || null })) };
       };
       try {
         if (path === "/squads" && method === "GET") return ok(await sview());
@@ -502,6 +503,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         const sm = path.match(/^\/squads\/(\d+)$/);
         if (sm && method === "PUT") { await updateSquadSet(env, g, Number(sm[1]), body); return ok(await sview()); }
         if (sm && method === "DELETE") { await deleteSquadSet(env, g, Number(sm[1])); return ok(await sview()); }
+        const nm = path.match(/^\/squads\/(\d+)\/notify$/);
+        if (nm && method === "POST") return ok({ ...(await notifySquads(env, g, Number(nm[1]), body.note, Number.isInteger(body.only) ? body.only : null)), ...(body.last === false ? {} : await sview()) });
       } catch (e) { if (e instanceof SquadError) throw new HttpError(400, e.message); throw e; }
     }
     /** The squads of the class: the squad sets (current first), then each brief's squads (latest first). */

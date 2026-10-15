@@ -32,7 +32,7 @@ async function viewActivities() {
   ACT.month = ACT.month || actToday().slice(0, 7);
   view.innerHTML = `
     <div class="page-head"><div><h1>Activités</h1>
-      <p class="sub">The daily <b>veilles</b> (09:15 · 30 min) and <b>live codings</b> (11:00 · 45 min) of a period, written from the programme, the sprint and the briefs of those days, in the format of the YouCode template.</p></div>
+      <p class="sub">The daily <b>veilles</b> (09:15 · 30 min) and <b>live codings</b> (11:00 · 45 min) of a period, written from the programme of those days (week, sprint, objective, concepts, competencies), in the format of the YouCode template. The same for every class of the programme, whatever brief it runs.</p></div>
       <div class="toolbar" style="margin:0"><span id="ac-lib"></span><a class="btn" href="#/presentations">🎤 Presentations</a><button class="btn" id="ac-this">This week</button><button class="btn" id="ac-next">Next week</button></div></div>
     <div class="act-top">
       <section class="panel act-cal" id="ac-cal" aria-label="Calendar"><div class="skeleton" style="height:320px"></div></section>
@@ -178,14 +178,14 @@ function actSummary() {
   }
   const W = ACT.sel.weeks, work = W.reduce((n, w) => n + w.work.length, 0), lives = W.reduce((n, w) => n + (ACT.live[w.monday] || []).length, 0);
   const off = ACT.sel.days.filter((d) => d.dow <= 5 && d.kind !== "work").length;
-  const todo = actTasks(false).filter((t) => t.kind !== "week").length, saved = (ACT.sel.items || []).filter((i) => i.kind !== "week").length;
+  const tasks = actTasks(false), todo = tasks.filter((t) => t.kind !== "week").length, plans = tasks.length - todo, saved = (ACT.sel.items || []).filter((i) => i.kind !== "week").length;
   box.innerHTML = `<div class="panel act-range">
     <div class="panel-head"><h2>${esc(actDate(ACT.from))} → ${esc(actDate(ACT.to))}</h2><button class="btn small" id="ac-clear">Clear</button></div>
     <p class="small muted act-count">${work} working day${work === 1 ? "" : "s"} · ${work} veille${work === 1 ? "" : "s"} · ${lives} live coding${lives === 1 ? "" : "s"}${off ? ` · ${off} weekday${off === 1 ? "" : "s"} without activity` : ""}${saved ? ` · <b>${saved} saved</b>` : ""}</p>
     ${ACT.sel.ai ? "" : `<div class="notice warn small" style="margin-bottom:12px"><b>No AI is set up.</b> Add a key in Settings → AI keys (free with Groq or Gemini) to generate.</div>`}
     <div class="act-wks">${W.map(actWeekCard).join("")}</div>
     ${work ? `<div class="toolbar act-go">
-      ${todo ? `<button class="btn primary" id="ac-gen">✨ ${saved ? `Generate the ${todo} missing` : `Generate ${todo} activit${todo === 1 ? "y" : "ies"}`}</button>` : ""}
+      ${tasks.length ? `<button class="btn primary" id="ac-gen">✨ ${!todo ? (plans > 1 ? "Plan the weeks" : "Plan the week") : saved ? `Generate the ${todo} missing` : `Generate ${todo} activit${todo === 1 ? "y" : "ies"}`}</button>` : ""}
       ${saved ? `<button class="btn" id="ac-regen">↻ Regenerate all</button><button class="btn" id="ac-dl">${icon("download")} Download .md</button>` : ""}
       <button class="btn danger" id="ac-stop" hidden>Stop</button><span class="small muted" id="ac-prog" role="status"></span></div>` : ""}
   </div>`;
@@ -198,30 +198,31 @@ function actSummary() {
   $$("[data-lc]", box).forEach((b) => b.onclick = () => actToggleLive(b.dataset.w, b.dataset.lc));
   if (ACT.running) actButtons(true);
 }
+/** A week of the period, from the programme only (the classes of a programme run different briefs, same concepts). */
 function actWeekCard(w) {
   const sp = w.sprint, pw = w.weeks;
   const reason = !w.work.length ? (ACT.sel.days.find((d) => d.day >= w.from && d.day <= w.to && d.dow <= 5) || {}).label || "No working day" : "";
   const comps = [...new Set(pw.flatMap((x) => [...x.competencies, ...x.soft]))];
+  const tech = [...new Set(pw.flatMap((x) => x.tech || []))];
   const live = ACT.live[w.monday] || [];
   const days = Array.from({ length: 5 }, (_, i) => actAdd(w.monday, i));
-  const pub = w.briefs.length ? w.briefs.map((b) => `<a href="#/brief/${b.id}">${esc(b.title)}</a> ${status(b.status === "assigned" ? "active" : b.status, STATUS[b.status])}`).join(" · ") : `<span class="muted">none published in the app</span>`;
   return `<div class="act-wk" style="--sp:${spColor(sp?.n)}">
     <div class="act-wk-h"><b>Week of ${esc(actDate(w.monday, { day: "numeric", month: "short" }))}</b>
-      ${pw.map((x) => `<span class="tag">S${x.n}</span>`).join(" ")}
+      ${pw.map((x) => `<span class="tag" title="Week ${x.n} of the programme">S${x.n}</span>`).join(" ")}
       ${sp ? `<span class="act-sprint" title="${esc(sp.title)}">Sprint ${sp.n} · ${esc(sp.title)}</span>` : ""}</div>
     ${reason ? `<p class="small muted" style="margin:6px 0 0">${esc(reason)}: no activity this week.</p>` : `
     <dl class="act-facts small">
-      <dt>Brief</dt><dd>${pw.map((x) => (x.brief ? `<b>Brief ${x.brief}</b> · ${esc(x.title)}` : `<span class="act-nob">No brief</span> · ${esc(x.title)}`)).join("<br>")}</dd>
-      <dt>In the app</dt><dd>${pub}</dd>
-      <dt>Mode</dt><dd>${esc([...new Set(pw.map((x) => x.mode))].join(", "))}</dd>
-      <dt>Code</dt><dd>${esc([...new Set(pw.map((x) => x.stack))].join(", "))}</dd>
+      ${pw.some((x) => x.objective) ? `<dt>Objective</dt><dd data-notr>${pw.map((x) => `${pw.length > 1 ? `<b>S${x.n}</b> ` : ""}${esc(x.objective || "—")}`).join("<br>")}</dd>` : ""}
       ${comps.length ? `<dt>Competencies</dt><dd>${comps.map((c) => compChip(c, /^T|^CT/i.test(c) ? "soft" : "")).join(" ")}</dd>` : ""}
-      <dt>Out of scope</dt><dd>${w.next ? `S${w.next.n}${w.next.brief ? ` · brief ${w.next.brief}` : ""} · ${esc(w.next.title)}` : "—"}</dd>
+      ${tech.length ? `<dt>Technologies</dt><dd>${tech.map((t) => `<span class="tag">${esc(t)}</span>`).join(" ")}</dd>` : ""}
+      <dt>Code</dt><dd>${esc([...new Set(pw.map((x) => x.stack))].join(", "))}</dd>
+      ${w.off.length ? `<dt>No activity</dt><dd>${w.off.map((d) => `<span class="act-off k-${esc(d.kind)}">${esc(actDate(d.day))} · <span data-notr>${esc(d.label)}</span></span>`).join("<br>")}</dd>` : ""}
+      <dt>Out of scope</dt><dd>${w.next ? `S${w.next.n} of the programme (from ${esc(actDate(w.next.start, { day: "numeric", month: "short" }))})` : "—"}</dd>
     </dl>
-    ${pw.some((x) => x.concepts) ? `<details class="small act-concepts"><summary>Concepts &amp; exigences techniques</summary>${pw.map((x) => `<div>${pw.length > 1 ? `<b>S${x.n}</b>` : ""}<p>${esc(x.concepts)}</p></div>`).join("")}</details>` : ""}
+    ${pw.some((x) => x.concepts) ? `<details class="small act-concepts"><summary>Concepts &amp; exigences techniques</summary>${pw.map((x) => `<div>${pw.length > 1 ? `<b>S${x.n}</b>` : ""}<p data-notr>${esc(x.concepts)}</p></div>`).join("")}</details>` : ""}
     <div class="act-lc"><span class="small muted">Live coding 11:00</span>
       ${days.map((d) => { const on = live.includes(d), ok = w.work.includes(d); return `<button type="button" class="act-lcd" data-w="${w.monday}" data-lc="${d}" aria-pressed="${on}" ${ok ? "" : `disabled data-off="1"`} title="${esc(actDate(d))}">${ACT_WD[actDow(d)]}</button>`; }).join("")}</div>`}
-    ${w.notes.length ? `<ul class="act-notes small">${w.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+    ${w.notes.length ? `<ul class="act-notes small" data-notr>${w.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
   </div>`;
 }
 async function actToggleLive(monday, day) {
@@ -314,7 +315,6 @@ async function actOne(kind, day) {
   const it = actItem(kind, day);
   if (it?.edited && !(await askConfirm("Replace your edits?", "This item was changed by hand: regenerating writes it again from the programme.", "Regenerate"))) return;
   const w = ACT.sel.weeks.find((x) => x.monday === actMonday(day));
-  if (kind !== "week" && !actItem("week", actMonday(day))) { toast("Generate the week's plan first (✨ Generate).", true); return; }
   const key = actKey(kind, day);
   ACT.running = true;
   actButtons(true);
@@ -334,6 +334,82 @@ async function actOne(kind, day) {
   }
 }
 
+// ================================================================ Regenerate from the teacher's proposal
+// quick requests added to the proposal (French: they go to the AI as they are)
+const ACT_CHIPS = ["plus simple", "plus pratique", "un exemple concret", "ajouter un piège à montrer", "moins de théorie", "plus de code à taper"];
+/** Step 1: the teacher's proposal (the last one is there again); step 2: the new version next to the current one. */
+function actPropose(kind, day, text = null, st = null) {
+  if (ACT.running) return;
+  const it = actItem(kind, day), label = kind === "live" ? "live coding" : "veille";
+  const S = st || { mode: it ? "new" : "same", theme: "" };
+  openDialog(`Regenerate this ${label}`, `
+    <p class="small muted" style="margin-top:0">${esc(actDate(day, { weekday: "long", day: "numeric", month: "long" }))} · ${esc(KIND_LABEL[kind])}</p>
+    <div class="act-cur"><span class="small muted">Now</span><b data-notr>${esc(it?.title || "—")}</b></div>
+    ${it ? `<div class="act-modes" role="radiogroup" aria-label="What to write">
+      <button type="button" class="act-mode" data-mode="new" aria-pressed="${S.mode === "new"}"><b>🔀 A different ${label}</b><span>A new subject and a new title. Give your theme, or let the AI pick one.</span></button>
+      <button type="button" class="act-mode" data-mode="same" aria-pressed="${S.mode === "same"}"><b>✍️ Same subject, rewritten</b><span>Keeps the title above and writes the content again.</span></button>
+    </div>` : ""}
+    <div id="ap-themebox" ${S.mode === "new" ? "" : "hidden"}><label for="ap-th">Your theme or title <span class="muted">(optional)</span></label>
+    <input type="text" id="ap-th" maxlength="200" style="width:100%" value="${esc(S.theme)}" placeholder="e.g. les événements clavier, un mini quiz en JavaScript, la délégation d'événements…"></div>
+    <label for="ap-t">Details <span class="muted">(optional)</span></label>
+    <textarea id="ap-t" rows="5" maxlength="1500" placeholder="What it should contain: the notions, an example to use, a mistake to show, a level…">${esc(text ?? it?.proposal ?? "")}</textarea>
+    <div class="act-chips" data-notr>${ACT_CHIPS.map((c) => `<button type="button" class="act-lcd act-chip" data-chip="${esc(c)}">+ ${esc(c)}</button>`).join("")}</div>
+    <p class="small muted">The AI follows your proposal, within the template and the programme of the week (nothing from a later week). You see the new version before it replaces the current one.</p>
+    <p class="small act-status" id="ap-st" role="status" hidden></p>`,
+  [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: () => generate() }]);
+  const ta = $("#ap-t", dlg), th = $("#ap-th", dlg);
+  $$("[data-mode]", dlg).forEach((b) => b.onclick = () => {
+    S.mode = b.dataset.mode;
+    $$("[data-mode]", dlg).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#ap-themebox", dlg).hidden = S.mode !== "new";
+    if (S.mode === "new") th.focus();
+  });
+  $$("[data-chip]", dlg).forEach((b) => b.onclick = () => {
+    const v = ta.value.trim();
+    ta.value = v ? `${v}${/[.,;:!?]$/.test(v) ? "" : ","} ${b.dataset.chip}` : b.dataset.chip.charAt(0).toUpperCase() + b.dataset.chip.slice(1);
+    ta.focus();
+  });
+  (S.mode === "new" && th ? th : ta).focus();
+  const generate = async () => {
+    const proposal = ta.value.trim(), st = $("#ap-st", dlg);
+    S.theme = th ? th.value.trim() : "";
+    ta.disabled = true; st.hidden = false; st.classList.remove("wait"); st.textContent = "Writing…";
+    try {
+      // one call; the AI's per-minute limit is waited out here too
+      for (let i = 0; i < 4; i++) {
+        const r = await api("/activities/item", { method: "POST", body: { day, kind, proposal, preview: true, ...(it ? { mode: S.mode, theme: S.mode === "new" ? S.theme : "" } : {}) } });
+        if (r.draft) return actCompare(kind, day, r.draft, proposal, S);
+        st.classList.add("wait");
+        for (let s = r.retryIn || 20; s > 0 && dlg.open; s--) { st.textContent = `AI per-minute limit: trying again in ${s} s`; await actSleep(1000); }
+        if (!dlg.open) return;
+        st.classList.remove("wait"); st.textContent = "Writing…";
+      }
+      throw new Error("The AI is still busy: try again in a minute.");
+    } finally { if (ta.isConnected) { ta.disabled = false; st.hidden = true; } }
+  };
+}
+function actCompare(kind, day, draft, proposal, st = null) {
+  const it = actItem(kind, day), label = kind === "live" ? "live coding" : "veille";
+  openDialog(`New ${label}: compare`, `
+    ${draft.ecarte.length ? `<div class="notice warn small" style="margin-bottom:10px"><b>Left out of your proposal</b> (not in the programme yet at this point): <span data-notr>${draft.ecarte.map(esc).join(" · ")}</span></div>` : ""}
+    ${draft.warnings.length ? `<details class="act-warn small" style="margin-bottom:10px"><summary>What doesn't follow the template yet</summary><ul data-notr>${draft.warnings.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p class="muted">Replace it and edit it by hand, or go back to your proposal.</p></details>` : ""}
+    ${it?.edited ? `<p class="small late-wait" style="margin-top:0">The current version was edited by hand: Replace drops your edits.</p>` : ""}
+    <div class="act-cmp">
+      <div><span class="act-kind k-${kind}">New version</span><div class="act-md act-scroll" data-emoji data-notr>${actMd(draft.md)}</div></div>
+      ${it ? `<div><span class="act-kind">Current version</span><div class="act-md act-scroll" data-emoji data-notr>${actMd(it.md)}</div></div>` : ""}
+    </div>`,
+  [{ label: "← My proposal", action: () => actPropose(kind, day, proposal, st) },
+    { label: it ? "Keep the old one" : "Cancel", action: () => dlg.close() },
+    { label: "Replace", primary: true, action: async () => {
+      await api("/activities/item/keep", { method: "POST", body: { day, kind, data: draft.data, proposal, model: draft.model } });
+      dlg.close();
+      await actLoadSel();
+      actLoadMonth();
+      toast(draft.warnings.length ? `Replaced, with ${draft.warnings.length} point${draft.warnings.length > 1 ? "s" : ""} to check` : "Replaced");
+    } }]);
+  dlg.classList.add("wide");
+}
+
 // ================================================================ results: a Monday → Friday timeline per week
 function actResults() {
   const box = $("#ac-out");
@@ -351,7 +427,7 @@ function actResults() {
         const info = ACT.sel.days.find((x) => x.day === d) || {};
         const work = info.kind === "work", live = (ACT.live[w.monday] || []).includes(d);
         return `<div class="act-day${work ? "" : " off"}">
-          <div class="act-dl"><b>${ACT_WD[actDow(d)]}</b><span>${esc(actDate(d, { day: "numeric", month: "short" }))}</span>${w.submission.includes(d) ? `<span class="tag" title="The brief is handed in tonight">submission</span>` : ""}</div>
+          <div class="act-dl"><b>${ACT_WD[actDow(d)]}</b><span>${esc(actDate(d, { day: "numeric", month: "short" }))}</span>${w.closing.includes(d) ? `<span class="tag" title="Last day of the programme week: a lighter veille">end of week</span>` : ""}</div>
           <div class="act-cards">${work ? actCard("veille", d) + (live ? actCard("live", d) : "") : `<p class="small muted act-offtxt">${esc(info.label || ACT_KIND[info.kind] || "")}</p>`}</div></div>`;
       }).join("")}</div></section>`;
   }).join("");
@@ -385,7 +461,7 @@ function actCard(kind, day) {
       </div>`)}
     ${job?.state === "error" ? `<p class="act-err small">${esc(job.text)}</p>` : ""}
     ${warn.length ? `<details class="act-warn small"><summary>What doesn't follow the template yet</summary><ul>${warn.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p class="muted">Edit it by hand, or regenerate it.</p></details>` : ""}
-    <div class="act-body"${open ? "" : " hidden"}><div class="act-md" data-emoji>${actMd(it.md)}</div></div>
+    <div class="act-body"${open ? "" : " hidden"}><div class="act-md" data-emoji data-notr>${actMd(it.md)}</div></div>
   </article>`;
 }
 function actWire() {
@@ -395,6 +471,7 @@ function actWire() {
     const [kind, day] = card.dataset.key.split(":");
     $$("[data-a]", card).forEach((b) => b.onclick = () => {
       const it = actItem(kind, day), a = b.dataset.a;
+      if (a === "regen" && kind !== "week") return actPropose(kind, day);
       if (a === "gen" || a === "regen") return actOne(kind, day);
       if (a === "copy") return copyText(it.md, `${kind === "week" ? "Overview" : kind === "live" ? "Live coding" : "Veille"} copied`);
       if (a === "toggle") {
@@ -412,15 +489,20 @@ function actWire() {
 function actEdit(card, it) {
   const body = $(".act-body", card);
   body.hidden = false;
-  body.innerHTML = `<textarea class="act-edit" spellcheck="true" aria-label="Markdown">${esc(it.md)}</textarea>
-    <div class="toolbar" style="margin:8px 0 0"><button class="btn small primary" data-e="save">Save</button><button class="btn small" data-e="cancel">Cancel</button><span class="small muted">Markdown, as it will be copied.</span></div>`;
-  const ta = $("textarea", body);
+  const titled = it.kind !== "week";
+  body.innerHTML = `${titled ? `<label class="small" for="ae-t-${it.id}" style="margin-top:0">Title</label><input type="text" class="act-edit-t" id="ae-t-${it.id}" maxlength="140" value="${esc(it.title || "")}" data-notr>` : ""}
+    <label class="small" for="ae-b-${it.id}">${titled ? "Content" : "Overview"}</label>
+    <textarea class="act-edit" id="ae-b-${it.id}" spellcheck="true" aria-label="Markdown" data-notr>${esc(it.md)}</textarea>
+    <div class="toolbar" style="margin:8px 0 0"><button class="btn small primary" data-e="save">Save</button><button class="btn small" data-e="cancel">Cancel</button><span class="small muted">Markdown, as it will be copied.${titled ? " The title follows in the heading, the week's overview and the next Regenerate." : ""}</span></div>`;
+  const ta = $("textarea", body), ti = $(".act-edit-t", body);
   ta.style.height = Math.min(700, Math.max(260, ta.scrollHeight + 8)) + "px";
-  ta.focus();
+  (ti || ta).focus();
   $("[data-e='cancel']", body).onclick = () => { card.outerHTML = actCard(it.kind, it.day); actWire(); };
   $("[data-e='save']", body).onclick = (e) => busy(e.currentTarget, async () => {
-    const r = await api(`/activities/${it.id}`, { method: "PUT", body: { md: ta.value } });
+    if (ti && !ti.value.trim()) { ti.focus(); throw new Error("Give it a title"); }
+    const r = await api(`/activities/${it.id}`, { method: "PUT", body: { md: ta.value, ...(ti ? { title: ti.value } : {}) } });
     ACT.sel.items = ACT.sel.items.map((x) => (x.id === it.id ? r.item : x));
+    if (ti && ti.value.trim() !== it.title) { await actLoadSel(); actLoadMonth(); toast("Saved"); return; }
     card.outerHTML = actCard(it.kind, it.day).replace("<div class=\"act-body\" hidden>", "<div class=\"act-body\">");
     actWire();
     toast("Saved");

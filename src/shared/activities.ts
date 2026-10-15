@@ -1,11 +1,14 @@
 // Activités: the daily veilles (09:15, 30 min) and the live codings (11:00, 45 min, Tuesday and Thursday by default)
-// of a date range, from the class's programme, its sprint and the briefs of those days. The format is the teacher's
-// reference: docs/activities/TEMPLATES_VEILLE_LIVE_CODING_DWWM_2026-2027.md (change both together).
+// of a date range, from the class's PROGRAMME only (week, sprint, objective, concepts, competencies, technologies):
+// classes of the same programme run different briefs but study the same concepts, and share these activities (see
+// library.ts). The format is the teacher's reference: docs/activities/TEMPLATES_VEILLE_LIVE_CODING_DWWM_2026-2027.md
+// (change both together).
 //   • the days of a range: weekends, public holidays, breaks, cross defenses (SC), certification, the teacher's own
 //     days off; the days that get a live coding; the range cut in weeks (Monday → Friday)
 //   • the AI answers JSON, one call per item (the week's plan, then each veille, then each live coding): a whole week
 //     in one answer gets cut. Every item is checked (sections, sizes, a déroulé of 45 min, the code, the links) and
 //     asked again once with what's wrong; still wrong, it's kept with its warnings for the teacher.
+//   • the teacher can regenerate one item from their own proposal: it's the main instruction, within the programme
 //   • the markdown is written here from the JSON, so every item has the template's sections, in its order.
 import { libGone } from "./library.ts";
 import type { Env, GuildRow } from "./types.ts";
@@ -13,9 +16,8 @@ import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "./db.ts";
 import { extractJson, groqChat, hasKeyedAi, workersChat } from "./ai.ts";
 import type { Msg } from "./ai.ts";
 import { perMinuteWait } from "./aikeys.ts";
-import { compLabel, parseComp, programOf, techOfWeek, techOutside } from "./program.ts";
+import { compLabel, compName, parseComp, programOf, techOfWeek, techOutside } from "./program.ts";
 import type { Program, ProgramSprint, ProgramWeek } from "./program.ts";
-import { getBrief, weekBlock } from "./briefs.ts";
 
 export class ActivityError extends Error { wait: number; constructor(msg: string, wait = 0) { super(msg); this.wait = wait; } }
 
@@ -53,23 +55,23 @@ export function holidayOf(day: string): { label: string; approx: boolean } | nul
 }
 
 export type DayKind = "work" | "weekend" | "holiday" | "off" | "break" | "crossdefense" | "certification" | "other" | "outside";
-export interface DayInfo { day: string; dow: number; kind: DayKind; label: string; week: number | null; sprint: number | null; brief: number | null; approx?: boolean }
+export interface DayInfo { day: string; dow: number; kind: DayKind; label: string; week: number | null; sprint: number | null; approx?: boolean }
 /** The teacher's changes: a working day without activities ("off"), a holiday that is worked after all ("on"). */
 export type Overrides = Record<string, "off" | "on">;
-const KIND_FR: Record<string, string> = { break: "Vacances", crossdefense: "Soutenances croisées", certification: "Certification", other: "Hors brief" };
+const KIND_FR: Record<string, string> = { break: "Vacances", crossdefense: "Soutenances croisées", certification: "Certification", other: "Autre" };
 
 /** The week of the programme that contains a day (none outside the planning). */
 export const weekOf = (p: Program, day: string) => p.weeks.find((w) => w.start && w.end && w.start <= day && day <= w.end) ?? null;
 export function dayInfo(p: Program, day: string, ov: Overrides = {}): DayInfo {
   const dow = dowOf(day), w = weekOf(p, day);
-  const base = { day, dow, week: w?.n ?? null, sprint: w?.sprint ?? null, brief: w?.brief ?? null };
+  const base = { day, dow, week: w?.n ?? null, sprint: w?.sprint ?? null };
   if (dow > 5) return { ...base, kind: "weekend", label: "Week-end" };
   if (!w) return { ...base, kind: "outside", label: "Hors du programme" };
   if (w.kind !== "brief") return { ...base, kind: w.kind, label: `${KIND_FR[w.kind]}${w.title && w.title !== KIND_FR[w.kind] ? ` : ${w.title}` : ""}` };
   if (ov[day] === "off") return { ...base, kind: "off", label: "Pas d'activité (choix du formateur)" };
   const h = holidayOf(day);
   if (h && ov[day] !== "on") return { ...base, kind: "holiday", label: `Férié : ${h.label}${h.approx ? " (date estimée)" : ""}`, approx: h.approx };
-  return { ...base, kind: "work", label: `S${w.n}${w.sprint ? ` · Sprint ${w.sprint}` : ""}${w.brief ? ` · Brief ${w.brief}` : ""}` };
+  return { ...base, kind: "work", label: `S${w.n}${w.sprint ? ` · Sprint ${w.sprint}` : ""}` };
 }
 /** Every day from `from` to `to` (at most MAX_DAYS). */
 export function rangeDays(p: Program, from: string, to: string, ov: Overrides = {}): DayInfo[] {
@@ -89,15 +91,15 @@ export function splitWeeks(days: DayInfo[]): { monday: string; days: DayInfo[] }
   }
   return out;
 }
-/** The last working day of a programme week: the brief is handed in that evening, so its veille is lighter. */
-export function submissionDay(p: Program, w: ProgramWeek, ov: Overrides = {}): string | null {
+/** The last working day of a programme week (the week's work is handed in that evening): its veille is lighter. */
+export function closingDay(p: Program, w: ProgramWeek, ov: Overrides = {}): string | null {
   for (let d = w.end, i = 0; d >= w.start && i < 40; d = addDays(d, -1), i++) if (dayInfo(p, d, ov).kind === "work") return d;
   return null;
 }
-/** The next week with a brief: its concepts are out of scope this week. */
-export const nextBriefWeek = (p: Program, w: ProgramWeek) =>
+/** The next teaching week of the programme: its concepts are out of scope this week. */
+export const nextProgrammeWeek = (p: Program, w: ProgramWeek) =>
   [...p.weeks].filter((x) => x.kind === "brief" && x.start > w.end).sort((a, b) => a.start.localeCompare(b.start))[0] ?? null;
-/** What the class has seen up to a week (the technologies of every brief week until then). */
+/** What the class has seen up to a week (the technologies of every teaching week until then: kind "brief" in the programme). */
 export function techSoFar(p: Program, w: ProgramWeek): string[] {
   const out = new Set<string>();
   for (const x of p.weeks) if (x.kind === "brief" && x.start <= w.start) techOfWeek(x).forEach((t) => out.add(t));
@@ -137,18 +139,63 @@ const FENCE: Record<string, string> = { html: "html", css: "css", js: "javascrip
 const extOf = (file: string) => (file.match(/\.([a-z]+)$/i)?.[1] ?? "").toLowerCase();
 const fenceOf = (file: string) => (/\.blade\.php$/i.test(file) ? "blade" : FENCE[extOf(file)] ?? "");
 
-// When no published brief gives the client: one métier per sprint (fictional, Moroccan context).
-export const METIERS = [
-  "un riad à Marrakech (chambres, réservations, avis des clients)",
-  "une coopérative d'huile d'argan à Agadir (produits, commandes, prix en DH)",
-  "une auto-école à Casablanca (candidats, séances de conduite, moniteurs)",
-  "une salle de sport à Rabat (cours collectifs, abonnements, coachs)",
-  "une pharmacie de quartier à Fès (médicaments, stock, ordonnances)",
-  "un food truck de msemen et harira à Tanger (menu, commandes, horaires)",
-  "une agence de location de voitures à Oujda (véhicules, locations, clients)",
-  "une librairie-café à Meknès (livres, événements, réservations de tables)",
-];
-export const metierOf = (sprint: number | null) => METIERS[(Math.max(1, sprint || 1) - 1) % METIERS.length];
+// Veille topics of the earlier promotions (docs/activities/VEILLE_INSPIRATION_DWWM.md, keep both the same), by the
+// technology of the programme they belong to (the names of TECHS in program.ts). Only inspiration: the AI sees the
+// ones of the week's technologies and may use, reword or ignore them; the programme stays the only scope. "Culture"
+// fits any week, for the lighter last day.
+export const INSPIRATION: Record<string, string[]> = {
+  "HTML": ["SEO", "Accessibilité", "UI / UX"],
+  "CSS": ["L'approche mobile first et le responsive design", "Le 8 point grid, les systèmes de grille et les unités de mesure", "Les sélecteurs CSS, les transitions et les animations", "Les pseudo-classes", "L'architecture CSS (BEM)"],
+  "Tailwind CSS": ["Les frameworks CSS"],
+  "Bootstrap": ["Les frameworks CSS"],
+  "Sass": ["Les préprocesseurs CSS : Sass et Less"],
+  "Lighthouse / accessibility": ["Accessibilité"],
+  "Git & GitHub": ["La méthode agile", "SCRUM"],
+  "Trello / Jira": ["La méthode agile", "SCRUM"],
+  "JavaScript": ["Les bases de JavaScript", "Le débogage", "Les Web APIs (canvas, drag & drop…)", "L'Event Loop", "Babel", "GSAP"],
+  "DOM": ["Le DOM en JavaScript", "Les événements et les animations en JavaScript"],
+  "TypeScript": ["TypeScript"],
+  "Fetch / API": ["Ajax", "Fetch et Axios", "L'Event Loop", "Les PWA", "CORS", "API REST", "REST et GraphQL", "La documentation d'une API", "Les bonnes pratiques de sécurité des API"],
+  "PHP": ["PHP", "Les failles de sécurité en PHP", "PHPMailer", "Le débogage en PHP", "Autoload et namespaces", "Les normes PHP-FIG (PSR)", "Les algorithmes de hachage"],
+  "PDO": ["PDO et MySQLi"],
+  "OOP": ["La POO", "Le pattern Singleton en PHP", "Les design patterns", "SOLID"],
+  "UML": ["UML", "Les cas d'utilisation (use cases)", "Le diagramme de classes"],
+  "SQL & database": ["Comment concevoir une base de données (relations entre tables)", "SQL", "NoSQL", "Les jointures SQL et les relations entre tables", "Les index en SQL", "Les vues en SQL", "Les transactions SQL", "Les procédures stockées", "PostgreSQL"],
+  "MVC": ["MVC", "Le système de routage en PHP", "Les middlewares dans l'architecture MVC", "Performance et optimisation d'une application MVC (cache, lazy loading)"],
+  "Back-end & auth": ["L'évolution des méthodes d'authentification : sessions, Basic, OAuth", "JWT", "Sessions, cookies et CSRF"],
+  "Laravel": ["Laravel 101", "Le moteur de templates Blade", "Eloquent", "DTO et DAO", "L'authentification avec Laravel", "Les autorisations avec Spatie", "Migrations, seeders et factories",
+    "Les relations polymorphiques de Laravel", "Optimiser les requêtes avec Query Builder et Eloquent", "Les notifications Laravel", "Les jobs et les queues", "Events, broadcasting et Reverb",
+    "Le cache dans Laravel", "Gates et Policies", "Les tests en PHP et les tests unitaires en Laravel", "Les façades de Laravel", "Le scheduler (cron) de Laravel", "Le rate limiting", "Laravel Dusk"],
+  "Docker": ["La virtualisation", "La conteneurisation", "Docker", "DevOps", "VPS et RDP", "Les pipelines CI/CD"],
+  "React": ["React JS", "Vue JS", "Le state management", "DOM, Virtual DOM et Shadow DOM", "Les SPA (Single Page Applications)", "Le rendu côté serveur et côté client (SSR / CSR)"],
+  "MongoDB": ["MongoDB", "Firebase"],
+  "Culture": ["Comment bien préparer sa soutenance", "Les lois et réglementations du développement web", "La cybersécurité", "La notation Big O", "Les structures de données"],
+};
+/** The inspiration topics of some weeks (their technologies), without duplicates; with the "Culture" ones when asked. */
+export function topicsFor(weeks: ProgramWeek[], culture = false): string[] {
+  const out: string[] = [];
+  for (const t of [...new Set(weeks.flatMap((w) => techOfWeek(w)))]) for (const x of INSPIRATION[t] ?? []) if (!out.includes(x)) out.push(x);
+  if (culture) for (const x of INSPIRATION.Culture) if (!out.includes(x)) out.push(x);
+  return out.slice(0, 24);
+}
+
+// ------------------------------------------------------------------ the teacher's proposal (Regenerate)
+export const PROPOSAL_MAX = 1500;
+export const cleanProposal = (v: unknown) => String(v ?? "").replace(/\r\n?/g, "\n").trim().slice(0, PROPOSAL_MAX);
+/** What a proposal asks that the class hasn't seen yet at that point of the programme (catalog names). */
+export const proposalOutside = (proposal: string, allowed: string[]) => (proposal && allowed.length ? techOutside(proposal, allowed) : []);
+/** The proposal as the main instruction of the prompt, within the template, the programme's scope and the rules. */
+export function proposalBlock(proposal: string, outside: string[]): string {
+  if (!proposal) return "";
+  return [
+    "PROPOSITION DU FORMATEUR (c'est la consigne principale : elle décide du sujet, des notions, de l'exemple, des données, du piège ou du niveau ; elle remplace le titre prévu dans le plan) :",
+    `<<<\n${proposal}\n>>>`,
+    "Suis-la à la lettre : si elle nomme un exemple ou des données (ex. « CRUD users » = un CRUD d'utilisateurs), utilise exactement celui-là, pas un autre thème.",
+    "Elle ne change ni le format du JSON, ni les règles ci-dessus, ni le périmètre du programme.",
+    outside.length ? `ATTENTION : elle demande ${outside.join(", ")}, pas encore au programme à ce moment de l'année. Ne l'utilise pas : reste dans le périmètre et dis-le dans "ecarte".` : "",
+    `Si une partie de la proposition sort du programme de la semaine (une notion d'une semaine suivante), laisse-la de côté et écris-la dans "ecarte" (une ligne courte par élément laissé de côté). Sinon "ecarte": [].`,
+  ].filter(Boolean).join("\n");
+}
 
 // ------------------------------------------------------------------ links
 // Only pages of these sites (French first). Anything else, or a malformed URL, is dropped: the AI invents URLs.
@@ -183,6 +230,7 @@ const VERB = /^[A-ZÀÂÉÈÊÎÔÛ][a-zàâäéèêëîïôöûüç'’-]*(?:er
 export interface Veille {
   titre: string; contexte: string; objectifs: string[]; plan: { titre: string; points: string[] }[]; questions: string[];
   ressources: { titre: string; url: string; source: string }[]; artefact: string; demo: string; criteres: string[]; dropped: string[];
+  ecarte: string[]; proposal: string;   // what was left out of the teacher's proposal (out of scope), and the proposal itself
 }
 export function cleanVeille(j: any): Veille {
   const dropped: string[] = [];
@@ -195,11 +243,15 @@ export function cleanVeille(j: any): Veille {
     titre: line(j?.titre, 140), contexte: line(j?.contexte, 1500), objectifs: strList(j?.objectifs, 8, 300),
     plan: (Array.isArray(j?.plan) ? j.plan : []).slice(0, 5).map((x: any) => ({ titre: line(x?.titre, 160), points: strList(x?.points, 8, 300) })).filter((x: { titre: string }) => x.titre),
     questions: strList(j?.questions, 6, 300), ressources, artefact: line(j?.artefact, 300), demo: line(j?.demo, 300), criteres: strList(j?.criteres, 8, 300), dropped,
+    ecarte: strList(j?.ecarte, 6, 200), proposal: cleanProposal(j?.proposal),
   };
 }
-export function validateVeille(v: Veille): string[] {
+/** `allowed`: the technologies seen up to this week; the subject (its title) must stay within them. */
+export function validateVeille(v: Veille, allowed: string[] = []): string[] {
   const e: string[] = [];
   if (v.titre.length < 3) e.push("le titre manque");
+  const outside = allowed.length ? techOutside(v.titre, allowed) : [];
+  if (outside.length) e.push(`le sujet sort du programme de la semaine (${outside.join(", ")}, pas encore vu) : reste dans les concepts de la semaine`);
   const n = sentences(v.contexte);
   if (n < 3 || n > 5) e.push(`le contexte doit faire 3 à 5 phrases (il en fait ${n})`);
   if (v.objectifs.length < 3 || v.objectifs.length > 5) e.push(`3 à 5 objectifs (il y en a ${v.objectifs.length})`);
@@ -221,6 +273,7 @@ export interface Live {
   titre: string; objectifs: string[]; contexte: string; deroule: { minutes: number; etape: string; notions: string }[];
   starter: CodeFile | null; support: CodeFile | null; final: CodeFile | null;
   tests: { action: string; saisie: string; resultat: string }[]; attention: string; extensions: string[]; reflexion: string[]; resultat: string[];
+  ecarte: string[]; proposal: string;
 }
 const code = (v: unknown) => String(v ?? "").replace(/\r\n?/g, "\n").replace(/^\s*```[\w-]*\n/, "").replace(/\n```\s*$/, "").replace(/^\n+|\s+$/g, "").slice(0, 8000);
 function codeFile(v: any, stack: Stack, def: string): CodeFile | null {
@@ -236,6 +289,7 @@ export function cleanLive(j: any, stack: Stack): Live {
     starter: codeFile(j?.starter, stack, S.starter), support: codeFile(j?.support, stack, S.support), final: codeFile(j?.final, stack, S.final),
     tests: (Array.isArray(j?.tests) ? j.tests : []).slice(0, 8).map((x: any) => ({ action: line(x?.action, 120), saisie: line(x?.saisie, 120), resultat: line(x?.resultat, 160) })).filter((x: { action: string }) => x.action),
     attention: line(j?.attention, 600), extensions: strList(j?.extensions, 5, 300), reflexion: strList(j?.reflexion, 5, 300), resultat: strList(j?.resultat, 5, 300),
+    ecarte: strList(j?.ecarte, 6, 200), proposal: cleanProposal(j?.proposal),
   };
 }
 
@@ -329,12 +383,13 @@ export function validateLive(l: Live, r: LiveRules): string[] {
 }
 
 export interface WeekPlan {
-  resume: string; jours: { date: string; veille: string; focus: string; avancement: string; live: string; live_focus: string }[];
+  resume: string; jours: { date: string; veille: string; focus: string; progression: string; live: string; live_focus: string }[];
   besoins: { besoin: string; ou: string }[]; hors: string[]; points: string[];
 }
+// plans saved before had "avancement" (a step of the brief): it isn't read anymore, the days show the programme only
 export function cleanPlan(j: any, days: string[]): WeekPlan {
   const jours = (Array.isArray(j?.jours) ? j.jours : []).map((x: any) => ({
-    date: String(x?.date ?? "").slice(0, 10), veille: line(x?.veille, 140), focus: line(x?.focus, 300), avancement: line(x?.avancement, 200), live: line(x?.live, 140), live_focus: line(x?.live_focus, 300),
+    date: String(x?.date ?? "").slice(0, 10), veille: line(x?.veille, 140), focus: line(x?.focus, 300), progression: line(x?.progression, 200), live: line(x?.live, 140), live_focus: line(x?.live_focus, 300),
   })).filter((x: { date: string }) => days.includes(x.date));
   return {
     resume: line(j?.resume, 400), jours: days.map((d) => jours.find((x: { date: string }) => x.date === d)).filter(Boolean),
@@ -348,6 +403,7 @@ export function validatePlan(pl: WeekPlan, f: WeekFacts): string[] {
     const x = pl.jours.find((j) => j.date === d);
     if (!x?.veille) e.push(`la veille du ${dayFr(d)} (${d}) manque`);
     if (f.live.includes(d) && !x?.live) e.push(`le live coding du ${dayFr(d)} (${d}) manque`);
+    if (x && !x.progression) e.push(`la progression du ${dayFr(d)} (la notion du programme atteinte ce jour) manque`);
   }
   if (pl.besoins.length < 2) e.push("au moins 2 besoins des apprenants, avec où ils sont couverts");
   if (f.next && !pl.hors.length) e.push("la liste « hors_perimetre » (notions de la semaine suivante) manque");
@@ -362,8 +418,8 @@ export interface WeekFacts {
   live: string[];           // the days with a live coding
   weeks: ProgramWeek[];     // the programme weeks of those days
   sprint: ProgramSprint | null;
-  submission: string[];     // working days that end a programme week (the brief is handed in)
-  next: ProgramWeek | null; // the next brief week: out of scope
+  closing: string[];        // working days that end a programme week (lighter veille)
+  next: ProgramWeek | null; // the next teaching week of the programme: out of scope
 }
 export function weekFacts(p: Program, monday: string, from: string, to: string, live: string[] | null, ov: Overrides = {}): WeekFacts {
   const friday = addDays(monday, 4);
@@ -373,65 +429,85 @@ export function weekFacts(p: Program, monday: string, from: string, to: string, 
   const work = inRange.filter((d) => d.kind === "work").map((d) => d.day);
   const weeks: ProgramWeek[] = [];
   for (const d of work.length ? work : inRange.map((x) => x.day)) { const w = weekOf(p, d); if (w && !weeks.includes(w)) weeks.push(w); }
-  const subs = new Set(weeks.map((w) => submissionDay(p, w, ov)));
+  const ends = new Set(weeks.map((w) => closingDay(p, w, ov)));
   const last = weeks[weeks.length - 1];
   return {
     monday, from: lo, to: hi, days, work,
     live: (live ?? defaultLive(inRange)).filter((d) => work.includes(d)).sort(),
     weeks, sprint: p.sprints.find((s) => s.n === weeks.find((w) => w.sprint)?.sprint) ?? null,
-    submission: work.filter((d) => subs.has(d)),
-    next: last ? nextBriefWeek(p, last) : null,
+    closing: work.filter((d) => ends.has(d)),
+    next: last ? nextProgrammeWeek(p, last) : null,
   };
 }
 /** Open points the teacher should look at (found without the AI). */
-export function weekNotes(p: Program, f: WeekFacts, published: number): string[] {
+export function weekNotes(f: WeekFacts): string[] {
   const out: string[] = [];
-  for (const w of f.weeks) if (w.kind === "brief" && !w.brief) out.push(`S${w.n} : pas de brief prévu dans le programme, les activités suivent l'intitulé de la semaine (« ${w.title.slice(0, 80)} »).`);
-  if (f.weeks.length > 1) out.push(`Cette semaine couvre ${f.weeks.map((w) => `S${w.n}${w.brief ? ` (brief ${w.brief})` : ""}`).join(" et ")} : chaque jour suit le brief de sa semaine.`);
+  for (const w of f.weeks) if (w.kind === "brief" && w.concepts.trim().length < 40) out.push(`S${w.n} : le programme ne détaille pas les concepts de cette semaine ; les activités suivent son objectif, son sprint et ses compétences.`);
+  if (f.weeks.length > 1) out.push(`Cette semaine couvre ${f.weeks.map((w) => `S${w.n}`).join(" et ")} du programme : chaque jour suit les concepts de sa semaine.`);
   for (const d of f.days) {
     if (d.day < f.from || d.day > f.to) continue;
     if ((d.dow === 2 || d.dow === 4) && (d.kind === "holiday" || d.kind === "off")) out.push(`${dayFr(d.day)} : ${d.label}, pas de live coding ce jour-là (choisis un autre jour si besoin).`);
     else if (d.kind === "holiday" && d.approx) out.push(`${dayFr(d.day)} : ${d.label}, à confirmer.`);
   }
-  if (f.work.length && !published) out.push("Aucun brief publié dans l'application pour ces dates : le contexte vient du programme.");
   return out;
 }
 
-// ------------------------------------------------------------------ markdown (the template)
-export interface WeekLabels { sprint: string; briefs: string[]; mode: string; comps: string[] }
-export function weekLabels(p: Program, f: WeekFacts): WeekLabels {
-  const comps: string[] = [];
-  for (const w of f.weeks) for (const c of [...w.competencies, ...w.soft]) {
+// ------------------------------------------------------------------ the programme, as the AI and the overview see it
+/** The competencies of some weeks of the programme ("C3N1", "CT1N2"…), without duplicates. */
+export function weekComps(weeks: ProgramWeek[]): string[] {
+  const out: string[] = [];
+  for (const w of weeks) for (const c of [...w.competencies, ...w.soft]) {
     const pc = parseComp(c);
     const label = pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""}` : c;
-    if (!comps.includes(label)) comps.push(label);
+    if (!out.includes(label)) out.push(label);
   }
+  return out;
+}
+/** One week of the programme for the prompts: objective, concepts, competencies, technologies. Never a brief. */
+export function programmeBlock(p: Program, w: ProgramWeek): string {
+  const sp = p.sprints.find((x) => x.n === w.sprint);
+  const comps = [...w.competencies, ...w.soft].map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; });
+  const tech = techOfWeek(w);
+  return [
+    `SEMAINE ${w.n} DU PROGRAMME (${w.start} → ${w.end})${sp ? `, sprint ${sp.n} « ${sp.title} »` : ""}`,
+    w.objective ? `Objectif de la semaine : ${w.objective}` : "",
+    w.concepts ? `Concepts et exigences techniques :\n${w.concepts}` : "",
+    comps.length ? `Compétences visées (chaque activité en fait pratiquer au moins une) : ${comps.join(", ")}` : "",
+    sp && sp.tech.length + sp.soft.length ? `Compétences du sprint : ${weekComps([{ competencies: sp.tech, soft: sp.soft } as ProgramWeek]).join(", ")}` : "",
+    tech.length ? `Technologies de la semaine : ${tech.join(", ")}` : "",
+    sp?.situation ? `Situation du sprint :\n${sp.situation.slice(0, 800)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+// ------------------------------------------------------------------ markdown (the template)
+export interface WeekLabels { sprint: string; comps: string[]; objective: string }
+export function weekLabels(p: Program, f: WeekFacts): WeekLabels {
+  const obj = f.weeks.map((w) => w.objective).filter(Boolean).join(" Puis : ");
   return {
     sprint: f.sprint ? `sprint ${f.sprint.n} « ${f.sprint.title} »` : "",
-    briefs: f.weeks.map((w) => (w.brief ? `brief ${w.brief} « ${w.title} »` : `« ${w.title} »`)),
-    mode: [...new Set(f.weeks.map((w) => w.mode).filter(Boolean))].join(" puis "),
-    comps,
+    comps: weekComps(f.weeks),
+    objective: obj.length > 320 ? obj.slice(0, 317).replace(/\s+\S*$/, "") + "…" : obj,
   };
 }
-const SUBMIT = "Finitions, README, déploiement, soumission avant 23:59";
-/** "## Analyse de la semaine": the template's overview. `titles` are the titles of the items already written. */
+const CLOSING = "Consolidation de la semaine : bonnes pratiques, débogage, qualité";
+/** "## Analyse de la semaine": the template's overview, from the programme. `titles` are the titles of the items already written. */
 export function renderWeek(pl: WeekPlan, f: WeekFacts, lb: WeekLabels, titles: { veille: Record<string, string>; live: Record<string, string> } = { veille: {}, live: {} }, notes: string[] = []): string {
   const lo = f.from, hi = f.to;
   const span = lo.slice(5, 7) === hi.slice(5, 7) ? `${lo.slice(8, 10)}–${ddmm(hi)}/${hi.slice(0, 4)}` : `${ddmm(lo)}–${ddmm(hi)}/${hi.slice(0, 4)}`;
-  const head = [`Semaine ${f.weeks.map((w) => w.n).join(" et ") || "—"} (${span})`, lb.sprint, lb.briefs.join(" puis "), lb.mode, lb.comps.length ? `compétences ${lb.comps.join(", ")}` : ""].filter(Boolean).join(", ") + ".";
+  const head = [`Semaine ${f.weeks.map((w) => w.n).join(" et ") || "—"} du programme (${span})`, lb.sprint, lb.comps.length ? `compétences ${lb.comps.join(", ")}` : ""].filter(Boolean).join(", ") + ".";
   const rows = f.days.filter((d) => d.day >= lo && d.day <= hi).map((d) => {
     if (d.kind !== "work") return `| ${dayShort(d.day)} | ${cell(d.label)} | — | — |`;
     const j = pl.jours.find((x) => x.date === d.day);
     const n = f.live.indexOf(d.day) + 1;
     const lc = n ? `LC${n} : ${cell(titles.live[d.day] || j?.live || "à préparer")}` : "—";
-    return `| ${dayShort(d.day)} | ${cell(titles.veille[d.day] || j?.veille || "à préparer")} | ${lc} | ${f.submission.includes(d.day) ? SUBMIT : cell(j?.avancement || "")} |`;
+    return `| ${dayShort(d.day)} | ${cell(titles.veille[d.day] || j?.veille || "à préparer")} | ${lc} | ${f.closing.includes(d.day) ? CLOSING : cell(j?.progression || "")} |`;
   });
-  const next = f.next ? `S${f.next.n}${f.next.brief ? ` · brief ${f.next.brief}` : ""} : ${f.next.title}` : "fin du programme";
+  const next = f.next ? `S${f.next.n} du programme, à partir du ${ddmm(f.next.start)}` : "fin du programme";
   const points = [...notes, ...pl.points];
   return [
     "## Analyse de la semaine", "",
-    [head, pl.resume].filter(Boolean).join(" "), "",
-    "| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Avancement attendu du brief |",
+    [head, lb.objective ? `Objectif : ${lb.objective}` : "", pl.resume].filter(Boolean).join(" "), "",
+    "| Jour | Veille 09:15 (30 min) | Live coding 11:00 (45 min) | Progression attendue (programme) |",
     "| --- | --- | --- | --- |",
     ...rows, "",
     "**Ce dont les apprenants auront besoin (et où c'est couvert)**",
@@ -484,32 +560,34 @@ const SYS = `Tu prépares les activités quotidiennes d'une promotion de dévelo
 - Veille : 09:15, 30 minutes. Les apprenants la préparent et la présentent. On s'adresse à l'apprenant avec « tu ».
 - Live coding : 11:00, 45 minutes. Le formateur code au clavier, les apprenants codent en parallèle : chaque étape doit pouvoir être tapée en direct dans le temps donné.
 Règles communes :
+- Tout part du PROGRAMME : le sprint, la semaine du planning (objectif, concepts et exigences techniques, technologies) et les compétences visées. Plusieurs classes suivent ce programme avec des projets différents : ne parle d'aucun projet, brief, client ni entreprise.
+- Exemples et données : simples et fictifs, choisis pour faire pratiquer le concept de la semaine (une liste d'utilisateurs, de tâches, de notes, de livres…), jamais le client ou le projet d'une classe. Prénoms marocains fictifs ; s'il y a des prix, en DH ; téléphones en 06/07.
 - En français, phrases simples, aucun jargon sans explication. Les noms de code entre backticks (\`querySelector\`). Aucun emoji.
 - N'exige jamais une notion d'une semaine suivante (voir HORS PÉRIMÈTRE) ni une notion pas encore vue.
-- Noms fictifs, contexte marocain, prix en DH, téléphones en 06/07.
 - Liens : uniquement des pages dont tu es CERTAIN qu'elles existent, en français d'abord, sur ces sites seulement : ${SITES}. N'invente jamais d'URL.
 Réponds UNIQUEMENT avec un objet JSON, sans texte autour.`;
 
 const PLAN_SHAPE = `{"resume": "1 phrase : l'enjeu de la semaine pour les apprenants",
- "jours": [{"date": "AAAA-MM-JJ", "veille": "titre court de la veille", "focus": "ce qu'elle couvre (1 phrase)", "avancement": "étape du brief attendue à la fin du jour", "live": "titre du live coding, seulement les jours avec live coding, sinon \\"\\"", "live_focus": "ce qu'on construit (1 phrase), sinon \\"\\""}],
- "besoins": [{"besoin": "ce dont les apprenants auront besoin pour le brief", "ou": "où c'est couvert (ex. Veille Lun 12/10, LC1)"}],
+ "jours": [{"date": "AAAA-MM-JJ", "veille": "titre court de la veille (un concept du programme)", "focus": "ce qu'elle couvre (1 phrase)", "progression": "la notion du programme que la classe doit atteindre à la fin du jour, avec la compétence visée (ex. Sélectionner et modifier le DOM — C4N1)", "live": "titre du live coding (le concept pratiqué, pas un client), seulement les jours avec live coding, sinon \\"\\"", "live_focus": "ce qu'on construit pour pratiquer le concept (1 phrase), sinon \\"\\""}],
+ "besoins": [{"besoin": "ce dont les apprenants auront besoin cette semaine (une notion du programme)", "ou": "où c'est couvert (ex. Veille Lun 12/10, LC1)"}],
  "hors_perimetre": ["notion de la semaine suivante à ne pas exiger"],
  "points_ouverts": ["question à valider par le formateur"]}`;
 const VEILLE_SHAPE = `{"titre": "titre de la veille",
- "contexte": "3 à 5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, le lien avec le brief",
+ "contexte": "3 à 5 phrases : ce que l'apprenant sait déjà, pourquoi ce sujet maintenant, le lien avec les concepts et les compétences de la semaine",
  "objectifs": ["3 à 5 objectifs, chacun commence par un verbe d'action à l'infinitif (Expliquer, Utiliser, Choisir, Distinguer, Mettre en place…)"],
  "plan": [{"titre": "partie 1", "points": ["3 à 4 points à explorer"]}, {"titre": "partie 2", "points": ["3 à 4 points"]}, {"titre": "partie 3 (optionnelle)", "points": ["1 à 4 points"]}],
  "questions": ["2 à 3 questions qui font réfléchir (pourquoi, quand, que se passe-t-il si…), pas des définitions, chacune finit par ?"],
  "ressources": [{"titre": "titre de la page", "url": "https://…"}],
  "artefact": "l'artefact concret à produire : un schéma, un tableau comparatif ou une checklist (une ligne)",
  "demo": "ce qui doit être montré en direct (une ligne)",
- "criteres": ["3 à 4 critères observables"]}
+ "criteres": ["3 à 4 critères observables"],
+ "ecarte": []}
 "ressources" : 3 à 4 liens, MDN en français et JavaScript.info en français d'abord (selon le sujet), plus un outil si utile.`;
 const liveShape = (s: Stack) => {
   const S = STACKS[s];
-  return `{"titre": "titre du live coding",
+  return `{"titre": "titre du live coding (le concept pratiqué)",
  "objectifs": ["3 objectifs, chacun commence par un verbe d'action à l'infinitif"],
- "contexte": "2 à 4 phrases : le besoin du client, ce qu'on construit, la partie du brief concernée",
+ "contexte": "2 à 4 phrases : le concept du programme travaillé, la compétence visée, ce qu'on construit pour le pratiquer",
  "deroule": [{"minutes": 5, "etape": "Présenter le besoin et le starter", "notions": "…"}, {"minutes": 15, "etape": "un seul élément ou champ « à la main »", "notions": "…"}, {"minutes": 10, "etape": "généraliser (fonction, boucle…)", "notions": "…"}, {"minutes": 10, "etape": "cas particulier, envoi ou état", "notions": "…"}, {"minutes": 5, "etape": "Tester en direct, récap", "notions": ""}],
  "starter": {"fichier": "${S.starter}", "code": "…"},
  "support": ${S.support ? `{"fichier": "${S.support}", "code": "…"} (ou null)` : "null"},
@@ -518,10 +596,11 @@ const liveShape = (s: Stack) => {
  "attention": "un piège à montrer et la règle à retenir, 2 à 3 phrases (ou \\"\\")",
  "extensions": ["1 à 2 idées si le temps le permet"],
  "reflexion": ["2 points de réflexion (questions)"],
- "resultat": ["ce que chaque apprenant a sur son écran à la fin", "ce qu'il sait expliquer"]}
+ "resultat": ["ce que chaque apprenant a sur son écran à la fin", "ce qu'il sait expliquer"],
+ "ecarte": []}
 Règles du live coding :
 - Langage de la semaine : ${S.label}. ${S.hint}
-- Un seul petit objectif concret, réutilisable tel quel dans le brief. Construis progressivement : d'abord un élément « à la main », puis généralise.
+- Un seul petit objectif concret qui fait pratiquer un concept et une compétence de la semaine, réutilisable dans n'importe quel projet de la semaine. Construis progressivement : d'abord un élément « à la main », puis généralise.
 - 4 ou 5 étapes dont les minutes font EXACTEMENT 45 au total.
 - Données : 5 éléments maximum dans une liste, 3 propriétés maximum par objet ; formulaire de 3 champs maximum.
 - Code final : 60 lignes maximum${S.fns ? ", 2 fonctions nommées maximum, avec `function`, `for...of` et des `if` simples" : ""}. Pas de motif avancé (objet de fonctions, DocumentFragment, lookahead dans une Regex, chaînages astucieux).
@@ -530,6 +609,66 @@ Règles du live coding :
 - Commentaires courts en français, seulement là où ils aident.
 - "tests" : surtout pour un formulaire (sinon []).`;
 };
+
+/**
+ * What the AI knows about a week: the programme (sprint, weeks of the planning with their objective, concepts and
+ * technologies, competencies), what's out of scope, the topics already done, ideas from earlier promotions.
+ * Never a brief, a client or a theme: the classes of the programme run different projects.
+ */
+export function weekContext(p: Program, f: WeekFacts, done: string[] = []): string {
+  const parts = f.weeks.map((w) => programmeBlock(p, w));
+  if (f.next) parts.push(`HORS PÉRIMÈTRE (semaine ${f.next.n} du programme, à ne jamais exiger) :\n${(f.next.concepts || f.next.objective).slice(0, 1200)}`);
+  const ideas = topicsFor(f.weeks, f.closing.length > 0);
+  if (ideas.length) parts.push(`IDÉES DE SUJETS (veilles des promotions précédentes, simple inspiration : tu peux t'en servir, les reformuler ou en choisir d'autres ; le programme de la semaine reste la seule référence) :\n${ideas.map((x) => "- " + x).join("\n")}`);
+  if (done.length) parts.push(`DÉJÀ COUVERT EN VEILLE (ne refais pas ces sujets) :\n${done.map((x) => "- " + x).join("\n")}`);
+  return parts.join("\n\n");
+}
+/** The prompt of a week's plan. `kept`: items already written whose titles stay. */
+export function weekPrompt(ctx: string, f: WeekFacts, kept: { day: string; kind: string; title: string }[] = []): string {
+  const dayLine = (d: string) => `- ${d} (${dayFr(d)}) : veille${f.live.includes(d) ? " + live coding" : ""}${f.closing.includes(d) ? " — dernier jour de la semaine du programme : veille plus légère (bonnes pratiques, débogage, qualité)" : ""}`;
+  const off = f.days.filter((d) => d.day >= f.from && d.day <= f.to && d.kind !== "work").map((d) => `- ${d.day} (${dayFr(d.day)}) : ${d.label}, aucune activité`);
+  return [
+    ctx,
+    `PLANNING DE LA SEMAINE À PRÉPARER (une veille par jour ouvré, dans l'ordre où les concepts du programme s'enchaînent ; chaque jour fait progresser vers les compétences visées ; chaque live coding applique la veille du jour ou de la veille ; ne refais pas un sujet déjà couvert) :\n${f.work.map(dayLine).join("\n")}${off.length ? "\n" + off.join("\n") : ""}`,
+    kept.length ? `DÉJÀ ÉCRITS (garde exactement ces titres) :\n${kept.map((r) => `- ${r.day} ${r.kind === "live" ? "live coding" : "veille"} : « ${r.title} »`).join("\n")}` : "",
+    `Réponds UNIQUEMENT avec ce JSON :\n${PLAN_SHAPE}`,
+  ].filter(Boolean).join("\n\n");
+}
+const planLines = (plan: WeekPlan, day: string) => `LES AUTRES JOURS DE LA SEMAINE (seulement pour ne pas répéter leurs sujets) :\n${plan.jours.filter((x) => x.date !== day).map((x) => `- ${dayFr(x.date)} : veille « ${x.veille} »${x.live ? ` ; live coding « ${x.live} »` : ""}`).join("\n") || "- (aucun)"}`;
+/** How the teacher wants it regenerated: a totally new subject (away from the current one), or the same subject rewritten. */
+export interface Regen { mode: "new" | "same"; current: string; theme: string }
+export function regenBlock(r: Regen | null): string {
+  if (!r) return "";
+  if (r.mode === "same") return r.current ? `MÊME SUJET : le formateur garde le sujet actuel. Garde exactement le titre « ${r.current} » et réécris le contenu (nouvelle formulation, nouvel exemple si utile).` : "";
+  return [
+    `NOUVEAU SUJET : le formateur veut une activité TOTALEMENT DIFFÉRENTE de la version actuelle${r.current ? ` « ${r.current} »` : ""} : autre sujet, autre titre, autre exemple, autres données. Ne reprends ni ce titre ni son angle.`,
+    r.theme ? `THÈME CHOISI PAR LE FORMATEUR : « ${r.theme} ». Le titre et tout le contenu portent sur ce thème (dans les concepts de la semaine).` : "Choisis toi-même un autre sujet utile, dans les concepts de la semaine, qui ne répète pas les autres jours.",
+  ].join("\n");
+}
+/** What to write: with a proposal (or a new subject asked), the planned title is left out; otherwise the plan's day. */
+const target = (what: string, day: string, title: string, focus: string, proposal: string, more = "", fresh = false) =>
+  proposal || fresh ? `${what} : ${dayFr(day)} (${day}). Le sujet, l'exemple et les données viennent de la PROPOSITION DU FORMATEUR ci-dessous, dans les concepts de la semaine.${more}`
+    : `${what} : ${dayFr(day)} (${day})${title ? `, titre prévu « ${title} », ${focus}` : ", choisis un sujet cohérent avec les concepts de la semaine, sans répéter les autres jours"}.${more}`;
+/** The prompt of one veille (with the teacher's proposal, when there is one). */
+export function veillePrompt(ctx: string, plan: WeekPlan, f: WeekFacts, day: string, proposal = "", outside: string[] = [], regen: Regen | null = null): string {
+  const j = plan.jours.find((x) => x.date === day);
+  return [ctx, planLines(plan, day),
+    target("VEILLE À ÉCRIRE", day, j?.veille || "", `focus : ${j?.focus || "—"}${j?.progression ? `, la classe doit atteindre : ${j.progression}` : ""}`, proposal,
+      f.closing.includes(day) ? " C'est le dernier jour de la semaine du programme : sujet plus léger (bonnes pratiques, débogage, qualité)." : "", regen?.mode === "new"),
+    regenBlock(regen),
+    proposalBlock(proposal, outside),
+    `Réponds UNIQUEMENT avec ce JSON :\n${VEILLE_SHAPE}`].filter(Boolean).join("\n\n");
+}
+/** The prompt of one live coding: it knows the veilles of the week up to its day. */
+export function livePrompt(ctx: string, plan: WeekPlan, f: WeekFacts, day: string, stack: Stack, veilles: string[], proposal = "", outside: string[] = [], regen: Regen | null = null): string {
+  const j = plan.jours.find((x) => x.date === day);
+  return [ctx, planLines(plan, day),
+    `VEILLES DE LA SEMAINE JUSQU'À CE JOUR (le live coding n'utilise que ces notions et celles d'avant) :\n${veilles.join("\n") || "- (aucune)"}`,
+    target(`LIVE CODING À ÉCRIRE (LC${f.live.indexOf(day) + 1 || 1})`, day, j?.live || "", `ce qu'on construit : ${j?.live_focus || "—"}`, proposal, "", regen?.mode === "new"),
+    regenBlock(regen),
+    proposalBlock(proposal, outside),
+    `Réponds UNIQUEMENT avec ce JSON :\n${liveShape(stack)}`].filter(Boolean).join("\n\n");
+}
 
 async function askJson(env: Env, user: string, maxTokens: number): Promise<{ json: any; model: string }> {
   if (!(await aiBudgetOk(env, 2))) throw new ActivityError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow.");
@@ -574,11 +713,14 @@ export interface ActivityRow {
 }
 const parse = (s: string | null, def: any) => { try { return s ? JSON.parse(s) : def; } catch { return def; } };
 export function itemView(r: ActivityRow) {
-  const d = r.kind === "week" ? parse(r.data, {}) : null;
+  const d = parse(r.data, {}) ?? {};
+  const week = r.kind === "week";
   return {
     id: r.id, day: r.day, kind: r.kind, week: r.week, title: r.title, md: r.md, warnings: parse(r.warnings, []), edited: !!r.edited, model: r.model, updated_at: r.updated_at ?? r.created_at,
+    // a veille or live coding: the teacher's last proposal (to start from it again)
+    ...(!week && typeof d.proposal === "string" && d.proposal ? { proposal: d.proposal } : {}),
     // a week: its live coding days, and the titles planned for each day (shown while the items are written)
-    ...(d ? { live: Array.isArray(d.live) ? d.live : [], plan: Array.isArray(d.plan?.jours) ? d.plan.jours.map((j: any) => ({ date: j.date, veille: j.veille, live: j.live })) : [] } : {}),
+    ...(week ? { live: Array.isArray(d.live) ? d.live : [], plan: Array.isArray(d.plan?.jours) ? d.plan.jours.map((j: any) => ({ date: j.date, veille: j.veille, live: j.live })) : [] } : {}),
   };
 }
 async function saveRow(env: Env, gid: string, o: { program: string; day: string; kind: string; week: number | null; title: string; data: unknown; md: string; warnings: string[]; model: string }) {
@@ -605,18 +747,7 @@ export async function setDay(env: Env, gid: string, day: string, mark: "off" | "
   return o;
 }
 
-// the briefs given in the app for some dates (not the drafts)
-interface BriefLite { id: number; week: number | null; title: string; status: string; start: string; due: string }
-async function publishedBriefs(env: Env, gid: string, p: Program): Promise<BriefLite[]> {
-  const rows = await all<{ id: number; week: number | null; title: string; status: string; start_at: number | null; due_at: number | null }>(env,
-    "SELECT id, week, title, status, start_at, due_at FROM briefs WHERE guild_id = ? AND status != 'draft'", gid);
-  const iso = (u: number | null) => (u ? new Date(u * 1000).toISOString().slice(0, 10) : "");
-  return rows.map((b) => { const w = p.weeks.find((x) => x.n === b.week); return { id: b.id, week: b.week, title: b.title, status: b.status, start: iso(b.start_at) || w?.start || "", due: iso(b.due_at) || w?.end || "" }; })
-    .filter((b) => b.start && b.due);
-}
-const overlaps = (b: BriefLite, lo: string, hi: string) => b.start <= hi && b.due >= lo;
-
-/** Everything the page shows for a range: the days, each week (programme, briefs, live coding days, notes), the saved items. */
+/** Everything the page shows for a range: the days, each week (the programme only, live coding days, notes), the saved items. */
 export async function activitiesView(env: Env, g: GuildRow, from: string, to: string) {
   if (!isIso(from) || !isIso(to)) throw new ActivityError("Pick a start day and an end day.");
   if (to < from) [from, to] = [to, from];
@@ -624,42 +755,30 @@ export async function activitiesView(env: Env, g: GuildRow, from: string, to: st
   const p = await programOf(env, g), ov = await overridesOf(env, g.id);
   const days = rangeDays(p, from, to, ov);
   const rows = await all<ActivityRow>(env, "SELECT * FROM activities WHERE guild_id = ? AND day >= ? AND day <= ? ORDER BY day, kind", g.id, mondayOf(from), to);
-  const briefs = await publishedBriefs(env, g.id, p);
   const weeks = splitWeeks(days).map(({ monday }) => {
     const saved = rows.find((r) => r.kind === "week" && r.day === monday);
     const f = weekFacts(p, monday, from, to, saved ? parse(saved.data, {}).live ?? null : null, ov);
-    const mine = briefs.filter((b) => overlaps(b, f.from, f.to));
     return {
-      monday, from: f.from, to: f.to, work: f.work, live: f.live, submission: f.submission,
-      weeks: f.weeks.map((w) => ({ n: w.n, start: w.start, end: w.end, kind: w.kind, sprint: w.sprint, brief: w.brief, mode: w.mode, title: w.title, objective: w.objective, concepts: w.concepts, competencies: w.competencies, soft: w.soft, stack: STACKS[stackOf(techOfWeek(w))].label })),
+      monday, from: f.from, to: f.to, work: f.work, live: f.live, closing: f.closing,
+      weeks: f.weeks.map((w) => ({ n: w.n, start: w.start, end: w.end, kind: w.kind, sprint: w.sprint, objective: w.objective, concepts: w.concepts, competencies: w.competencies, soft: w.soft,
+        tech: techOfWeek(w), stack: STACKS[stackOf(techOfWeek(w))].label })),
       sprint: f.sprint ? { n: f.sprint.n, title: f.sprint.title } : null,
-      next: f.next ? { n: f.next.n, brief: f.next.brief, title: f.next.title } : null,
-      briefs: mine, notes: weekNotes(p, f, mine.length),
+      // the weekdays of the range without activity, and why
+      off: f.days.filter((d) => d.day >= f.from && d.day <= f.to && d.kind !== "work").map((d) => ({ day: d.day, kind: d.kind, label: d.label })),
+      next: f.next ? { n: f.next.n, start: f.next.start } : null,
+      notes: weekNotes(f),
     };
   });
   return { program: { id: p.id, name: p.name }, from, to, days, weeks, items: rows.map(itemView), overrides: ov };
 }
 
-/** What the AI needs to know about a week: the programme, the briefs given, the métier, what's out of scope, what's done. */
+/** The week's context for the AI, with the topics this class already covered (the 6 weeks before). */
 async function contextOf(env: Env, g: GuildRow, p: Program, f: WeekFacts): Promise<string> {
-  const parts = f.weeks.map((w) => weekBlock(p, w));
-  const briefs = (await publishedBriefs(env, g.id, p)).filter((b) => overlaps(b, f.from, f.to)).slice(0, 2);
-  let client = "";
-  for (const b of briefs) {
-    const full = await getBrief(env, g, b.id);
-    if (!full) continue;
-    const d = full.data;
-    parts.push(`BRIEF PUBLIÉ DANS L'APPLICATION : « ${d.title} »${d.summary ? `\n${d.summary}` : ""}${d.context ? `\nContexte (début) :\n${d.context.slice(0, 1500)}` : ""}${d.groups.length ? `\nUser stories (extrait) :\n${d.groups.flatMap((x) => x.stories).slice(0, 10).map((x) => "- " + x).join("\n")}` : ""}`);
-    client ||= d.situation.title || d.context.split("\n").find((l) => l.trim().length > 30)?.slice(0, 300) || "";
-  }
-  parts.push(`MÉTIER DES LIVE CODINGS : ${client ? `celui du brief (${client})` : metierOf(f.sprint?.n ?? null)}. Garde le même métier toute la semaine.`);
-  if (f.next) parts.push(`HORS PÉRIMÈTRE (semaine suivante, à ne jamais exiger) : S${f.next.n}${f.next.brief ? `, brief ${f.next.brief}` : ""} « ${f.next.title} »\n${f.next.concepts.slice(0, 1200)}`);
   const done = await all<{ title: string }>(env, "SELECT title FROM activities WHERE guild_id = ? AND kind = 'veille' AND day < ? AND day >= ? ORDER BY day DESC LIMIT 15", g.id, f.monday, addDays(f.monday, -42));
-  if (done.length) parts.push(`DÉJÀ COUVERT EN VEILLE (ne refais pas ces sujets) :\n${done.map((x) => "- " + x.title).join("\n")}`);
-  return parts.join("\n\n");
+  return weekContext(p, f, done.map((x) => x.title));
 }
 
-/** The week's plan ("Analyse de la semaine"): a title per day, in the order the brief needs them. `keep` keeps the titles already written. */
+/** The week's plan ("Analyse de la semaine"): a title per day, in the order the programme's concepts come. `keep` keeps the titles already written. */
 export async function generateWeek(env: Env, g: GuildRow, o: { monday: string; from: string; to: string; live?: string[] | null; keep?: boolean }) {
   if (!isIso(o.monday) || !isIso(o.from) || !isIso(o.to)) throw new ActivityError("Pick a start day and an end day.");
   const monday = mondayOf(o.monday);
@@ -668,14 +787,7 @@ export async function generateWeek(env: Env, g: GuildRow, o: { monday: string; f
   if (!f.work.length) throw new ActivityError("No working day this week (holiday, break, cross defense…): nothing to plan.");
   const rows = await weekRows(env, g.id, monday);
   const kept = o.keep ? rows.filter((r) => r.kind !== "week" && f.work.includes(r.day)) : [];
-  const dayLine = (d: string) => `- ${d} (${dayFr(d)}) : veille${f.live.includes(d) ? " + live coding" : ""}${f.submission.includes(d) ? " — jour de soumission du brief : veille plus légère (bonnes pratiques, débogage, qualité)" : ""}`;
-  const off = f.days.filter((d) => d.day >= f.from && d.day <= f.to && d.kind !== "work").map((d) => `- ${d.day} (${dayFr(d.day)}) : ${d.label}, aucune activité`);
-  const user = [
-    await contextOf(env, g, p, f),
-    `PLANNING DE LA SEMAINE À PRÉPARER (une veille par jour ouvré, dans l'ordre où le brief en a besoin ; chaque live coding applique la veille du jour ou de la veille ; ne refais pas un sujet déjà couvert) :\n${f.work.map(dayLine).join("\n")}${off.length ? "\n" + off.join("\n") : ""}`,
-    kept.length ? `DÉJÀ ÉCRITS (garde exactement ces titres) :\n${kept.map((r) => `- ${r.day} ${r.kind === "live" ? "live coding" : "veille"} : « ${r.title} »`).join("\n")}` : "",
-    `Réponds UNIQUEMENT avec ce JSON :\n${PLAN_SHAPE}`,
-  ].filter(Boolean).join("\n\n");
+  const user = weekPrompt(await contextOf(env, g, p, f), f, kept.map((r) => ({ day: r.day, kind: r.kind, title: r.title || "" })));
   const r = await askChecked(env, user, 2500, (j) => cleanPlan(j, f.work), (x) => validatePlan(x, f));
   for (const k of kept) { const j = r.data.jours.find((x) => x.date === k.day); if (j && k.title) j[k.kind === "live" ? "live" : "veille"] = k.title; }
   const w = weekOf(p, f.work[0]);
@@ -694,9 +806,9 @@ async function refreshWeek(env: Env, g: GuildRow, p: Program, monday: string, ov
   const f = weekFacts(p, monday, d.from || monday, d.to || addDays(monday, 4), Array.isArray(d.live) ? d.live : null, ov);
   const titles = { veille: {} as Record<string, string>, live: {} as Record<string, string> };
   for (const r of rows) if (r.kind !== "week" && r.title) titles[r.kind === "live" ? "live" : "veille"][r.day] = r.title;
-  const briefs = (await publishedBriefs(env, g.id, p)).filter((b) => overlaps(b, f.from, f.to));
-  const plan: WeekPlan = { resume: "", jours: [], besoins: [], hors: [], points: [], ...(d.plan ?? {}) };
-  if (!wk.edited) await run(env, "UPDATE activities SET md = ? WHERE id = ?", renderWeek(plan, f, weekLabels(p, f), titles, weekNotes(p, f, briefs.length)), wk.id);
+  // a plan saved before (with brief steps in "avancement") is read again through cleanPlan: only the programme stays
+  const plan = cleanPlan(d.plan ?? {}, (Array.isArray(d.plan?.jours) ? d.plan.jours : []).map((x: any) => String(x?.date ?? "")));
+  if (!wk.edited) await run(env, "UPDATE activities SET md = ? WHERE id = ?", renderWeek(plan, f, weekLabels(p, f), titles, weekNotes(f)), wk.id);
   for (const r of rows.filter((x) => x.kind === "live" && !x.edited)) {
     const n = f.live.indexOf(r.day) + 1;
     const l = parse(r.data, null);
@@ -704,48 +816,71 @@ async function refreshWeek(env: Env, g: GuildRow, p: Program, monday: string, ov
   }
 }
 
-/** One veille or live coding, written from the week's plan. Saved (in place of the old one) with its warnings. */
-export async function generateItem(env: Env, g: GuildRow, o: { day: string; kind: string }) {
-  if (!isIso(o.day) || !["veille", "live"].includes(o.kind)) throw new ActivityError("Pick a day and a kind (veille or live coding).");
+/** Where an item stands: its day, its week's plan, the programme week, what the class has seen. */
+async function itemCtx(env: Env, g: GuildRow, day: string, kind: string) {
+  if (!isIso(day) || !["veille", "live"].includes(kind)) throw new ActivityError("Pick a day and a kind (veille or live coding).");
   const p = await programOf(env, g), ov = await overridesOf(env, g.id);
-  const info = dayInfo(p, o.day, ov);
-  if (info.kind !== "work") throw new ActivityError(`No activity on ${o.day}: ${info.label}.`);
-  const monday = mondayOf(o.day);
+  const info = dayInfo(p, day, ov);
+  if (info.kind !== "work") throw new ActivityError(`No activity on ${day}: ${info.label}.`);
+  const monday = mondayOf(day);
   const rows = await weekRows(env, g.id, monday);
+  // no plan for the week (items that came from the shared library, or written before it): the programme is enough
   const wk = rows.find((r) => r.kind === "week" && r.day === monday);
-  if (!wk) throw new ActivityError("Generate the week's plan first.");
-  const d = parse(wk.data, {});
+  const d = wk ? parse(wk.data, {}) : {};
   const f = weekFacts(p, monday, d.from || monday, d.to || addDays(monday, 4), Array.isArray(d.live) ? d.live : null, ov);
-  if (o.kind === "live" && !f.live.includes(o.day)) throw new ActivityError("No live coding planned on this day: turn it on for this day first.");
-  const w = weekOf(p, o.day)!;
-  const plan: WeekPlan = { resume: "", jours: [], besoins: [], hors: [], points: [], ...(d.plan ?? {}) };
-  const j = plan.jours.find((x) => x.date === o.day);
-  const planText = `PLAN DE LA SEMAINE :\n${plan.jours.map((x) => `- ${dayFr(x.date)} : veille « ${x.veille} »${x.live ? ` ; live coding « ${x.live} »` : ""}`).join("\n")}`;
-  const ctx = await contextOf(env, g, p, f);
-  let saved;
-  if (o.kind === "veille") {
-    const user = [ctx, planText,
-      `VEILLE À ÉCRIRE : ${dayFr(o.day)} (${o.day})${j ? `, titre prévu « ${j.veille} », focus : ${j.focus}${j.avancement ? `, le brief en est à : ${j.avancement}` : ""}` : ", choisis un sujet cohérent avec le plan, sans répéter les autres jours"}.${f.submission.includes(o.day) ? " C'est le jour de soumission du brief : sujet plus léger (bonnes pratiques, débogage, qualité)." : ""}`,
-      `Réponds UNIQUEMENT avec ce JSON :\n${VEILLE_SHAPE}`].join("\n\n");
-    const r = await askChecked(env, user, 3000, cleanVeille, validateVeille);
-    saved = await saveRow(env, g.id, { program: p.id, day: o.day, kind: "veille", week: w.n, title: r.data.titre || j?.veille || "Veille", data: r.data, md: renderVeille(r.data, o.day), warnings: r.errors, model: r.model });
-  } else {
-    const stack = stackOf(techOfWeek(w));
+  if (!wk) f.live = [...new Set([...f.live, ...rows.filter((r) => r.kind === "live").map((r) => r.day)])].filter((x) => f.work.includes(x)).sort();
+  if (kind === "live" && !f.live.includes(day)) throw new ActivityError("No live coding planned on this day: turn it on for this day first.");
+  const w = weekOf(p, day)!;
+  const plan = cleanPlan(d.plan ?? {}, (Array.isArray(d.plan?.jours) ? d.plan.jours : []).map((x: any) => String(x?.date ?? "")));
+  return { p, ov, monday, rows, f, w, plan, stack: stackOf(techOfWeek(w)), allowed: techSoFar(p, w) };
+}
+type ItemCtx = Awaited<ReturnType<typeof itemCtx>>;
+const checkOf = (c: ItemCtx, kind: string) => (kind === "veille"
+  ? (x: Veille) => validateVeille(x, c.allowed)
+  : (x: Live) => validateLive(x, { stack: c.stack, allowed: c.allowed, concepts: conceptsSoFar(c.p, c.w) })) as (x: any) => string[];
+const renderOf = (c: ItemCtx, kind: string, data: any, day: string) => (kind === "veille" ? renderVeille(data, day) : renderLive(data, day, c.f.live.indexOf(day) + 1));
+
+/**
+ * One veille or live coding, written from the week's plan; with the teacher's proposal as the main instruction.
+ * Saved in place of the old one, unless `preview` (the teacher compares, then keeps it with keepItem).
+ */
+export async function generateItem(env: Env, g: GuildRow, o: { day: string; kind: string; proposal?: unknown; preview?: boolean; mode?: unknown; theme?: unknown }) {
+  const c = await itemCtx(env, g, o.day, o.kind);
+  const proposal = cleanProposal(o.proposal);
+  const theme = String(o.theme ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+  // Regenerate: a totally new subject (the current title is avoided), or the same subject rewritten
+  const cur = c.rows.find((x) => x.kind === o.kind && x.day === o.day);
+  const regen: Regen | null = o.mode === "new" || o.mode === "same" ? { mode: o.mode, current: cur?.title || "", theme: o.mode === "new" ? theme : "" } : null;
+  const outside = proposalOutside([theme, proposal].filter(Boolean).join("\n"), c.allowed);
+  const ctx = await contextOf(env, g, c.p, c.f);
+  let r: { data: Veille | Live; errors: string[]; model: string };
+  if (o.kind === "veille") r = await askChecked(env, veillePrompt(ctx, c.plan, c.f, o.day, proposal, outside, regen), 3000, cleanVeille, checkOf(c, "veille"));
+  else {
     // the veilles of the week up to this day: the live coding uses only them (and what came before)
-    const veilles = rows.filter((r) => r.kind === "veille" && r.day <= o.day).map((r) => {
-      const v = parse(r.data, {});
-      return `- ${dayFr(r.day)} : « ${r.title} »${Array.isArray(v.objectifs) ? ` (${v.objectifs.slice(0, 4).join(" ; ")})` : ""}`;
+    const veilles = c.rows.filter((x) => x.kind === "veille" && x.day <= o.day).map((x) => {
+      const v = parse(x.data, {});
+      return `- ${dayFr(x.day)} : « ${x.title} »${Array.isArray(v.objectifs) ? ` (${v.objectifs.slice(0, 4).join(" ; ")})` : ""}`;
     });
-    const planned = plan.jours.filter((x) => x.date <= o.day && !rows.some((r) => r.kind === "veille" && r.day === x.date)).map((x) => `- ${dayFr(x.date)} : « ${x.veille} » (${x.focus})`);
-    const n = f.live.indexOf(o.day) + 1;
-    const user = [ctx, planText,
-      `VEILLES DE LA SEMAINE JUSQU'À CE JOUR (le live coding n'utilise que ces notions et celles d'avant) :\n${[...veilles, ...planned].join("\n") || "- (aucune)"}`,
-      `LIVE CODING À ÉCRIRE : LC${n}, ${dayFr(o.day)} (${o.day})${j?.live ? `, titre prévu « ${j.live} », ce qu'on construit : ${j.live_focus}` : ", choisis un sujet cohérent avec la veille du jour"}.`,
-      `Réponds UNIQUEMENT avec ce JSON :\n${liveShape(stack)}`].join("\n\n");
-    const r = await askChecked(env, user, 4500, (x) => cleanLive(x, stack), (x) => validateLive(x, { stack, allowed: techSoFar(p, w), concepts: conceptsSoFar(p, w) }));
-    saved = await saveRow(env, g.id, { program: p.id, day: o.day, kind: "live", week: w.n, title: r.data.titre || j?.live || "Live coding", data: r.data, md: renderLive(r.data, o.day, n), warnings: r.errors, model: r.model });
+    const planned = c.plan.jours.filter((x) => x.date <= o.day && !c.rows.some((y) => y.kind === "veille" && y.day === x.date)).map((x) => `- ${dayFr(x.date)} : « ${x.veille} » (${x.focus})`);
+    r = await askChecked(env, livePrompt(ctx, c.plan, c.f, o.day, c.stack, [...veilles, ...planned], proposal, outside, regen), 4500, (x) => cleanLive(x, c.stack), checkOf(c, "live"));
   }
-  await refreshWeek(env, g, p, monday, ov);
+  if (regen?.mode === "same" && regen.current) r.data.titre = regen.current;
+  const data = { ...r.data, proposal, ...(theme && regen?.mode === "new" ? { theme } : {}), ecarte: [...new Set([...outside.map((x) => `${x} (pas encore au programme)`), ...r.data.ecarte])].slice(0, 6) };
+  const title = data.titre || c.plan.jours.find((x) => x.date === o.day)?.[o.kind === "live" ? "live" : "veille"] || (o.kind === "live" ? "Live coding" : "Veille");
+  const md = renderOf(c, o.kind, data, o.day);
+  if (o.preview) return { draft: { day: o.day, kind: o.kind, title, md, warnings: r.errors, ecarte: data.ecarte, data, model: r.model } };
+  const saved = await saveRow(env, g.id, { program: c.p.id, day: o.day, kind: o.kind, week: c.w.n, title, data, md, warnings: r.errors, model: r.model });
+  await refreshWeek(env, g, c.p, c.monday, c.ov);
+  return { item: itemView((await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ?", saved.id))!) };
+}
+/** "Replace": the version the teacher previewed is saved (cleaned and checked again here, nothing is trusted), with their proposal. */
+export async function keepItem(env: Env, g: GuildRow, o: { day: string; kind: string; data: unknown; proposal?: unknown; model?: unknown }) {
+  const c = await itemCtx(env, g, o.day, o.kind);
+  const data = { ...(o.kind === "veille" ? cleanVeille(o.data) : cleanLive(o.data, c.stack)), proposal: cleanProposal(o.proposal) };
+  if (!data.titre) throw new ActivityError("This version is empty: generate it again.");
+  const saved = await saveRow(env, g.id, { program: c.p.id, day: o.day, kind: o.kind, week: c.w.n, title: data.titre, data, md: renderOf(c, o.kind, data, o.day),
+    warnings: checkOf(c, o.kind)(data), model: String(o.model ?? "").slice(0, 80) });
+  await refreshWeek(env, g, c.p, c.monday, c.ov);
   return itemView((await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ?", saved.id))!);
 }
 
@@ -765,12 +900,35 @@ export async function setLiveDays(env: Env, g: GuildRow, monday: string, live: s
   return { live: keep, removed: gone.map((r) => r.day) };
 }
 
-/** The teacher's own version of an item. */
-export async function editItem(env: Env, g: GuildRow, id: number, md: string) {
-  const text = String(md ?? "").replace(/\r\n?/g, "\n").slice(0, 30000);
+/** The teacher's own version of an item: its text, and its title (the card, the week's overview and the next Regenerate follow it). */
+export async function editItem(env: Env, g: GuildRow, id: number, md: string, title?: unknown) {
+  let text = String(md ?? "").replace(/\r\n?/g, "\n").slice(0, 30000);
   if (!text.trim()) throw new ActivityError("The text is empty: regenerate the item or delete it instead.");
-  const r = await run(env, "UPDATE activities SET md = ?, edited = 1, updated_at = ? WHERE id = ? AND guild_id = ?", text, now(), id, g.id);
-  if (!r.meta.changes) throw new ActivityError("This activity doesn't exist anymore.");
+  const row = await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!row) throw new ActivityError("This activity doesn't exist anymore.");
+  let t = row.title || "";
+  if (row.kind !== "week" && title !== undefined) {
+    t = String(title ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
+    if (!t) throw new ActivityError("Give it a title.");
+    // the heading of the text says the title too ("## Mardi 27/10 — Veille : …"): it follows
+    const lines = text.split("\n"), h = lines.findIndex((l) => /^##\s/.test(l));
+    if (h >= 0 && /(Veille|Live coding[^:]*)\s*:\s*/.test(lines[h])) lines[h] = lines[h].replace(/((?:Veille|Live coding[^:]*)\s*:\s*).*$/, `$1${t}`);
+    text = lines.join("\n");
+  }
+  const d = parse(row.data, {});
+  if (row.kind !== "week" && d && typeof d === "object") d.titre = t;
+  await run(env, "UPDATE activities SET md = ?, title = ?, data = ?, edited = 1, updated_at = ? WHERE id = ?", text, t, JSON.stringify(d), now(), id);
+  if (row.kind !== "week" && t !== row.title) {
+    // the week's plan says this title from now on (an unchanged Regenerate starts from it)
+    const monday = mondayOf(row.day);
+    const wk = await one<ActivityRow>(env, "SELECT * FROM activities WHERE guild_id = ? AND day = ? AND kind = 'week'", g.id, monday);
+    if (wk) {
+      const wd = parse(wk.data, {});
+      const j = Array.isArray(wd?.plan?.jours) ? wd.plan.jours.find((x: any) => x?.date === row.day) : null;
+      if (j) { j[row.kind === "live" ? "live" : "veille"] = t; await run(env, "UPDATE activities SET data = ? WHERE id = ?", JSON.stringify(wd), wk.id); }
+    }
+    await refreshWeek(env, g, await programOf(env, g), monday, await overridesOf(env, g.id)).catch(() => null);
+  }
   return itemView((await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ?", id))!);
 }
 export async function deleteItem(env: Env, g: GuildRow, id: number) {

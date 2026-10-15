@@ -5,11 +5,19 @@
 /* global $, $$, api, esc, toast, busy, view, openDialog, confirmDialog, dlg, loadDiscord, loadStudents, channelOptions, avatar, fmtAgo, table, refreshPills, routes */
 let presTab = (() => { try { return localStorage.getItem("presTab") || "acts"; } catch { return "acts"; } })();
 let presFilter = "all";
+// the week shared (or assigned at random) from the "Share in Discord" panel: remembered in this browser
+let presWeek = (() => { try { return localStorage.getItem("presWeek") || ""; } catch { return ""; } })();
 const PR_LV = { easy: "Easy", medium: "Medium", hard: "Hard" };
 const PR_GRADES = [[100, "Excellent"], [75, "Good"], [50, "Average"], [25, "Weak"], [0, "Not presented"]];
 const prKind = (k) => (k === "live" ? "Live coding" : "Veille");
 const prDay = (d, o = { weekday: "short", day: "numeric", month: "short" }) => esc(new Date(d + "T12:00:00Z").toLocaleDateString(undefined, { ...o, timeZone: "UTC" }));
 const prMonday = (d) => { const t = new Date(d + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() - ((t.getUTCDay() + 6) % 7)); return t.toISOString().slice(0, 10); };
+/** The free activities by week (Monday first), and whether a week is already all shared. */
+const prFreeWeeks = (free) => {
+  const out = [];
+  for (const it of [...free].sort((a, b) => a.day.localeCompare(b.day))) { const m = prMonday(it.day); let w = out.find((x) => x.m === m); if (!w) out.push((w = { m, items: [] })); w.items.push(it); }
+  return out.map((w) => ({ ...w, shared: w.items.every((i) => i.shared) }));
+};
 const prWho = (members) => members.map((m) => `<span class="pr-who">${avatar(m.name, m.id)}<span>${esc(m.name)}</span></span>`).join("");
 
 async function viewPresentations() {
@@ -56,16 +64,18 @@ function prActsPane(P, free) {
     : presFilter === "free" ? !i.claim && !i.past : presFilter === "taken" ? i.claim && i.claim.status === "approved" : presFilter === "done" ? i.claim?.status === "done" : true);
   const weeks = [];
   for (const it of shown) { const m = prMonday(it.day); let w = weeks.find((x) => x.m === m); if (!w) weeks.push((w = { m, items: [] })); w.items.push(it); }
+  const fweeks = prFreeWeeks(free), sel = fweeks.find((w) => w.m === presWeek) || fweeks[0];
   const counts = { all: P.items.filter((i) => !i.past || i.claim?.status === "approved").length, free: free.length, taken: P.items.filter((i) => i.claim?.status === "approved").length, done: P.items.filter((i) => i.claim?.status === "done").length };
   return `
     <section class="panel pr-share">
       <div class="pr-share-l"><h2>📣 Share in Discord</h2>
         <p class="muted small">Students see the free ones with <code>/activity list</code>, ask with <code>/activity choose</code> (a veille with their binôme) and read the subject with <code>/activity mine</code> once you approve.</p></div>
       <div class="pr-share-r">
+        <label>Week<select id="pr-wk">${fweeks.length ? fweeks.map((w) => `<option value="${w.m}" ${w === sel ? "selected" : ""}>Week of ${prDay(w.m, { day: "numeric", month: "short" })} · ${w.items.length} free${w.shared ? " · shared" : ""}</option>`).join("") : `<option value="">No free activity</option>`}</select></label>
         <label>Channel<select id="pr-ch"><option value="">Choose a channel…</option>${channelOptions(P.cfg.channel)}</select></label>
         <label>Veille<span class="unit-in"><input type="number" id="pr-pv" min="0" max="300" value="${P.cfg.veille}"><i>pts</i></span></label>
         <label>Live coding<span class="unit-in"><input type="number" id="pr-pl" min="0" max="300" value="${P.cfg.live}"><i>pts</i></span></label>
-        <div class="pr-share-btns"><button class="btn primary" id="pr-share" ${free.length ? "" : "disabled"}>📣 Share ${free.length} free</button><button class="btn" id="pr-rand" ${free.length ? "" : "disabled"}>🎲 Assign at random</button></div>
+        <div class="pr-share-btns"><button class="btn primary" id="pr-share" ${sel ? "" : "disabled"}>📣 Share the week (${sel?.items.length ?? 0})</button><button class="btn" id="pr-rand" ${sel ? "" : "disabled"}>🎲 Assign the week at random</button></div>
       </div>
     </section>
     <div class="seg pr-filter" role="group" aria-label="Show">
@@ -170,12 +180,18 @@ function prWire(P, free) {
   $("#pr-ch").onchange = (e) => cfg({ channel: e.target.value || null });
   $("#pr-pv").onchange = (e) => cfg({ veille: Number(e.target.value) });
   $("#pr-pl").onchange = (e) => cfg({ live: Number(e.target.value) });
+  // share / assign at random: the free activities of the week picked
+  const weekFree = () => free.filter((i) => prMonday(i.day) === $("#pr-wk").value);
+  $("#pr-wk").onchange = (e) => {
+    presWeek = e.target.value; try { localStorage.setItem("presWeek", presWeek); } catch { /* this visit only */ }
+    $("#pr-share").textContent = `📣 Share the week (${weekFree().length})`;
+  };
   $("#pr-share").onclick = (e) => busy(e.currentTarget, async () => {
     if (!$("#pr-ch").value) throw new Error("Pick the Discord channel where the activities are shared.");
-    const r = await api("/activities/share", { method: "POST", body: { ids: free.map((i) => i.id), channel: $("#pr-ch").value } });
-    await reload(`${r.shared} activit${r.shared === 1 ? "y" : "ies"} shared in Discord`);
+    const r = await api("/activities/share", { method: "POST", body: { ids: weekFree().map((i) => i.id), channel: $("#pr-ch").value } });
+    await reload(`${r.shared} activit${r.shared === 1 ? "y" : "ies"} of the week of ${prDay($("#pr-wk").value, { day: "numeric", month: "short" })} shared in Discord`);
   });
-  $("#pr-rand").onclick = () => prRandom(free.map((i) => i.id), reload);
+  $("#pr-rand").onclick = () => prRandom(weekFree().map((i) => i.id), reload);
   $$("[data-pf]").forEach((b) => b.onclick = () => { presFilter = b.dataset.pf; $("#pt-acts").innerHTML = prActsPane(P, free); prWire(P, free); });
   $$(".pr-card").forEach((card) => {
     const it = P.items.find((x) => x.id === Number(card.dataset.act));
