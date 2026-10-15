@@ -1,13 +1,14 @@
 // 🎮 Class games pages (public, on the bot Worker):
 //   GET  /game/<id>.<tv>            the class TV (with the teacher's buttons)     GET  /play/<id>.<code>           a student's phone / laptop
-//   GET  /game/<id>.<tv>/state      what the TV shows                              GET  /play/<id>.<code>/roster    the names to pick from
-//   POST /game/<id>.<tv>/act        start / reveal / next / stop / kick / pardon   POST /play/<id>.<code>/join      this device plays for that name
+//   GET  /game/<id>.<tv>/state      what the TV shows                              (the student's own link comes from Discord: /play or 🎮)
+//   POST /game/<id>.<tv>/act        start / reveal / next / stop / kick / unban    POST /play/<id>.<code>/join      {pass}: this device plays for that student
+//                                   announce / pardon
 //                                   results (relay tests) / reset                  GET  /play/<id>.<code>/state     what this student sees
 //   GET  /game/<id>.<tv>/qr.svg     the QR code of the join link                   POST /play/<id>.<code>/answer|revive|check|hint|accuse|code|noise|mic
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { GameError, accuseSql, answerRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, reviveRoyale, rosterOf, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, NEXT_MS, accuseSql, answerRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -17,7 +18,7 @@ const html = (body: string) => new Response(body, { headers: { "content-type": "
 const esc = (s: string) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]!));
 const GONE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Class game</title>
 <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#0b1020;color:#e7edf8;font:18px system-ui,sans-serif;text-align:center"><div><div style="font-size:64px">🎮</div><p>This game doesn't exist anymore.<br>Ask your teacher for the new link.</p></div></body>`;
-const HOST_ACTIONS = ["start", "reveal", "next", "stop", "kick", "pardon", "results", "runtests", "reset"];
+const HOST_ACTIONS = ["start", "reveal", "next", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
 
 async function body(request: Request): Promise<any> { try { return await request.json(); } catch { return {}; } }
 
@@ -29,7 +30,11 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
   const url = new URL(request.url);
   try {
     if (who === "tv") {
-      if (!action) return html(TV(gm));
+      if (!action) {
+        // the first time the TV opens the lobby: the 🎮 Join button goes to #arena by itself
+        if (gm.state.phase === "lobby" && !gm.state.posted) await postJoin(env, gm).catch((e) => console.error("game join post", e?.message ?? e));
+        return html(TV(gm));
+      }
       if (action === "state") {
         const since = Number(url.searchParams.get("seq") || 0);
         // nothing new: a tiny answer (the clocks run on the screen); during a royale question the answer count moves
@@ -51,16 +56,17 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
     }
     // ---- a student
     if (!action) return html(PLAY(gm));
-    if (action === "roster") return json({ title: gm.title, kind: gm.kind, phase: gm.state.phase, names: await rosterOf(env, gm) });
     if (action === "case" && gm.kind === "sql") return new Response(JSON.stringify(caseForPlayers(gameCase(gm))), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "private, max-age=600" } });
     const b = request.method === "POST" ? await body(request) : {};
     const key = String(b.key || url.searchParams.get("key") || request.headers.get("x-player-key") || "").slice(0, 64);
     if (action === "join" && request.method === "POST") {
-      const p = await joinGame(env, gm, key, String(b.pid || "").slice(0, 25));
+      const pid = await readGamePass(env, gm.id, String(b.pass || ""));
+      if (!pid) return json({ error: "This link isn't valid anymore: type /play in Discord to get a new one.", join: true }, 403);
+      const p = await joinGame(env, gm, key, pid);
       return json(await playerView(env, (await getGame(env, gm.id))!, p));
     }
     const p = await playerByKey(env, gm.id, key);
-    if (!p) return json({ error: "Pick your name first.", join: true }, 403);
+    if (!p) return json({ error: "Open your own link from Discord (/play).", join: true }, 403);
     if (!p.seen || now() - p.seen >= 20) await run(env, "UPDATE game_players SET seen = ? WHERE game_id = ? AND pid = ?", now(), gm.id, p.pid);
     if (action === "state") {
       const since = Number(url.searchParams.get("seq") || 0);
@@ -176,10 +182,106 @@ h1.big{font-size:3.6vw;margin:0 0 1vh}h2{font-size:1.8vw;margin:0 0 1vh}
 .res{display:grid;gap:1.2vh}.resrow{display:grid;grid-template-columns:16vw 1fr 8vw;gap:1vw;align-items:center;font-size:1.4vw;font-weight:800}
 .pbar{height:2.4vh;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden}.pbar i{display:block;height:100%;background:var(--good)}
 .fullcode{max-height:34vh;font-size:1.1vw}
-.toast{position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#111827;border:1px solid var(--line);padding:1.2vh 1.6vw;border-radius:14px;font-weight:700;z-index:9;font-size:1.1vw}
+.toast{position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#111827;border:1px solid var(--line);padding:1.2vh 1.6vw;border-radius:14px;font-weight:700;z-index:50;font-size:1.1vw}
+
+/* ---- look: moving light, glass cards */
+body::before,body::after{content:"";position:fixed;width:60vw;height:60vw;border-radius:50%;filter:blur(90px);opacity:.35;z-index:-1;pointer-events:none}
+body::before{background:#7c3aed;top:-25vw;left:-15vw;animation:drift 18s ease-in-out infinite alternate}
+body::after{background:#0891b2;bottom:-30vw;right:-15vw;animation:drift 22s ease-in-out infinite alternate-reverse}
+@keyframes drift{to{transform:translate(12vw,8vh) scale(1.15)}}
+.grid-bg{position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:4vw 4vw;mask-image:radial-gradient(ellipse at center,#000 30%,transparent 75%)}
+.top>div{display:flex;align-items:center;gap:.6vw}
+.pill{padding:.6vh 1vw;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--ink);font-weight:800}
+.pill.hot{background:rgba(239,68,68,.22);border-color:rgba(239,68,68,.5)}
+.prog{position:fixed;top:0;left:0;height:.6vh;background:linear-gradient(90deg,#8b5cf6,#06b6d4);z-index:7;transition:width .6s;box-shadow:0 0 12px #8b5cf6}
+.glass{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:28px;backdrop-filter:blur(8px)}
+/* ---- lobby: join from Discord */
+.lobby2{display:grid;grid-template-columns:30vw 1fr;gap:3vw;align-items:center;height:100%}
+.joincard{padding:3vh 2vw;text-align:center;position:relative;overflow:hidden}
+.joincard::before{content:"";position:absolute;inset:-2px;border-radius:30px;padding:2px;background:linear-gradient(135deg,#5865f2,#8b5cf6,#06b6d4);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.dlogo{width:6vw;height:6vw;margin:0 auto 1.4vh;border-radius:26%;display:grid;place-items:center;background:#5865f2;font-size:3.4vw;box-shadow:0 0 40px rgba(88,101,242,.6);animation:bob 3s ease-in-out infinite}
+.joincard h2{font-size:2vw;margin:0 0 1.6vh}
+.jsteps{display:grid;gap:1.2vh;text-align:left;margin-top:1vh}
+.jsteps div{display:flex;gap:1vw;align-items:center;font-size:1.25vw;color:#dbe4fb}
+.jsteps i{flex:none;font-style:normal;display:grid;place-items:center;width:2.6vw;height:2.6vw;border-radius:50%;background:rgba(255,255,255,.1);font-weight:900}
+kbd{font:800 1.3vw/1 "JetBrains Mono",Consolas,monospace;padding:.5vh .7vw;border-radius:8px;background:#0b1224;border:1px solid var(--line);color:#c4b5fd}
+.jnote{margin-top:2vh;font-size:1vw;color:var(--soft)}
+.crown{font-size:5vw;display:inline-block;animation:bob 2.4s ease-in-out infinite;filter:drop-shadow(0 0 24px rgba(245,158,11,.6))}
+.ptitle{font-size:4.2vw;font-weight:900;margin:0;background:linear-gradient(90deg,#fff,#c4b5fd 50%,#67e8f9);-webkit-background-clip:text;background-clip:text;color:transparent;letter-spacing:-.02em}
+.pl{display:inline-flex;align-items:center;gap:.5vw}
+.pl .av{display:grid;place-items:center;width:1.9vw;height:1.9vw;border-radius:50%;background:rgba(0,0,0,.28);font-size:.9vw;font-weight:900}
+.sqbox{border-radius:22px;padding:1.4vh 1.1vw;background:linear-gradient(180deg,color-mix(in srgb,var(--c) 22%,transparent),rgba(255,255,255,.03));border:2px solid color-mix(in srgb,var(--c) 70%,transparent);min-width:13vw;animation:pop .4s}
+.sqbox b{font-size:1.4vw}.sqbox .mem{display:flex;flex-wrap:wrap;gap:.4vw}
+.sqbox .mem button{border:0;color:#fff;font-weight:700;font-size:1vw;padding:.4vh .7vw;border-radius:999px;background:rgba(0,0,0,.25)}
+.sqbox .mem button:hover,.pl:hover{outline:2px solid #fff}
+.empty{font-size:1.3vw;color:var(--soft);margin-top:2vh;animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.45}}
+/* ---- countdown */
+.cd{display:grid;place-items:center;align-content:center;gap:2vh;text-align:center;height:100%}
+.cd h1{font-size:3vw;margin:0;color:var(--soft);letter-spacing:.3em;text-transform:uppercase}
+.cdn{font-size:17vw;font-weight:900;line-height:1;color:#fff;text-shadow:0 0 .4em rgba(139,92,246,.9),0 0 1.2em rgba(6,182,212,.5);margin:2vh 0}
+.cdn.tick{animation:cdpop .9s ease-out}
+@keyframes cdpop{0%{transform:scale(1.8);opacity:0}25%{transform:scale(.95);opacity:1}100%{transform:scale(1);opacity:1}}
+.cd .sub{font-size:1.6vw;color:#dbe4fb}
+.go{position:fixed;inset:0;display:grid;place-items:center;font-size:16vw;font-weight:900;color:#fff;z-index:20;pointer-events:none;animation:goflash .8s ease-out forwards;text-shadow:0 0 60px #22c55e}
+@keyframes goflash{0%{transform:scale(.4);opacity:0}30%{transform:scale(1.15);opacity:1}100%{transform:scale(1.6);opacity:0}}
+/* ---- question */
+.q{display:flex;flex-direction:column;gap:1.5vh;min-height:0}.ring{width:7vw;height:7vw}.ring span{font-size:2.4vw}
+.qhead .chip{font-size:1.1vw}
+.ring{filter:drop-shadow(0 0 18px var(--rc,#8b5cf6))}.ring .fg{stroke:var(--rc,#8b5cf6);transition:stroke .4s}
+.ring.hurry{animation:hurry .5s ease-in-out infinite alternate}
+@keyframes hurry{to{transform:scale(1.08)}}
+.promptbox{padding:2.4vh 2vw;animation:rise .5s both}
+.opt{animation:rise .5s both;box-shadow:0 .8vh 0 rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.25)}
+.opt:nth-child(2){animation-delay:.08s}.opt:nth-child(3){animation-delay:.16s}.opt:nth-child(4){animation-delay:.24s}
+@keyframes rise{from{transform:translateY(3vh);opacity:0}}
+.opt b{font-size:1.5vw}.q .opt{padding:3.2vh 1.6vw}
+.opt.yes{animation:glow 1.2s ease-in-out infinite alternate}
+@keyframes glow{from{box-shadow:0 0 0 .4vw #fff,0 0 30px rgba(255,255,255,.4)}to{box-shadow:0 0 0 .5vw #fff,0 0 60px rgba(255,255,255,.7)}}
+.ansbar{display:flex;align-items:center;gap:1vw;font-size:1.2vw;color:var(--soft);font-weight:800}
+.ansbar .pbar{flex:1;height:1.4vh}.ansbar .pbar i{background:linear-gradient(90deg,#8b5cf6,#06b6d4);transition:width .4s}
+.arena{display:flex;flex-wrap:wrap;gap:.8vw;justify-content:center}
+.sqcard{display:flex;align-items:center;gap:.7vw;padding:.9vh 1vw;border-radius:16px;background:linear-gradient(90deg,color-mix(in srgb,var(--c) 35%,transparent),rgba(255,255,255,.04));border:1px solid color-mix(in srgb,var(--c) 60%,transparent);font-weight:800;font-size:1.1vw;transition:all .5s}
+.sqcard .e{font-size:1.6vw}.sqcard .hp{letter-spacing:.1vw;font-size:1vw}
+.sqcard.dead{filter:grayscale(1);opacity:.35;transform:scale(.94)}
+.sqcard .pts{padding:.2vh .6vw;border-radius:999px;background:rgba(0,0,0,.25);font-size:.95vw}
+/* ---- wiped squad */
+.wipe{position:fixed;inset:0;z-index:30;display:grid;place-items:center;align-content:center;gap:1.6vh;text-align:center;background:radial-gradient(circle at center,color-mix(in srgb,var(--c) 40%,#000) 0%,#000 70%);animation:wipein .35s ease-out,shake .5s .35s 2;overflow:hidden}
+@keyframes wipein{from{opacity:0}}
+.wipe .flash{position:absolute;inset:0;background:#fff;animation:flash .5s ease-out forwards;pointer-events:none}
+@keyframes flash{from{opacity:.9}to{opacity:0}}
+.wipe .we{font-size:16vw;line-height:1;animation:crack 2.6s ease-in forwards;filter:drop-shadow(0 0 50px var(--c))}
+@keyframes crack{0%{transform:scale(.3) rotate(-20deg)}15%{transform:scale(1.15) rotate(4deg)}30%{transform:scale(1) rotate(0)}70%{transform:scale(1) rotate(0);filter:grayscale(0) drop-shadow(0 0 50px var(--c))}100%{transform:scale(.6) rotate(25deg) translateY(10vh);filter:grayscale(1) drop-shadow(0 0 0 transparent);opacity:.2}}
+.wipe .wt{font-size:6vw;font-weight:900;letter-spacing:.06em;color:#fff;text-shadow:.3vw 0 #ef4444,-.3vw 0 #06b6d4;animation:glitch .25s steps(2) 6,rise .4s both}
+@keyframes glitch{50%{text-shadow:-.4vw 0 #ef4444,.4vw 0 #06b6d4;transform:translateX(.3vw) skewX(-6deg)}}
+.wipe .wn{font-size:3vw;font-weight:900;color:var(--c);animation:rise .5s .3s both}
+.wipe .wm{display:flex;flex-wrap:wrap;gap:.6vw;justify-content:center;max-width:70vw;animation:rise .5s .5s both}
+.wipe .wm span{padding:.6vh 1vw;border-radius:999px;background:rgba(255,255,255,.1);font-weight:800;font-size:1.3vw}
+.shard{position:fixed;left:50%;top:45%;width:1.2vw;height:1.2vw;border-radius:3px;background:var(--c);z-index:31;pointer-events:none;animation:shard 1.4s cubic-bezier(.15,.7,.3,1) forwards}
+@keyframes shard{to{transform:translate(var(--dx),var(--dy)) rotate(var(--r));opacity:0}}
+/* ---- the end */
+.podium{display:flex;align-items:flex-end;justify-content:center;gap:1.4vw;margin-top:1vh}
+.pod{display:grid;justify-items:center;gap:.6vh;animation:rise .7s both}
+.pod .nm{font-weight:900;font-size:1.3vw;max-width:14vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pod .blk{width:12vw;border-radius:18px 18px 0 0;display:grid;place-items:center;font-size:3vw;font-weight:900;background:linear-gradient(180deg,var(--pc),rgba(255,255,255,.04))}
+.pod.p1{animation-delay:.6s}.pod.p1 .blk{height:20vh;--pc:#f59e0b}.pod.p2{animation-delay:.3s}.pod.p2 .blk{height:14vh;--pc:#94a3b8}.pod.p3 .blk{height:10vh;--pc:#b45309}
+.wbig{font-size:4.6vw;font-weight:900;margin:0;padding:1vh 2.4vw;border-radius:24px;background:linear-gradient(90deg,color-mix(in srgb,var(--c,#f59e0b) 40%,transparent),transparent);text-shadow:0 0 30px var(--c,#f59e0b)}
+.rank{display:flex;flex-wrap:wrap;gap:.6vw;justify-content:center;max-width:86vw}
+.rank span{padding:.6vh 1vw;border-radius:999px;background:rgba(255,255,255,.08);font-weight:800;font-size:1.05vw}
+canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
+/* ---- players panel */
+.modal{position:fixed;inset:0;z-index:40;display:grid;place-items:center;background:rgba(3,6,15,.72);backdrop-filter:blur(6px)}
+.mbox{width:min(46vw,720px);max-height:80vh;overflow:auto;padding:2.6vh 2vw;border-radius:26px;background:#0e1530;border:1px solid var(--line);animation:pop .3s}
+.mbox h2{display:flex;justify-content:space-between;align-items:center}
+.prow{display:flex;align-items:center;gap:1vw;padding:1vh .4vw;border-bottom:1px solid var(--line);font-size:1.1vw;font-weight:700}
+.prow .dotc{width:1vw;height:1vw;border-radius:50%;background:var(--c)}
+.prow .grow{flex:1}
+.prow .btn{font-size:.95vw;padding:.7vh 1vw}
+.mbox .btn.danger{background:rgba(239,68,68,.35)}
 </style></head><body>
+<div class="grid-bg"></div><div class="prog" id="prog" style="width:0"></div>
 <div class="top"><div>🎮 <b id="kind"></b></div><div id="ttl">${esc(gm.title)}</div><div id="info"></div></div>
-<div id="app"></div>
+<div id="app"></div><div id="ov"></div>
 <div class="bar" id="bar"></div>
 <script>
 "use strict";
@@ -210,50 +312,126 @@ async function poll() {
   try { const r = await fetch(BASE + "/state?seq=" + (S ? S.seq : 0)); if (r.ok) take(await r.json()); } catch (x) {}
   setTimeout(poll, S && S.phase === "question" ? 900 : 1500);
 }
+let manage = "", panel = false;
+const initials = (n) => String(n || "?").trim().split(/\\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
 function players(list, opts) {
-  return list.map((p) => '<button class="pl' + (p.alive === false ? " dead" : "") + '" data-kick="' + e(p.pid) + '" style="--c:' + (p.squad >= 0 && S.mode !== "solo" ? sq(p.squad).color : "rgba(255,255,255,.12)") + '" title="' + T("Cliquer deux fois pour libérer ce nom", "Click twice to free this name") + '">' + (opts && opts.mic ? (p.mic === 1 ? "🎤 " : p.mic === 0 ? "🔇 " : "") : "") + e(p.name) + (kick === p.pid ? " ✕?" : "") + "</button>").join("");
+  return list.map((p) => '<button class="pl' + (p.alive === false ? " dead" : "") + '" data-who="' + e(p.pid) + '" style="--c:' + (p.squad >= 0 && S.mode !== "solo" ? sq(p.squad).color : "rgba(255,255,255,.12)") + '" title="' + T("Cliquer pour retirer ce joueur", "Click to remove this player") + '"><span class="av">' + e(initials(p.name)) + "</span>" + (opts && opts.mic ? (p.mic === 1 ? "🎤 " : p.mic === 0 ? "🔇 " : "") : "") + e(p.name) + "</button>").join("");
+}
+function bannedLine() {
+  return S.banned && S.banned.length ? '<p class="muted" style="font-size:1vw;margin-top:1.4vh">🚫 ' + T("Retirés : ", "Removed: ") + S.banned.map((b) => e(b.name)).join(", ") + ' <button class="btn" style="font-size:.9vw;padding:.4vh .9vw" data-panel="1">' + T("Gérer", "Manage") + "</button></p>" : "";
 }
 function lobby(extra) {
   const head = S.kind === "sql" ? '<h1 class="big">🕵️ ' + e(S.case.title) + '</h1><p class="story">' + e(S.case.story) + '</p><p class="muted">' + T("Notions : ", "Notions: ") + S.case.notions.map(e).join(" · ") + "</p>"
     : S.kind === "relay" ? '<h1 class="big">🏃 ' + T("Relais de code", "Code Relay") + " · " + e(S.task.title) + ' <span class="chip" style="font-size:1.2vw;vertical-align:middle">' + e(S.langName || "JavaScript") + '</span></h1><p class="story">' + e(S.task.text) + '</p><p class="muted">' + T("Chacun écrit à son tour : ", "Each one writes in turn: ") + mmss(S.totalMs) + T(" ÷ la taille du squad. ", " ÷ the squad size. ") + (S.noise ? T("Interdit de parler : les micros écoutent (", "No talking: the mics are listening (") + S.strikesMax + T(" avertissements = éliminés).", " strikes = out).") : "") + "</p>"
-    : '<h1 class="big">👑 Battle Royale</h1><p class="story">' + T("Une mauvaise réponse et tu es éliminé. Le dernier debout gagne !", "One wrong answer and you're out. The last one standing wins!") + (S.mode !== "solo" ? T(" En squad, vos bonnes réponses donnent des points pour ramener un coéquipier.", " In squads, your right answers earn points to bring a teammate back.") : "") + "</p>";
-  const bySquad = S.mode === "squads" ? '<div class="sqrow">' + S.squads.map((q, i) => q ? '<div class="sqbox" style="--c:' + q.color + '"><b>' + e(q.emoji + " " + q.name) + "</b>" + S.players.filter((p) => p.squad === i).map((p) => e(p.name)).join(", ") + "</div>" : "").join("") + "</div>" : "";
-  return '<div class="lobby"><div><div class="qr"><img src="' + BASE + '/qr.svg" alt="QR"></div><div class="join">' + T("Scanne ou ouvre", "Scan or open") + '<br><b>' + e(S.join.replace(/^https?:\\/\\//, "")) + "</b></div></div><div>" + head +
-    '<h2 style="margin-top:2vh">' + S.players.length + T(" joueur", " player") + (S.players.length > 1 ? "s" : "") + (S.mode === "random" ? T(" · squads au hasard au départ", " · random squads at the start") : "") + "</h2>" + (bySquad || '<div class="plist">' + players(S.players, { mic: S.kind === "relay" }) + "</div>") + (extra || "") + "</div></div>";
+    : '<div class="crown">👑</div><h1 class="ptitle">Battle Royale</h1><p class="story">' + T("Une mauvaise réponse et tu es éliminé. Le dernier debout gagne !", "One wrong answer and you're out. The last one standing wins!") + (S.mode !== "solo" ? T(" En squad, vos bonnes réponses donnent des points pour ramener un coéquipier. Un squad dont tous les membres tombent est éliminé.", " In squads, your right answers earn points to bring a teammate back. A squad whose members all fall is wiped out.") : "") + "</p>";
+  const bySquad = S.mode === "squads" ? '<div class="sqrow">' + S.squads.map((q, i) => {
+    if (!q) return "";
+    const mem = S.players.filter((p) => p.squad === i);
+    return '<div class="sqbox" style="--c:' + q.color + '"><b>' + e(q.emoji + " " + q.name) + ' <span class="muted" style="font-size:1vw">· ' + mem.length + '</span></b><div class="mem">' + (mem.length ? mem.map((p) => '<button data-who="' + e(p.pid) + '" title="' + T("Cliquer pour retirer", "Click to remove") + '">' + e(p.name) + "</button>").join("") : '<span class="muted" style="font-size:.95vw">' + T("personne encore", "nobody yet") + "</span>") + "</div></div>";
+  }).join("") + "</div>" : "";
+  const join = '<div class="joincard glass"><div class="dlogo">🎮</div><h2>' + T("Rejoins depuis Discord", "Join from Discord") + '</h2><div class="jsteps"><div><i>1</i>' + T("Ouvre Discord sur ton téléphone ou ton PC", "Open Discord on your phone or laptop") + "</div><div><i>2</i><span>" + T("Clique sur <b>🎮 Rejoindre</b> dans #arena, ou tape ", "Click <b>🎮 Join</b> in #arena, or type ") + "<kbd>/play</kbd></span></div><div><i>3</i>" + T("Ouvre ton lien personnel : tu joues sous ton nom", "Open your own link: you play under your name") + '</div></div><div class="jnote">🔒 ' + T("Chaque lien est lié à un compte Discord : personne ne peut jouer à ta place.", "Each link is tied to a Discord account: nobody can play as you.") + "</div></div>";
+  const n = S.players.length;
+  return '<div class="lobby2">' + join + "<div>" + head + '<h2 style="margin-top:2vh">' + n + T(" joueur", " player") + (n > 1 ? "s" : "") + (S.mode === "random" ? T(" · les squads sont formés au départ", " · the squads are made at the start") : "") + "</h2>" +
+    (n || bySquad ? (bySquad || '<div class="plist">' + players(S.players, { mic: S.kind === "relay" }) + "</div>") : '<div class="empty">⏳ ' + T("En attente des joueurs…", "Waiting for players…") + "</div>") + bannedLine() + (extra || "") + "</div></div>";
 }
+// ---------------------------------------------------------------- 👥 the teacher manages the players
+function panelHtml() {
+  if (manage) {
+    const p = S.players.find((x) => x.pid === manage);
+    if (!p) { manage = ""; return panelHtml(); }
+    return '<div class="modal" data-close="1"><div class="mbox"><h2>' + e(p.name) + '</h2><p class="muted" style="font-size:1.1vw">' + T("Retirer ce joueur de la partie ? Son lien Discord ne le laissera plus revenir (tu peux annuler dans 👥 Joueurs).", "Remove this player from the game? Their Discord link won't let them back in (you can undo it in 👥 Players).") + '</p><p style="display:flex;gap:1vw;justify-content:flex-end"><button class="btn" data-close="1">' + T("Annuler", "Cancel") + '</button><button class="btn danger" data-kick="' + e(p.pid) + '">🚫 ' + T("Retirer", "Remove") + "</button></p></div></div>";
+  }
+  if (!panel) return "";
+  const rows = S.players.slice().sort((a, b) => a.squad - b.squad || a.name.localeCompare(b.name)).map((p) => '<div class="prow" style="--c:' + (p.squad >= 0 && S.mode !== "solo" ? sq(p.squad).color : "#64748b") + '"><span class="dotc"></span><span class="grow">' + e(p.name) + (p.alive === false && S.phase !== "lobby" ? " 💀" : "") + "</span>" + (S.mode !== "solo" && p.squad >= 0 ? '<span class="muted">' + e(sq(p.squad).emoji + " " + sq(p.squad).name) + "</span>" : "") + '<button class="btn danger" data-kick="' + e(p.pid) + '">🚫 ' + T("Retirer", "Remove") + "</button></div>").join("");
+  const banned = (S.banned || []).map((b) => '<div class="prow" style="--c:#ef4444"><span class="dotc"></span><span class="grow">' + e(b.name) + ' <span class="muted">· ' + T("retiré", "removed") + '</span></span><button class="btn" data-unban="' + e(b.pid) + '">↩ ' + T("Laisser revenir", "Let back in") + "</button></div>").join("");
+  return '<div class="modal" data-close="1"><div class="mbox"><h2>👥 ' + T("Joueurs", "Players") + " (" + S.players.length + ')<button class="btn" data-close="1">✕</button></h2>' + (rows || '<p class="muted">' + T("Personne pour l'instant.", "Nobody yet.") + "</p>") + (banned ? '<h2 style="margin-top:2vh">🚫 ' + T("Retirés", "Removed") + "</h2>" + banned + '<p class="muted" style="font-size:.95vw">' + T("Un joueur retiré qui revient recommence comme spectateur si la partie a commencé.", "A removed player who comes back watches if the game has started.") + "</p>" : "") + "</div></div>";
+}
+function drawPanel() { $("#ov").innerHTML = panelHtml(); }
 function winScreen(title, sub, more) {
   return '<div class="win"><div class="trophy">🏆</div><h1>' + title + "</h1>" + (sub ? "<p>" + sub + "</p>" : "") + (more || "") + "</div>";
 }
 // ---------------------------------------------------------------- 👑 royale
-let shownStep = 0, shownPhase = "";
+let shownStep = 0, shownPhase = "", wipedShown = -1, pre = false;
+const SH = ["▲", "◆", "●", "■"];
+const squadsLeft = () => new Set(S.players.filter((p) => p.alive && p.squad >= 0).map((p) => p.squad)).size;
+const ringColor = (left) => { const f = left / (S.seconds * 1000); return f > .5 ? "#22c55e" : f > .25 ? "#f59e0b" : "#ef4444"; };
+function squadArena(reveal) {
+  return '<div class="arena">' + S.squads.map((s, i) => {
+    if (!s) return "";
+    const mem = S.players.filter((p) => p.squad === i);
+    if (!mem.length) return "";
+    const al = mem.filter((p) => p.alive).length;
+    return '<div class="sqcard' + (al ? "" : " dead") + '" style="--c:' + s.color + '"><span class="e">' + e(s.emoji) + "</span>" + e(s.name) + ' <span class="hp">' + "❤️".repeat(Math.min(al, 6)) + (al > 6 ? "+" + (al - 6) : "") + "🖤".repeat(Math.min(mem.length - al, 6)) + '</span><span class="pts">' + (al ? (S.pts[i] || 0) + " pts" : "💀") + "</span></div>";
+  }).join("") + "</div>";
+}
+function countdown() {
+  const n = Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000));
+  const al = S.players.filter((p) => p.alive).length;
+  return '<div class="cd"><h1>' + (S.step === 1 ? T("Préparez-vous", "Get ready") : T("Question ", "Question ") + S.step + " / " + S.total) + '</h1><div class="cdn tick" id="cdn">' + n + '</div><div class="sub">' +
+    (S.step === 1 ? al + T(" joueurs en lice · une erreur et c'est fini !", " players · one mistake and you're out!") : "❤️ " + al + T(" encore en vie", " still alive")) + "</div>" + (S.mode !== "solo" ? squadArena(false) : "") + "</div>";
+}
+function overScreen() {
+  const w = S.players.filter((p) => S.winners.includes(p.pid));
+  const s = S.winSquad != null ? sq(S.winSquad) : null;
+  const ranked = S.players.slice().sort((a, b) => (b.out == null ? 999 : b.out) - (a.out == null ? 999 : a.out) || b.score - a.score);
+  const pod = (p, k) => p ? '<div class="pod p' + (k + 1) + '"><div class="nm">' + ["🥇", "🥈", "🥉"][k] + " " + e(p.name) + '</div><div class="muted" style="font-size:1vw">' + p.score + ' ✓</div><div class="blk">' + (k + 1) + "</div></div>" : "";
+  const title = s ? '<div class="wbig" style="--c:' + s.color + '">' + e(s.emoji + " " + s.name) + "</div>"
+    : '<div class="wbig">' + (w.length === 1 ? "👑 " + e(w[0].name) : w.length ? w.map((p) => e(p.name)).join(", ") : T("Personne ne survit !", "Nobody survives!")) + "</div>";
+  const sub = s ? T("Le dernier squad debout · ", "The last squad standing · ") + w.map((p) => e(p.name)).join(", ") : w.length ? T("Dernier survivant", "Last one standing") + (w.length > 1 ? "s" : "") : "";
+  return '<div class="win"><div class="trophy">🏆</div>' + title + (sub ? "<p>" + sub + "</p>" : "") + '<div class="podium">' + pod(ranked[1], 1) + pod(ranked[0], 0) + pod(ranked[2], 2) + '</div><div class="rank">' + ranked.slice(3, 24).map((p, i) => "<span>" + (i + 4) + ". " + e(p.name) + " · " + p.score + "✓</span>").join("") + "</div></div>";
+}
 function royale() {
   const alive = S.players.filter((p) => p.alive);
-  $("#info").textContent = S.phase === "lobby" ? "" : alive.length + T(" en vie", " alive") + " · " + T("question ", "question ") + S.step + "/" + S.total;
+  $("#info").innerHTML = S.phase === "lobby" ? "" : '<span class="pill' + (alive.length <= 3 ? " hot" : "") + '">❤️ ' + alive.length + T(" en vie", " alive") + "</span>" + (S.mode !== "solo" && S.phase !== "over" ? '<span class="pill">🛡️ ' + squadsLeft() + " squad" + (squadsLeft() > 1 ? "s" : "") + "</span>" : "") + '<span class="pill">' + T("Question ", "Question ") + S.step + "/" + S.total + "</span>";
+  $("#prog").style.width = S.phase === "lobby" ? "0" : Math.round(100 * (S.step || 0) / (S.total || 1)) + "%";
   if (S.phase === "lobby") return lobby();
-  if (S.phase === "over") {
-    const w = S.players.filter((p) => S.winners.includes(p.pid));
-    const s = S.winSquad != null ? sq(S.winSquad) : null;
-    return winScreen(s ? e(s.emoji + " " + s.name) : w.length === 1 ? "👑 " + e(w[0].name) : w.length ? w.map((p) => e(p.name)).join(", ") : T("Personne ne survit !", "Nobody survives!"),
-      s ? T("Le dernier squad debout · ", "The last squad standing · ") + w.map((p) => e(p.name)).join(", ") : w.length ? T("Dernier survivant", "Last one standing") + (w.length > 1 ? "s" : "") : "",
-      '<div class="plist" style="justify-content:center">' + S.players.slice().sort((a, b) => (b.out == null ? 999 : b.out) - (a.out == null ? 999 : a.out) || b.score - a.score).slice(0, 12).map((p, i) => '<span class="pl">' + (i + 1) + ". " + e(p.name) + " · " + p.score + "✓</span>").join("") + "</div>");
-  }
+  if (S.phase === "over") return overScreen();
   const q = S.q; if (!q) return "";
+  if (S.phase === "question" && nowMs() < S.qAt) return countdown();
   const reveal = S.phase === "reveal";
-  const left = reveal ? 0 : S.qAt > nowMs() ? S.seconds * 1000 : S.qEnd - nowMs();
+  const left = reveal ? 0 : S.qEnd - nowMs();
   const L = S.last;
   const total = L ? L.dist.reduce((a, b) => a + b, 0) || 1 : 1;
   let banner = "";
   if (reveal && L) {
     const outs = S.players.filter((p) => L.out.includes(p.pid));
     banner = L.everyone ? '<div class="banner">😅 ' + T("Tout le monde s'est trompé : personne n'est éliminé !", "Everybody was wrong: nobody is out!") + "</div>"
-      : outs.length ? '<div class="banner">💀 ' + outs.length + T(" éliminé", " out") + (outs.length > 1 && FR ? "s" : "") + '</div><div class="outs">' + outs.map((p) => '<span class="pl">' + e(p.name) + "</span>").join("") + "</div>"
+      : outs.length ? '<div class="banner">💀 ' + outs.length + T(" éliminé", " out") + (outs.length > 1 && FR ? "s" : "") + (L.wiped && L.wiped.length ? " · 💥 " + L.wiped.map((i) => e(sq(i).emoji + " " + sq(i).name)).join(", ") : "") + '</div><div class="outs">' + outs.map((p) => '<span class="pl">' + e(p.name) + "</span>").join("") + "</div>"
       : '<div class="banner">🎉 ' + T("Personne n'est éliminé !", "Nobody is out!") + "</div>";
-    if (S.mode !== "solo") banner += '<div class="sqrow" style="justify-content:center">' + S.squads.map((s, i) => s && S.players.some((p) => p.squad === i) ? '<span class="chip" style="background:' + s.color + '">' + e(s.emoji + " " + s.name) + " · " + S.players.filter((p) => p.squad === i && p.alive && !L.out.includes(p.pid)).length + "❤️ · " + (S.pts[i] || 0) + " pts</span>" : "").join("") + "</div>";
   }
-  return '<div class="q"><div class="qhead"><span>' + (q.topic ? '<span class="chip">' + e(q.topic) + "</span> " : "") + T("Question ", "Question ") + S.step + '</span><div class="ring" id="ring"><svg viewBox="0 0 100 100"><circle class="bgc" cx="50" cy="50" r="44"/><circle class="fg" id="rfg" cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="' + (276.46 * (1 - left / (S.seconds * 1000))) + '"/></svg><span id="rt">' + (reveal ? "✓" : Math.ceil(left / 1000)) + "</span></div><span>" + (reveal ? "" : S.answered + "/" + alive.length + T(" ont répondu", " answered")) + "</span></div>" +
-    '<div class="prompt">' + e(q.prompt) + "</div>" + (q.code ? '<pre class="code">' + e(q.code) + "</pre>" : "") +
-    '<div class="opts">' + q.options.map((o, i) => '<div class="opt' + (reveal ? (i === q.answer ? " yes" : " no") : "") + '" style="--o:' + OCOL[i] + '">' + (reveal ? '<i style="width:' + Math.round(100 * L.dist[i] / total) + '%"></i>' : "") + "<b>" + LET[i] + "</b><span>" + e(o) + "</span>" + (reveal ? "<em>" + L.dist[i] + "</em>" : "") + "</div>").join("") + "</div>" +
-    banner + (reveal ? "" : '<div class="alive">' + players(alive) + "</div>") + "</div>";
+  return '<div class="q"><div class="qhead"><span>' + (q.topic ? '<span class="chip">' + e(q.topic) + "</span>" : "") + '</span><div class="ring' + (!reveal && left < 5000 ? " hurry" : "") + '" id="ring" style="--rc:' + (reveal ? "#8b5cf6" : ringColor(left)) + '"><svg viewBox="0 0 100 100"><circle class="bgc" cx="50" cy="50" r="44"/><circle class="fg" id="rfg" cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="' + (276.46 * (1 - Math.max(0, left) / (S.seconds * 1000))) + '"/></svg><span id="rt">' + (reveal ? "✓" : Math.max(0, Math.ceil(left / 1000))) + "</span></div><span></span></div>" +
+    '<div class="promptbox glass"><div class="prompt">' + e(q.prompt) + "</div>" + (q.code ? '<pre class="code" style="margin-top:1.4vh">' + e(q.code) + "</pre>" : "") + "</div>" +
+    '<div class="opts">' + q.options.map((o, i) => '<div class="opt' + (reveal ? (i === q.answer ? " yes" : " no") : "") + '" style="--o:' + OCOL[i] + '">' + (reveal ? '<i style="width:' + Math.round(100 * L.dist[i] / total) + '%"></i>' : "") + "<b>" + SH[i] + "</b><span>" + e(o) + "</span>" + (reveal ? "<em>" + (i === q.answer ? "✓ " : "") + L.dist[i] + "</em>" : "") + "</div>").join("") + "</div>" +
+    (reveal ? banner : '<div class="ansbar"><span>✍️ ' + S.answered + "/" + alive.length + T(" ont répondu", " answered") + '</span><div class="pbar"><i style="width:' + Math.round(100 * S.answered / (alive.length || 1)) + '%"></i></div></div>') +
+    (S.mode !== "solo" ? squadArena(reveal) : reveal ? "" : '<div class="alive">' + players(alive) + "</div>") + "</div>";
+}
+// a squad whose last members just fell: the whole screen tells it
+function showWipes(list) {
+  const i = list.shift(); if (i == null) return;
+  const s = sq(i), mem = S.players.filter((p) => p.squad === i);
+  const d = document.createElement("div"); d.className = "wipe"; d.style.setProperty("--c", s.color);
+  d.innerHTML = '<div class="flash"></div><div class="we">' + e(s.emoji) + '</div><div class="wt">' + T("SQUAD ÉLIMINÉ", "SQUAD WIPED OUT") + '</div><div class="wn">' + e(s.name) + '</div><div class="wm">' + mem.map((p) => "<span>💀 " + e(p.name) + "</span>").join("") + "</div>";
+  document.body.append(d);
+  for (let k = 0; k < 40; k++) {
+    const sh = document.createElement("i"); sh.className = "shard";
+    const a = Math.random() * Math.PI * 2, r = 25 + Math.random() * 45;
+    sh.style.setProperty("--c", k % 3 ? s.color : "#fff"); sh.style.setProperty("--dx", Math.cos(a) * r + "vw"); sh.style.setProperty("--dy", Math.sin(a) * r + "vh"); sh.style.setProperty("--r", (Math.random() * 720 - 360) + "deg");
+    sh.style.animationDelay = (.15 + Math.random() * .25) + "s"; document.body.append(sh); setTimeout(() => sh.remove(), 2200);
+  }
+  [330, 262, 196, 147, 98].forEach((f, k) => setTimeout(() => beep(f, .4, "sawtooth"), k * 130));
+  const end = () => { if (!d.isConnected) return; d.style.transition = "opacity .4s"; d.style.opacity = "0"; setTimeout(() => { d.remove(); showWipes(list); }, 400); };
+  d.onclick = end; setTimeout(end, 3400);
+}
+function confetti() {
+  const c = document.createElement("canvas"); c.id = "conf"; c.width = innerWidth; c.height = innerHeight; document.body.append(c);
+  const x = c.getContext("2d"), cols = ["#f59e0b", "#8b5cf6", "#06b6d4", "#22c55e", "#ef4444", "#ec4899", "#ffffff"];
+  const P = Array.from({ length: 240 }, () => ({ x: Math.random() * c.width, y: -20 - Math.random() * c.height * .7, w: 6 + Math.random() * 9, h: 8 + Math.random() * 12, vx: -2 + Math.random() * 4, vy: 2 + Math.random() * 4, r: Math.random() * 6, vr: -.2 + Math.random() * .4, c: cols[Math.floor(Math.random() * cols.length)] }));
+  const t0 = Date.now();
+  (function f() { x.clearRect(0, 0, c.width, c.height); for (const p of P) { p.x += p.vx; p.y += p.vy; p.vy += .03; p.r += p.vr; x.save(); x.translate(p.x, p.y); x.rotate(p.r); x.fillStyle = p.c; x.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); x.restore(); } if (Date.now() - t0 < 6500) requestAnimationFrame(f); else c.remove(); })();
+}
+function goFlash() {
+  const d = document.createElement("div"); d.className = "go"; d.textContent = S.step === 1 ? T("GO !", "GO!") : "⚡"; document.body.append(d); setTimeout(() => d.remove(), 900);
+  beep(880, .3, "square");
 }
 // ---------------------------------------------------------------- 🕵️ sql
 function sqlView() {
@@ -314,36 +492,59 @@ async function runAll() {
 function controls() {
   const b = [];
   if (S.phase === "lobby") b.push('<button class="btn primary" data-act="start">▶ ' + T("Lancer", "Start") + "</button>");
-  if (S.kind === "royale" && S.phase === "question") b.push('<button class="btn" data-act="reveal">👁 ' + T("Révéler", "Reveal") + "</button>");
+  if (S.phase === "lobby") b.push('<button class="btn" data-act="announce" title="' + T("Publie le bouton 🎮 Rejoindre dans #arena", "Posts the 🎮 Join button in #arena") + '">📣 ' + T("Bouton dans Discord", "Button in Discord") + "</button>");
+  if (S.kind === "royale" && S.phase === "question" && !pre) b.push('<button class="btn" data-act="reveal">👁 ' + T("Révéler", "Reveal") + "</button>");
   if (S.kind === "royale" && S.phase === "reveal") b.push('<button class="btn primary" data-act="next">' + (S.last && S.last.final ? "🏆 " + T("Résultat", "Result") : "▶ " + T("Question suivante", "Next question")) + " <span class=muted>(␣)</span></button>");
   if (!["lobby", "over"].includes(S.phase)) b.push('<button class="btn danger" data-act="stop">⏹ ' + T("Terminer", "End") + "</button>");
   if (S.kind === "relay" && S.phase === "testing") b.push('<button class="btn" id="rerun">🧪 ' + T("Relancer les tests", "Run the tests again") + "</button>");
   if (S.phase === "over") b.push('<button class="btn" data-act="reset">🔁 ' + T("Rejouer", "Play again") + "</button>");
+  b.push('<button class="btn" data-panel="1">👥 ' + S.players.length + (S.banned && S.banned.length ? " · 🚫" + S.banned.length : "") + "</button>");
   b.push('<button class="btn" id="fs">⛶</button>');
   $("#bar").innerHTML = b.join("");
 }
 function render() {
   $("#kind").textContent = S.kind === "royale" ? "Battle Royale" : S.kind === "sql" ? T("Détective SQL", "SQL Detective") : T("Relais de code", "Code Relay");
-  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step]) : 0) + "." + kick;
-  // sounds and shakes on what just happened
-  if (S.kind === "royale" && (S.step !== shownStep || S.phase !== shownPhase)) { if (S.phase === "question") beep(660, .15); if (S.phase === "reveal") { beep(S.last && S.last.out.length ? 196 : 880, .4, "triangle"); } if (S.phase === "over") [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .25), i * 140)); shownStep = S.step; shownPhase = S.phase; }
+  pre = S.kind === "royale" && S.phase === "question" && nowMs() < S.qAt;
+  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive])) + "." + (S.banned || []).length;
+  // sounds and animations on what just happened
+  if (S.kind === "royale" && (S.step !== shownStep || S.phase !== shownPhase)) {
+    if (S.phase === "question" && !pre) beep(660, .15);
+    if (S.phase === "reveal") {
+      beep(S.last && S.last.out.length ? 196 : 880, .4, "triangle");
+      if (S.last && S.last.wiped && S.last.wiped.length && wipedShown !== S.step) { wipedShown = S.step; setTimeout(() => showWipes(S.last.wiped.slice()), 700); }
+    }
+    if (S.phase === "over") { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .25), i * 140)); confetti(); }
+    shownStep = S.step; shownPhase = S.phase;
+  }
   if (S.kind === "relay" && S.teams) for (const t of S.teams) { if (t.lastNoise && noiseSeen["n" + t.squad] !== t.lastNoise.at) { const first = noiseSeen["n" + t.squad] === undefined; noiseSeen["n" + t.squad] = t.lastNoise.at; if (!first) { noiseSeen[t.squad] = 1; beep(150, .5, "sawtooth"); toast("🗣️ " + sq(t.squad).name + " : " + t.lastNoise.name + T(" a parlé !", " talked!")); setTimeout(() => { noiseSeen[t.squad] = 0; }, 800); } } }
-  if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : relayView(); controls(); }
+  if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : relayView(); controls(); if (panel || manage) drawPanel(); }
 }
 document.addEventListener("click", (ev) => {
-  const a = ev.target.closest("[data-act]"); if (a) { if (a.dataset.act === "reset" && !confirm(T("Rejouer avec les mêmes joueurs ?", "Play again with the same players?"))) return; act(a.dataset.act); return; }
-  const k = ev.target.closest("[data-kick]"); if (k) { if (kick === k.dataset.kick) { kick = ""; act("kick", { pid: k.dataset.kick }); } else { kick = k.dataset.kick; lastKey = ""; render(); setTimeout(() => { kick = ""; lastKey = ""; render(); }, 3000); } return; }
+  const a = ev.target.closest("[data-act]"); if (a) { if (a.dataset.act === "reset" && !confirm(T("Rejouer avec les mêmes joueurs ?", "Play again with the same players?"))) return; act(a.dataset.act).then(() => { if (a.dataset.act === "announce") toast(T("Bouton 🎮 publié dans Discord", "🎮 button posted in Discord")); }); return; }
+  const k = ev.target.closest("[data-kick]"); if (k) { manage = ""; act("kick", { pid: k.dataset.kick }).then(drawPanel); return; }
+  const u = ev.target.closest("[data-unban]"); if (u) { act("unban", { pid: u.dataset.unban }).then(drawPanel); return; }
+  const w = ev.target.closest("[data-who]"); if (w) { manage = w.dataset.who; drawPanel(); return; }
+  if (ev.target.closest("[data-panel]")) { panel = true; manage = ""; drawPanel(); return; }
+  if (ev.target.matches("[data-close]")) { panel = false; manage = ""; drawPanel(); return; }
   const p = ev.target.closest("[data-pardon]"); if (p) { act("pardon", { squad: Number(p.dataset.pardon) }); return; }
   if (ev.target.closest("#rerun")) { tested = false; runAll(); return; }
   if (ev.target.closest("#fs")) { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
 });
-document.addEventListener("keydown", (ev) => { if (ev.key === " " && S && S.kind === "royale" && S.phase === "reveal") { ev.preventDefault(); act("next"); } });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && (panel || manage)) { panel = false; manage = ""; drawPanel(); return; } if (ev.key === " " && S && S.kind === "royale" && S.phase === "reveal" && !panel && !manage) { ev.preventDefault(); act("next"); } });
 // the clocks between two polls
 setInterval(() => {
   if (!S) return;
-  if (S.kind === "royale" && S.phase === "question") {
-    const left = S.qAt > nowMs() ? S.seconds * 1000 : S.qEnd - nowMs();
-    const rt = $("#rt"), fg = $("#rfg"); if (rt) rt.textContent = Math.max(0, Math.ceil(left / 1000)); if (fg) fg.setAttribute("stroke-dashoffset", 276.46 * (1 - Math.max(0, left) / (S.seconds * 1000)));
+  if (S.kind === "royale" && S.phase === "question" && nowMs() < S.qAt) {
+    // the countdown: a big number each second
+    const n = Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000)), el = $("#cdn");
+    if (!el) { lastKey = ""; render(); }
+    else if (el.textContent !== String(n)) { el.textContent = n; el.classList.remove("tick"); void el.offsetWidth; el.classList.add("tick"); beep(520, .12); }
+    window.__cd = n === 1 ? 2 : 1;
+  } else if (window.__cd) { window.__cd = 0; lastKey = ""; render(); if (S.kind === "royale" && S.phase === "question") goFlash(); }
+  if (S.kind === "royale" && S.phase === "question" && nowMs() >= S.qAt) {
+    const left = S.qEnd - nowMs();
+    const rt = $("#rt"), fg = $("#rfg"), ring = $("#ring"); if (rt) rt.textContent = Math.max(0, Math.ceil(left / 1000)); if (fg) fg.setAttribute("stroke-dashoffset", 276.46 * (1 - Math.max(0, left) / (S.seconds * 1000)));
+    if (ring) { ring.style.setProperty("--rc", ringColor(left)); ring.classList.toggle("hurry", left < 5000); }
     const alive = S.players.filter((p) => p.alive).length;
     if ((left <= -300 || (alive && S.answered >= alive && nowMs() > S.qAt)) && !busy && Date.now() - (window.__rv || 0) > 1500) { window.__rv = Date.now(); act("reveal"); }
     else if (left > 0 && left < 5200 && Math.ceil(left / 1000) !== window.__tick) { window.__tick = Math.ceil(left / 1000); beep(440, .06); }
@@ -388,6 +589,33 @@ table{border-collapse:collapse;font-size:14px;width:100%}th,td{border-bottom:1px
 .found li{margin:4px 0}
 .meter{height:10px;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden}.meter i{display:block;height:100%;background:var(--good);transition:width .1s}
 .err{color:#fca5a5}
+@keyframes pulse{50%{opacity:.45}}
+@keyframes rise{from{transform:translateY(16px);opacity:0}}
+@keyframes cdpop{0%{transform:scale(1.8);opacity:0}25%{transform:scale(.95);opacity:1}100%{transform:scale(1)}}
+body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;background:radial-gradient(40% 30% at 20% 10%,rgba(124,58,237,.35),transparent),radial-gradient(40% 30% at 80% 90%,rgba(8,145,178,.3),transparent);animation:drift 16s ease-in-out infinite alternate}
+@keyframes drift{to{transform:translate(4%,3%) scale(1.08)}}
+header{position:sticky;top:0;z-index:5;padding:8px 0;backdrop-filter:blur(8px)}
+.sqbadge{display:inline-flex;gap:6px;align-items:center;padding:5px 12px;border-radius:999px;background:color-mix(in srgb,var(--c) 28%,transparent);border:1px solid var(--c);font-weight:800;color:#fff;font-size:14px}
+.hero{font-size:68px;display:inline-block;animation:bob 2.4s ease-in-out infinite;filter:drop-shadow(0 0 20px rgba(245,158,11,.5))}
+.joinc .dl{width:76px;height:76px;margin:6px auto 12px;border-radius:24px;display:grid;place-items:center;background:#5865f2;font-size:40px;box-shadow:0 0 34px rgba(88,101,242,.55);animation:bob 3s ease-in-out infinite}
+.steps{text-align:left;line-height:1.8;margin:12px auto;max-width:380px;padding-left:22px}
+.pcd{font-size:140px;font-weight:900;line-height:1;margin:10px 0;color:#fff;text-shadow:0 0 .35em rgba(139,92,246,.9)}
+.pcd.tick{animation:cdpop .9s ease-out}
+.tline{height:8px;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden;margin:10px 0 2px}.tline i{display:block;height:100%;border-radius:9px;transition:width .25s linear,background .4s}
+.qcard{animation:rise .35s both}
+.opt{box-shadow:0 5px 0 rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .08s,box-shadow .08s,opacity .3s;animation:rise .35s both}
+.opt:nth-child(2){animation-delay:.05s}.opt:nth-child(3){animation-delay:.1s}.opt:nth-child(4){animation-delay:.15s}
+.opt:active:not(:disabled){transform:translateY(4px);box-shadow:0 1px 0 rgba(0,0,0,.28)}
+.opt b{font-size:18px}
+.opt.pick{animation:pop .4s}
+.lock{display:flex;gap:10px;align-items:center;justify-content:center;color:var(--soft);font-weight:700;margin:14px 0}.lock i{width:10px;height:10px;border-radius:50%;background:var(--acc);animation:pulse 1s infinite}
+.resc .big{font-size:72px}.resc.out .big{animation:shake .5s 2}.resc.ok .big{animation:pop .6s}
+.resc.out{border-color:rgba(239,68,68,.5);background:linear-gradient(180deg,rgba(239,68,68,.18),rgba(255,255,255,.03))}
+.resc.ok{border-color:rgba(34,197,94,.5);background:linear-gradient(180deg,rgba(34,197,94,.16),rgba(255,255,255,.03))}
+.stat{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:8px}.stat span{padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.08);font-weight:700;font-size:13px}
+.pwipe{position:fixed;inset:0;z-index:30;display:grid;place-items:center;align-content:center;gap:10px;text-align:center;padding:20px;background:radial-gradient(circle,color-mix(in srgb,var(--c) 45%,#000),#000 75%);animation:shake .5s 2}
+.pwipe .we{font-size:110px;animation:pop .5s}.pwipe h1{margin:0;font-size:34px;letter-spacing:.05em;text-shadow:3px 0 #ef4444,-3px 0 #06b6d4}.pwipe p{color:#dbe4fb;margin:0}
+canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
 </style></head><body>
 <header><b>${esc(gm.title)}</b><span class="me" id="me"></span></header>
 <div id="app"><div class="card center muted">…</div></div>
@@ -404,6 +632,9 @@ const mmss = (ms) => { ms = Math.max(0, ms); const s = Math.ceil(ms / 1000); ret
 const LET = ["A", "B", "C", "D"], OCOL = ["var(--A)", "var(--B)", "var(--C)", "var(--D)"];
 let KEY = ""; try { KEY = localStorage.getItem("cb-game-" + BASE) || ""; } catch (x) {}
 if (!KEY) { KEY = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join(""); try { localStorage.setItem("cb-game-" + BASE, KEY); } catch (x) {} }
+// the student's own pass from Discord (/play or 🎮): after # so it never reaches a server log; removed from the address bar
+let PASS = ""; { const m = location.hash.match(/p=([A-Za-z0-9._-]+)/); if (m) { PASS = m[1]; try { history.replaceState(null, "", location.pathname + location.search); } catch (x) {} } }
+window.addEventListener("hashchange", () => location.reload());
 let S = null, off = 0, lastKey = "";
 const nowMs = () => Date.now() + off;
 ${RUNNER}
@@ -413,46 +644,78 @@ async function call(path, body) {
   if (!r.ok) { const er = new Error(d.error || "Error"); er.join = d.join; throw er; }
   return d;
 }
-function take(d) { if (!d) return; off = d.now - Date.now(); if (d.same) return; S = d; $("#me").textContent = S.me.name + (S.squad ? " · " + S.squad.emoji + " " + S.squad.name : ""); render(); }
+function take(d) { if (!d) return; off = d.now - Date.now(); if (d.same) return; S = d; $("#me").innerHTML = (S.squad && S.mode !== "solo" ? '<span class="sqbadge" style="--c:' + S.squad.color + '">' + e(S.squad.emoji + " " + S.squad.name) + "</span> " : "") + e(S.me.name); render(); }
 async function poll() {
   let wait = KIND === "sql" ? 2500 : 1500;
   try { take(await call("state?seq=" + (S ? S.seq : 0))); }
-  catch (x) { if (x.join) { await joinScreen(); return; } }
+  catch (x) {
+    if (x.join) {
+      if (!PASS) { linkScreen(S ? T("Ton lien a été ouvert sur un autre appareil, ou ton formateur t'a retiré.", "Your link was opened on another device, or your teacher removed you.") : ""); return; }
+      const p = PASS; PASS = "";
+      try { take(await call("join", { pass: p })); if (KIND === "relay") micStart(); }
+      catch (y) { linkScreen(y.message); return; }
+    }
+  }
   if (S && S.phase === "over") wait = 5000;
   setTimeout(poll, wait);
 }
-// ---------------------------------------------------------------- pick your name
-async function joinScreen() {
-  const d = await (await fetch(BASE + "/roster")).json();
-  $("#app").innerHTML = '<div class="card"><h2>' + T("Qui es-tu ?", "Who are you?") + '</h2><input id="q" placeholder="' + T("Tape ton nom…", "Type your name…") + '" autocomplete="off"><div class="names" id="nm"></div><p class="err" id="er"></p></div>';
-  const draw = () => { const f = $("#q").value.toLowerCase(); $("#nm").innerHTML = d.names.filter((n) => !f || n.name.toLowerCase().includes(f)).map((n) => '<button data-pid="' + e(n.pid) + '"' + (n.taken ? " disabled" : "") + (n.squad ? ' class="sq"' : "") + ">" + e(n.name) + (n.taken ? " ✓" : "") + "</button>").join(""); };
-  $("#q").oninput = draw; draw();
-  $("#nm").onclick = async (ev) => { const b = ev.target.closest("[data-pid]"); if (!b) return; try { take(await call("join", { pid: b.dataset.pid })); setTimeout(poll, 1200); if (KIND === "relay") micStart(); } catch (x) { $("#er").textContent = x.message; } };
+// ---------------------------------------------------------------- not linked yet: the way in is Discord
+function linkScreen(msg) {
+  $("#me").textContent = "";
+  $("#app").innerHTML = '<div class="card center joinc"><div class="dl">🎮</div><h2>' + T("Rejoins depuis Discord", "Join from Discord") + '</h2><p class="muted">' + T("Pour jouer sous ton nom, ouvre ton lien personnel :", "To play under your name, open your own link:") + '</p><ol class="steps"><li>' + T("Ouvre Discord", "Open Discord") + "</li><li>" + T("Clique sur <b>🎮 Rejoindre</b> dans #arena, ou tape <b>/play</b>", "Click <b>🎮 Join</b> in #arena, or type <b>/play</b>") + "</li><li>" + T("Touche le bouton : la partie s'ouvre ici, à ton nom", "Tap the button: the game opens here, under your name") + "</li></ol>" + (msg ? '<p class="err">' + e(msg) + "</p>" : "") + "</div>";
 }
 // ---------------------------------------------------------------- 👑 royale
+const SH = ["▲", "◆", "●", "■"];
+let wipedSeen = -1, overSeen = false;
 async function pick(i) { try { take(await call("answer", { step: S.step, choice: i })); if (navigator.vibrate) navigator.vibrate(40); } catch (x) { alert(x.message); } }
 async function revive(pid) { try { take(await call("revive", { target: pid })); } catch (x) { alert(x.message); } }
+function squadCard() {
+  if (!S.squad || S.mode === "solo") return "";
+  const dead = S.squad.mates.filter((m) => !m.alive && m.pid !== S.me.pid);
+  return '<div class="card" style="border-color:' + S.squad.color + '"><b>' + e(S.squad.emoji + " " + S.squad.name) + "</b> · " + S.pts + ' pts<div class="mates" style="margin-top:8px">' + S.squad.mates.map((m) => '<span class="chip">' + (m.alive ? "❤️ " : "💀 ") + e(m.name) + "</span>").join("") + "</div>" +
+    (S.phase === "reveal" && S.me.alive && !(S.last && S.last.final) && dead.length ? '<p class="muted">' + T("Ramène un coéquipier (", "Bring a teammate back (") + S.reviveCost + T(" pts) :", " pts):") + "</p>" + dead.map((m) => '<button class="btn primary" style="margin:4px" data-revive="' + e(m.pid) + '"' + (S.pts < S.reviveCost || m.revived >= S.maxRevives ? " disabled" : "") + ">💖 " + e(m.name) + "</button>").join("") : "") + "</div>";
+}
+const stats = () => '<div class="stat"><span>❤️ ' + S.alive + T(" en vie", " alive") + "</span>" + (S.squadsLeft != null ? "<span>🛡️ " + S.squadsLeft + " squad" + (S.squadsLeft > 1 ? "s" : "") + "</span>" : "") + "<span>✓ " + S.me.score + "</span></div>";
 function royale() {
-  if (S.phase === "lobby") return '<div class="card center"><div class="big">👑</div><h2>' + T("Tu es inscrit !", "You're in!") + '</h2><p class="muted">' + T("Regarde la TV : la partie va commencer.", "Watch the TV: the game is about to start.") + "</p></div>";
-  if (S.phase === "over") { const won = S.winners.includes(S.me.pid) || (S.winSquad != null && S.me.squad === S.winSquad); return '<div class="card center"><div class="big">' + (won ? "🏆" : "🎮") + "</div><h2>" + (won ? T("Victoire !", "You win!") : T("Partie terminée", "Game over")) + '</h2><p class="muted">' + S.me.score + T(" bonne(s) réponse(s)", " right answer(s)") + "</p></div>"; }
-  let h = "";
-  if (S.squad && S.mode !== "solo") {
-    const dead = S.squad.mates.filter((m) => !m.alive && m.pid !== S.me.pid);
-    h += '<div class="card"><b>' + e(S.squad.emoji + " " + S.squad.name) + "</b> · " + S.pts + " pts" + '<div class="mates" style="margin-top:8px">' + S.squad.mates.map((m) => '<span class="chip">' + (m.alive ? "❤️ " : "💀 ") + e(m.name) + "</span>").join("") + "</div>" +
-      (S.phase === "reveal" && S.me.alive && !(S.last && S.last.final) && dead.length ? '<p class="muted">' + T("Ramène un coéquipier (", "Bring a teammate back (") + S.reviveCost + T(" pts) :", " pts):") + "</p>" + dead.map((m) => '<button class="btn primary" style="margin:4px" data-revive="' + e(m.pid) + '"' + (S.pts < S.reviveCost || m.revived >= S.maxRevives ? " disabled" : "") + ">💖 " + e(m.name) + "</button>").join("") : "") + "</div>";
+  const h = squadCard();
+  if (S.phase === "lobby") return '<div class="card center"><div class="hero">👑</div><h2>' + T("Tu es dans la partie, ", "You're in, ") + e(S.me.name) + " !</h2>" + (S.squad && S.mode !== "solo" ? '<p><span class="sqbadge" style="--c:' + S.squad.color + '">' + e(S.squad.emoji + " " + S.squad.name) + "</span></p>" : "") + '<p class="muted">' + T("Regarde la TV : la partie va commencer.", "Watch the TV: the game is about to start.") + '</p><div class="lock"><i></i>' + S.players + T(" joueur(s) connecté(s)", " player(s) in") + "</div></div>" + h;
+  if (S.phase === "over") {
+    const won = S.winners.includes(S.me.pid) || (S.winSquad != null && S.me.squad === S.winSquad);
+    return '<div class="card center resc' + (won ? " ok" : "") + '"><div class="big">' + (won ? "🏆" : "🎮") + "</div><h2>" + (won ? T("Victoire !", "You win!") : T("Partie terminée", "Game over")) + '</h2><p class="muted">' + S.me.score + T(" bonne(s) réponse(s)", " right answer(s)") + "</p></div>";
   }
-  if (!S.me.alive && S.phase === "question") return '<div class="card center"><div class="big">💀</div><h2>' + T("Éliminé", "You're out") + '</h2><p class="muted">' + T("Regarde la TV" + (S.mode !== "solo" ? " : un coéquipier peut te ramener." : "."), "Watch the TV" + (S.mode !== "solo" ? ": a teammate can bring you back." : ".")) + "</p></div>" + h;
+  if (!S.me.alive && S.phase === "question") return '<div class="card center resc out"><div class="big">💀</div><h2>' + T("Éliminé", "You're out") + '</h2><p class="muted">' + T("Regarde la TV" + (S.mode !== "solo" ? " : un coéquipier peut te ramener." : "."), "Watch the TV" + (S.mode !== "solo" ? ": a teammate can bring you back." : ".")) + "</p>" + stats() + "</div>" + h;
   const q = S.q; if (!q) return h;
-  if (S.phase === "question" && nowMs() < S.qAt) return '<div class="card center"><div class="big">⏳</div><h2>' + T("Prépare-toi…", "Get ready…") + "</h2></div>" + h;
+  if (S.phase === "question" && nowMs() < S.qAt) return '<div class="card center"><h2>' + (S.step === 1 ? T("Prépare-toi…", "Get ready…") : T("Question ", "Question ") + S.step) + '</h2><div class="pcd tick" id="pcd">' + Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000)) + "</div>" + stats() + "</div>" + h;
   if (S.phase === "question") {
-    const left = S.qEnd - nowMs();
-    return '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><b>' + T("Question ", "Question ") + S.step + '</b><span class="timer" id="tm">' + Math.max(0, Math.ceil(left / 1000)) + '</span></div><p style="font-size:19px;font-weight:700">' + e(q.prompt) + "</p>" + (q.code ? '<pre class="code">' + e(q.code) + "</pre>" : "") + "</div>" +
-      '<div class="opts">' + q.options.map((o, i) => '<button class="opt' + (S.picked === i ? " pick" : S.picked != null ? " dim" : "") + '" style="--o:' + OCOL[i] + '" data-pick="' + i + '"' + (S.picked != null || left < -1500 ? " disabled" : "") + "><b>" + LET[i] + "</b><span>" + e(o) + "</span></button>").join("") + "</div>" +
-      (S.picked != null ? '<p class="center muted">🔒 ' + T("Réponse verrouillée", "Answer locked") + "</p>" : "") + h;
+    const left = S.qEnd - nowMs(), tot = S.qEnd - S.qAt;
+    return '<div class="card qcard"><div style="display:flex;justify-content:space-between;align-items:center"><b>' + T("Question ", "Question ") + S.step + '</b><span class="timer" id="tm">' + Math.max(0, Math.ceil(left / 1000)) + '</span></div><div class="tline"><i id="tb" style="width:' + Math.max(0, Math.min(100, 100 * left / tot)) + "%;background:" + barColor(left / tot) + '"></i></div><p style="font-size:19px;font-weight:700">' + e(q.prompt) + "</p>" + (q.code ? '<pre class="code">' + e(q.code) + "</pre>" : "") + "</div>" +
+      '<div class="opts">' + q.options.map((o, i) => '<button class="opt' + (S.picked === i ? " pick" : S.picked != null ? " dim" : "") + '" style="--o:' + OCOL[i] + '" data-pick="' + i + '"' + (S.picked != null || left < -1500 ? " disabled" : "") + "><b>" + SH[i] + "</b><span>" + e(o) + "</span></button>").join("") + "</div>" +
+      (S.picked != null ? '<div class="lock"><i></i>🔒 ' + T("Réponse verrouillée · on attend les autres", "Answer locked · waiting for the others") + "</div>" : "") + h;
   }
   // reveal
   const right = S.picked === q.answer, out = S.last && S.last.out;
-  return '<div class="card center"><div class="big">' + (out ? "💀" : S.last && S.last.everyone ? "😅" : right ? "✅" : S.me.alive ? "🛡️" : "👀") + "</div><h2>" + (out ? T("Éliminé !", "You're out!") : S.last && S.last.everyone ? T("Tout le monde s'est trompé : tu restes !", "Everyone was wrong: you stay!") : right ? T("Bonne réponse !", "Right!") : S.me.alive ? T("Toujours en vie", "Still alive") : T("Tu regardes", "Watching")) + '</h2><p class="muted">' + T("La réponse : ", "The answer: ") + "<b>" + LET[q.answer] + " · " + e(q.options[q.answer]) + "</b></p></div>" + h;
+  return '<div class="card center resc' + (out ? " out" : right || (S.last && S.last.everyone) ? " ok" : "") + '"><div class="big">' + (out ? "💀" : S.last && S.last.everyone ? "😅" : right ? "✅" : S.me.alive ? "🛡️" : "👀") + "</div><h2>" + (out ? T("Éliminé !", "You're out!") : S.last && S.last.everyone ? T("Tout le monde s'est trompé : tu restes !", "Everyone was wrong: you stay!") : right ? T("Bonne réponse !", "Right!") : S.me.alive ? T("Toujours en vie", "Still alive") : T("Tu regardes", "Watching")) + '</h2><p class="muted">' + T("La réponse : ", "The answer: ") + "<b>" + SH[q.answer] + " " + e(q.options[q.answer]) + "</b></p>" + stats() + "</div>" + h;
+}
+const barColor = (f) => (f > .5 ? "#22c55e" : f > .25 ? "#f59e0b" : "#ef4444");
+function royaleEffects() {
+  if (S.phase === "reveal" && S.last && wipedSeen !== S.step) {
+    wipedSeen = S.step;
+    if (S.last.wiped) {
+      const d = document.createElement("div"); d.className = "pwipe"; d.style.setProperty("--c", S.squad ? S.squad.color : "#ef4444");
+      d.innerHTML = '<div class="we">' + e(S.squad ? S.squad.emoji : "💀") + "</div><h1>" + T("SQUAD ÉLIMINÉ", "SQUAD WIPED OUT") + "</h1><p>" + T("Tout ton squad est tombé. Regarde la fin sur la TV !", "Your whole squad fell. Watch the end on the TV!") + "</p>";
+      document.body.append(d); if (navigator.vibrate) navigator.vibrate([120, 60, 120, 60, 300]);
+      d.onclick = () => d.remove(); setTimeout(() => d.remove(), 3500);
+    } else if (S.last.out && navigator.vibrate) navigator.vibrate([200, 80, 200]);
+  }
+  if (S.phase === "over" && !overSeen) { overSeen = true; if (S.winners.includes(S.me.pid) || (S.winSquad != null && S.me.squad === S.winSquad)) confetti(); }
+  if (S.phase !== "over") overSeen = false;
+}
+function confetti() {
+  const c = document.createElement("canvas"); c.id = "conf"; c.width = innerWidth; c.height = innerHeight; document.body.append(c);
+  const x = c.getContext("2d"), cols = ["#f59e0b", "#8b5cf6", "#06b6d4", "#22c55e", "#ef4444", "#ec4899"];
+  const P = Array.from({ length: 120 }, () => ({ x: Math.random() * c.width, y: -20 - Math.random() * c.height * .6, w: 5 + Math.random() * 6, h: 7 + Math.random() * 8, vx: -1.5 + Math.random() * 3, vy: 2 + Math.random() * 3, r: Math.random() * 6, vr: -.2 + Math.random() * .4, c: cols[Math.floor(Math.random() * cols.length)] }));
+  const t0 = Date.now();
+  (function f() { x.clearRect(0, 0, c.width, c.height); for (const p of P) { p.x += p.vx; p.y += p.vy; p.vy += .03; p.r += p.vr; x.save(); x.translate(p.x, p.y); x.rotate(p.r); x.fillStyle = p.c; x.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); x.restore(); } if (Date.now() - t0 < 5000) requestAnimationFrame(f); else c.remove(); })();
 }
 // ---------------------------------------------------------------- 🕵️ sql
 let DB = null, CASE = null, sqlMsg = "", lastRows = null, accMsg = "";
@@ -573,7 +836,8 @@ function render() {
     myTurn = S.turn; testOut = ""; lastKey = ""; draw(); const ta = $("#code"); if (ta) { ta.value = mine != null ? mine : S.code || S.starter || ""; ta.focus(); } return;
   }
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
-  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0);
+  if (KIND === "royale") royaleEffects();
+  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0);
   if (key === lastKey) return;
   lastKey = key;
   if (KIND === "relay" && S.writing && $("#code")) return;   // never redraw the editor under the writer's fingers
@@ -597,7 +861,18 @@ function wire() {
 }
 setInterval(() => {
   if (!S) return;
-  if (KIND === "royale" && S.phase === "question") { const t = $("#tm"); if (t) t.textContent = Math.max(0, Math.ceil((S.qEnd - nowMs()) / 1000)); if (nowMs() >= S.qAt && nowMs() - S.qAt < 400) { lastKey = ""; draw(); } }
+  if (KIND === "royale" && S.phase === "question") {
+    if (nowMs() < S.qAt) {
+      const n = Math.max(1, Math.ceil((S.qAt - nowMs()) / 1000)), el = $("#pcd");
+      if (el && el.textContent !== String(n)) { el.textContent = n; el.classList.remove("tick"); void el.offsetWidth; el.classList.add("tick"); if (navigator.vibrate) navigator.vibrate(25); }
+      window.__cd = 1;
+    } else {
+      if (window.__cd || $("#pcd")) { window.__cd = 0; lastKey = ""; draw(); }
+      const left = S.qEnd - nowMs(), tot = S.qEnd - S.qAt;
+      const t = $("#tm"); if (t) t.textContent = Math.max(0, Math.ceil(left / 1000));
+      const b = $("#tb"); if (b) { b.style.width = Math.max(0, Math.min(100, 100 * left / tot)) + "%"; b.style.background = barColor(left / tot); }
+    }
+  }
   if (KIND === "relay" && S.phase === "playing") {
     const t = $("#tm"); if (t && S.turnEnd) t.textContent = mmss(S.turnEnd - nowMs());
     const nx = $("#nx"); if (nx && S.nextAt) nx.textContent = mmss(S.nextAt - nowMs());

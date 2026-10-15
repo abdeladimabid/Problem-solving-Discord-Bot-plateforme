@@ -274,7 +274,7 @@ export const makeGen = (body: string, seed: number) => GEN_HEADER.replace("__SEE
 export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic?: string | null; lang: string; quest?: string | null }): Promise<GeneratedWrite | null> {
   const language = o.lang === "fr" ? "French" : "English";
   const limit = o.difficulty === "hard" ? 3 : 2;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < (o.quest ? 3 : 2); attempt++) {
     if (!(await aiBudgetOk(env, AI_COST.write))) return null;
     await aiBudgetUse(env, AI_COST.write);
     const system = [
@@ -293,7 +293,7 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
     const user = `Create one ${o.difficulty.toUpperCase()} problem${o.topic ? ` about: ${o.topic}` : ""}. Make it original (not a famous LeetCode title).`;
     let j: any;
     try {
-      j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 9000, temperature: 0.8, timeoutMs: 150000 });
+      j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: o.quest ? 12000 : 9000, temperature: 0.8, timeoutMs: 150000 });
     } catch { continue; }
     const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
     const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500), reference = s(j?.reference, 6000), brute = s(j?.brute, 6000);
@@ -312,17 +312,20 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
       ]);
       if (ref.compile || br.compile || ref.rows.length !== all.length) continue;
       let ok = true;
+      const keep: number[] = [];
       for (let i = 0; i < all.length; i++) {
         const r = ref.rows[i];
-        if (r.s !== "ok" || !r.o || r.n > 2000) { ok = false; break; }
-        if (i < lits.length && (br.rows[i]?.s !== "ok" || br.rows[i].o !== r.o)) { ok = false; break; }   // brute must agree
-        if (i >= lits.length && r.t > limit * 0.4) { ok = false; break; }                                  // reference must be fast
+        if (i < lits.length) {
+          if (r.s !== "ok" || !r.o || r.n > 2000) { ok = false; break; }
+          if (br.rows[i]?.s !== "ok" || br.rows[i].o !== r.o) { ok = false; break; }   // brute must agree
+          keep.push(i);
+        } else if (r.s === "ok" && r.o && r.n <= 2000 && r.t <= limit * 0.4) keep.push(i);  // a big test that fails or is slow is dropped, not the problem
       }
       if (!ok) continue;
       return {
         title, statement, reference, timeLimit: limit,
         hint: s(j?.hint, 400) ?? "", topic: s(j?.topic, 40) ?? "",
-        tests: all.map((t, i) => ({ input: t.input, gen: t.gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
+        tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
       };
     } catch (e) {
       if (e instanceof RunnerUnavailable) return null;

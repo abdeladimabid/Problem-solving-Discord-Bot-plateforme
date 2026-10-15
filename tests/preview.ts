@@ -404,6 +404,15 @@ createServer(async (req, res) => {
   for await (const c of req) chunks.push(c as Buffer);
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
   // public pages of the bot Worker (shared profile, certificates, the assessment page)
+  // preview only: a student's own game link (in Discord it comes from /play)
+  const pm = (req.url ?? "").match(/^\/__pass\/(\d+)\/(\d+)$/);
+  if (pm) {
+    const GM = await import("../src/shared/games.ts");
+    const gm = await GM.getGame(env, Number(pm[1]));
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(gm ? (await GM.playLink(env, gm, pm[2])).replace(/^https?:\/\/[^/]+/, "") : "");
+    return;
+  }
   if (/^\/(u|cert|quiz|battle|league|game|play)\//.test(req.url ?? "")) {
     const r = await bot.fetch(new Request("http://localhost" + req.url, { method: req.method, headers: req.headers as any, body }), env, { waitUntil() {} } as any);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });

@@ -181,6 +181,7 @@ export const COMMANDS: any[] = [
       { type: SUB, name: "mine", description: "Your activities and their subject", description_localizations: fr("Tes activités et leur sujet") },
     ],
   },
+  { name: "play", description: "Join the class game on the TV (your own link)", description_localizations: fr("Rejoindre le jeu de classe sur la TV (ton lien personnel)") },
   { name: "league", description: "Class vs class: this week's league table", description_localizations: fr("Classe contre classe : le classement de la semaine") },
   {
     name: "help", description: "Everything the bot can do", description_localizations: fr("Tout ce que le bot sait faire"),
