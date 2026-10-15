@@ -6,6 +6,7 @@ import type { Env, GuildRow } from "./types.ts";
 import { addPoints, all, now, one, run } from "./db.ts";
 import { COLORS, send, truncate } from "./discord.ts";
 import { t } from "./i18n.ts";
+import { mondayOf } from "./activities.ts";
 import { dashLink, dmChecked } from "./notify.ts";
 import { progressView } from "./review/debrief.ts";
 
@@ -100,9 +101,12 @@ export async function shareActivities(env: Env, g: GuildRow, list: number[], cha
   acts.sort((a, b) => (a.day + a.kind).localeCompare(b.day + b.kind));
   const L = g.lang;
   const lines = acts.map((a) => line(L, a));
+  // shared week by week from the dashboard: the title says which week
+  const mondays = [...new Set(acts.map((a) => mondayOf(a.day)))];
+  const week = mondays.length === 1 ? ` · ${t(L, "act.share_week", { day: `${mondays[0].slice(8, 10)}/${mondays[0].slice(5, 7)}` })}` : "";
   await send(env, cfg.channel!, {
     embeds: [{
-      title: t(L, "act.share_title"),
+      title: t(L, "act.share_title") + week,
       description: truncate([t(L, "act.share_intro", { veille: cfg.veille, live: cfg.live }), "", ...lines, "", t(L, "act.share_how")].join("\n"), 4000),
       color: COLORS.purple,
     }],

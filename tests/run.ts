@@ -4324,6 +4324,8 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   const before = discordCalls.length;
   const sh = await api("POST", `/api/activities/share?g=${G}`, { ids: [v1, v2, l1], channel: "555000111" });
   check(sh.status === 200 && sh.data.shared === 3 && discordCalls.slice(before).some((c) => c.path === "/channels/555000111/messages" && JSON.stringify(c.body).includes("Sélecteurs DOM modernes")), "teacher shares the activities in the channel chosen");
+  const shMsg = discordCalls.slice(before).find((c) => c.path === "/channels/555000111/messages");
+  check(/(week of|semaine du) 03\/03/.test(JSON.stringify(shMsg?.body?.embeds?.[0]?.title ?? "")), "shared week by week: the message's title names the week");
   const ls = text(await slash(U.alice, "activity", {}, "list"));
   check(ls.includes("Gestion des événements") && !ls.includes("Formulaires et validation"), "/activity list: the shared ones only");
   // a veille needs a binôme
