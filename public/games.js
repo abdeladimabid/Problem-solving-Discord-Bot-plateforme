@@ -309,7 +309,8 @@ async function viewGame(id) {
         <div class="toolbar" style="margin:0"><a class="btn primary" href="${esc(G.tv)}" target="_blank" rel="noopener">📺 Open the TV screen</a><button class="btn" id="gm-cptv">Copy the link</button></div></div></section>
       <section class="panel gm-card"><div class="gm-ic" aria-hidden="true">📱</div><div>
         <h2>The students join from Discord</h2>
-        <p class="small muted">When the TV opens, the bot posts a <b>🎮 Join</b> button in #arena (or they type <code>/play</code>). Each one gets their <b>own link</b>, tied to their Discord account${G.kind === "royale" ? ", to open on their phone" : ", to open on a laptop"}.${G.kind === "relay" && G.settings.noise ? " 🎤 They must allow the microphone." : ""}</p></div></section>
+        <p class="small muted">When the TV opens, the bot posts a <b>🎮 Join</b> button in #arena (or they type <code>/play</code>). Each one gets their <b>own link</b>, tied to their Discord account${G.kind === "royale" ? ", to open on their phone" : ", to open on a laptop"}.${G.kind === "relay" && G.settings.noise ? " 🎤 They must allow the microphone." : ""}</p>
+        <div class="toolbar" style="margin:0"><button class="btn" id="gm-post">📣 Post the Join button in Discord</button></div></div></section>
     </div>
     <section class="panel gm-livep"><div class="panel-head" style="margin-bottom:6px"><h2 style="margin:0">🎮 Live</h2><span class="small muted">Updates by itself</span></div><div id="gm-live">${gameLive(G, L)}</div></section>
     ${G.kind === "royale" ? `<section class="panel"><h2>Questions <span class="muted">${G.content.questions.length}</span></h2><div class="bt-qs">${G.content.questions.map((q) => `<div class="bt-q"><span class="bt-k">❓</span><div><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}<div class="small">${q.options.map((o, k) => `${k === q.answer ? "✅ <b>" : ""}${"ABCD"[k]}. ${esc(o)}${k === q.answer ? "</b>" : ""}`).join(" · ")}</div></div></div>`).join("")}</div></section>` : ""}
@@ -320,6 +321,7 @@ async function viewGame(id) {
       <div class="small">${G.content.task.tests.map((t, i) => `${i < 2 ? "👁 " : "🔒 "}<code>${esc(G.content.task.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div>
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
   $("#gm-cptv").onclick = () => copyText(G.tv, "TV link copied");
+  $("#gm-post").onclick = (e) => busy(e.currentTarget, async () => { await api(`/games/${id}/announce`, { method: "POST" }); toast("🎮 Join button posted in #arena: the students can join"); });
   $("#gm-del").onclick = () => confirmDialog("Delete this game?", "The TV and the join links stop working.", "Delete", async () => { await api(`/games/${id}`, { method: "DELETE" }); location.hash = `#/games/${G.kind}`; }, true);
   // reuse the game: free the players, remove one, other squads (the TV and the phones follow by themselves)
   const live = $("#gm-live");
@@ -328,7 +330,9 @@ async function viewGame(id) {
     const rm = ev.target.closest("[data-rmp]");
     if (rm) return confirmDialog(`Remove ${rm.dataset.n} from this game?`, "They leave the game now. Their Discord link still works: they can join again.", "Remove",
       async () => { redraw(await api(`/games/${id}/remove`, { method: "POST", body: { pid: rm.dataset.rmp } })); toast("Removed"); }, true);
-    if (ev.target.closest("[data-gclear]")) return confirmDialog("Free all the players?", "Everyone leaves this game and it goes back to the start, with its questions and settings: another group (or the same one) joins again from Discord. The points already given stay.", "Free them",
+    const gp = ev.target.closest("[data-gpost]");
+    if (gp) return busy(gp, async () => { await api(`/games/${id}/announce`, { method: "POST" }); toast("🎮 Join button posted in #arena: the students can join"); });
+    if (ev.target.closest("[data-gclear]")) return confirmDialog("Free all the players?", "Everyone leaves this game and it goes back to the start, with its questions and settings. A new 🎮 Join button is posted in #arena when you open the TV (or with 📣 now): another group, or the same one, joins again. The points already given stay.", "Free them",
       async () => { redraw(await api(`/games/${id}/clear`, { method: "POST" })); toast("The game is ready for another group"); }, true);
     if (ev.target.closest("[data-gsq]")) return (async () => {
       const d = await api("/games");
@@ -366,7 +370,7 @@ function gameLive(G, L) {
   const bySquad = G.mode !== "solo" && L.squads.some(Boolean);
   const groups = bySquad ? L.squads.map((q, i) => (q ? { q, i, list: L.players.filter((p) => p.squad === i) } : null)).filter((x) => x && x.list.length) : [];
   const loose = bySquad ? L.players.filter((p) => !groups.some((g) => g.i === p.squad)) : L.players;
-  const players = !L.players.length ? `<div class="gm-empty">⏳ Nobody has joined yet: open the TV screen, the 🎮 Join button goes to #arena.</div>`
+  const players = !L.players.length ? `<div class="gm-empty">⏳ Nobody has joined yet. <button class="btn small primary" data-gpost="1">📣 Post the Join button in Discord</button><div class="small" style="margin-top:6px">It's posted by itself when you open the TV screen; students can also type <code>/play</code>.</div></div>`
     : `<div class="gm-squads">${groups.map((g) => { const al = g.list.filter((p) => p.alive).length;
         return `<div class="gm-sq" style="--c:${esc(g.q.color)}"><div class="gm-sqh"><b>${esc(g.q.emoji + " " + g.q.name)}</b>${G.kind === "royale" && playing ? `<span class="small ${al ? "" : "gm-dead"}">${al ? `❤️ ${al}/${g.list.length}` : "💀 out"}</span>` : `<span class="small muted">${g.list.length}</span>`}</div><div class="gm-pls">${g.list.map(chip).join("")}</div></div>`; }).join("")}
         ${loose.length ? `<div class="gm-sq${bySquad ? "" : " gm-all"}" style="--c:#94a3b8">${bySquad ? `<div class="gm-sqh"><b>No squad</b></div>` : ""}<div class="gm-pls">${loose.map(chip).join("")}</div></div>` : ""}</div>`;
