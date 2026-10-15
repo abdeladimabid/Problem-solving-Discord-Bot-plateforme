@@ -1,7 +1,7 @@
 # Templates Veille & Live Coding — YouCode / DWWM 2026-2027 (A1)
 
 > **Purpose:** the reference format Claude must follow every time it generates a daily *veille* or a *live coding* for the A1 promotion.
-> **Companion of:** `A1_DWWM_2026-2027_context_analysis.md`, `BRIEF_FORMAT_SPEC_DWWM_2026-2027.md`, `METIERS_POOL_DWWM_2026-2027.md`.
+> **Companion of:** `A1_DWWM_2026-2027_context_analysis.md`, `VEILLE_INSPIRATION_DWWM.md`.
 > **Conventions:** rules in English, templates and generated content in **French**. Learners are addressed with **« tu »** in veilles (as in the original template).
 >
 > ClassBot's **Activités** page (dashboard → Projects → Activités) follows this file: `src/shared/activities.ts` checks every item
@@ -139,7 +139,7 @@ Tu dois répondre à ces questions dans ta présentation :
 - **Build progressively:** first one element / one field "by hand", then generalise (function, loop, delegation).
 - **Déroulé table:** 4–5 steps, minutes **must add up to exactly 45**.
 - Anything harder goes in **« ➕ Si le temps le permet »** (1–2 items max).
-- Theme = the sprint's métier (see `METIERS_POOL_DWWM_2026-2027.md`), fictional names, prices in DH, Moroccan context (e.g. phone 06/07).
+- Theme = the concept practised (e.g. a list of users for a CRUD), never a client, a company or a class's project: the sprint, the planning and the competencies decide. Fictional Moroccan first names, prices in DH, phones 06/07. The teacher's proposal (Regenerate) can set the example.
 - Comments in the code: short, in French, only where they help.
 
 ### Template
@@ -157,7 +157,7 @@ Tu dois répondre à ces questions dans ta présentation :
 
 **📌 Contexte général**
 
-{2–4 phrases : le besoin du client du métier, ce qu'on va construire, le concept du programme travaillé.}
+{2–4 phrases : le concept du programme travaillé, la compétence visée, ce qu'on va construire pour le pratiquer.}
 
 **⏱️ Déroulé**
 
