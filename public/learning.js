@@ -768,10 +768,9 @@ function analyzeAllDialog(root) {
 function briefStudentsTab(root) {
   const { B } = BR, id = B.brief.id;
   const pushCell = (p) => (p === "on" ? `<span class="status solved">pushed</span>` : p === "late" ? `<span class="status late">after the deadline</span>` : `<span class="muted small">—</span>`);
-  // a finalized debrief: see it, or reopen it to change something (the points are never given twice)
+  // a finalized debrief: "View" in place of "Debrief" (reopening is on the debrief page itself)
   const actions = (who, h, r) => `<button class="btn small" data-hi="${esc(who)}" data-repo="${esc(h?.repo || "")}" data-plan="${esc(h?.plan || "")}" title="Set or fix the repo">✏️ Repo</button>
-    ${r?.status === "final" ? `<a class="btn small" href="#/debrief/${id}~${encodeURIComponent(who)}" title="The finalized debrief">👁 View</a><button class="btn small primary" data-reopen="${esc(who)}">↺ Reopen</button>`
-      : `<a class="btn small primary" href="#/debrief/${id}~${encodeURIComponent(who)}">Debrief →</a>`}`;
+    <a class="btn small primary" href="#/debrief/${id}~${encodeURIComponent(who)}">${r?.status === "final" ? "👁 View" : "Debrief →"}</a>`;
   let html;
   if (B.kind === "squad") {
     const nameOf = (uid) => B.students.find((s) => s.discord_id === uid)?.name || uid;
@@ -795,11 +794,6 @@ function briefStudentsTab(root) {
   }
   root.innerHTML = `${debriefToolsHtml()}<section class="panel"><p class="muted small" style="margin-top:0">After the deadline, open each debrief: the bot reads the repo, checks the requirements and the competencies, proposes a mise en situation and writes the comment. Finalizing records the competencies on the student's profile.</p>${html}</section>`;
   wireDebriefTools(root);
-  $$("[data-reopen]", root).forEach((x) => x.onclick = () => confirmDialog("Reopen this debrief?", "Its competencies and skills leave the record until you finalize it again. The points and coins stay: finalizing again only adds or removes the difference.", "Reopen", async () => {
-    await api(`/briefs/${id}/review/reopen`, { method: "POST", body: { who: x.dataset.reopen } });
-    toast("Reopened: change it, then finalize again");
-    location.hash = `#/debrief/${id}~${encodeURIComponent(x.dataset.reopen)}`;
-  }));
   $$("[data-hi]", root).forEach((x) => x.onclick = () => openDialog("Repo handed in", `
       <label for="hi-r">GitHub repo <span class="muted">(owner/repo or its link; empty = remove)</span></label><input type="text" id="hi-r" style="width:100%" value="${esc(x.dataset.repo)}">
       <label for="hi-p">Planning board <span class="muted">(Trello, Jira or GitHub Project, optional)</span></label><input type="url" id="hi-p" style="width:100%" value="${esc(x.dataset.plan)}">`,

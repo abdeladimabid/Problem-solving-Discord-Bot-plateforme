@@ -343,7 +343,9 @@ export async function signupStats(env: Env, g: GuildRow) {
   const avg = rows.length ? rows.reduce((s, r) => s + r.total, 0) / rows.length : 0;
   const avgV = rows.length ? rows.reduce((s, r) => s + r.veille, 0) / rows.length : 0;
   const avgL = rows.length ? rows.reduce((s, r) => s + r.live, 0) / rows.length : 0;
-  for (const r of rows as any[]) r.behind = r.total === 0 && avg >= 0.5 ? true : r.total <= avg - 1;
+  // behind on each kind separately: everyone should have as many veilles AND as many live codings as the others
+  const late = (n: number, a: number) => (n === 0 && a >= 0.5) || n <= a - 1;
+  for (const r of rows as any[]) { r.behindV = late(r.veille, avgV); r.behindL = late(r.live, avgL); r.behind = r.behindV || r.behindL; }
   return { rows, avg: Math.round(avg * 10) / 10, avgVeille: Math.round(avgV * 10) / 10, avgLive: Math.round(avgL * 10) / 10 };
 }
 

@@ -68,8 +68,7 @@ function prActsPane(P, free) {
   const counts = { all: P.items.filter((i) => !i.past || i.claim?.status === "approved").length, free: free.length, taken: P.items.filter((i) => i.claim?.status === "approved").length, done: P.items.filter((i) => i.claim?.status === "done").length };
   return `
     <section class="panel pr-share">
-      <div class="pr-share-l"><h2>📣 Share in Discord</h2>
-        <p class="muted small">Students see the free ones with <code>/activity list</code>, ask with <code>/activity choose</code> (a veille with their binôme) and read the subject with <code>/activity mine</code> once you approve.</p></div>
+      <div class="pr-share-l"><h2>📣 Share in Discord</h2></div>
       <div class="pr-share-r">
         <label>Week<select id="pr-wk">${fweeks.length ? fweeks.map((w) => `<option value="${w.m}" ${w === sel ? "selected" : ""}>Week of ${prDay(w.m, { day: "numeric", month: "short" })} · ${w.items.length} free${w.shared ? " · shared" : ""}</option>`).join("") : `<option value="">No free activity</option>`}</select></label>
         <label>Channel<select id="pr-ch"><option value="">Choose a channel…</option>${channelOptions(P.cfg.channel)}</select></label>
@@ -146,30 +145,34 @@ function prHistPane(P) {
 
 // ------------------------------------------------------------- 👥 Students
 function prStuPane(P, free) {
-  const maxT = Math.max(1, ...P.stats.rows.map((r) => r.total));
-  const rows = [...P.stats.rows].sort((a, b) => (b.behind - a.behind) || (a.total - b.total) || a.name.localeCompare(b.name));
+  const rows = [...P.stats.rows].sort((a, b) => (b.behind - a.behind) || (a.veille - b.veille) || (a.live - b.live) || a.name.localeCompare(b.name));
+  // a kind's cell: how many in all, then what's done and what's coming (approved, not presented yet)
+  const kindCell = (n, done, late) => {
+    const next = n - done;
+    const what = n ? [done ? `${done} presented` : "", next ? `${next} coming up` : ""].filter(Boolean).join(" · ") : "none yet";
+    return `<span class="pr-kc${late ? " late" : ""}"><b>${n}</b><span class="small">${what}</span></span>`;
+  };
   return `<div class="cs-grid">
     <section class="panel cs-list-panel"><div class="panel-head"><h2>Who presented what</h2>
       <span class="toolbar" style="margin:0"><input type="search" id="pr-q" placeholder="Search a student" style="max-width:170px"></span></div>
-      <p class="muted small" style="margin-top:0">Class average: <b>${P.stats.avg}</b> (${P.stats.avgVeille} veille · ${P.stats.avgLive} live coding). The ones behind come first.</p>
+      <p class="muted small" style="margin-top:0">On average, each student has <b>${P.stats.avgVeille}</b> veille(s) and <b>${P.stats.avgLive}</b> live coding(s). Behind on one or the other: first in the list.</p>
       <div class="cs-scroll" id="pr-list">${table([
         { label: "", html: (r) => `<input type="checkbox" data-psel="${esc(r.discord_id)}" aria-label="Select">` },
-        { label: "Student", html: (r) => `<a class="nowrap" href="#/student/${esc(r.discord_id)}" data-n="${esc(r.name.toLowerCase())}">${avatar(r.name, r.discord_id)} ${esc(r.name)}</a>${r.behind ? ` <span class="pr-warn">behind</span>` : ""}` },
+        { label: "Student", html: (r) => `<a class="nowrap" href="#/student/${esc(r.discord_id)}" data-n="${esc(r.name.toLowerCase())}">${avatar(r.name, r.discord_id)} ${esc(r.name)}</a>` },
         { label: "Level", html: (r) => (r.level ? `<span class="niv pgc-${esc(r.level)}"><i></i>${esc(r.level[0].toUpperCase() + r.level.slice(1))}</span>` : `<span class="muted">—</span>`) },
-        { label: "Presentations", html: (r) => `<span class="coin-cell"><span class="coin-bar pr-bar"><i style="width:${Math.round((r.total / maxT) * 100)}%"></i></span><b>${r.total}</b></span>` },
-        { label: "🔎", num: true, html: (r) => (r.veille ? `${r.vDone}${r.veille - r.vDone ? `<span class="muted">+${r.veille - r.vDone}</span>` : ""}` : `<span class="muted">·</span>`) },
-        { label: "💻", num: true, html: (r) => (r.live ? `${r.lDone}${r.live - r.lDone ? `<span class="muted">+${r.live - r.lDone}</span>` : ""}` : `<span class="muted">·</span>`) },
+        { label: "🔎 Veilles", html: (r) => kindCell(r.veille, r.vDone, r.behindV) },
+        { label: "💻 Live codings", html: (r) => kindCell(r.live, r.lDone, r.behindL) },
         { label: "Points", num: true, html: (r) => (r.points ? `${r.points}` : `<span class="muted">·</span>`) },
         { label: "Last", html: (r) => `<span class="small nowrap">${r.last ? prDay(r.last, { day: "numeric", month: "short" }) : "—"}</span>` },
       ], rows, { empty: "No students yet." })}</div>
-      <p class="muted small" style="margin:8px 0 0">🔎 veilles · 💻 live codings: presented <span class="muted">+ planned</span></p></section>
+      <p class="muted small" style="margin:8px 0 0"><span class="pr-kc late"><b>0</b></span> in red: behind the class on that kind.</p></section>
     <section class="panel cs-change"><h2>Give a presentation</h2>
       <label>Who</label><p class="small" id="pr-picked" style="margin:0 0 6px">Tick students in the list.</p>
       <label for="pr-act">Activity</label>
       <select id="pr-act" style="width:100%">${free.length ? free.map((i) => `<option value="${i.id}">${prKind(i.kind)} · ${prDay(i.day)} · ${esc(i.title || "")}</option>`).join("") : `<option value="">No free activity</option>`}</select>
       <p class="notice small">A veille: 2 students (3 at most). A live coding: 1 or 2. They get a DM.</p>
       <p style="margin-bottom:0"><button class="btn primary" id="pr-give" style="width:100%" ${free.length ? "" : "disabled"}>Assign</button></p>
-      ${P.stats.rows.some((r) => r.behind) ? `<p style="margin:10px 0 0"><button class="btn" id="pr-behind" style="width:100%">⚠️ Select the ones behind</button></p>` : ""}
+      ${P.stats.rows.some((r) => r.behind) ? `<p style="margin:10px 0 0"><button class="btn" id="pr-behind" style="width:100%" title="The students with the fewest presentations of the activity's kind (veille or live coding)">⚠️ Select the ones behind</button></p>` : ""}
     </section></div>`;
 }
 
@@ -222,7 +225,16 @@ function prWire(P, free) {
   $$("[data-psel]").forEach((c) => c.onchange = () => { c.checked ? picked.add(c.dataset.psel) : picked.delete(c.dataset.psel); draw(); });
   $("#pr-q").oninput = (e) => { const q = e.target.value.toLowerCase(); $$("#pr-list tbody tr").forEach((tr) => (tr.hidden = !($("[data-n]", tr)?.dataset.n || "").includes(q))); };
   const bh = $("#pr-behind");
-  if (bh) bh.onclick = () => { P.stats.rows.filter((r) => r.behind).slice(0, 3).forEach((r) => { picked.add(r.discord_id); const c = $(`[data-psel="${r.discord_id}"]`); if (c) c.checked = true; }); draw(); };
+  // for the activity picked: the ones with the fewest of ITS kind (2 for a veille, 1 for a live coding)
+  if (bh) bh.onclick = () => {
+    const act = free.find((i) => String(i.id) === $("#pr-act").value), kind = act?.kind === "live" ? "live" : "veille";
+    const key = kind === "live" ? "behindL" : "behindV";
+    picked.clear(); $$("[data-psel]").forEach((c) => (c.checked = false));
+    const pool = P.stats.rows.filter((r) => r[key]).sort((a, b) => a[kind] - b[kind] || a.veille + a.live - b.veille - b.live || Math.random() - .5);
+    if (!pool.length) return toast(`Nobody is behind on ${kind === "live" ? "live codings" : "veilles"}`);
+    pool.slice(0, kind === "live" ? 1 : 2).forEach((r) => { picked.add(r.discord_id); const c = $(`[data-psel="${r.discord_id}"]`); if (c) c.checked = true; });
+    draw();
+  };
   $("#pr-give").onclick = (e) => busy(e.currentTarget, async () => {
     if (!picked.size) throw new Error("Pick at least one student");
     if (!$("#pr-act").value) throw new Error("No free activity");

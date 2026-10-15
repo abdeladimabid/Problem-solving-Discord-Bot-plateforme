@@ -4467,7 +4467,14 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   // fairness: counts, behind, random picks the fewest first and keeps hard subjects from Faible / Critique students
   const st = await api("GET", `/api/activities/stats?g=${G}`);
   const row = (id: string) => st.data.rows.find((r: any) => r.discord_id === id);
-  check(row(U.alice.id).vDone === 1 && row(extra[2].id).lDone === 1 && row(extra[0].id).total === 0 && row(extra[0].id).behind === (st.data.avg >= 0.5), "who presented what; nobody is 'behind' while the class average is under one half");
+  check(row(U.alice.id).vDone === 1 && row(extra[2].id).lDone === 1 && row(extra[0].id).total === 0 && row(extra[0].id).behindV === (st.data.avgVeille >= 0.5) && row(extra[0].id).behindL === (st.data.avgLive >= 0.5), "who presented what; nobody is 'behind' on a kind while its class average is under one half");
+  const SG = await import("../src/shared/actsignup.ts");
+  const gS = q1("SELECT * FROM guilds WHERE id = ?", G);
+  // behind is per kind: a student with 2 veilles and no live coding is behind on live codings when the others have one
+  const fake = { rows: [{ veille: 2, live: 0 }, { veille: 0, live: 1 }, { veille: 1, live: 1 }, { veille: 1, live: 1 }] };
+  const avgV = fake.rows.reduce((a, r) => a + r.veille, 0) / 4, avgL = fake.rows.reduce((a, r) => a + r.live, 0) / 4;
+  const late = (n: number, a: number) => (n === 0 && a >= 0.5) || n <= a - 1;
+  check(late(0, avgL) && late(0, avgV) && !late(1, avgV) && typeof SG.signupStats === "function" && (await SG.signupStats(env, gS)).rows.every((r: any) => r.behind === (r.behindV || r.behindL)), "behind is counted per kind (veilles and live codings separately)");
   const bid = Number(run1("INSERT INTO briefs (guild_id, title, status, data, kind, created_at) VALUES (?, 'Zz last', 'assigned', '{}', 'solo', ?)", G, 9e9).lastInsertRowid);
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, level, status) VALUES (?, ?, ?, '{}', 'faible', 'final')", bid, G, `u:${extra[0].id}`);
   await api("PUT", `/api/activities/${v3}/slot?g=${G}`, { level: "hard" });
