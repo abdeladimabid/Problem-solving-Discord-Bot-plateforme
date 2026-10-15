@@ -13,6 +13,7 @@ import { fetchChallenge, hackerrankHealth, parseChallengeSlug } from "../shared/
 import { RunnerUnavailable, runPythonTests, runnerHealth } from "../shared/runner.ts";
 import { arenaChannel } from "../shared/arena.ts";
 import { MIGRATIONS } from "../shared/schema.ts";
+import { BOSS_BANK } from "../shared/bossbank.ts";
 import { integrityOf } from "../shared/integrity.ts";
 import { createSession, endSession, sessionResults } from "../shared/sessions.ts";
 import { ROLE_DEFS, autoRolesOf, setAutoRoles, syncAutoRoles, wantedHolders } from "../shared/roles.ts";
@@ -211,6 +212,17 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       try {
         return ok(await createBoss(env, g, { challengeId: Number(body.challenge_id), name: String(body.name ?? "").trim().slice(0, 60) || "The Bug King", hp: n(body.hp, 40, 5000, 200), hours: n(body.hours, 1, 336, 48), reward: n(body.reward, 0, 200, 30), coins: n(body.coins, 0, 500, 20), channelId: body.channel_id || null, lore: body.lore }));
       } catch (e: any) { throw new HttpError(400, e.message); }
+    }
+    if (path === "/bosses/bank" && method === "GET") {
+      const L = (await guild()).lang === "fr" ? "fr" : "en";
+      return ok({ bosses: BOSS_BANK.map((b) => ({ id: b.id, emoji: b.emoji, name: b.name[L], title: b.title[L], skill: b.skill, skill_name: skillName(b.skill, L), difficulty: b.difficulty, intro: b.lore[L].intro })) });
+    }
+    const bankM = path.match(/^\/bosses\/bank\/([a-z0-9-]+)$/);
+    if (bankM && method === "POST") {
+      const g = await guild();
+      const b = BOSS_BANK.find((x) => x.id === bankM[1]);
+      if (!b) throw new HttpError(404, "unknown boss");
+      return ok(await bankBoss(env, g, b, user.email));
     }
     if (path === "/events/ai" && method === "POST") {
       try { return ok(await eventWithAi(env, await guild(), body, user.email)); }
@@ -1135,7 +1147,14 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
   let ch: any;
   if (qtype === "write") {
     const w = await generateWrite(env, { difficulty, topic, lang, quest });
-    if (!w) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+    if (!w) {
+      if (!boss) throw new HttpError(503, "The AI couldn't produce a problem that passed its own checks (busy or daily limit reached). Try again.");
+      // no checked problem from the AI: a ready-made boss instead (same skill if there is one), so the battle can still start
+      const pick = BOSS_BANK.filter((x) => x.skill === skill?.key);
+      const pool = pick.length ? pick : BOSS_BANK.filter((x) => x.difficulty === difficulty).length ? BOSS_BANK.filter((x) => x.difficulty === difficulty) : BOSS_BANK;
+      const r = await bankBoss(env, g, pool[Math.floor(Math.random() * pool.length)], by);
+      return { ...r, fallback: true };
+    }
     ch = await saveGeneratedWrite(env, { ...g, lang }, w, difficulty, by, "ai");
   } else {
     const codeLang = guildLangs({ code_lang: b.code_lang || "" }).includes(b.code_lang) ? b.code_lang : pickGuildLang(g);
@@ -1154,6 +1173,27 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
     return { name, why, lore, challenge, players, fighters, hp: Math.min(5000, fighters * 40), hours: lvl === 2 ? 48 : 24, reward: [15, 25, 40][lvl], coins: [10, 15, 25][lvl] };
   }
   return { why, challenge, players, points: [25, 40, 60][lvl], coins: [15, 25, 40][lvl], hours: lvl === 2 ? 48 : 24 };
+}
+
+/** A ready-made boss (see bossbank.ts): its problem saved in the bank (once per class) and the same shape as the AI helper. */
+async function bankBoss(env: Env, g: GuildRow, b: (typeof BOSS_BANK)[number], by: string) {
+  const L = g.lang === "fr" ? "fr" : "en";
+  const title = b.title[L];
+  let ch = await one<any>(env, "SELECT id, title, difficulty, kind FROM challenges WHERE guild_id = ? AND kind = 'write' AND title = ? AND status != 'archived' ORDER BY id DESC LIMIT 1", g.id, title);
+  if (!ch) {
+    ch = await saveGeneratedWrite(env, { ...g, lang: L }, { title, statement: b.statement[L], hint: b.hint[L], topic: skillName(b.skill, L), reference: b.solution, timeLimit: 3, tests: b.tests }, b.difficulty as Difficulty, by, "teacher");
+    if (!ch) throw new HttpError(500, "couldn't save the boss's challenge");
+    await setSkills(env, ch.id, [b.skill]);
+  }
+  const act = await one<{ n: number }>(env, "SELECT COUNT(DISTINCT discord_id) AS n FROM attempts WHERE guild_id = ? AND started_at >= ?", g.id, now() - 14 * 86400);
+  const players = Math.max(4, Number(act?.n) || 0);
+  const lvl = { easy: 0, medium: 1, hard: 2 }[b.difficulty] ?? 1;
+  const fighters = Math.max(3, Math.round(players * 0.6));
+  return {
+    name: b.name[L], why: L === "fr" ? `Boss prêt à l'emploi : ${skillName(b.skill, L)}.` : `Ready-made boss: ${skillName(b.skill, L)}.`,
+    lore: { ...b.lore[L], hits: [...b.lore[L].hits] }, challenge: { id: ch.id, title: ch.title, difficulty: ch.difficulty, kind: ch.kind },
+    players, fighters, hp: Math.min(5000, fighters * 40), hours: lvl === 2 ? 48 : 24, reward: [15, 25, 40][lvl], coins: [10, 15, 25][lvl], bank: b.id,
+  };
 }
 
 async function createChallenge(env: Env, g: GuildRow, b: any, by: string) {
