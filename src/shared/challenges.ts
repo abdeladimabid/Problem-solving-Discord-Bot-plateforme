@@ -2,7 +2,7 @@
 // Shared by practice, daily challenges, assignments and duels.
 import { trackOf } from "./tracks.ts";
 import type { AttemptRow, ChallengeRow, Difficulty, DuelRow, Env, GuildRow, PlayerRow } from "./types.ts";
-import { addPoints, all, checkBadges, findPlayer, now, one, practicePointsToday, quickSolvesToday, run, totalPoints } from "./db.ts";
+import { addPoints, all, challengeCoins, checkBadges, findPlayer, now, one, practicePointsToday, quickSolvesToday, run, totalPoints } from "./db.ts";
 import { HINT_STEPS, RULES, basePoints, dayKey, elo, isLimitedKind, quickFactor, fmtDuration, isCorrectOutput, levelInfo, pointsFor, progressBar, scoringOf, titleKey } from "./game.ts";
 import { t } from "./i18n.ts";
 import { COLORS, btn, codeBlock, linkBtn, mention, pingUsers, row, send, truncate } from "./discord.ts";
@@ -614,6 +614,7 @@ export async function finish(
     }
     if (points) {
       await addPoints(env, guild, { discordId: a.discord_id, amount: points, reason: a.origin, ref: a.id });
+      await challengeCoins(env, guild, a.discord_id, points);
       await run(env, "UPDATE attempts SET points = ? WHERE id = ?", points, a.id);
     }
     // 🎯 challenge contract (bought in /shop): every new code/SQL solve at the goal level counts
@@ -857,6 +858,7 @@ export async function regrade(env: Env, guild: GuildRow, c: ChallengeRow): Promi
     const pts = pointsFor(scoringOf(guild), { kind: c.kind, difficulty: c.difficulty, origin: a.origin === "duel" ? "practice" : a.origin, usedHint: a.used_hint, tries: a.tries, seconds: 999 });
     await run(env, "UPDATE attempts SET status = 'solved', points = ? WHERE id = ?", pts, a.id);
     await addPoints(env, guild, { discordId: a.discord_id, amount: pts, reason: "regrade", ref: a.id });
+    await challengeCoins(env, guild, a.discord_id, pts);
     n++;
   }
   return n;
@@ -980,6 +982,7 @@ async function releaseHeld(env: Env, guild: GuildRow, a: AttemptRow, score: numb
   const pts = Math.round((a.held ?? 0) * Math.max(0, Math.min(1, score)));
   if (pts) {
     await addPoints(env, guild, { discordId: a.discord_id, amount: pts, reason: a.origin, ref: a.id, note });
+    await challengeCoins(env, guild, a.discord_id, pts);
     await run(env, "UPDATE attempts SET points = points + ? WHERE id = ?", pts, a.id);
   }
   return pts;

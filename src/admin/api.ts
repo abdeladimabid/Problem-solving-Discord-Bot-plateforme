@@ -1,6 +1,6 @@
 // JSON API behind the teacher dashboard.
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
-import { addPoints, aiBudgetLeft, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
+import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
@@ -929,9 +929,10 @@ async function reviewAttempt(env: Env, g: GuildRow, attemptId: number, approve: 
       const pts = pointsFor(scoringOf(g), { kind: a.kind, difficulty: a.difficulty, origin: a.origin, usedHint: false, tries: 1, seconds: 999 });
       await run(env, "UPDATE attempts SET verified = 1, points = ? WHERE id = ?", pts, a.id);
       await addPoints(env, g, { discordId: a.discord_id, amount: pts, reason: a.origin, ref: a.id, note: "approved by teacher" });
+      await challengeCoins(env, g, a.discord_id, pts);
     } else await run(env, "UPDATE attempts SET verified = 1 WHERE id = ?", a.id);
   } else {
-    if (a.points) await addPoints(env, g, { discordId: a.discord_id, amount: -a.points, reason: "bonus", ref: a.id, note: "self-report rejected" });
+    if (a.points) { await addPoints(env, g, { discordId: a.discord_id, amount: -a.points, reason: "bonus", ref: a.id, note: "self-report rejected" }); await challengeCoins(env, g, a.discord_id, -a.points); }
     await run(env, "UPDATE attempts SET status = 'failed', points = 0 WHERE id = ?", a.id);
   }
   const L = g.lang;
@@ -1451,7 +1452,7 @@ async function reviewIntegrity(env: Env, g: GuildRow, id: number, b: any, ctx: C
   const a = await one<any>(env, "SELECT a.*, c.title FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.id = ? AND a.guild_id = ?", id, g.id);
   if (!a) throw new HttpError(404, "unknown attempt");
   if (b.action === "void") {
-    if (a.points > 0) await addPoints(env, g, { discordId: a.discord_id, amount: -a.points, reason: "adjust", ref: a.id, note: `points removed by the teacher: ${String(b.reason || "integrity check").slice(0, 120)}` });
+    if (a.points > 0) { await addPoints(env, g, { discordId: a.discord_id, amount: -a.points, reason: "adjust", ref: a.id, note: `points removed by the teacher: ${String(b.reason || "integrity check").slice(0, 120)}` }); await challengeCoins(env, g, a.discord_id, -a.points); }
     await run(env, "UPDATE attempts SET points = 0, held = 0, reviewed = 2 WHERE id = ?", id);
     if (b.notify) ctx.waitUntil(dm(env, a.discord_id, { content: t(g.lang, "integrity.voided", { title: a.title, reason: String(b.reason || "").slice(0, 200) }) }).catch(() => {}));
   } else {

@@ -379,6 +379,8 @@ section("HackerRank problems: only verified solves count");
 section("duels: invite in #arena, accept, first correct answer wins, Elo, coins");
 let duelId = 0;
 {
+  const coinsBefore = (id: string) => q1("SELECT coins FROM players WHERE discord_id = ?", id).coins;
+  const a0 = coinsBefore(U.alice.id), b0 = coinsBefore(U.bob.id);
   const r = await slash(U.alice, "duel", { opponent: U.bob.id, mode: "quick", difficulty: "easy", stake: 10 });
   check(r.data?.flags === 64 && text(r).includes(`<#${ARENA}>`), "duel invitation posted in #arena (private confirmation)");
   const inv = messagesTo(ARENA).reverse().find((m) => text(m).includes("dacc:"));
@@ -391,7 +393,7 @@ let duelId = 0;
   check(text(lastPatch()).includes("Duel on"), "duel started message");
   const d = q1("SELECT * FROM duels WHERE id = ?", duelId);
   check(d.status === "active" && d.challenge_id && d.channel_id === ARENA, "duel active with a challenge");
-  check(q1("SELECT coins FROM players WHERE discord_id = ?", U.alice.id).coins === 90, "stake escrowed");
+  check(q1("SELECT coins FROM players WHERE discord_id = ?", U.alice.id).coins === a0 - 10, "stake escrowed");
   const openA = await click(U.alice, `dopen:${duelId}`);
   const pa0 = lastPatch();
   await click(U.bob, `dopen:${duelId}`);
@@ -408,7 +410,8 @@ let duelId = 0;
   const d2 = q1("SELECT * FROM duels WHERE id = ?", duelId);
   check(d2.status === "finished" && d2.winner_id === U.alice.id, "alice wins the duel");
   const pa = q1("SELECT coins, rating FROM players WHERE discord_id = ?", U.alice.id), pb = q1("SELECT coins, rating FROM players WHERE discord_id = ?", U.bob.id);
-  check(pa.coins === 110 && pb.coins === 90, `coins settled (alice ${pa.coins}, bob ${pb.coins})`);
+  const won = q1("SELECT COALESCE(SUM(points), 0) AS n FROM attempts WHERE discord_id = ? AND origin = 'duel' AND status = 'solved'", U.alice.id).n;
+  check(pa.coins === a0 + 10 + won && pb.coins === b0 - 10, `coins settled: the stakes, and the solve's points as coins (alice ${pa.coins}, bob ${pb.coins})`);
   check(pa.rating > 1000 && pb.rating < 1000, "Elo updated");
   check(messagesTo(ARENA).some((m) => /wins the duel|Victory for/.test(text(m))), "victory announced in #arena");
   if (choice) await click(U.bob, `ans:${aidB}:${c.answer}`); else await submit(U.bob, `mans:${aidB}`, c.answer);
@@ -2007,7 +2010,7 @@ section("shop: boosts and profile extras");
   await finish(env, g!, at(ws[1]), ws[1], true);
   const c4 = coins(A);
   const r3 = await finish(env, g!, at(ws[2]), ws[2], true);
-  check(text(r3.payload).includes("Contract complete") && coins(A) === c4 + 150 && JSON.parse(P(A).boosts).contract.done, "contract complete: +150 coins");
+  check(text(r3.payload).includes("Contract complete") && coins(A) === c4 + 150 + (q1("SELECT points FROM attempts WHERE discord_id = ? ORDER BY id DESC LIMIT 1", A).points || 0) && JSON.parse(P(A).boosts).contract.done, "contract complete: +150 coins (plus the solve's coins)");
   check(messagesTo(ARENA).some((m) => text(m).includes("completed their challenge contract")), "…announced in #arena");
 
   // 🛡️ shield + ⚔️ victory message in a duel
@@ -3842,6 +3845,22 @@ section("i18n: every key exists in English and French");
   walk(join(ROOT, "src"));
   const unknown = [...used].filter((k) => !(k in DICTS.en));
   check(!unknown.length, "keys used in code but missing from i18n: " + unknown.join(", "));
+}
+
+section("challenges give as many coins as points");
+{
+  const g = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const { finish } = await import("../src/shared/challenges.ts");
+  const ch = q1("SELECT * FROM challenges WHERE kind = 'write' AND difficulty = 'easy' LIMIT 1");
+  const c0 = q1("SELECT coins FROM players WHERE discord_id = ?", U.carol.id).coins;
+  const r = run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, started_at, tries) VALUES (?, ?, ?, 'practice', ?, 1)", G, U.carol.id, ch.id, clock.now() - 300);
+  await finish(env, g, q1("SELECT * FROM attempts WHERE id = ?", Number(r.lastInsertRowid)), ch, true);
+  const at = q1("SELECT * FROM attempts WHERE id = ?", Number(r.lastInsertRowid));
+  const c1 = q1("SELECT coins FROM players WHERE discord_id = ?", U.carol.id).coins;
+  check(at.points > 0 && c1 === c0 + at.points, `a practice solve: +${at.points} points and +${c1 - c0} coins`);
+  const v = await api("POST", `/api/attempts/${at.id}/integrity?g=${G}`, { action: "void", reason: "copied" });
+  const c2 = q1("SELECT coins FROM players WHERE discord_id = ?", U.carol.id).coins;
+  check(v.status === 200 && c2 === c0, `the teacher voids the solve: the coins go back too (${c2})`);
 }
 
 section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + students' devices)");
