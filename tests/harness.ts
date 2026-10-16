@@ -77,7 +77,9 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
   learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
   dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
-  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[] }[] };
+  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[] }[],
+  // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
+  trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
@@ -258,7 +260,19 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (createHmac("sha256", intranetFake.secret).update(toSign).digest("hex") !== h("X-Classbot-Signature")) return deny("bad_signature");
     if (intranetFake.nonces.has(nonce)) return deny("replay");
     intranetFake.nonces.add(nonce);
-    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), classrooms: intranetFake.allowed });
+    const T = intranetFake.trainer, auth = String(h("Authorization") || "").replace(/^Bearer /, "");
+    const who = intranetFake.tokens.has(auth) ? { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } : null;
+    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), trainer: who, classrooms: who ? intranetFake.allowed : [] });
+    if (url.pathname === "/api/classbot/login") {
+      const b = JSON.parse(body || "{}");
+      if (b.email !== T.email || b.password !== T.password) return Response.json({ success: false, code: "bad_login", message: "Email ou mot de passe incorrect." }, { status: 401 });
+      intranetFake.tokens.clear();
+      const tok = `1|tok${intranetFake.nextId++}`;
+      intranetFake.tokens.add(tok);
+      return Response.json({ success: true, token: tok, trainer: { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } });
+    }
+    if (!who) return deny("no_trainer");
+    if (url.pathname === "/api/classbot/logout") { intranetFake.tokens.delete(auth); return Response.json({ success: true }); }
     if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
     const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
     if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);

@@ -1602,8 +1602,9 @@ async function intranetSettings(root) {
       <ul class="bchecks">${row(!!s.host && s.https, "Address (INTRANET_URL)", s.url || "")}${row(!!s.keyId, "Key id (INTRANET_KEY_ID)", s.keyId)}${row(s.secretOk, "Secret (INTRANET_SECRET, 32+ characters)", s.secretOk ? "set" : "")}</ul>
       ${s.host && !s.https ? `<p class="gh-warn">⚠️ Use an <b>https://</b> address (http only works for a test on this computer).</p>` : ""}
       ${s.ready ? "" : `<details class="small"><summary><b>How to set it</b></summary><ol>
-        <li>On the intranet: your profile → Settings → <b>🤖 Connecter mon ClassBot</b> → <b>Générer ma clé</b>. It works for your own classes only; copy the secret right away (it's shown once).</li>
-        <li>ClassBot: <code>INTRANET_URL</code> and <code>INTRANET_KEY_ID</code> in <code>wrangler.admin.jsonc</code> (vars), then <code>npx wrangler secret put INTRANET_SECRET -c wrangler.admin.jsonc</code>, and deploy.</li></ol></details>`}
+        <li>The school gives the ClassBot key: <code>INTRANET_URL</code>, <code>INTRANET_KEY_ID</code> and the secret (the intranet's <code>CLASSBOT_KEY_ID</code> / <code>CLASSBOT_SECRET</code>).</li>
+        <li>ClassBot: <code>INTRANET_URL</code> and <code>INTRANET_KEY_ID</code> in <code>wrangler.admin.jsonc</code> (vars), then <code>npx wrangler secret put INTRANET_SECRET -c wrangler.admin.jsonc</code>, and deploy.</li>
+        <li>Then connect your intranet account below: ClassBot works in your own classes, as you.</li></ol></details>`}
       <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-ping" ${s.ready ? "" : "disabled"}>🔌 Test the connection</button><span id="in-out" class="small"></span></div></div>`;
   const b = $("#in-ping", root);
   if (b) b.onclick = (e) => busy(e.currentTarget, async () => {
@@ -1612,20 +1613,42 @@ async function intranetSettings(root) {
     try {
       const r = await api("/intranet/ping", { method: "POST", body: {} });
       const skew = r.skew == null ? "" : Math.abs(r.skew) > 60 ? ` · ⚠️ the clocks differ by ${Math.abs(r.skew)} s` : " · clocks in sync";
-      out.innerHTML = `<span style="color:var(--up)">✅ Connected, signature accepted${esc(skew)} · classrooms allowed: ${r.classrooms.length ? esc(r.classrooms.join(", ")) : "none yet (CLASSBOT_CLASSROOMS)"}</span>`;
+      out.innerHTML = `<span style="color:var(--up)">✅ Signature accepted${esc(skew)}${r.trainer ? ` · connected as <b>${esc(r.trainer.name)}</b> (${r.trainer.classrooms} classes)` : " · no intranet account connected yet"}</span>`;
     } catch (err) { out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
   });
-  if (s.ready) {
-    root.insertAdjacentHTML("beforeend", `<div class="panel set-card" id="in-class"><h3>Intranet classroom</h3><p class="muted small">Loading…</p></div><div id="in-match"></div>`);
-    intranetClassCard(root);
-  }
+  if (!s.ready) return;
+  // the trainer's intranet account: ClassBot works in their classes, as them (the password is never kept)
+  root.insertAdjacentHTML("beforeend", s.trainer
+    ? `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
+        <p style="margin:0 0 10px">✅ Connected as <b>${esc(s.trainer.name)}</b> · ${s.trainer.classrooms} class(es) on the intranet · since ${esc(fmtAgo(s.trainer.at))}</p>
+        <p class="small muted">ClassBot sends squads and activities to your classes only, as you. Your password isn't kept: only a ClassBot token, encrypted.</p>
+        <button class="btn" id="in-out-acc">Disconnect</button></div>
+      <div class="panel set-card" id="in-class"><h3>Intranet classroom</h3><p class="muted small">Loading…</p></div><div id="in-match"></div>`
+    : `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
+        <p class="small muted" style="margin-top:0">Connect once with your intranet email and password: ClassBot then works in <b>your</b> classes, as you. The password goes to the intranet only and is never kept.</p>
+        <div class="field-row"><div><label for="in-email">Intranet email</label><input type="email" id="in-email" autocomplete="username"></div>
+          <div><label for="in-pass">Password</label><input type="password" id="in-pass" autocomplete="current-password"></div></div>
+        <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-login">🔐 Connect</button><span id="in-login-out" class="small"></span></div></div>`);
+  if ($("#in-login", root)) $("#in-login", root).onclick = (e) => busy(e.currentTarget, async () => {
+    const out = $("#in-login-out", root);
+    out.textContent = "";
+    try {
+      const r = await api("/intranet/login", { method: "POST", body: { email: $("#in-email", root).value, password: $("#in-pass", root).value } });
+      $("#in-pass", root).value = "";
+      toast(`Connected as ${r.trainer.name}`);
+      intranetSettings(root);
+    } catch (err) { $("#in-pass", root).value = ""; out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
+  });
+  if ($("#in-out-acc", root)) $("#in-out-acc", root).onclick = () => confirmDialog("Disconnect your intranet account?", "ClassBot can't send anything to the intranet until you connect again. What was already sent stays.", "Disconnect",
+    async () => { await api("/intranet/logout", { method: "POST", body: {} }); toast("Disconnected"); intranetSettings(root); }, true);
+  if (s.trainer) intranetClassCard(root);
 }
 async function intranetClassCard(root) {
   const box = $("#in-class", root);
   let r;
   try { r = await api("/intranet/classrooms"); } catch (e) { box.innerHTML = `<h3>Intranet classroom</h3><p class="gh-warn">❌ ${esc(e.message)}</p>`; return; }
   box.innerHTML = `<h3>Intranet classroom</h3>
-    <p class="small muted" style="margin-top:0">The intranet classroom of this Discord class. Only the classrooms the intranet allows for ClassBot are listed (CLASSBOT_CLASSROOMS).</p>
+    <p class="small muted" style="margin-top:0">The intranet classroom of this Discord class: one of your classes on the intranet.</p>
     <div class="toolbar" style="margin:0"><select id="in-cls"><option value="">— Not linked —</option>${r.classrooms.map((c) => `<option value="${c.id}" ${r.current?.id === c.id ? "selected" : ""}>${esc(c.name)} · ${c.learners} learners</option>`).join("")}</select>
       <button class="btn" id="in-cls-save">Save</button></div>`;
   const save = async (id) => {

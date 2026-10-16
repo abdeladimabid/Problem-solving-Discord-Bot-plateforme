@@ -4133,7 +4133,17 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   Object.assign(env as any, { INTRANET_URL: "http://intranet.test", INTRANET_KEY_ID: intranetFake.keyId, INTRANET_SECRET: intranetFake.secret });
   intranetFake.learners[12] = [{ id: 501, first_name: "Alice", last_name: "Martin" }, { id: 502, first_name: "Bob", last_name: "Durand" }, { id: 503, first_name: "Caroline", last_name: "Petit" }];
   const ping = await api("POST", "/api/intranet/ping", { g: G });
-  check(ping.status === 200 && ping.data.ok && ping.data.classrooms.join() === "12", "Test the connection: a signed ping accepted by the intranet");
+  check(ping.status === 200 && ping.data.ok && !ping.data.trainer, "Test the connection: a signed ping accepted by the intranet (no trainer connected yet)");
+  check(/Connect your intranet account/.test((await api("GET", `/api/intranet/classrooms?g=${G}`)).data.error), "…without the trainer's account: nothing else");
+  const T = intranetFake.trainer;
+  const badLogin = await api("POST", "/api/intranet/login", { g: G, email: T.email, password: "wrong" });
+  check(badLogin.status === 400 && /incorrect/.test(badLogin.data.error), "…a wrong password: refused");
+  const lg = await api("POST", "/api/intranet/login", { g: G, email: T.email, password: T.password });
+  const stored = q1("SELECT intranet FROM guilds WHERE id = ?", G).intranet;
+  check(lg.status === 200 && lg.data.trainer.name === T.name && ![...intranetFake.tokens].some((t) => stored.includes(t)) && !stored.includes(T.password) && JSON.parse(stored).auth.trainer.id === T.id,
+    "the trainer connects with their intranet account: the token is kept encrypted, the password never");
+  const ping2 = await api("POST", "/api/intranet/ping", { g: G });
+  check(ping2.data.trainer?.name === T.name && ping2.data.classrooms.join() === "12", "…the ping says who is connected, and their classrooms");
   const cls = await api("GET", `/api/intranet/classrooms?g=${G}`);
   check(cls.data.classrooms.length === 1 && cls.data.classrooms[0].id === 12, "…only the classrooms the intranet allows");
   check((await api("PUT", "/api/intranet/classroom", { g: G, id: 99 })).status === 400, "…another classroom: refused");
@@ -4189,6 +4199,9 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   check(intranetFake.nonces.size === intranetFake.calls, "every request to the intranet was signed and used once");
   await api("PUT", "/api/intranet/classroom", { g: G, id: 0 });
   check(!q("SELECT 1 FROM intranet_links WHERE guild_id = ?", G).length, "…no classroom any more: the links go");
+  // disconnect: the intranet forgets the token, ClassBot too
+  await api("POST", "/api/intranet/logout", { g: G });
+  check(!intranetFake.tokens.size && !(JSON.parse(q1("SELECT intranet FROM guilds WHERE id = ?", G).intranet || "{}").auth) && (await api("GET", `/api/intranet?g=${G}`)).data.trainer === null, "Disconnect: the token is revoked on the intranet and forgotten here");
   for (const k of ["INTRANET_URL", "INTRANET_KEY_ID", "INTRANET_SECRET"]) delete (env as any)[k];
 }
 

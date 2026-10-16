@@ -1,5 +1,5 @@
 // JSON API behind the teacher dashboard.
-import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
+import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, intranetTrainer, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -462,17 +462,20 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // -------------------------------------------------------------- teams
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
     // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
-    if (path === "/intranet" && method === "GET") { await guild(); return ok(intranetSetup(env)); }
+    if (path === "/intranet" && method === "GET") { const g = await guild(); return ok({ ...intranetSetup(env), trainer: await intranetTrainer(env, g.id) }); }
     if (path.startsWith("/intranet/")) {
       const g = await guild();
       try {
-        if (path === "/intranet/ping" && method === "POST") return ok(await intranetPing(env));
+        if (path === "/intranet/ping" && method === "POST") return ok(await intranetPing(env, g.id));
+        // the trainer connects this class's ClassBot with their intranet account (the password is never kept)
+        if (path === "/intranet/login" && method === "POST") return ok({ trainer: await intranetLogin(env, g.id, String(body.email || ""), String(body.password || "")) });
+        if (path === "/intranet/logout" && method === "POST") { await intranetLogout(env, g.id); return ok({ trainer: null }); }
         // the class's intranet classroom (among those the intranet allows this key)
-        if (path === "/intranet/classrooms" && method === "GET") return ok({ current: intranetClassOf(g as any), classrooms: await intranetClassrooms(env) });
+        if (path === "/intranet/classrooms" && method === "GET") return ok({ current: intranetClassOf(g as any), classrooms: await intranetClassrooms(env, g.id) });
         if (path === "/intranet/classroom" && method === "PUT") {
           const id = Math.floor(Number(body.id)) || 0;
-          const c = id ? (await intranetClassrooms(env)).find((x) => x.id === id) : null;
-          if (id && !c) throw new HttpError(400, "This classroom isn't allowed for ClassBot on the intranet (CLASSBOT_CLASSROOMS).");
+          const c = id ? (await intranetClassrooms(env, g.id)).find((x) => x.id === id) : null;
+          if (id && !c) throw new HttpError(400, "This classroom isn't one of yours on the intranet.");
           await setIntranetClass(env, g.id, c ? { id: c.id, name: c.name } : null);
           return ok({ current: c ? { id: c.id, name: c.name } : null });
         }
