@@ -75,7 +75,8 @@ export const leagueFake = { status: 200, body: null as any, calls: 0 };
 // a fake YouCode intranet: checks each request's signature like VerifyClassbotSignature.php, then answers
 export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
-  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]> };
+  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
+  dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900 };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
@@ -262,6 +263,19 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
     const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
     if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);
+    const sm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/squads$/);
+    if (sm && init.method === "POST") {
+      const cid = Number(sm[1]), b = JSON.parse(body || "{}");
+      if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
+      const active = (intranetFake.learners[cid] || []).map((l) => l.id), all = b.groups.flatMap((g: any) => g.learner_ids);
+      if (all.some((x: number) => !active.includes(x))) return Response.json({ success: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }, { status: 422 });
+      let d = intranetFake.dists.find((x) => x.id === b.distribution_id && x.classroom === cid);
+      if (!d) { d = { id: intranetFake.nextId++, classroom: cid, name: b.name, groups: [] }; intranetFake.dists.push(d); }
+      d.name = b.name;
+      const map: Record<string, number> = {};
+      d.groups = b.groups.map((g: any) => { const old = d!.groups.find((x) => x.id === g.group_id); const id = old ? old.id : intranetFake.nextId++; map[g.key] = id; return { id, name: g.name, learners: g.learner_ids }; });
+      return Response.json({ success: true, distribution_id: d.id, groups: map, kept: 0, learners: all.length });
+    }
     return deny("not_found", 404);
   }
   if (url.hostname === "other.classbot.test") {

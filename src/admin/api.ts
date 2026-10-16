@@ -1,5 +1,5 @@
 // JSON API behind the teacher dashboard.
-import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetMatchView, intranetPing, intranetSetup, setIntranetClass, setIntranetLink } from "../shared/intranet.ts";
+import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -534,6 +534,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         const sm = path.match(/^\/squads\/(\d+)$/);
         if (sm && method === "PUT") { await updateSquadSet(env, g, Number(sm[1]), body); return ok(await sview()); }
         if (sm && method === "DELETE") { await deleteSquadSet(env, g, Number(sm[1])); return ok(await sview()); }
+        // the squads → the intranet's groups (preview first; all or nothing)
+        const im = path.match(/^\/squads\/(\d+)\/intranet$/);
+        if (im) {
+          try {
+            if (method === "GET") return ok(await squadsPreview(env, g.id, Number(im[1])));
+            if (method === "POST") return ok(await sendSquads(env, g.id, Number(im[1])));
+          } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+        }
         const nm = path.match(/^\/squads\/(\d+)\/notify$/);
         if (nm && method === "POST") return ok({ ...(await notifySquads(env, g, Number(nm[1]), body.note, Number.isInteger(body.only) ? body.only : null)), ...(body.last === false ? {} : await sview()) });
       } catch (e) { if (e instanceof SquadError) throw new HttpError(400, e.message); throw e; }

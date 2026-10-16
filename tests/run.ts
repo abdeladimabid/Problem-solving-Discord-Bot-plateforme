@@ -4146,6 +4146,25 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const mine = await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 501 });
   check(row(mine.data, U.carol.id).linked?.id === 501 && row(mine.data, U.carol.id).linked.by === "you" && !row(mine.data, U.alice.id).linked, "…the teacher's choice wins (the learner moves to that student)");
   check((await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 777 })).status === 400, "…a learner outside the classroom: refused");
+  // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
+  run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
+    JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
+  const sid = q1("SELECT id FROM squad_sets WHERE guild_id = ? AND name = 'Sprint intranet'", G).id;
+  run1("DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  const pv = await api("GET", `/api/squads/${sid}/intranet?g=${G}`);
+  check(pv.status === 200 && pv.data.groups.length === 2 && pv.data.missing.length === 1 && !pv.data.sent, `preview: each squad with its intranet learners, who isn't linked (${pv.data.missing})`);
+  const before = intranetFake.dists.length;
+  check((await api("POST", `/api/squads/${sid}/intranet`, { g: G })).status === 400 && intranetFake.dists.length === before, "…a student not linked: nothing is sent (all or nothing)");
+  await api("PUT", "/api/intranet/link", { g: G, discord_id: U.alice.id, learner_id: 503 });
+  const s1 = await api("POST", `/api/squads/${sid}/intranet`, { g: G });
+  const d1 = intranetFake.dists.find((x) => x.id === s1.data.distribution_id)!;
+  check(s1.status === 200 && s1.data.groups === 2 && s1.data.learners === 3 && d1.name === "Sprint intranet" && d1.groups[0].learners.join() === "503,502" && !s1.data.again, "sent: a new group distribution, each squad a group with its learners");
+  const g1 = d1.groups.map((x) => x.id);
+  run1("UPDATE squad_sets SET squads = ? WHERE id = ?", JSON.stringify([{ id: "aa1111", name: "Squad A+", members: [U.alice.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id, U.bob.id], sm: U.carol.id }]), sid);
+  const s2 = await api("POST", `/api/squads/${sid}/intranet`, { g: G });
+  const d2 = intranetFake.dists.find((x) => x.id === s2.data.distribution_id)!;
+  check(s2.data.again && s2.data.distribution_id === s1.data.distribution_id && d2.groups.map((x) => x.id).join() === g1.join() && d2.groups[0].name === "Squad A+" && d2.groups[1].learners.join() === "501,502", "sent again: the same distribution and the same groups, updated (activities stay linked)");
+  check((await api("GET", `/api/squads/${sid}/intranet?g=${G}`)).data.sent?.distribution_id === s1.data.distribution_id, "…the preview says it was sent");
   check(intranetFake.nonces.size === intranetFake.calls, "every request to the intranet was signed and used once");
   await api("PUT", "/api/intranet/classroom", { g: G, id: 0 });
   check(!q("SELECT 1 FROM intranet_links WHERE guild_id = ?", G).length, "…no classroom any more: the links go");
