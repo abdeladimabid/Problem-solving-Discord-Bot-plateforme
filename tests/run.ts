@@ -20,6 +20,7 @@ import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText 
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
+import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
@@ -4198,6 +4199,20 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const as3 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
   check(as3.data.sent === 0 && as3.data.skipped === 1 && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1, "…and not sent: no second live coding at 11:00");
   check((await api("GET", `/api/intranet/classrooms?g=${G}`)).status === 200, "reading what's on the intranet goes through the same signed, trainer-only access");
+  // from the shared library: the intranet gets the library's key (a second class's copy is a reused one) and the author
+  run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `lib:${G}`, JSON.stringify({ link: "https://hub.example/library/abcdef123456." + "x".repeat(32), name: "A1" }), clock.now());
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-09', 'veille', 'Promesses', '# V', ?, ?)", G, clock.now(), clock.now());
+  const vb = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-09'", G).id;
+  run1("INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, author, updated_at, deleted) VALUES (?, 'activity', '2030-01-09:veille', 'Promesses', NULL, 1, 'DevStorm', 'Achraf Chaoub', ?, 0)", G, clock.now());
+  const pvb = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-09&to=2030-01-09`);
+  check(pvb.data.items.find((x: any) => x.id === vb)?.author === "Achraf Chaoub", "a library activity made by another teacher: the preview says who made it");
+  await api("POST", "/api/activities/intranet", { g: G, ids: [vb] });
+  const sentItem = (intranetFake as any).lastItems?.[0];
+  check(sentItem?.library_key === "abcdef123456:2030-01-09:veille" && sentItem.credit === "Achraf Chaoub", `…the intranet gets the library key and the author to credit (${JSON.stringify({ k: sentItem?.library_key, c: sentItem?.credit })})`);
+  run1("DELETE FROM activities WHERE id = ?", vb);
+  run1("DELETE FROM library_cache WHERE guild_id = ? AND key = '2030-01-09:veille'", G);
+  run1("DELETE FROM app_settings WHERE k = ?", `lib:${G}`);
+  run1("DELETE FROM intranet_sync WHERE kind = 'activity' AND local_id = ?", vb);
   // these activities were only for the intranet: the next sections use their own
   run1(`DELETE FROM activity_claims WHERE activity_id IN (${va}, ${la})`);
   run1(`DELETE FROM activities WHERE id IN (${va}, ${la})`);
@@ -4723,6 +4738,15 @@ section("📚 shared library: the A1 classes share activities, assessments, quiz
   // leave: the class keeps its copy
   const lv = await api("DELETE", `/api/library?g=${G2}`);
   check(!lv.data.connected && q1("SELECT COUNT(*) AS n FROM activities WHERE guild_id = ?", G2).n >= 1 && !q1("SELECT 1 AS x FROM library_cache WHERE guild_id = ?", G2), "leaving keeps the class's copy");
+  {
+    // the author is whoever made the item first: another class editing it later doesn't change it
+    const tm = db.prepare("SELECT id, secret FROM library_teams LIMIT 1").get() as any;
+    await hubWrite(env, tm.id, tm.secret, [{ kind: "activity", key: "2031-01-06:veille", title: "Auteur", data: { md: "a" } }], "Classe A", "Houssni OUCHAD");
+    await hubWrite(env, tm.id, tm.secret, [{ kind: "activity", key: "2031-01-06:veille", title: "Auteur v2", data: { md: "b" } }], "Classe B", "Achraf Chaoub");
+    const row = db.prepare("SELECT author, by, version FROM library_items WHERE key = '2031-01-06:veille'").get() as any;
+    check(row.author === "Houssni OUCHAD" && row.by === "Classe B" && row.version === 2, `the library keeps the first author (${JSON.stringify(row)})`);
+    db.prepare("DELETE FROM library_items WHERE key = '2031-01-06:veille'").run();
+  }
   const items = JSON.stringify(db.prepare("SELECT data FROM library_items").all());
   check(!items.includes(U.alice.name) && !items.includes(U.bob.name), "no student name in the library");
   await api("DELETE", `/api/library?g=${G}`); await api("DELETE", `/api/library?g=${G3}`);
