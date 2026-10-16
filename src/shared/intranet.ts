@@ -1,12 +1,13 @@
 // The YouCode intranet (Laravel, its own server): requests signed server to server, never from the browser.
-// Settings (Cloudflare, never in the database): INTRANET_URL and INTRANET_KEY_ID (vars), INTRANET_SECRET (secret,
-// 32+ characters, the same as the intranet's CLASSBOT_SECRET).
-//
-// Each request is signed with HMAC-SHA256 over
-//   "v1\n{unix time}\n{nonce}\n{METHOD}\n{path and query}\n{hex SHA-256 of the raw body}"
-// and sent with X-Classbot-Key / -Timestamp / -Nonce / -Signature. The intranet refuses a wrong signature, a request
-// more than 5 minutes off, a nonce it has already seen (replay) and a key it doesn't know
-// (app/Http/Middleware/VerifyClassbotSignature.php on the intranet).
+// Nothing to set on the intranet, nothing in Cloudflare: the trainer types the intranet's address and connects once
+// with their intranet email and password (Settings → Intranet YouCode). The intranet gives this ClassBot
+//   - a token for ClassBot only: it says which trainer (their own classrooms; what's created is written as theirs);
+//   - a signing secret for that token: every request is signed with HMAC-SHA256 over
+//     "v1\n{unix time}\n{nonce}\n{METHOD}\n{path and query}\n{hex SHA-256 of the raw body}"
+//     and sent with X-Classbot-Timestamp / -Nonce / -Signature and the token. The intranet refuses a wrong signature,
+//     a request more than 5 minutes off, a nonce it has already seen (replay), and anything without a ClassBot token
+//     (app/Http/Middleware/VerifyClassbotSignature.php on the intranet).
+// Both are kept encrypted here; the password is never kept.
 import type { Env } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
 
@@ -26,39 +27,38 @@ export async function toSign(ts: number, nonce: string, method: string, pathAndQ
   return ["v1", String(ts), nonce, method.toUpperCase(), pathAndQuery, await sha256(body)].join("\n");
 }
 
-/** What the dashboard may know: is it set, and where (never the secret). */
-export function intranetSetup(env: Env) {
-  const raw = String(env.INTRANET_URL || "").trim().replace(/\/+$/, "");
+/** The intranet's address: HTTPS (http only on this computer, for tests). */
+export function checkUrl(raw: unknown) {
+  const url = String(raw ?? "").trim().replace(/\/+$/, "");
   let host = "", safe = false;
   try {
-    const u = new URL(raw);
+    const u = new URL(url);
     host = u.host;
-    // HTTPS only, except on this computer (tests with the intranet in Laragon)
     safe = u.protocol === "https:" || (u.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$|\.test$|\.localhost$/.test(u.hostname));
   } catch { /* not a URL */ }
-  const secretOk = String(env.INTRANET_SECRET || "").length >= 32;
-  return { url: raw, host, https: safe, keyId: String(env.INTRANET_KEY_ID || "").trim(), secretOk, ready: !!(host && safe && env.INTRANET_KEY_ID && secretOk) };
+  return { url, host, https: safe, ok: !!(host && safe) };
 }
 
-// ------------------------------------------------------------ the class's state: classroom, trainer's token
-// guilds.intranet = {"classroom": {id, name}, "auth": {"tok": <encrypted>, "trainer": {id, name, classrooms}, "at": …}}
-// The trainer's token is encrypted with a key made from INTRANET_SECRET (a Cloudflare secret): the database alone
-// can't use it.
+// ------------------------------------------------------------ the class's state: address, trainer, classroom
+// guilds.intranet = {"url": "https://…", "classroom": {id, name},
+//                    "auth": {"tok": <encrypted>, "sig": <encrypted>, "trainer": {id, name, classrooms}, "at": …}}
+// The token and its signing secret are encrypted with a key made from this ClassBot's own Cloudflare secret
+// (DISCORD_TOKEN): the database alone can't use them.
 const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-async function tokenKey(env: Env) {
-  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`classbot-intranet-token|${env.INTRANET_SECRET || ""}`));
+async function sealKey(env: Env) {
+  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`classbot-intranet|${env.DISCORD_TOKEN || ""}`));
   return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
-async function sealToken(env: Env, token: string) {
+async function seal(env: Env, text: string) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await tokenKey(env), new TextEncoder().encode(token)));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await sealKey(env), new TextEncoder().encode(text)));
   return `${b64(iv)}.${b64(ct)}`;
 }
-async function openToken(env: Env, sealed: string): Promise<string | null> {
+async function unseal(env: Env, sealed: unknown): Promise<string | null> {
   try {
-    const [iv, ct] = sealed.split(".");
-    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await tokenKey(env), unb64(ct)));
+    const [iv, ct] = String(sealed || "").split(".");
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await sealKey(env), unb64(ct)));
   } catch { return null; }
 }
 async function stateOf(env: Env, guildId: string): Promise<any> {
@@ -68,23 +68,32 @@ async function stateOf(env: Env, guildId: string): Promise<any> {
 async function saveState(env: Env, guildId: string, st: any) {
   await run(env, "UPDATE guilds SET intranet = ? WHERE id = ?", Object.keys(st).length ? JSON.stringify(st) : null, guildId);
 }
-/** The trainer this class's ClassBot is connected as (never the token). */
-export async function intranetTrainer(env: Env, guildId: string): Promise<{ id: number; name: string; classrooms: number; at: number } | null> {
-  const a = (await stateOf(env, guildId)).auth;
-  return a?.tok && a.trainer ? { ...a.trainer, at: a.at || 0 } : null;
+
+/** What the dashboard may know: the address and the trainer connected (never the token). */
+export async function intranetSetup(env: Env, guildId: string) {
+  const st = await stateOf(env, guildId);
+  const u = checkUrl(st.url || env.INTRANET_URL || "");
+  return { url: u.url, host: u.host, https: u.https, ready: u.ok, trainer: st.auth?.tok && st.auth.trainer ? { ...st.auth.trainer, at: st.auth.at || 0 } : null };
+}
+export async function intranetTrainer(env: Env, guildId: string) {
+  return (await intranetSetup(env, guildId)).trainer;
 }
 
-/** The trainer connects this class's ClassBot with their intranet email and password (sent once, never kept). */
-export async function intranetLogin(env: Env, guildId: string, email: string, password: string) {
+/** The trainer connects this class's ClassBot: the intranet's address, their intranet email and password (sent once, never kept). */
+export async function intranetLogin(env: Env, guildId: string, url: string, email: string, password: string) {
+  const u = checkUrl(url);
+  if (!u.host) throw new IntranetError("Write the intranet's address (https://…).", "no_url");
+  if (!u.https) throw new IntranetError("The intranet must be reached in HTTPS (http only for a test on this computer).", "not_https");
   email = String(email || "").trim().slice(0, 200);
   if (!email || !password) throw new IntranetError("Write your intranet email and password.", "empty");
-  const r = await intranetFetch(env, "POST", "/api/classbot/login", { email, password: String(password).slice(0, 200) });
-  if (!r.token) throw new IntranetError("The intranet didn't give a token.", "no_token");
+  const r = await send(u.url, "POST", "/api/classbot/login", JSON.stringify({ email, password: String(password).slice(0, 200) }), null);
+  if (!r.token || String(r.signing_secret || "").length < 32) throw new IntranetError("The intranet didn't give a ClassBot token: is its ClassBot API up to date?", "no_token");
   const st = await stateOf(env, guildId);
   const trainer = { id: Number(r.trainer?.id) || 0, name: String(r.trainer?.name || email).slice(0, 120), classrooms: Number(r.trainer?.classrooms) || 0 };
-  // another trainer: the classroom and the students' links were theirs
-  if (st.auth?.trainer?.id && st.auth.trainer.id !== trainer.id) { delete st.classroom; await run(env, "DELETE FROM intranet_links WHERE guild_id = ?", guildId); }
-  st.auth = { tok: await sealToken(env, String(r.token)), trainer, at: now() };
+  // another trainer or another intranet: the classroom and the students' links were theirs
+  if ((st.auth?.trainer?.id && st.auth.trainer.id !== trainer.id) || (st.url && st.url !== u.url)) { delete st.classroom; await run(env, "DELETE FROM intranet_links WHERE guild_id = ?", guildId); }
+  st.url = u.url;
+  st.auth = { tok: await seal(env, String(r.token)), sig: await seal(env, String(r.signing_secret)), trainer, at: now() };
   await saveState(env, guildId, st);
   return trainer;
 }
@@ -96,33 +105,28 @@ export async function intranetLogout(env: Env, guildId: string) {
   await saveState(env, guildId, st);
 }
 
-/**
- * A signed request to the intranet's ClassBot API (path like "/api/classbot/ping"); with guildId, as the trainer that
- * class is connected as (their token).
- */
-export async function intranetFetch(env: Env, method: string, path: string, data?: unknown, guildId?: string): Promise<any> {
-  let bearer: string | null = null;
-  if (guildId) {
-    const a = (await stateOf(env, guildId)).auth;
-    bearer = a?.tok ? await openToken(env, a.tok) : null;
-    if (!bearer && path !== "/api/classbot/ping") throw new IntranetError("Connect your intranet account first (Settings → Intranet YouCode).", "no_trainer");
+/** A request to the intranet's ClassBot API (path like "/api/classbot/ping"), as the trainer this class is connected as. */
+export async function intranetFetch(env: Env, method: string, path: string, data: unknown, guildId: string): Promise<any> {
+  const st = await stateOf(env, guildId);
+  const u = checkUrl(st.url || env.INTRANET_URL || "");
+  const token = await unseal(env, st.auth?.tok), secret = await unseal(env, st.auth?.sig);
+  if (!token || !secret) throw new IntranetError("Connect your intranet account first (Settings → Intranet YouCode).", "no_trainer");
+  if (!u.ok) throw new IntranetError("The intranet's address isn't valid: connect again in Settings → Intranet YouCode.", "no_url");
+  return send(u.url, method, path, data === undefined ? "" : JSON.stringify(data), { token, secret });
+}
+
+async function send(base: string, method: string, path: string, body: string, auth: { token: string; secret: string } | null): Promise<any> {
+  const url = new URL(base + path);
+  const headers: Record<string, string> = { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) };
+  if (auth) {
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomUUID().replace(/-/g, "");
+    Object.assign(headers, { Authorization: `Bearer ${auth.token}`, "X-Classbot-Timestamp": String(ts), "X-Classbot-Nonce": nonce,
+      "X-Classbot-Signature": await hmac(auth.secret, await toSign(ts, nonce, method, url.pathname + url.search, body)) });
   }
-  const s = intranetSetup(env);
-  if (!s.host) throw new IntranetError("The intranet address isn't set (INTRANET_URL).", "not_configured");
-  if (!s.https) throw new IntranetError("The intranet must be reached in HTTPS (http only for a test on this computer).", "not_https");
-  if (!s.keyId || !s.secretOk) throw new IntranetError("The intranet key isn't set (INTRANET_KEY_ID, and the secret INTRANET_SECRET of 32+ characters).", "not_configured");
-  const body = data === undefined ? "" : JSON.stringify(data);
-  const ts = Math.floor(Date.now() / 1000);
-  const nonce = crypto.randomUUID().replace(/-/g, "");
-  const url = new URL(s.url + path);
-  const sig = await hmac(String(env.INTRANET_SECRET), await toSign(ts, nonce, method, url.pathname + url.search, body));
   let res: Response;
   try {
-    res = await fetch(url.toString(), {
-      method, body: body || undefined, redirect: "manual", signal: AbortSignal.timeout(15000),
-      headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}), ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
-        "X-Classbot-Key": s.keyId, "X-Classbot-Timestamp": String(ts), "X-Classbot-Nonce": nonce, "X-Classbot-Signature": sig },
-    });
+    res = await fetch(url.toString(), { method, body: body || undefined, redirect: "manual", signal: AbortSignal.timeout(15000), headers });
   } catch (e) {
     throw new IntranetError(`The intranet didn't answer (${(e as Error)?.name === "TimeoutError" ? "no answer in 15 s" : "unreachable"}): check its address and that it can be reached from Cloudflare.`, "unreachable");
   }
@@ -130,24 +134,23 @@ export async function intranetFetch(env: Env, method: string, path: string, data
   if (res.status >= 300 && res.status < 400) throw new IntranetError("The intranet answered with a redirect (often to its login page): check the address and that /api/classbot exists.", "redirect", res.status);
   if (!res.ok || !json?.success) {
     const why: Record<string, string> = {
-      not_configured: "the intranet has no ClassBot key yet (CLASSBOT_KEY_ID, CLASSBOT_SECRET in its .env)",
-      unknown_key: "the key id isn't the intranet's (INTRANET_KEY_ID ≠ CLASSBOT_KEY_ID)",
-      bad_signature: "the secret isn't the same on both sides (INTRANET_SECRET ≠ CLASSBOT_SECRET)",
       expired: "the clocks differ by more than 5 minutes (check the server's time)",
       replay: "this request was already received",
       bad_headers: "the request headers are malformed",
+      bad_signature: "the signature isn't right: connect again in Settings → Intranet YouCode",
       no_trainer: "your intranet login is no longer valid (disconnected, or your password changed): connect again in Settings → Intranet YouCode",
     };
-    const code = json?.code || (res.status === 404 ? "not_found" : "error");
-    // the intranet's own explanation (in French) for what it refuses about the data
+    const code = json?.code || (res.status === 404 ? "not_found" : res.status === 429 ? "too_many" : "error");
+    if (code === "too_many") throw new IntranetError("Too many tries: wait a minute and try again.", code, res.status);
+    // the intranet's own explanation (in French) for what it refuses
     if (!why[code] && json?.message && code !== "not_found") throw new IntranetError(`The intranet refused: ${String(json.message).slice(0, 300)}`, code, res.status);
     throw new IntranetError(why[code] ? `Refused: ${why[code]}.` : res.status === 404 ? "The intranet has no ClassBot API yet (/api/classbot)." : `The intranet answered ${res.status}.`, code, res.status);
   }
   return json;
 }
 
-/** "Test the connection": a signed ping, with how far the two clocks are apart (and the trainer, when connected). */
-export async function intranetPing(env: Env, guildId?: string) {
+/** "Test the connection": a signed ping as the trainer, with how far the two clocks are apart. */
+export async function intranetPing(env: Env, guildId: string) {
   const t0 = Math.floor(Date.now() / 1000);
   const r = await intranetFetch(env, "GET", "/api/classbot/ping", undefined, guildId);
   return { ok: true, skew: Number(r.server_time) ? Number(r.server_time) - t0 : null, trainer: r.trainer || null, classrooms: Array.isArray(r.classrooms) ? r.classrooms : [] };
