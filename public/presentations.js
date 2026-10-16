@@ -331,7 +331,7 @@ function intranetActsDialog(from = null) {
       <p class="small muted" style="margin-top:0">Classroom <b>${esc(p.classroom.name)}</b>. Veille 09:15 (30 min), live coding 11:00 (45 min). Two presenters are a binôme. What the intranet already has at that time is never sent again.</p>
       <div class="table-wrap" style="max-height:360px"><table class="grid-table"><thead><tr><th></th><th>Day</th><th>Activity</th><th>Presenters (intranet)</th><th></th></tr></thead><tbody>
       ${p.items.map((it) => `<tr${it.existing ? ' style="opacity:.75"' : ""}><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length || it.existing || p.checkError ? "disabled" : "checked"} aria-label="Send ${esc(it.title)}"></td>
-        <td class="small">${esc(it.day)} ${esc(it.at)}</td><td><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}</td>
+        <td class="small">${esc(it.day)} ${esc(it.at)}</td><td><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}${it.author ? `<div class="small muted">conçue par ${esc(it.author)}</div>` : ""}</td>
         <td class="small">${it.members.length ? it.members.map((m) => (m.learner ? esc(m.learner.name || m.name) : `<span style="color:var(--down)">⚠ ${esc(m.name)}</span>`)).join(", ") : `<span class="muted">nobody yet</span>`}</td>
         <td class="small">${it.existing ? `<span title="${esc(it.existing.text)}">✓ Already on the intranet${it.existing.mine ? " (sent by ClassBot)" : ""}<br><span class="muted">« ${esc(it.existing.subject)} » · created by <b>${esc(it.existing.by)}</b> on ${esc(it.existing.created)}</span></span>`
           : it.missing.length ? `<span style="color:var(--down)">link them first</span>` : "new"}</td></tr>`).join("")}</tbody></table></div>`;
@@ -342,18 +342,18 @@ function intranetActsDialog(from = null) {
 function intranetActsConfirm(start, list) {
   const who = (it) => (it.members.length ? it.members.map((m) => esc(m.learner?.name || m.name)).join(", ") : `<span class="muted">nobody</span>`);
   openDialog(`🏫 Confirm: ${list.length} activit${list.length > 1 ? "ies" : "y"} to the intranet`, `
-    <p class="small muted" style="margin-top:4px">Untick what you don't want to send. An activity already sent is updated (not doubled).</p>
+    <p class="small muted" style="margin-top:4px">Untick what you don't want to send. If another class already has the same library activity on the intranet, yours is a <b>reused copy</b> (linked to it, its content stored once); its author is credited.</p>
     <div class="checks" style="flex-direction:column;align-items:stretch;gap:6px;max-height:380px;overflow:auto">
       ${list.map((it) => `<label class="check" style="align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:10px">
         <input type="checkbox" data-iac="${it.id}" checked>
         <span><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}
-          <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)} · ${it.sent ? "update" : "new"}</span></span></label>`).join("")}
+          <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)}${it.author ? ` · conçue par ${esc(it.author)}` : ""}</span></span></label>`).join("")}
     </div>`,
     [{ label: "← Back", action: () => intranetActsDialog(start) }, { label: "🏫 Confirm and send", primary: true, action: async () => {
       const ids = $$("[data-iac]:checked", dlg).map((x) => Number(x.dataset.iac));
       if (!ids.length) throw new Error("Nothing is ticked");
       const r = await api("/activities/intranet", { method: "POST", body: { ids } });
-      toast(`${r.sent} sent to the intranet${r.skipped ? ` · ${r.skipped} already there (not sent again)` : ""}${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
+      toast(`${r.sent} sent to the intranet${r.reused ? ` (${r.reused} reused from another class: linked, content stored once)` : ""}${r.skipped ? ` · ${r.skipped} already there (not sent again)` : ""}${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
       const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message);
       if (why.length) toast(why[0], !!r.failed);
       intranetActsDialog(start);

@@ -3,6 +3,7 @@
 // Code Relay challenges, Battle Royale question sets). One ClassBot hosts the library; the others join with its link.
 // One shared copy: whoever edits, everyone gets the new version (last edit wins; each item has a version number).
 // Only teachers' content travels: never a student's name, answer, paper or grade.
+import { intranetTrainer } from "./intranet.ts";
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
 
@@ -10,7 +11,7 @@ export class LibraryError extends Error {}
 const fail = (m: string): never => { throw new LibraryError(m); };
 export const LIB_KINDS = ["activity", "assessment", "quiz", "case", "task", "royale"] as const;
 export type LibKind = (typeof LIB_KINDS)[number];
-export interface LibItem { kind: string; key: string; title: string | null; data: any; version: number; by: string | null; updated_at: number; deleted: number }
+export interface LibItem { kind: string; key: string; title: string | null; data: any; version: number; by: string | null; author?: string | null; updated_at: number; deleted: number }
 
 const base = (env: Env) => (env.PUBLIC_URL || "").replace(/\/$/, "");
 const LINK_RX = /^(https?:\/\/[^\s]+?)\/library\/([a-f0-9]{12})\.([A-Za-z0-9_-]{32})\/?$/;
@@ -33,11 +34,11 @@ async function team(env: Env, id: string, secret: string) {
 export async function hubRead(env: Env, id: string, secret: string, since: number) {
   const t = await team(env, id, secret);
   if (!t) return null;
-  const rows = await all<any>(env, "SELECT kind, key, title, data, version, by, updated_at, deleted FROM library_items WHERE team = ? AND updated_at >= ? ORDER BY updated_at, kind, key LIMIT 1000", t.id, Math.max(0, since || 0));
+  const rows = await all<any>(env, "SELECT kind, key, title, data, version, by, author, updated_at, deleted FROM library_items WHERE team = ? AND updated_at >= ? ORDER BY updated_at, kind, key LIMIT 1000", t.id, Math.max(0, since || 0));
   return { kind: "classbot-library", v: 1, name: t.name, at: now(), more: rows.length === 1000, items: rows.map((r) => ({ ...r, data: parse(r.data) })) as LibItem[] };
 }
 /** New versions from a class (last edit wins). */
-export async function hubWrite(env: Env, id: string, secret: string, items: any[], by: string) {
+export async function hubWrite(env: Env, id: string, secret: string, items: any[], by: string, author: string | null = null) {
   const t = await team(env, id, secret);
   if (!t) return null;
   const out: { kind: string; key: string; version: number; updated_at: number }[] = [];
@@ -47,10 +48,11 @@ export async function hubWrite(env: Env, id: string, secret: string, items: any[
     const data = it.deleted ? null : JSON.stringify(it.data ?? null);
     if (data && data.length > 300_000) continue;
     const at = now();
-    await run(env, `INSERT INTO library_items (team, kind, key, title, data, version, by, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+    // the author is whoever made it first: later edits never change it
+    await run(env, `INSERT INTO library_items (team, kind, key, title, data, version, by, author, updated_at, deleted) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
       ON CONFLICT (team, kind, key) DO UPDATE SET title = excluded.title, data = COALESCE(excluded.data, library_items.data), version = library_items.version + 1,
-        by = excluded.by, updated_at = excluded.updated_at, deleted = excluded.deleted`,
-      t.id, kind, key, String(it.title ?? "").slice(0, 200) || null, data, String(by || "").slice(0, 80) || null, at, it.deleted ? 1 : 0);
+        by = excluded.by, author = COALESCE(library_items.author, excluded.author), updated_at = excluded.updated_at, deleted = excluded.deleted`,
+      t.id, kind, key, String(it.title ?? "").slice(0, 200) || null, data, String(by || "").slice(0, 80) || null, String(author || "").slice(0, 120) || null, at, it.deleted ? 1 : 0);
     const r = await one<{ version: number; updated_at: number }>(env, "SELECT version, updated_at FROM library_items WHERE team = ? AND kind = ? AND key = ?", t.id, kind, key);
     out.push({ kind, key, version: r!.version, updated_at: r!.updated_at });
   }
@@ -62,7 +64,7 @@ export async function libraryRoute(request: Request, env: Env, id: string, secre
   if (request.method === "POST") {
     let b: any = {};
     try { b = await request.json(); } catch { /* empty */ }
-    const r = await hubWrite(env, id, secret, b.items, b.by);
+    const r = await hubWrite(env, id, secret, b.items, b.by, b.author ?? null);
     return Response.json(r ?? { error: "This library link doesn't work anymore." }, { status: r ? 200 : 404, headers: cors });
   }
   const r = await hubRead(env, id, secret, Number(new URL(request.url).searchParams.get("since")) || 0);
@@ -85,7 +87,7 @@ async function call(env: Env, link: string, body?: unknown, since = 0): Promise<
   const m = link.match(LINK_RX);
   if (!m) fail("This isn't a library link. It looks like https://…/library/1a2b3c4d5e6f.Ab3…");
   if (base(env) && m![1] === base(env)) {
-    const r = body ? await hubWrite(env, m![2], m![3], (body as any).items, (body as any).by) : await hubRead(env, m![2], m![3], since);
+    const r = body ? await hubWrite(env, m![2], m![3], (body as any).items, (body as any).by, (body as any).author ?? null) : await hubRead(env, m![2], m![3], since);
     if (!r) fail("This library link doesn't work anymore (the library was deleted).");
     return r;
   }
@@ -183,16 +185,25 @@ async function note(env: Env, g: GuildRow, c: LibCfg, e: unknown) {
   console.warn("library", g.id, e);
   await saveCfg(env, g.id, { ...c, error: String((e as Error)?.message || e).slice(0, 200) });
 }
+/** The teacher's name for what this class makes: their intranet name when connected, else their Discord name. */
+async function authorOf(env: Env, g: GuildRow): Promise<string | null> {
+  const t = await intranetTrainer(env, g.id).catch(() => null);
+  if (t?.name) return t.name.slice(0, 120);
+  const p = g.teacher_id ? await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", g.id, g.teacher_id) : null;
+  return p?.name ? p.name.slice(0, 120) : null;
+}
 /** Send items to the hub and keep the versions it gives back. */
 async function send(env: Env, g: GuildRow, c: LibCfg, items: { kind: string; key: string; title: string | null; data: any; deleted?: boolean }[]) {
   for (let i = 0; i < items.length; i += 20) {
     const part = items.slice(i, i + 20);
-    const r = await call(env, c.link, { items: part, by: g.name || "A class" });
+    const author = await authorOf(env, g);
+    const r = await call(env, c.link, { items: part, by: g.name || "A class", author });
     for (const v of r.items || []) {
       const it = part.find((x) => x.kind === v.kind && x.key === v.key)!;
-      await run(env, `INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (guild_id, kind, key) DO UPDATE SET title = excluded.title, data = COALESCE(excluded.data, library_cache.data), version = excluded.version, by = excluded.by, updated_at = excluded.updated_at, deleted = excluded.deleted`,
-        g.id, v.kind, v.key, it.title, it.deleted ? null : JSON.stringify(it.data), v.version, g.name || null, v.updated_at, it.deleted ? 1 : 0);
+      await run(env, `INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, author, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (guild_id, kind, key) DO UPDATE SET title = excluded.title, data = COALESCE(excluded.data, library_cache.data), version = excluded.version, by = excluded.by,
+          author = COALESCE(library_cache.author, excluded.author), updated_at = excluded.updated_at, deleted = excluded.deleted`,
+        g.id, v.kind, v.key, it.title, it.deleted ? null : JSON.stringify(it.data), v.version, g.name || null, author, v.updated_at, it.deleted ? 1 : 0);
       if (v.kind === "activity") await run(env, "UPDATE activities SET lib_v = ?, lib_at = COALESCE(updated_at, created_at, 1) WHERE guild_id = ? AND day || ':' || kind = ?", v.version, g.id, v.key);
       if (v.kind === "assessment") await run(env, "UPDATE assessments SET lib_v = ? WHERE guild_id = ? AND lib_key = ?", v.version, g.id, v.key);
     }
@@ -235,9 +246,10 @@ export async function syncLibrary(env: Env, g: GuildRow, o: { force?: boolean; s
         cursor = Math.max(cursor, it.updated_at);
         const cur = await one<{ version: number }>(env, "SELECT version FROM library_cache WHERE guild_id = ? AND kind = ? AND key = ?", g.id, it.kind, it.key);
         if (cur && cur.version >= it.version) continue;
-        await run(env, `INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT (guild_id, kind, key) DO UPDATE SET title = excluded.title, data = excluded.data, version = excluded.version, by = excluded.by, updated_at = excluded.updated_at, deleted = excluded.deleted`,
-          g.id, it.kind, it.key, it.title, it.data == null ? null : JSON.stringify(it.data), it.version, it.by, it.updated_at, it.deleted);
+        await run(env, `INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, author, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (guild_id, kind, key) DO UPDATE SET title = excluded.title, data = excluded.data, version = excluded.version, by = excluded.by,
+            author = COALESCE(excluded.author, library_cache.author), updated_at = excluded.updated_at, deleted = excluded.deleted`,
+          g.id, it.kind, it.key, it.title, it.data == null ? null : JSON.stringify(it.data), it.version, it.by, it.author ?? null, it.updated_at, it.deleted);
         await apply(env, g, it);
         changed++;
       }

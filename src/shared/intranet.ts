@@ -307,6 +307,8 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x.name || x.discord_id]));
   const sent = new Map((await all<{ local_id: number; remote_id: number | null; at: number | null }>(env, "SELECT local_id, remote_id, at FROM intranet_sync WHERE guild_id = ? AND kind = 'activity'", guildId)).map((x) => [x.local_id, x]));
   const days = acts.map((a) => a.day).sort();
+  const lib = await libraryOf(env, guildId, acts);
+  const me = (await intranetTrainer(env, guildId))?.name || "";
   let existing = new Map<string, OnIntranet>(), checkError: string | null = null;
   if (c && days.length) {
     try { existing = await onIntranet(env, guildId, c.id, days[0], days[days.length - 1]); } catch (e) { checkError = (e as Error).message; }
@@ -319,9 +321,23 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
       const ex = existing.get(`${a.kind}|${a.day} ${ACT_TIME[a.kind].at}`) || null;
       return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
         members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null,
+        author: (() => { const au = lib.get(`${a.day}:${a.kind}`)?.author; return au && au.toLowerCase() !== me.toLowerCase() ? au : null; })(),
         existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id } : null };
     }),
   };
+}
+
+/**
+ * Where an activity comes from in the shared library (the same for every class of that library) and who made it:
+ * sent to the intranet, a second class's copy is a reused copy of the first one, and the author is credited.
+ */
+async function libraryOf(env: Env, guildId: string, rows: { day: string; kind: string }[]) {
+  const cfg = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", `lib:${guildId}`);
+  const team = (parseJson(cfg?.v, {})?.link || "").match(/\/library\/([a-f0-9]{12})\./)?.[1];
+  if (!team || !rows.length) return new Map<string, { key: string; author: string | null }>();
+  const keys = rows.map((r) => `${r.day}:${r.kind}`);
+  const cache = await all<{ key: string; author: string | null }>(env, `SELECT key, author FROM library_cache WHERE guild_id = ? AND kind = 'activity' AND deleted = 0 AND key IN (${keys.map(() => "?").join(",")})`, guildId, ...keys);
+  return new Map(cache.map((c) => [c.key, { key: `${team}:${c.key}`, author: c.author }]));
 }
 
 /** Send the chosen activities (each on its own: one refused doesn't stop the others); what the intranet already has is skipped. */
@@ -338,14 +354,17 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
   const view = await activitiesPreview(env, guildId, days[0], days[days.length - 1]);
   if (view.checkError) throw new IntranetError(`Couldn't check what's already on the intranet: ${view.checkError}`, "check");
   const info = new Map(view.items.map((x) => [x.id, x]));
-  const results: Record<number, { ok: boolean; message?: string; existing?: boolean }> = {};
+  const results: Record<number, { ok: boolean; message?: string; existing?: boolean; reused?: string }> = {};
   const items: any[] = [];
+  const lib = await libraryOf(env, guildId, rows);
   for (const a of rows) {
     const v = info.get(a.id)!;
     if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     if (v.missing.length) { results[a.id] = { ok: false, message: `not linked to an intranet learner: ${v.missing.join(", ")}` }; continue; }
+    const l = lib.get(`${a.day}:${a.kind}`);
     items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: null, type: a.kind, subject: v.title.slice(0, 255),
-      datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id) });
+      datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id),
+      ...(l ? { library_key: l.key.slice(0, 160), credit: l.author ? l.author.slice(0, 120) : null } : {}) });
   }
   if (items.length) {
     const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities`, { items }, guildId);
@@ -355,11 +374,11 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
       if (res?.ok) {
         await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'activity', ?, ?, NULL, ?)
           ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, at = excluded.at`, guildId, id, Number(res.activity_id) || null, now());
-        results[id] = { ok: true };
+        results[id] = { ok: true, ...(res.reused_from ? { reused: `reused from « ${res.reused_from.subject} », created by ${res.reused_from.by} on ${res.reused_from.created}` } : {}) };
       } else if (res?.code === "exists" && res.existing) results[id] = { ok: false, existing: true, message: alreadyText(res.existing) };
       else results[id] = { ok: false, message: String(res?.message || "refused by the intranet").slice(0, 200) };
     }
   }
   const failed = Object.values(results).filter((x) => !x.ok);
-  return { sent: Object.values(results).filter((x) => x.ok).length, skipped: failed.filter((x) => x.existing).length, failed: failed.filter((x) => !x.existing).length, results };
+  return { sent: Object.values(results).filter((x) => x.ok).length, reused: Object.values(results).filter((x) => x.reused).length, skipped: failed.filter((x) => x.existing).length, failed: failed.filter((x) => !x.existing).length, results };
 }

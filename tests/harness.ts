@@ -301,6 +301,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       return Response.json({ success: true, activities: intranetFake.acts.filter((a) => a.classroom === cid && a.datetime.slice(0, 10) >= from && a.datetime.slice(0, 10) <= to).map((a) => ({ type: a.type, ...info(a) })) });
     }
     if (am && init.method === "POST") {
+      (intranetFake as any).lastItems = JSON.parse(body || "{}").items;
       const cid = Number(am[1]), b = JSON.parse(body || "{}"), active = (intranetFake.learners[cid] || []).map((l) => l.id), results: Record<string, any> = {};
       for (const it of b.items) {
         if (it.learner_ids.some((x: number) => !active.includes(x))) { results[it.ref] = { ok: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }; continue; }
