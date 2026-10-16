@@ -1602,8 +1602,7 @@ async function intranetSettings(root) {
       <ul class="bchecks">${row(!!s.host && s.https, "Address (INTRANET_URL)", s.url || "")}${row(!!s.keyId, "Key id (INTRANET_KEY_ID)", s.keyId)}${row(s.secretOk, "Secret (INTRANET_SECRET, 32+ characters)", s.secretOk ? "set" : "")}</ul>
       ${s.host && !s.https ? `<p class="gh-warn">⚠️ Use an <b>https://</b> address (http only works for a test on this computer).</p>` : ""}
       ${s.ready ? "" : `<details class="small"><summary><b>How to set it</b></summary><ol>
-        <li>Make a secret: 32+ random characters (for example <code>openssl rand -hex 32</code>).</li>
-        <li>Intranet <code>.env</code>: <code>CLASSBOT_KEY_ID=classbot</code>, <code>CLASSBOT_SECRET=…</code>, <code>CLASSBOT_CLASSROOMS=</code> the ids of your classrooms.</li>
+        <li>On the intranet: your profile → Settings → <b>🤖 Connecter mon ClassBot</b> → <b>Générer ma clé</b>. It works for your own classes only; copy the secret right away (it's shown once).</li>
         <li>ClassBot: <code>INTRANET_URL</code> and <code>INTRANET_KEY_ID</code> in <code>wrangler.admin.jsonc</code> (vars), then <code>npx wrangler secret put INTRANET_SECRET -c wrangler.admin.jsonc</code>, and deploy.</li></ol></details>`}
       <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-ping" ${s.ready ? "" : "disabled"}>🔌 Test the connection</button><span id="in-out" class="small"></span></div></div>`;
   const b = $("#in-ping", root);
