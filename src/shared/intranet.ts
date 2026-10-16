@@ -8,6 +8,7 @@
 // more than 5 minutes off, a nonce it has already seen (replay) and a key it doesn't know
 // (app/Http/Middleware/VerifyClassbotSignature.php on the intranet).
 import type { Env } from "./types.ts";
+import { all, now, one, run } from "./db.ts";
 
 export class IntranetError extends Error {
   code: string; status: number;
@@ -82,4 +83,90 @@ export async function intranetPing(env: Env) {
   const t0 = Math.floor(Date.now() / 1000);
   const r = await intranetFetch(env, "GET", "/api/classbot/ping");
   return { ok: true, skew: Number(r.server_time) ? Number(r.server_time) - t0 : null, classrooms: Array.isArray(r.classrooms) ? r.classrooms : [] };
+}
+
+// ------------------------------------------------------------ the class's intranet classroom and its learners
+export interface Learner { id: number; first_name: string; last_name: string }
+export const intranetClassrooms = async (env: Env) => (await intranetFetch(env, "GET", "/api/classbot/classrooms")).classrooms as { id: number; name: string; learners: number }[];
+export const intranetLearners = async (env: Env, classroomId: number) => (await intranetFetch(env, "GET", `/api/classbot/classrooms/${Math.floor(classroomId)}/learners`)).learners as Learner[];
+
+export function intranetClassOf(g: { intranet?: string | null } | null): { id: number; name: string } | null {
+  try { const c = JSON.parse(g?.intranet || "{}")?.classroom; return c && Number(c.id) ? { id: Number(c.id), name: String(c.name || "") } : null; } catch { return null; }
+}
+export async function setIntranetClass(env: Env, guildId: string, c: { id: number; name: string } | null) {
+  const cur = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
+  await run(env, "UPDATE guilds SET intranet = ? WHERE id = ?", c ? JSON.stringify({ classroom: { id: Math.floor(c.id), name: String(c.name || "").slice(0, 120) } }) : null, guildId);
+  // another classroom: its learners are other people
+  if (!c || cur?.id !== Math.floor(c.id)) await run(env, "DELETE FROM intranet_links WHERE guild_id = ?", guildId);
+}
+
+// "Hélène  BEN-ALI" → ["ben", "ali", "helene"]: no accents, no case, no punctuation, any order
+export const nameTokens = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+const keyOf = (t: string[]) => [...t].sort().join(" ");
+// every word of a matches a word of b (a single letter matches a word that starts with it: "Mehdi R." ~ "Mehdi Rahmani")
+const covers = (a: string[], b: string[]) => a.length > 0 && a.every((x) => b.some((y) => y === x || (x.length === 1 && y.startsWith(x)))) && a.some((x) => x.length > 1 && b.includes(x));
+
+/** Each student of the bot against the intranet's learners: exact (same words), close (one learner fits), several, none. */
+export function matchNames(players: { discord_id: string; name: string | null }[], learners: Learner[]) {
+  const L = learners.map((l) => ({ l, t: nameTokens(`${l.first_name} ${l.last_name}`) }));
+  const rows = players.map((p) => {
+    const t = nameTokens(p.name || "");
+    const exact = L.filter((x) => t.length && keyOf(x.t) === keyOf(t));
+    const close = exact.length ? [] : L.filter((x) => covers(t, x.t) || covers(x.t, t));
+    const cands = exact.length ? exact : close;
+    return { discord_id: p.discord_id, name: p.name || p.discord_id, kind: (exact.length === 1 ? "exact" : close.length === 1 ? "close" : cands.length > 1 ? "several" : "none") as "exact" | "close" | "several" | "none",
+      candidates: cands.map((x) => x.l.id) };
+  });
+  // a learner two students point to: nobody gets it automatically
+  const taken = new Map<number, number>();
+  for (const r of rows) if (r.kind === "exact" || r.kind === "close") taken.set(r.candidates[0], (taken.get(r.candidates[0]) || 0) + 1);
+  for (const r of rows) if ((r.kind === "exact" || r.kind === "close") && (taken.get(r.candidates[0]) || 0) > 1) r.kind = "several";
+  return rows;
+}
+
+const learnerName = (l: Learner | undefined) => (l ? `${l.first_name} ${l.last_name}`.trim() : "");
+
+/** The matching screen: each student, the learner linked (or proposed), and the intranet's learners to choose from. */
+export async function intranetMatchView(env: Env, guildId: string) {
+  const g = await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId);
+  const c = intranetClassOf(g);
+  if (!c) throw new IntranetError("Choose the class's intranet classroom first.", "no_classroom");
+  const learners = await intranetLearners(env, c.id);
+  const players = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", guildId);
+  const links = new Map((await all<{ discord_id: string; learner_id: number; by: string | null }>(env, "SELECT discord_id, learner_id, by FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
+  const byId = new Map(learners.map((l) => [l.id, l]));
+  const rows = matchNames(players, learners).map((r) => {
+    const ln = links.get(r.discord_id);
+    return { ...r, linked: ln && byId.has(ln.learner_id) ? { id: ln.learner_id, by: ln.by || "you", name: learnerName(byId.get(ln.learner_id)) } : null };
+  });
+  const used = new Set(rows.filter((r) => r.linked).map((r) => r.linked!.id));
+  return {
+    classroom: c, rows,
+    learners: learners.map((l) => ({ id: l.id, name: learnerName(l) })).sort((a, b) => a.name.localeCompare(b.name)),
+    free: learners.filter((l) => !used.has(l.id)).map((l) => ({ id: l.id, name: learnerName(l) })),
+  };
+}
+
+/** Link every student whose name fits one learner only (exact, or close: to check); those already linked stay. */
+export async function intranetAutoLink(env: Env, guildId: string) {
+  const v = await intranetMatchView(env, guildId);
+  const used = new Set(v.rows.filter((r) => r.linked).map((r) => r.linked!.id));
+  const names = new Map(v.learners.map((l) => [l.id, l.name]));
+  let n = 0;
+  for (const r of v.rows) {
+    if (r.linked || (r.kind !== "exact" && r.kind !== "close") || used.has(r.candidates[0])) continue;
+    used.add(r.candidates[0]);
+    await run(env, "INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, by, at) VALUES (?, ?, ?, ?, ?, ?)", guildId, r.discord_id, r.candidates[0], names.get(r.candidates[0]) || null, r.kind, now());
+    n++;
+  }
+  return n;
+}
+
+/** The teacher's choice for one student (null: not linked); a learner linked to someone else moves to this student. */
+export async function setIntranetLink(env: Env, guildId: string, discordId: string, learnerId: number | null, learnerName: string | null) {
+  if (!learnerId) { await run(env, "DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", guildId, discordId); return; }
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM intranet_links WHERE guild_id = ? AND learner_id = ? AND discord_id != ?").bind(guildId, Math.floor(learnerId), discordId),
+    env.DB.prepare("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, by, at) VALUES (?, ?, ?, ?, 'you', ?)").bind(guildId, discordId, Math.floor(learnerId), learnerName ? String(learnerName).slice(0, 120) : null, now()),
+  ]);
 }

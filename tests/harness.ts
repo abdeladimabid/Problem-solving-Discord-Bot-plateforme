@@ -72,6 +72,10 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
+// a fake YouCode intranet: checks each request's signature like VerifyClassbotSignature.php, then answers
+export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
+  classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
+  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]> };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
@@ -238,6 +242,25 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (gtrans.down) return new Response("busy", { status: 429 });
     const q = url.searchParams.get("q") ?? "", tl = url.searchParams.get("tl");
     return Response.json([[[`[${tl}] ${q}`, q, null, null, 1]], null, "fr"]);
+  }
+  if (url.hostname === "intranet.test") {
+    intranetFake.calls++;
+    const h = (k: string) => (init.headers as any)?.[k] ?? "";
+    const body = typeof init.body === "string" ? init.body : "";
+    const { createHash, createHmac } = await import("node:crypto");
+    const ts = h("X-Classbot-Timestamp"), nonce = h("X-Classbot-Nonce");
+    const toSign = ["v1", ts, nonce, String(init.method || "GET").toUpperCase(), url.pathname + url.search, createHash("sha256").update(body).digest("hex")].join("\n");
+    const deny = (code: string, status = 401) => Response.json({ success: false, code }, { status });
+    if (h("X-Classbot-Key") !== intranetFake.keyId) return deny("unknown_key");
+    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return deny("expired");
+    if (createHmac("sha256", intranetFake.secret).update(toSign).digest("hex") !== h("X-Classbot-Signature")) return deny("bad_signature");
+    if (intranetFake.nonces.has(nonce)) return deny("replay");
+    intranetFake.nonces.add(nonce);
+    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), classrooms: intranetFake.allowed });
+    if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
+    const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
+    if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);
+    return deny("not_found", 404);
   }
   if (url.hostname === "other.classbot.test") {
     leagueFake.calls++;

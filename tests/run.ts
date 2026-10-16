@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { intranetFake } from "./harness.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
@@ -22,7 +23,7 @@ import { memoryKv } from "../src/shared/watcher.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
-import { intranetFetch, intranetSetup, toSign } from "../src/shared/intranet.ts";
+import { intranetFetch, intranetSetup, matchNames, toSign } from "../src/shared/intranet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -4120,6 +4121,35 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   let err = "";
   try { await intranetFetch({} as any, "GET", "/api/classbot/ping"); } catch (e) { err = (e as Error).message; }
   check(/isn't set/.test(err), "not set: nothing is sent");
+
+  // names: the same words in any order, without accents or capitals; a learner two students fit goes to nobody
+  const L = [{ id: 1, first_name: "Hélène", last_name: "BEN-ALI" }, { id: 2, first_name: "Mehdi", last_name: "Rahmani" }, { id: 3, first_name: "Sara", last_name: "Idrissi" }, { id: 4, first_name: "Sara", last_name: "Amrani" }];
+  const M = matchNames([{ discord_id: "a", name: "ben ali helene" }, { discord_id: "b", name: "Mehdi R." }, { discord_id: "c", name: "Sara" }, { discord_id: "d", name: "Youssef" }], L);
+  check(M[0].kind === "exact" && M[0].candidates[0] === 1 && M[1].kind === "close" && M[1].candidates[0] === 2 && M[2].kind === "several" && M[2].candidates.length === 2 && M[3].kind === "none",
+    `matching names: exact, close, several, none (${M.map((r) => r.kind).join(", ")})`);
+  check(matchNames([{ discord_id: "a", name: "Mehdi Rahmani" }, { discord_id: "b", name: "Rahmani Mehdi" }], L).every((r) => r.kind === "several"), "…two students on the same learner: nobody gets it automatically");
+
+  // the class's intranet classroom, then each student linked once (kept in ClassBot only)
+  Object.assign(env as any, { INTRANET_URL: "http://intranet.test", INTRANET_KEY_ID: intranetFake.keyId, INTRANET_SECRET: intranetFake.secret });
+  intranetFake.learners[12] = [{ id: 501, first_name: "Alice", last_name: "Martin" }, { id: 502, first_name: "Bob", last_name: "Durand" }, { id: 503, first_name: "Caroline", last_name: "Petit" }];
+  const ping = await api("POST", "/api/intranet/ping", { g: G });
+  check(ping.status === 200 && ping.data.ok && ping.data.classrooms.join() === "12", "Test the connection: a signed ping accepted by the intranet");
+  const cls = await api("GET", `/api/intranet/classrooms?g=${G}`);
+  check(cls.data.classrooms.length === 1 && cls.data.classrooms[0].id === 12, "…only the classrooms the intranet allows");
+  check((await api("PUT", "/api/intranet/classroom", { g: G, id: 99 })).status === 400, "…another classroom: refused");
+  await api("PUT", "/api/intranet/classroom", { g: G, id: 12 });
+  const mv = await api("GET", `/api/intranet/match?g=${G}`);
+  const row = (d: any, id: string) => d.rows.find((r: any) => r.discord_id === id);
+  check(mv.status === 200 && row(mv.data, U.alice.id).kind === "close" && row(mv.data, U.bob.id).kind === "close" && !row(mv.data, U.alice.id).linked, `…each student and the learner their name fits (${row(mv.data, U.alice.id)?.kind})`);
+  const au = await api("POST", "/api/intranet/match/auto", { g: G });
+  check(au.data.linked >= 2 && row(au.data, U.alice.id).linked?.id === 501 && q1("SELECT learner_id FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).learner_id === 502, "Link automatically: saved in ClassBot");
+  const mine = await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 501 });
+  check(row(mine.data, U.carol.id).linked?.id === 501 && row(mine.data, U.carol.id).linked.by === "you" && !row(mine.data, U.alice.id).linked, "…the teacher's choice wins (the learner moves to that student)");
+  check((await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 777 })).status === 400, "…a learner outside the classroom: refused");
+  check(intranetFake.nonces.size === intranetFake.calls, "every request to the intranet was signed and used once");
+  await api("PUT", "/api/intranet/classroom", { g: G, id: 0 });
+  check(!q("SELECT 1 FROM intranet_links WHERE guild_id = ?", G).length, "…no classroom any more: the links go");
+  for (const k of ["INTRANET_URL", "INTRANET_KEY_ID", "INTRANET_SECRET"]) delete (env as any)[k];
 }
 
 section("i18n: every key exists in English and French");
