@@ -254,26 +254,28 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const h = (k: string) => (init.headers as any)?.[k] ?? "";
     const body = typeof init.body === "string" ? init.body : "";
     const { createHash, createHmac } = await import("node:crypto");
-    const ts = h("X-Classbot-Timestamp"), nonce = h("X-Classbot-Nonce");
-    const toSign = ["v1", ts, nonce, String(init.method || "GET").toUpperCase(), url.pathname + url.search, createHash("sha256").update(body).digest("hex")].join("\n");
     const deny = (code: string, status = 401) => Response.json({ success: false, code }, { status });
-    if (h("X-Classbot-Key") !== intranetFake.keyId) return deny("unknown_key");
-    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return deny("expired");
-    if (createHmac("sha256", intranetFake.secret).update(toSign).digest("hex") !== h("X-Classbot-Signature")) return deny("bad_signature");
-    if (intranetFake.nonces.has(nonce)) return deny("replay");
-    intranetFake.nonces.add(nonce);
-    const T = intranetFake.trainer, auth = String(h("Authorization") || "").replace(/^Bearer /, "");
-    const who = intranetFake.tokens.has(auth) ? { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } : null;
-    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), trainer: who, classrooms: who ? intranetFake.allowed : [] });
+    const T = intranetFake.trainer;
+    // logging in: the email and password only; it gives a ClassBot token and its signing secret
     if (url.pathname === "/api/classbot/login") {
       const b = JSON.parse(body || "{}");
       if (b.email !== T.email || b.password !== T.password) return Response.json({ success: false, code: "bad_login", message: "Email ou mot de passe incorrect." }, { status: 401 });
       intranetFake.tokens.clear();
       const tok = `1|tok${intranetFake.nextId++}`;
       intranetFake.tokens.add(tok);
-      return Response.json({ success: true, token: tok, trainer: { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } });
+      return Response.json({ success: true, token: tok, signing_secret: createHash("sha256").update("sign|" + tok).digest("hex"), trainer: { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } });
     }
-    if (!who) return deny("no_trainer");
+    // everything else: a ClassBot token, and the request signed with its secret
+    const auth = String(h("Authorization") || "").replace(/^Bearer /, "");
+    if (!intranetFake.tokens.has(auth)) return deny("no_trainer");
+    const ts = h("X-Classbot-Timestamp"), nonce = h("X-Classbot-Nonce");
+    const toSign = ["v1", ts, nonce, String(init.method || "GET").toUpperCase(), url.pathname + url.search, createHash("sha256").update(body).digest("hex")].join("\n");
+    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return deny("expired");
+    if (createHmac("sha256", createHash("sha256").update("sign|" + auth).digest("hex")).update(toSign).digest("hex") !== h("X-Classbot-Signature")) return deny("bad_signature");
+    if (intranetFake.nonces.has(nonce)) return deny("replay");
+    intranetFake.nonces.add(nonce);
+    const who = { id: T.id, name: T.name, classrooms: intranetFake.allowed.length };
+    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), trainer: who, classrooms: intranetFake.allowed });
     if (url.pathname === "/api/classbot/logout") { intranetFake.tokens.delete(auth); return Response.json({ success: true }); }
     if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
     const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);

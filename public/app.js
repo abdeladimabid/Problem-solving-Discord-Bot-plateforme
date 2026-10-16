@@ -1597,51 +1597,43 @@ async function aiSettings(root, flash = null) {
 // Settings → Intranet YouCode: what is set (never the secret) and "Test the connection"
 async function intranetSettings(root) {
   const s = await api("/intranet");
-  const row = (ok, label, val) => `<li>${ok ? "✅" : "⬜"} ${label}${val ? ` <code>${esc(val)}</code>` : ""}</li>`;
-  root.innerHTML = `<div class="panel set-card">
-      <ul class="bchecks">${row(!!s.host && s.https, "Address (INTRANET_URL)", s.url || "")}${row(!!s.keyId, "Key id (INTRANET_KEY_ID)", s.keyId)}${row(s.secretOk, "Secret (INTRANET_SECRET, 32+ characters)", s.secretOk ? "set" : "")}</ul>
-      ${s.host && !s.https ? `<p class="gh-warn">⚠️ Use an <b>https://</b> address (http only works for a test on this computer).</p>` : ""}
-      ${s.ready ? "" : `<details class="small"><summary><b>How to set it</b></summary><ol>
-        <li>The school gives the ClassBot key: <code>INTRANET_URL</code>, <code>INTRANET_KEY_ID</code> and the secret (the intranet's <code>CLASSBOT_KEY_ID</code> / <code>CLASSBOT_SECRET</code>).</li>
-        <li>ClassBot: <code>INTRANET_URL</code> and <code>INTRANET_KEY_ID</code> in <code>wrangler.admin.jsonc</code> (vars), then <code>npx wrangler secret put INTRANET_SECRET -c wrangler.admin.jsonc</code>, and deploy.</li>
-        <li>Then connect your intranet account below: ClassBot works in your own classes, as you.</li></ol></details>`}
-      <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-ping" ${s.ready ? "" : "disabled"}>🔌 Test the connection</button><span id="in-out" class="small"></span></div></div>`;
-  const b = $("#in-ping", root);
-  if (b) b.onclick = (e) => busy(e.currentTarget, async () => {
+  if (!s.trainer) {
+    // connect once: the intranet's address, the trainer's intranet email and password (never kept)
+    root.innerHTML = `<div class="panel set-card" id="in-acc"><h3>Connect your intranet account</h3>
+        <p class="small muted" style="margin-top:0">Once, with your intranet email and password: ClassBot then sends squads and activities to <b>your</b> classes, as you. Nothing to set on the intranet. The password goes to the intranet only and is never kept.</p>
+        <label for="in-url">Intranet address</label><input type="url" id="in-url" value="${esc(s.url || "")}" placeholder="https://intranet.youcode.ma" style="width:100%">
+        <div class="field-row"><div><label for="in-email">Intranet email</label><input type="email" id="in-email" autocomplete="username"></div>
+          <div><label for="in-pass">Password</label><input type="password" id="in-pass" autocomplete="current-password"></div></div>
+        <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-login">🔐 Connect</button><span id="in-login-out" class="small"></span></div></div>`;
+    $("#in-login", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const out = $("#in-login-out", root);
+      out.textContent = "";
+      try {
+        const r = await api("/intranet/login", { method: "POST", body: { url: $("#in-url", root).value, email: $("#in-email", root).value, password: $("#in-pass", root).value } });
+        $("#in-pass", root).value = "";
+        toast(`Connected as ${r.trainer.name}`);
+        intranetSettings(root);
+      } catch (err) { $("#in-pass", root).value = ""; out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
+    });
+    return;
+  }
+  root.innerHTML = `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
+      <p style="margin:0 0 6px">✅ Connected as <b>${esc(s.trainer.name)}</b> · ${s.trainer.classrooms} class(es) · <code>${esc(s.host)}</code> · since ${esc(fmtAgo(s.trainer.at))}</p>
+      <p class="small muted">Squads and activities go to your classes only, as you. Every request is signed; the password isn't kept, only a ClassBot token, encrypted.</p>
+      <div class="set-foot" style="justify-content:flex-start"><button class="btn" id="in-ping">🔌 Test the connection</button><button class="btn" id="in-out-acc">Disconnect</button><span id="in-out" class="small"></span></div></div>
+    <div class="panel set-card" id="in-class"><h3>Intranet classroom</h3><p class="muted small">Loading…</p></div><div id="in-match"></div>`;
+  $("#in-ping", root).onclick = (e) => busy(e.currentTarget, async () => {
     const out = $("#in-out", root);
     out.textContent = "";
     try {
       const r = await api("/intranet/ping", { method: "POST", body: {} });
       const skew = r.skew == null ? "" : Math.abs(r.skew) > 60 ? ` · ⚠️ the clocks differ by ${Math.abs(r.skew)} s` : " · clocks in sync";
-      out.innerHTML = `<span style="color:var(--up)">✅ Signature accepted${esc(skew)}${r.trainer ? ` · connected as <b>${esc(r.trainer.name)}</b> (${r.trainer.classrooms} classes)` : " · no intranet account connected yet"}</span>`;
+      out.innerHTML = `<span style="color:var(--up)">✅ Signature accepted${esc(skew)} · ${r.classrooms.length} class(es)</span>`;
     } catch (err) { out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
   });
-  if (!s.ready) return;
-  // the trainer's intranet account: ClassBot works in their classes, as them (the password is never kept)
-  root.insertAdjacentHTML("beforeend", s.trainer
-    ? `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
-        <p style="margin:0 0 10px">✅ Connected as <b>${esc(s.trainer.name)}</b> · ${s.trainer.classrooms} class(es) on the intranet · since ${esc(fmtAgo(s.trainer.at))}</p>
-        <p class="small muted">ClassBot sends squads and activities to your classes only, as you. Your password isn't kept: only a ClassBot token, encrypted.</p>
-        <button class="btn" id="in-out-acc">Disconnect</button></div>
-      <div class="panel set-card" id="in-class"><h3>Intranet classroom</h3><p class="muted small">Loading…</p></div><div id="in-match"></div>`
-    : `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
-        <p class="small muted" style="margin-top:0">Connect once with your intranet email and password: ClassBot then works in <b>your</b> classes, as you. The password goes to the intranet only and is never kept.</p>
-        <div class="field-row"><div><label for="in-email">Intranet email</label><input type="email" id="in-email" autocomplete="username"></div>
-          <div><label for="in-pass">Password</label><input type="password" id="in-pass" autocomplete="current-password"></div></div>
-        <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-login">🔐 Connect</button><span id="in-login-out" class="small"></span></div></div>`);
-  if ($("#in-login", root)) $("#in-login", root).onclick = (e) => busy(e.currentTarget, async () => {
-    const out = $("#in-login-out", root);
-    out.textContent = "";
-    try {
-      const r = await api("/intranet/login", { method: "POST", body: { email: $("#in-email", root).value, password: $("#in-pass", root).value } });
-      $("#in-pass", root).value = "";
-      toast(`Connected as ${r.trainer.name}`);
-      intranetSettings(root);
-    } catch (err) { $("#in-pass", root).value = ""; out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
-  });
-  if ($("#in-out-acc", root)) $("#in-out-acc", root).onclick = () => confirmDialog("Disconnect your intranet account?", "ClassBot can't send anything to the intranet until you connect again. What was already sent stays.", "Disconnect",
+  $("#in-out-acc", root).onclick = () => confirmDialog("Disconnect your intranet account?", "ClassBot can't send anything to the intranet until you connect again. What was already sent stays.", "Disconnect",
     async () => { await api("/intranet/logout", { method: "POST", body: {} }); toast("Disconnected"); intranetSettings(root); }, true);
-  if (s.trainer) intranetClassCard(root);
+  intranetClassCard(root);
 }
 async function intranetClassCard(root) {
   const box = $("#in-class", root);
@@ -1847,7 +1839,7 @@ async function viewSettings(arg) {
     </section>
 
     <section class="set-sec" data-sec="intranet" hidden>
-      ${head("Intranet YouCode", "ClassBot talks to the intranet server to server: every request is signed (HMAC-SHA256), dated (refused after 5 minutes) and used once. The secret stays in Cloudflare: never in the database or this page.")}
+      ${head("Intranet YouCode", "Send your squads and activities to your classes on the YouCode intranet. Server to server: every request is signed (HMAC-SHA256), dated (refused after 5 minutes) and used once.")}
       <div id="set-intranet"><p class="muted">Loading…</p></div>
     </section>
 
