@@ -207,3 +207,62 @@ export async function sendSquads(env: Env, guildId: string, setId: number) {
     ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, map = excluded.map, at = excluded.at`, guildId, setId, Number(r.distribution_id) || null, JSON.stringify(r.groups || {}), now());
   return { distribution_id: Number(r.distribution_id), groups: Object.keys(r.groups || {}).length, learners: Number(r.learners) || 0, kept: Number(r.kept) || 0, again: !!sync?.remote_id };
 }
+
+// ------------------------------------------------------------ veilles and live codings → the intranet's activities
+// The school's times (Moroccan time, as the intranet keeps them): veille 09:15 for 30 min, live coding 11:00 for 45 min.
+export const ACT_TIME: Record<string, { at: string; minutes: number }> = { veille: { at: "09:15", minutes: 30 }, live: { at: "11:00", minutes: 45 } };
+
+/** The veilles and live codings of a range, each with its presenters' intranet learners and whether it was sent. */
+export async function activitiesPreview(env: Env, guildId: string, from: string, to: string) {
+  const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
+  const acts = await all<{ id: number; day: string; kind: string; title: string | null }>(env,
+    "SELECT id, day, kind, title FROM activities WHERE guild_id = ? AND kind IN ('veille', 'live') AND day >= ? AND day <= ? ORDER BY day, kind DESC LIMIT 60", guildId, from, to);
+  const claims = acts.length ? await all<{ activity_id: number; members: string }>(env,
+    `SELECT activity_id, members FROM activity_claims WHERE guild_id = ? AND status IN ('approved', 'done') AND activity_id IN (${acts.map(() => "?").join(",")}) ORDER BY id`, guildId, ...acts.map((a) => a.id)) : [];
+  const presenters = new Map(claims.map((x) => [x.activity_id, (parseJson(x.members, []) as unknown[]).map(String)]));
+  const links = new Map((await all<{ discord_id: string; learner_id: number; learner_name: string | null }>(env, "SELECT discord_id, learner_id, learner_name FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x.name || x.discord_id]));
+  const sent = new Map((await all<{ local_id: number; remote_id: number | null; at: number | null }>(env, "SELECT local_id, remote_id, at FROM intranet_sync WHERE guild_id = ? AND kind = 'activity'", guildId)).map((x) => [x.local_id, x]));
+  return {
+    classroom: c,
+    items: acts.map((a) => {
+      const members = (presenters.get(a.id) || []).map((m) => { const l = links.get(m); return { id: m, name: names.get(m) || m, learner: l ? { id: l.learner_id, name: l.learner_name || "" } : null }; });
+      const s = sent.get(a.id);
+      return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
+        members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null };
+    }),
+  };
+}
+
+/** Send the chosen activities (each on its own: one refused doesn't stop the others). Sent again: the same activity updated. */
+export async function sendActivities(env: Env, guildId: string, ids: number[]) {
+  const want = [...new Set(ids.map((x) => Math.floor(Number(x))).filter((x) => x > 0))].slice(0, 20);
+  if (!want.length) throw new IntranetError("Choose the activities to send.", "empty");
+  const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
+  if (!c) throw new IntranetError("Choose the class's intranet classroom first (Settings → Intranet YouCode).", "no_classroom");
+  const rows = await all<{ id: number; day: string; kind: string; title: string | null; md: string }>(env,
+    `SELECT id, day, kind, title, md FROM activities WHERE guild_id = ? AND kind IN ('veille', 'live') AND id IN (${want.map(() => "?").join(",")})`, guildId, ...want);
+  const view = await activitiesPreview(env, guildId, "0000-01-01", "9999-12-31");
+  const info = new Map(view.items.map((x) => [x.id, x]));
+  const results: Record<number, { ok: boolean; message?: string }> = {};
+  const items: any[] = [];
+  for (const a of rows) {
+    const v = info.get(a.id)!;
+    if (v.missing.length) { results[a.id] = { ok: false, message: `not linked to an intranet learner: ${v.missing.join(", ")}` }; continue; }
+    items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: v.sent?.activity_id ?? null, type: a.kind, subject: v.title.slice(0, 255),
+      datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id) });
+  }
+  if (items.length) {
+    const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities`, { items });
+    for (const it of items) {
+      const id = Number(String(it.ref).split(":").pop());
+      const res = r.results?.[it.ref];
+      if (res?.ok) {
+        await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'activity', ?, ?, NULL, ?)
+          ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, at = excluded.at`, guildId, id, Number(res.activity_id) || null, now());
+        results[id] = { ok: true };
+      } else results[id] = { ok: false, message: String(res?.message || "refused by the intranet").slice(0, 200) };
+    }
+  }
+  return { sent: Object.values(results).filter((x) => x.ok).length, failed: Object.values(results).filter((x) => !x.ok).length, results };
+}

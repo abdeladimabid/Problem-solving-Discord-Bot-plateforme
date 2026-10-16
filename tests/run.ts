@@ -4165,6 +4165,27 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const d2 = intranetFake.dists.find((x) => x.id === s2.data.distribution_id)!;
   check(s2.data.again && s2.data.distribution_id === s1.data.distribution_id && d2.groups.map((x) => x.id).join() === g1.join() && d2.groups[0].name === "Squad A+" && d2.groups[1].learners.join() === "501,502", "sent again: the same distribution and the same groups, updated (activities stay linked)");
   check((await api("GET", `/api/squads/${sid}/intranet?g=${G}`)).data.sent?.distribution_id === s1.data.distribution_id, "…the preview says it was sent");
+  // the veilles and live codings → activities of the classroom, with their presenters (two: a binôme)
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-07', 'veille', 'Flexbox vs Grid', ?, ?, ?)", G, "# Veille\n**Objectif** : comparer", clock.now(), clock.now());
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-08', 'live', 'Panier en JS', '# Live', ?, ?)", G, clock.now(), clock.now());
+  const va = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-07' AND kind = 'veille'", G).id, la = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-08' AND kind = 'live'", G).id;
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'veille', ?, 'teacher', 'approved', ?)", G, va, JSON.stringify([U.alice.id, U.bob.id]), clock.now());
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'live', ?, 'teacher', 'approved', ?)", G, la, JSON.stringify(["990999"]), clock.now());
+  const ap = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  const it = (id: number) => ap.data.items.find((x: any) => x.id === id);
+  check(ap.status === 200 && it(va).members.length === 2 && it(va).at === "09:15" && it(la).at === "11:00" && it(la).missing.length === 1, "activities preview: the week's veilles and live codings, their presenters' intranet learners, who isn't linked");
+  const as1 = await api("POST", "/api/activities/intranet", { g: G, ids: [va, la] });
+  const fa = intranetFake.acts.find((x) => x.subject === "Flexbox vs Grid")!;
+  check(as1.status === 200 && as1.data.sent === 1 && as1.data.failed === 1 && /not linked/.test(as1.data.results[la].message) && fa.type === "veille" && fa.datetime === "2030-01-07 09:15" && fa.duration === 30 && fa.learners.join() === "503,502" && fa.md.startsWith("# Veille"),
+    "sent: the veille at 09:15 for 30 min with its binôme and its markdown; a live coding with someone not linked is not sent (the others still are)");
+  run1("UPDATE activities SET title = 'Flexbox ou Grid ?' WHERE id = ?", va);
+  const as2 = await api("POST", "/api/activities/intranet", { g: G, ids: [va] });
+  check(as2.data.sent === 1 && intranetFake.acts.filter((x) => x.subject.startsWith("Flexbox")).length === 1 && fa.subject === "Flexbox ou Grid ?", "sent again: the same intranet activity, updated");
+  check((await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`)).data.items.find((x: any) => x.id === va).sent?.activity_id === fa.id, "…the preview says it was sent");
+  // these activities were only for the intranet: the next sections use their own
+  run1(`DELETE FROM activity_claims WHERE activity_id IN (${va}, ${la})`);
+  run1(`DELETE FROM activities WHERE id IN (${va}, ${la})`);
+  run1(`DELETE FROM intranet_sync WHERE kind = 'activity' AND local_id IN (${va}, ${la})`);
   check(intranetFake.nonces.size === intranetFake.calls, "every request to the intranet was signed and used once");
   await api("PUT", "/api/intranet/classroom", { g: G, id: 0 });
   check(!q("SELECT 1 FROM intranet_links WHERE guild_id = ?", G).length, "…no classroom any more: the links go");

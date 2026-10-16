@@ -76,7 +76,8 @@ export const leagueFake = { status: 200, body: null as any, calls: 0 };
 export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
   learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
-  dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900 };
+  dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
+  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[] }[] };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
@@ -275,6 +276,18 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       const map: Record<string, number> = {};
       d.groups = b.groups.map((g: any) => { const old = d!.groups.find((x) => x.id === g.group_id); const id = old ? old.id : intranetFake.nextId++; map[g.key] = id; return { id, name: g.name, learners: g.learner_ids }; });
       return Response.json({ success: true, distribution_id: d.id, groups: map, kept: 0, learners: all.length });
+    }
+    const am = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/activities$/);
+    if (am && init.method === "POST") {
+      const cid = Number(am[1]), b = JSON.parse(body || "{}"), active = (intranetFake.learners[cid] || []).map((l) => l.id), results: Record<string, any> = {};
+      for (const it of b.items) {
+        if (it.learner_ids.some((x: number) => !active.includes(x))) { results[it.ref] = { ok: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }; continue; }
+        let a = intranetFake.acts.find((x) => x.id === it.activity_id && x.classroom === cid);
+        if (!a) { a = { id: intranetFake.nextId++, classroom: cid, type: "", subject: "", datetime: "", duration: 0, md: "", learners: [] }; intranetFake.acts.push(a); }
+        Object.assign(a, { type: it.type, subject: it.subject, datetime: it.datetime, duration: it.duration, md: it.description_md, learners: it.learner_ids });
+        results[it.ref] = { ok: true, activity_id: a.id };
+      }
+      return Response.json({ success: true, results });
     }
     return deny("not_found", 404);
   }
