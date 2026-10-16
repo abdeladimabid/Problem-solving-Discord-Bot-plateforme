@@ -40,8 +40,73 @@ export function intranetSetup(env: Env) {
   return { url: raw, host, https: safe, keyId: String(env.INTRANET_KEY_ID || "").trim(), secretOk, ready: !!(host && safe && env.INTRANET_KEY_ID && secretOk) };
 }
 
-/** A signed request to the intranet's ClassBot API (path like "/api/classbot/ping"). */
-export async function intranetFetch(env: Env, method: string, path: string, data?: unknown): Promise<any> {
+// ------------------------------------------------------------ the class's state: classroom, trainer's token
+// guilds.intranet = {"classroom": {id, name}, "auth": {"tok": <encrypted>, "trainer": {id, name, classrooms}, "at": …}}
+// The trainer's token is encrypted with a key made from INTRANET_SECRET (a Cloudflare secret): the database alone
+// can't use it.
+const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
+const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function tokenKey(env: Env) {
+  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`classbot-intranet-token|${env.INTRANET_SECRET || ""}`));
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+async function sealToken(env: Env, token: string) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await tokenKey(env), new TextEncoder().encode(token)));
+  return `${b64(iv)}.${b64(ct)}`;
+}
+async function openToken(env: Env, sealed: string): Promise<string | null> {
+  try {
+    const [iv, ct] = sealed.split(".");
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await tokenKey(env), unb64(ct)));
+  } catch { return null; }
+}
+async function stateOf(env: Env, guildId: string): Promise<any> {
+  const r = await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId);
+  try { return JSON.parse(r?.intranet || "{}") || {}; } catch { return {}; }
+}
+async function saveState(env: Env, guildId: string, st: any) {
+  await run(env, "UPDATE guilds SET intranet = ? WHERE id = ?", Object.keys(st).length ? JSON.stringify(st) : null, guildId);
+}
+/** The trainer this class's ClassBot is connected as (never the token). */
+export async function intranetTrainer(env: Env, guildId: string): Promise<{ id: number; name: string; classrooms: number; at: number } | null> {
+  const a = (await stateOf(env, guildId)).auth;
+  return a?.tok && a.trainer ? { ...a.trainer, at: a.at || 0 } : null;
+}
+
+/** The trainer connects this class's ClassBot with their intranet email and password (sent once, never kept). */
+export async function intranetLogin(env: Env, guildId: string, email: string, password: string) {
+  email = String(email || "").trim().slice(0, 200);
+  if (!email || !password) throw new IntranetError("Write your intranet email and password.", "empty");
+  const r = await intranetFetch(env, "POST", "/api/classbot/login", { email, password: String(password).slice(0, 200) });
+  if (!r.token) throw new IntranetError("The intranet didn't give a token.", "no_token");
+  const st = await stateOf(env, guildId);
+  const trainer = { id: Number(r.trainer?.id) || 0, name: String(r.trainer?.name || email).slice(0, 120), classrooms: Number(r.trainer?.classrooms) || 0 };
+  // another trainer: the classroom and the students' links were theirs
+  if (st.auth?.trainer?.id && st.auth.trainer.id !== trainer.id) { delete st.classroom; await run(env, "DELETE FROM intranet_links WHERE guild_id = ?", guildId); }
+  st.auth = { tok: await sealToken(env, String(r.token)), trainer, at: now() };
+  await saveState(env, guildId, st);
+  return trainer;
+}
+/** Disconnect: the intranet forgets the token, and so does ClassBot. */
+export async function intranetLogout(env: Env, guildId: string) {
+  const st = await stateOf(env, guildId);
+  if (st.auth?.tok) await intranetFetch(env, "POST", "/api/classbot/logout", {}, guildId).catch(() => null);
+  delete st.auth;
+  await saveState(env, guildId, st);
+}
+
+/**
+ * A signed request to the intranet's ClassBot API (path like "/api/classbot/ping"); with guildId, as the trainer that
+ * class is connected as (their token).
+ */
+export async function intranetFetch(env: Env, method: string, path: string, data?: unknown, guildId?: string): Promise<any> {
+  let bearer: string | null = null;
+  if (guildId) {
+    const a = (await stateOf(env, guildId)).auth;
+    bearer = a?.tok ? await openToken(env, a.tok) : null;
+    if (!bearer && path !== "/api/classbot/ping") throw new IntranetError("Connect your intranet account first (Settings → Intranet YouCode).", "no_trainer");
+  }
   const s = intranetSetup(env);
   if (!s.host) throw new IntranetError("The intranet address isn't set (INTRANET_URL).", "not_configured");
   if (!s.https) throw new IntranetError("The intranet must be reached in HTTPS (http only for a test on this computer).", "not_https");
@@ -55,7 +120,7 @@ export async function intranetFetch(env: Env, method: string, path: string, data
   try {
     res = await fetch(url.toString(), {
       method, body: body || undefined, redirect: "manual", signal: AbortSignal.timeout(15000),
-      headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}),
+      headers: { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}), ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         "X-Classbot-Key": s.keyId, "X-Classbot-Timestamp": String(ts), "X-Classbot-Nonce": nonce, "X-Classbot-Signature": sig },
     });
   } catch (e) {
@@ -71,6 +136,7 @@ export async function intranetFetch(env: Env, method: string, path: string, data
       expired: "the clocks differ by more than 5 minutes (check the server's time)",
       replay: "this request was already received",
       bad_headers: "the request headers are malformed",
+      no_trainer: "your intranet login is no longer valid (disconnected, or your password changed): connect again in Settings → Intranet YouCode",
     };
     const code = json?.code || (res.status === 404 ? "not_found" : "error");
     // the intranet's own explanation (in French) for what it refuses about the data
@@ -80,24 +146,26 @@ export async function intranetFetch(env: Env, method: string, path: string, data
   return json;
 }
 
-/** "Test the connection": a signed ping, with how far the two clocks are apart. */
-export async function intranetPing(env: Env) {
+/** "Test the connection": a signed ping, with how far the two clocks are apart (and the trainer, when connected). */
+export async function intranetPing(env: Env, guildId?: string) {
   const t0 = Math.floor(Date.now() / 1000);
-  const r = await intranetFetch(env, "GET", "/api/classbot/ping");
-  return { ok: true, skew: Number(r.server_time) ? Number(r.server_time) - t0 : null, classrooms: Array.isArray(r.classrooms) ? r.classrooms : [] };
+  const r = await intranetFetch(env, "GET", "/api/classbot/ping", undefined, guildId);
+  return { ok: true, skew: Number(r.server_time) ? Number(r.server_time) - t0 : null, trainer: r.trainer || null, classrooms: Array.isArray(r.classrooms) ? r.classrooms : [] };
 }
 
 // ------------------------------------------------------------ the class's intranet classroom and its learners
 export interface Learner { id: number; first_name: string; last_name: string }
-export const intranetClassrooms = async (env: Env) => (await intranetFetch(env, "GET", "/api/classbot/classrooms")).classrooms as { id: number; name: string; learners: number }[];
-export const intranetLearners = async (env: Env, classroomId: number) => (await intranetFetch(env, "GET", `/api/classbot/classrooms/${Math.floor(classroomId)}/learners`)).learners as Learner[];
+export const intranetClassrooms = async (env: Env, guildId: string) => (await intranetFetch(env, "GET", "/api/classbot/classrooms", undefined, guildId)).classrooms as { id: number; name: string; learners: number }[];
+export const intranetLearners = async (env: Env, guildId: string, classroomId: number) => (await intranetFetch(env, "GET", `/api/classbot/classrooms/${Math.floor(classroomId)}/learners`, undefined, guildId)).learners as Learner[];
 
 export function intranetClassOf(g: { intranet?: string | null } | null): { id: number; name: string } | null {
   try { const c = JSON.parse(g?.intranet || "{}")?.classroom; return c && Number(c.id) ? { id: Number(c.id), name: String(c.name || "") } : null; } catch { return null; }
 }
 export async function setIntranetClass(env: Env, guildId: string, c: { id: number; name: string } | null) {
-  const cur = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
-  await run(env, "UPDATE guilds SET intranet = ? WHERE id = ?", c ? JSON.stringify({ classroom: { id: Math.floor(c.id), name: String(c.name || "").slice(0, 120) } }) : null, guildId);
+  const st = await stateOf(env, guildId);
+  const cur = intranetClassOf({ intranet: JSON.stringify(st) });
+  if (c) st.classroom = { id: Math.floor(c.id), name: String(c.name || "").slice(0, 120) }; else delete st.classroom;
+  await saveState(env, guildId, st);
   // another classroom: its learners are other people
   if (!c || cur?.id !== Math.floor(c.id)) await run(env, "DELETE FROM intranet_links WHERE guild_id = ?", guildId);
 }
@@ -133,7 +201,7 @@ export async function intranetMatchView(env: Env, guildId: string) {
   const g = await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId);
   const c = intranetClassOf(g);
   if (!c) throw new IntranetError("Choose the class's intranet classroom first.", "no_classroom");
-  const learners = await intranetLearners(env, c.id);
+  const learners = await intranetLearners(env, guildId, c.id);
   const players = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", guildId);
   const links = new Map((await all<{ discord_id: string; learner_id: number; by: string | null }>(env, "SELECT discord_id, learner_id, by FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
   const byId = new Map(learners.map((l) => [l.id, l]));
@@ -202,7 +270,7 @@ export async function sendSquads(env: Env, guildId: string, setId: number) {
   const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${p.classroom.id}/squads`, {
     ref: `${guildId}:squads:${setId}`, name: p.set.name, distribution_id: sync?.remote_id ?? null,
     groups: p.groups.map((g) => ({ key: g.key, name: g.name, group_id: map[g.key] ?? null, learner_ids: g.members.map((m) => m.learner!.id) })),
-  });
+  }, guildId);
   await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'squads', ?, ?, ?, ?)
     ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, map = excluded.map, at = excluded.at`, guildId, setId, Number(r.distribution_id) || null, JSON.stringify(r.groups || {}), now());
   return { distribution_id: Number(r.distribution_id), groups: Object.keys(r.groups || {}).length, learners: Number(r.learners) || 0, kept: Number(r.kept) || 0, again: !!sync?.remote_id };
@@ -253,7 +321,7 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
       datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id) });
   }
   if (items.length) {
-    const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities`, { items });
+    const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities`, { items }, guildId);
     for (const it of items) {
       const id = Number(String(it.ref).split(":").pop());
       const res = r.results?.[it.ref];
