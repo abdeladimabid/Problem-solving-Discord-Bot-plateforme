@@ -283,7 +283,19 @@ export async function sendSquads(env: Env, guildId: string, setId: number) {
 // The school's times (Moroccan time, as the intranet keeps them): veille 09:15 for 30 min, live coding 11:00 for 45 min.
 export const ACT_TIME: Record<string, { at: string; minutes: number }> = { veille: { at: "09:15", minutes: 30 }, live: { at: "11:00", minutes: 45 } };
 
-/** The veilles and live codings of a range, each with its presenters' intranet learners and whether it was sent. */
+export interface OnIntranet { activity_id: number; subject: string; datetime: string; duration: number; by: string; by_id: number; created: string }
+/** The veilles and live codings already on the intranet for the class over a range (anyone's), by "kind|YYYY-MM-DD HH:MM". */
+async function onIntranet(env: Env, guildId: string, classroomId: number, from: string, to: string): Promise<Map<string, OnIntranet>> {
+  const r = await intranetFetch(env, "GET", `/api/classbot/classrooms/${classroomId}/activities?from=${from}&to=${to}`, undefined, guildId);
+  return new Map((r.activities || []).map((a: OnIntranet & { type: string }) => [`${a.type}|${a.datetime}`, a]));
+}
+/** "Already on the intranet: « … », created by X on 16/10/2026" */
+export const alreadyText = (e: OnIntranet) => `already on the intranet: « ${e.subject} », created by ${e.by} on ${e.created}`;
+
+/**
+ * The veilles and live codings of a range, each with its presenters' intranet learners and what the intranet already
+ * has at that time in the class (whoever made it: never sent twice).
+ */
 export async function activitiesPreview(env: Env, guildId: string, from: string, to: string) {
   const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
   const acts = await all<{ id: number; day: string; kind: string; title: string | null }>(env,
@@ -294,18 +306,25 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
   const links = new Map((await all<{ discord_id: string; learner_id: number; learner_name: string | null }>(env, "SELECT discord_id, learner_id, learner_name FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x.name || x.discord_id]));
   const sent = new Map((await all<{ local_id: number; remote_id: number | null; at: number | null }>(env, "SELECT local_id, remote_id, at FROM intranet_sync WHERE guild_id = ? AND kind = 'activity'", guildId)).map((x) => [x.local_id, x]));
+  const days = acts.map((a) => a.day).sort();
+  let existing = new Map<string, OnIntranet>(), checkError: string | null = null;
+  if (c && days.length) {
+    try { existing = await onIntranet(env, guildId, c.id, days[0], days[days.length - 1]); } catch (e) { checkError = (e as Error).message; }
+  }
   return {
-    classroom: c,
+    classroom: c, checkError,
     items: acts.map((a) => {
       const members = (presenters.get(a.id) || []).map((m) => { const l = links.get(m); return { id: m, name: names.get(m) || m, learner: l ? { id: l.learner_id, name: l.learner_name || "" } : null }; });
       const s = sent.get(a.id);
+      const ex = existing.get(`${a.kind}|${a.day} ${ACT_TIME[a.kind].at}`) || null;
       return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
-        members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null };
+        members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null,
+        existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id } : null };
     }),
   };
 }
 
-/** Send the chosen activities (each on its own: one refused doesn't stop the others). Sent again: the same activity updated. */
+/** Send the chosen activities (each on its own: one refused doesn't stop the others); what the intranet already has is skipped. */
 export async function sendActivities(env: Env, guildId: string, ids: number[]) {
   const want = [...new Set(ids.map((x) => Math.floor(Number(x))).filter((x) => x > 0))].slice(0, 20);
   if (!want.length) throw new IntranetError("Choose the activities to send.", "empty");
@@ -313,14 +332,19 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
   if (!c) throw new IntranetError("Choose the class's intranet classroom first (Settings → Intranet YouCode).", "no_classroom");
   const rows = await all<{ id: number; day: string; kind: string; title: string | null; md: string }>(env,
     `SELECT id, day, kind, title, md FROM activities WHERE guild_id = ? AND kind IN ('veille', 'live') AND id IN (${want.map(() => "?").join(",")})`, guildId, ...want);
-  const view = await activitiesPreview(env, guildId, "0000-01-01", "9999-12-31");
+  if (!rows.length) throw new IntranetError("These activities don't exist any more.", "empty");
+  const days = rows.map((a) => a.day).sort();
+  // checked again now: someone may have made one on the intranet since the preview
+  const view = await activitiesPreview(env, guildId, days[0], days[days.length - 1]);
+  if (view.checkError) throw new IntranetError(`Couldn't check what's already on the intranet: ${view.checkError}`, "check");
   const info = new Map(view.items.map((x) => [x.id, x]));
-  const results: Record<number, { ok: boolean; message?: string }> = {};
+  const results: Record<number, { ok: boolean; message?: string; existing?: boolean }> = {};
   const items: any[] = [];
   for (const a of rows) {
     const v = info.get(a.id)!;
+    if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     if (v.missing.length) { results[a.id] = { ok: false, message: `not linked to an intranet learner: ${v.missing.join(", ")}` }; continue; }
-    items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: v.sent?.activity_id ?? null, type: a.kind, subject: v.title.slice(0, 255),
+    items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: null, type: a.kind, subject: v.title.slice(0, 255),
       datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id) });
   }
   if (items.length) {
@@ -332,8 +356,10 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
         await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'activity', ?, ?, NULL, ?)
           ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, at = excluded.at`, guildId, id, Number(res.activity_id) || null, now());
         results[id] = { ok: true };
-      } else results[id] = { ok: false, message: String(res?.message || "refused by the intranet").slice(0, 200) };
+      } else if (res?.code === "exists" && res.existing) results[id] = { ok: false, existing: true, message: alreadyText(res.existing) };
+      else results[id] = { ok: false, message: String(res?.message || "refused by the intranet").slice(0, 200) };
     }
   }
-  return { sent: Object.values(results).filter((x) => x.ok).length, failed: Object.values(results).filter((x) => !x.ok).length, results };
+  const failed = Object.values(results).filter((x) => !x.ok);
+  return { sent: Object.values(results).filter((x) => x.ok).length, skipped: failed.filter((x) => x.existing).length, failed: failed.filter((x) => !x.existing).length, results };
 }

@@ -327,12 +327,14 @@ function intranetActsDialog(from = null) {
     if (!p.classroom) { box.innerHTML = `<p>Choose the class's intranet classroom first, and link the students: <a href="#/settings/intranet">Settings → Intranet YouCode</a>.</p>`; return; }
     if (!p.items.length) { box.innerHTML = `<p class="muted">No veille or live coding this week.</p>`; return; }
     items = p.items;
-    box.innerHTML = `<p class="small muted" style="margin-top:0">Classroom <b>${esc(p.classroom.name)}</b>. Veille 09:15 (30 min), live coding 11:00 (45 min). Two presenters are a binôme. Already sent: the same activity is updated.</p>
+    box.innerHTML = `${p.checkError ? `<div class="notice warn" style="margin-bottom:10px">Couldn't check what's already on the intranet: ${esc(p.checkError)} Nothing can be sent until it can be checked.</div>` : ""}
+      <p class="small muted" style="margin-top:0">Classroom <b>${esc(p.classroom.name)}</b>. Veille 09:15 (30 min), live coding 11:00 (45 min). Two presenters are a binôme. What the intranet already has at that time is never sent again.</p>
       <div class="table-wrap" style="max-height:360px"><table class="grid-table"><thead><tr><th></th><th>Day</th><th>Activity</th><th>Presenters (intranet)</th><th></th></tr></thead><tbody>
-      ${p.items.map((it) => `<tr><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length ? "disabled" : it.sent ? "" : "checked"} aria-label="Send ${esc(it.title)}"></td>
+      ${p.items.map((it) => `<tr${it.existing ? ' style="opacity:.75"' : ""}><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length || it.existing || p.checkError ? "disabled" : "checked"} aria-label="Send ${esc(it.title)}"></td>
         <td class="small">${esc(it.day)} ${esc(it.at)}</td><td><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}</td>
         <td class="small">${it.members.length ? it.members.map((m) => (m.learner ? esc(m.learner.name || m.name) : `<span style="color:var(--down)">⚠ ${esc(m.name)}</span>`)).join(", ") : `<span class="muted">nobody yet</span>`}</td>
-        <td class="small">${it.missing.length ? `<span style="color:var(--down)">link them first</span>` : it.sent ? `✓ sent ${esc(fmtAgo(it.sent.at))}` : "new"}</td></tr>`).join("")}</tbody></table></div>`;
+        <td class="small">${it.existing ? `<span title="${esc(it.existing.text)}">✓ Already on the intranet${it.existing.mine ? " (sent by ClassBot)" : ""}<br><span class="muted">« ${esc(it.existing.subject)} » · created by <b>${esc(it.existing.by)}</b> on ${esc(it.existing.created)}</span></span>`
+          : it.missing.length ? `<span style="color:var(--down)">link them first</span>` : "new"}</td></tr>`).join("")}</tbody></table></div>`;
   }).catch((e) => { const box = $("#ia-body", dlg); if (box) box.innerHTML = `<p style="color:var(--down)">❌ ${esc(e.message)}</p>`; });
 }
 
@@ -351,8 +353,9 @@ function intranetActsConfirm(start, list) {
       const ids = $$("[data-iac]:checked", dlg).map((x) => Number(x.dataset.iac));
       if (!ids.length) throw new Error("Nothing is ticked");
       const r = await api("/activities/intranet", { method: "POST", body: { ids } });
-      toast(`${r.sent} sent to the intranet${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
-      if (r.failed) { const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message); toast(why[0], true); }
+      toast(`${r.sent} sent to the intranet${r.skipped ? ` · ${r.skipped} already there (not sent again)` : ""}${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
+      const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message);
+      if (why.length) toast(why[0], !!r.failed);
       intranetActsDialog(start);
     } }]);
   const btn = $(".dlg-foot .btn.primary", dlg);
