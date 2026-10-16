@@ -4184,10 +4184,20 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const fa = intranetFake.acts.find((x) => x.subject === "Flexbox vs Grid")!;
   check(as1.status === 200 && as1.data.sent === 1 && as1.data.failed === 1 && /not linked/.test(as1.data.results[la].message) && fa.type === "veille" && fa.datetime === "2030-01-07 09:15" && fa.duration === 30 && fa.learners.join() === "503,502" && fa.md.startsWith("# Veille"),
     "sent: the veille at 09:15 for 30 min with its binôme and its markdown; a live coding with someone not linked is not sent (the others still are)");
-  run1("UPDATE activities SET title = 'Flexbox ou Grid ?' WHERE id = ?", va);
+  // never twice: what the intranet already has at that time in the class (whoever made it) is shown and not sent again
   const as2 = await api("POST", "/api/activities/intranet", { g: G, ids: [va] });
-  check(as2.data.sent === 1 && intranetFake.acts.filter((x) => x.subject.startsWith("Flexbox")).length === 1 && fa.subject === "Flexbox ou Grid ?", "sent again: the same intranet activity, updated");
-  check((await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`)).data.items.find((x: any) => x.id === va).sent?.activity_id === fa.id, "…the preview says it was sent");
+  check(as2.data.sent === 0 && as2.data.skipped === 1 && intranetFake.acts.filter((x) => x.subject === "Flexbox vs Grid").length === 1 && /already on the intranet: « Flexbox vs Grid », created by Prof YouCode on 16\/10\/2026/.test(as2.data.results[va].message),
+    "sent again: not sent twice, and it says it's already there, created by whom and when");
+  const ap2 = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  check(ap2.data.items.find((x: any) => x.id === va).existing?.mine === true, "…the preview shows it as already on the intranet (sent by ClassBot)");
+  intranetFake.acts.push({ id: 7001, classroom: 12, type: "live", subject: "Panier (fait à la main)", datetime: "2030-01-08 11:00", duration: 60, md: "", learners: [], by: "Achraf Chaoub", by_id: 2002, created: "15/10/2026" });
+  run1("UPDATE activity_claims SET members = ? WHERE activity_id = ?", JSON.stringify([U.carol.id]), la);
+  const ap3 = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  const ex = ap3.data.items.find((x: any) => x.id === la).existing;
+  check(ex && ex.by === "Achraf Chaoub" && !ex.mine && ex.subject === "Panier (fait à la main)", "…one made by hand by someone else at that time: shown with who made it");
+  const as3 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
+  check(as3.data.sent === 0 && as3.data.skipped === 1 && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1, "…and not sent: no second live coding at 11:00");
+  check((await api("GET", `/api/intranet/classrooms?g=${G}`)).status === 200, "reading what's on the intranet goes through the same signed, trainer-only access");
   // these activities were only for the intranet: the next sections use their own
   run1(`DELETE FROM activity_claims WHERE activity_id IN (${va}, ${la})`);
   run1(`DELETE FROM activities WHERE id IN (${va}, ${la})`);

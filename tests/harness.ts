@@ -77,7 +77,7 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
   learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
   dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
-  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[] }[],
+  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
   trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
@@ -292,11 +292,20 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       return Response.json({ success: true, distribution_id: d.id, groups: map, kept: 0, learners: all.length });
     }
     const am = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/activities$/);
+    const info = (a: any) => ({ activity_id: a.id, subject: a.subject, datetime: a.datetime, duration: a.duration, by: a.by || T.name, by_id: a.by_id || T.id, created: a.created || "16/10/2026" });
+    if (am && (init.method || "GET") === "GET") {
+      const cid = Number(am[1]), from = url.searchParams.get("from") || "", to = url.searchParams.get("to") || "";
+      if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
+      return Response.json({ success: true, activities: intranetFake.acts.filter((a) => a.classroom === cid && a.datetime.slice(0, 10) >= from && a.datetime.slice(0, 10) <= to).map((a) => ({ type: a.type, ...info(a) })) });
+    }
     if (am && init.method === "POST") {
       const cid = Number(am[1]), b = JSON.parse(body || "{}"), active = (intranetFake.learners[cid] || []).map((l) => l.id), results: Record<string, any> = {};
       for (const it of b.items) {
         if (it.learner_ids.some((x: number) => !active.includes(x))) { results[it.ref] = { ok: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }; continue; }
         let a = intranetFake.acts.find((x) => x.id === it.activity_id && x.classroom === cid);
+        // like the intranet: never a second one of the same type at the same time in the class
+        const dup = !a && intranetFake.acts.find((x) => x.classroom === cid && x.type === it.type && x.datetime === it.datetime);
+        if (dup) { results[it.ref] = { ok: false, code: "exists", existing: info(dup), message: "Déjà sur l'intranet" }; continue; }
         if (!a) { a = { id: intranetFake.nextId++, classroom: cid, type: "", subject: "", datetime: "", duration: 0, md: "", learners: [] }; intranetFake.acts.push(a); }
         Object.assign(a, { type: it.type, subject: it.subject, datetime: it.datetime, duration: it.duration, md: it.description_md, learners: it.learner_ids });
         results[it.ref] = { ok: true, activity_id: a.id };
