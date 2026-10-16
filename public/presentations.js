@@ -311,14 +311,12 @@ function intranetActsDialog(from = null) {
   const mon = (d) => { const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
   const add = (d, n) => { const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
   const start = from || mon(new Date().toISOString().slice(0, 10));
+  let items = [];
   openDialog("🏫 Send to the intranet", `<div class="toolbar" style="margin:0 0 10px"><button class="btn small" id="ia-prev">← Week before</button><b id="ia-week"></b><button class="btn small" id="ia-next">Week after →</button></div><div id="ia-body"><p class="muted">Loading…</p></div>`,
     [{ label: "Cancel", action: () => dlg.close() }, { label: "🏫 Send the ones checked", primary: true, action: async () => {
       const ids = $$("[data-ia]:checked", dlg).map((x) => Number(x.dataset.ia));
       if (!ids.length) throw new Error("Check the activities to send");
-      const r = await api("/activities/intranet", { method: "POST", body: { ids } });
-      toast(`${r.sent} sent to the intranet${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
-      if (r.failed) { const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message); toast(why[0], true); }
-      intranetActsDialog(start);
+      intranetActsConfirm(start, items.filter((it) => ids.includes(it.id)));
     } }]);
   $("#ia-week", dlg).textContent = `${start} → ${add(start, 6)}`;
   $("#ia-prev", dlg).onclick = () => intranetActsDialog(add(start, -7));
@@ -328,6 +326,7 @@ function intranetActsDialog(from = null) {
     if (!box) return;
     if (!p.classroom) { box.innerHTML = `<p>Choose the class's intranet classroom first, and link the students: <a href="#/settings/intranet">Settings → Intranet YouCode</a>.</p>`; return; }
     if (!p.items.length) { box.innerHTML = `<p class="muted">No veille or live coding this week.</p>`; return; }
+    items = p.items;
     box.innerHTML = `<p class="small muted" style="margin-top:0">Classroom <b>${esc(p.classroom.name)}</b>. Veille 09:15 (30 min), live coding 11:00 (45 min). Two presenters are a binôme. Already sent: the same activity is updated.</p>
       <div class="table-wrap" style="max-height:360px"><table class="grid-table"><thead><tr><th></th><th>Day</th><th>Activity</th><th>Presenters (intranet)</th><th></th></tr></thead><tbody>
       ${p.items.map((it) => `<tr><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length ? "disabled" : it.sent ? "" : "checked"} aria-label="Send ${esc(it.title)}"></td>
@@ -335,4 +334,29 @@ function intranetActsDialog(from = null) {
         <td class="small">${it.members.length ? it.members.map((m) => (m.learner ? esc(m.learner.name || m.name) : `<span style="color:var(--down)">⚠ ${esc(m.name)}</span>`)).join(", ") : `<span class="muted">nobody yet</span>`}</td>
         <td class="small">${it.missing.length ? `<span style="color:var(--down)">link them first</span>` : it.sent ? `✓ sent ${esc(fmtAgo(it.sent.at))}` : "new"}</td></tr>`).join("")}</tbody></table></div>`;
   }).catch((e) => { const box = $("#ia-body", dlg); if (box) box.innerHTML = `<p style="color:var(--down)">❌ ${esc(e.message)}</p>`; });
+}
+
+// the last look before sending: each activity checked, untick the ones not needed, then confirm
+function intranetActsConfirm(start, list) {
+  const who = (it) => (it.members.length ? it.members.map((m) => esc(m.learner?.name || m.name)).join(", ") : `<span class="muted">nobody</span>`);
+  openDialog(`🏫 Confirm: ${list.length} activit${list.length > 1 ? "ies" : "y"} to the intranet`, `
+    <p class="small muted" style="margin-top:4px">Untick what you don't want to send. An activity already sent is updated (not doubled).</p>
+    <div class="checks" style="flex-direction:column;align-items:stretch;gap:6px;max-height:380px;overflow:auto">
+      ${list.map((it) => `<label class="check" style="align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:10px">
+        <input type="checkbox" data-iac="${it.id}" checked>
+        <span><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}
+          <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)} · ${it.sent ? "update" : "new"}</span></span></label>`).join("")}
+    </div>`,
+    [{ label: "← Back", action: () => intranetActsDialog(start) }, { label: "🏫 Confirm and send", primary: true, action: async () => {
+      const ids = $$("[data-iac]:checked", dlg).map((x) => Number(x.dataset.iac));
+      if (!ids.length) throw new Error("Nothing is ticked");
+      const r = await api("/activities/intranet", { method: "POST", body: { ids } });
+      toast(`${r.sent} sent to the intranet${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent);
+      if (r.failed) { const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message); toast(why[0], true); }
+      intranetActsDialog(start);
+    } }]);
+  const btn = $(".dlg-foot .btn.primary", dlg);
+  const count = () => { const n = $$("[data-iac]:checked", dlg).length; btn.textContent = `🏫 Confirm and send (${n})`; btn.disabled = !n; };
+  $$("[data-iac]", dlg).forEach((x) => x.addEventListener("change", count));
+  count();
 }
