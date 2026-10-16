@@ -1,5 +1,6 @@
 // End-to-end tests: real Worker code, fake Discord/HackerRank/AI/D1.
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
@@ -21,6 +22,7 @@ import { memoryKv } from "../src/shared/watcher.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { intranetFetch, intranetSetup, toSign } from "../src/shared/intranet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -4100,6 +4102,24 @@ section("AI keys: keys of the same provider take turns; a key at its per-minute 
   const put = await api("PUT", "/api/settings/ai", { g: G, rotate: false });
   check(put.status === 200 && put.data.rotate === false, "the teacher can turn it off");
   await api("PUT", "/api/settings/ai", { g: G, rotate: true });
+}
+
+section("intranet: signed server-to-server requests (the intranet's VerifyClassbotSignature checks the same string)");
+{
+  const body = '{"nom":"Hélène"}';
+  check(await toSign(1791900000, "abcdabcdabcdabcd", "post", "/api/classbot/squads?x=1", body)
+    === `v1
+1791900000
+abcdabcdabcdabcd
+POST
+/api/classbot/squads?x=1
+${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string: version, time, nonce, method, path and query, SHA-256 of the raw body (accents included)");
+  check(!intranetSetup({ INTRANET_URL: "http://intranet.youcode.ma", INTRANET_KEY_ID: "k", INTRANET_SECRET: "s".repeat(40) } as any).ready
+    && intranetSetup({ INTRANET_URL: "http://127.0.0.1:8010", INTRANET_KEY_ID: "k", INTRANET_SECRET: "s".repeat(40) } as any).ready
+    && !intranetSetup({ INTRANET_URL: "https://intranet.youcode.ma", INTRANET_KEY_ID: "k", INTRANET_SECRET: "short" } as any).ready, "HTTPS only (http on this computer), a secret of 32+ characters");
+  let err = "";
+  try { await intranetFetch({} as any, "GET", "/api/classbot/ping"); } catch (e) { err = (e as Error).message; }
+  check(/isn't set/.test(err), "not set: nothing is sent");
 }
 
 section("i18n: every key exists in English and French");

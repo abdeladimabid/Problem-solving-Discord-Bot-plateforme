@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { IntranetError, intranetPing, intranetSetup } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -460,6 +461,12 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
 
     // -------------------------------------------------------------- teams
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
+    // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
+    if (path === "/intranet" && method === "GET") { await guild(); return ok(intranetSetup(env)); }
+    if (path === "/intranet/ping" && method === "POST") {
+      await guild();
+      try { return ok(await intranetPing(env)); } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+    }
     if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
       const g = await guild();
       const view = async () => ({ ...(await classAiView(env, g.id)), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });

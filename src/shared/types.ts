@@ -52,6 +52,9 @@ export interface Env {
   GITHUB_WEBHOOK_SECRET?: string;
   GITHUB_PRIVATE_KEY?: string;
   WATCHER_KV?: any;         // optional: the old GitHub Watcher's KV namespace, for the one-time import
+  INTRANET_URL?: string;     // optional: the YouCode intranet (signed server-to-server requests, see shared/intranet.ts)
+  INTRANET_KEY_ID?: string;
+  INTRANET_SECRET?: string;  // secret: never in the database or the browser
 }
 
 export type Lang = "en" | "fr";
