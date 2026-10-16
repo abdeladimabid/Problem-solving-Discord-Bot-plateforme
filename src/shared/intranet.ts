@@ -73,6 +73,8 @@ export async function intranetFetch(env: Env, method: string, path: string, data
       bad_headers: "the request headers are malformed",
     };
     const code = json?.code || (res.status === 404 ? "not_found" : "error");
+    // the intranet's own explanation (in French) for what it refuses about the data
+    if (!why[code] && json?.message && code !== "not_found") throw new IntranetError(`The intranet refused: ${String(json.message).slice(0, 300)}`, code, res.status);
     throw new IntranetError(why[code] ? `Refused: ${why[code]}.` : res.status === 404 ? "The intranet has no ClassBot API yet (/api/classbot)." : `The intranet answered ${res.status}.`, code, res.status);
   }
   return json;
@@ -169,4 +171,39 @@ export async function setIntranetLink(env: Env, guildId: string, discordId: stri
     env.DB.prepare("DELETE FROM intranet_links WHERE guild_id = ? AND learner_id = ? AND discord_id != ?").bind(guildId, Math.floor(learnerId), discordId),
     env.DB.prepare("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, by, at) VALUES (?, ?, ?, ?, 'you', ?)").bind(guildId, discordId, Math.floor(learnerId), learnerName ? String(learnerName).slice(0, 120) : null, now()),
   ]);
+}
+
+// ------------------------------------------------------------ squads → the intranet's group distribution
+const parseJson = (s: string | null | undefined, d: any) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
+
+/** What sending these squads would do: each squad with each student's intranet learner, and who has none yet. */
+export async function squadsPreview(env: Env, guildId: string, setId: number) {
+  const set = await one<{ id: number; name: string; squads: string }>(env, "SELECT id, name, squads FROM squad_sets WHERE id = ? AND guild_id = ?", setId, guildId);
+  if (!set) throw new IntranetError("These squads don't exist any more.", "not_found");
+  const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
+  const links = new Map((await all<{ discord_id: string; learner_id: number; learner_name: string | null }>(env, "SELECT discord_id, learner_id, learner_name FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x.name || x.discord_id]));
+  const groups = (parseJson(set.squads, []) as { id: string; name: string; members: string[] }[]).filter((s) => s.members?.length).map((s) => ({
+    key: String(s.id), name: String(s.name || "Squad").slice(0, 255),
+    members: s.members.map((m) => { const l = links.get(String(m)); return { id: String(m), name: names.get(String(m)) || String(m), learner: l ? { id: l.learner_id, name: l.learner_name || "" } : null }; }),
+  }));
+  const sync = await one<{ remote_id: number | null; at: number | null }>(env, "SELECT remote_id, at FROM intranet_sync WHERE guild_id = ? AND kind = 'squads' AND local_id = ?", guildId, setId);
+  return { set: { id: set.id, name: set.name }, classroom: c, groups, missing: groups.flatMap((g) => g.members.filter((m) => !m.learner).map((m) => m.name)), sent: sync?.at ? { at: sync.at, distribution_id: sync.remote_id } : null };
+}
+
+/** Send the squads (all or nothing): the first time a new group distribution, then the same one updated in place. */
+export async function sendSquads(env: Env, guildId: string, setId: number) {
+  const p = await squadsPreview(env, guildId, setId);
+  if (!p.classroom) throw new IntranetError("Choose the class's intranet classroom first (Settings → Intranet YouCode).", "no_classroom");
+  if (!p.groups.length) throw new IntranetError("These squads have nobody in them yet.", "empty");
+  if (p.missing.length) throw new IntranetError(`Not linked to an intranet learner yet: ${p.missing.join(", ")}. Link them in Settings → Intranet YouCode.`, "missing");
+  const sync = await one<{ remote_id: number | null; map: string | null }>(env, "SELECT remote_id, map FROM intranet_sync WHERE guild_id = ? AND kind = 'squads' AND local_id = ?", guildId, setId);
+  const map = parseJson(sync?.map, {}) as Record<string, number>;
+  const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${p.classroom.id}/squads`, {
+    ref: `${guildId}:squads:${setId}`, name: p.set.name, distribution_id: sync?.remote_id ?? null,
+    groups: p.groups.map((g) => ({ key: g.key, name: g.name, group_id: map[g.key] ?? null, learner_ids: g.members.map((m) => m.learner!.id) })),
+  });
+  await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'squads', ?, ?, ?, ?)
+    ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, map = excluded.map, at = excluded.at`, guildId, setId, Number(r.distribution_id) || null, JSON.stringify(r.groups || {}), now());
+  return { distribution_id: Number(r.distribution_id), groups: Object.keys(r.groups || {}).length, learners: Number(r.learners) || 0, kept: Number(r.kept) || 0, again: !!sync?.remote_id };
 }

@@ -205,6 +205,7 @@ async function squadsSection(box) {
           ${set.active ? `<span class="tag lang">Current squads</span>` : `<button class="btn small" id="sq-cur">Make them the current squads</button>`}
           <span class="small muted" id="sq-state">${dirty ? "…" : "Saved automatically"}</span>
           <button class="btn small" id="sq-send" title="Each student gets a DM with their squad and their teammates">📨 Send to the students</button>
+          <button class="btn small" id="sq-intra" title="The squads become a group distribution of the class on the YouCode intranet">🏫 Send to the intranet</button>
           ${set.sent_at ? `<span class="small muted">✓ sent ${esc(fmtDateTime(set.sent_at))}</span>` : ""}
           <button class="btn small danger" id="sq-del" style="margin-left:auto">Delete</button></div>
         <div id="sq-board"></div>`
@@ -217,6 +218,7 @@ async function squadsSection(box) {
     if ($("#sq-cur", box)) $("#sq-cur", box).onclick = (e) => busy(e.currentTarget, async () => { if (dirty) await save(); d = await api(`/squads/${set.id}`, { method: "PUT", body: { active: true } }); set = d.sets.find((x) => x.id === set.id); toast("These are now the current squads"); render(); });
     if ($("#sq-del", box)) $("#sq-del", box).onclick = () => confirmDialog(`Delete “${set.name}”?`, "The briefs that already loaded these squads keep their own copy.", "Delete", async () => { d = await api(`/squads/${set.id}`, { method: "DELETE" }); set = d.sets.find((x) => x.active) || d.sets[0] || null; render(); }, true);
     if ($("#sq-send", box)) $("#sq-send", box).onclick = async () => { if (dirty) await save(); sendDialog(); };
+    if ($("#sq-intra", box)) $("#sq-intra", box).onclick = async () => { if (dirty) await save(); intranetDialog(); };
     const create = () => openDialog("New squads", `
       <label for="ns-name">Name</label><input type="text" id="ns-name" style="width:100%" maxlength="60" placeholder="e.g. Sprint 3" value="Sprint ${d.sets.length + 1}">
       <label>Start from</label>${segHtml("ns-from", [...(set ? [["copy", `A copy of “${set.name}”`]] : []), ["empty", "Empty"]], set ? "copy" : "empty")}
@@ -228,6 +230,23 @@ async function squadsSection(box) {
     } }]);
     $("#sq-new", box).onclick = () => { create(); wireSeg(dlg, "ns-from"); };
     if ($("#sq-first", box)) $("#sq-first", box).onclick = () => { create(); wireSeg(dlg, "ns-from"); };
+  };
+  // 🏫 the squads → the intranet's groups: a preview (each student's intranet learner), then all or nothing
+  const intranetDialog = async () => {
+    let p;
+    try { p = await api(`/squads/${set.id}/intranet`); } catch (e) { return toast(e.message, true); }
+    if (!p.classroom) return openDialog("🏫 Send to the intranet", `<p>Choose the class's intranet classroom first, and link the students.</p>`, [{ label: "Open Settings → Intranet YouCode", primary: true, action: () => { dlg.close(); location.hash = "#/settings/intranet"; } }]);
+    const ok = !p.missing.length && p.groups.length;
+    openDialog(`🏫 Send “${p.set.name}” to the intranet`, `
+      <p style="margin-top:4px">Classroom <b>${esc(p.classroom.name)}</b> · ${p.groups.length} squad(s). ${p.sent ? `Already sent ${esc(fmtDateTime(p.sent.at))}: <b>the same groups are updated</b> (the activities assigned to them stay linked).` : "A new group distribution is created."}</p>
+      ${p.missing.length ? `<div class="notice warn"><b>${p.missing.length} student(s) not linked to an intranet learner:</b> ${esc(p.missing.join(", "))}. Nothing is sent until every student is linked (Settings → Intranet YouCode).</div>` : ""}
+      <div class="table-wrap" style="max-height:340px"><table class="grid-table"><thead><tr><th>Squad</th><th>Intranet learners</th></tr></thead><tbody>
+        ${p.groups.map((g) => `<tr><td><b>${esc(g.name)}</b></td><td class="small">${g.members.map((m) => m.learner ? esc(m.learner.name || m.name) : `<span style="color:var(--down)">⚠ ${esc(m.name)}</span>`).join(", ")}</td></tr>`).join("")}</tbody></table></div>`,
+      ok ? [{ label: "Cancel", action: () => dlg.close() }, { label: p.sent ? "🏫 Update on the intranet" : "🏫 Send", primary: true, action: async () => {
+        const r = await api(`/squads/${set.id}/intranet`, { method: "POST", body: {} });
+        dlg.close();
+        toast(`${r.again ? "Updated" : "Sent"} on the intranet: ${r.groups} group(s), ${r.learners} learner(s)${r.kept ? ` · ${r.kept} old group(s) kept (activities use them)` : ""}`);
+      } }] : [{ label: "Open Settings → Intranet YouCode", action: () => { dlg.close(); location.hash = "#/settings/intranet"; } }]);
   };
   // 📨 each student gets their squad by DM: one squad per request (Discord calls stay few), with the progress shown
   const sendDialog = () => {
