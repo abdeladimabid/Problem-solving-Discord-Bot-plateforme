@@ -1594,6 +1594,30 @@ async function aiSettings(root, flash = null) {
   });
 }
 
+// Settings → Intranet YouCode: what is set (never the secret) and "Test the connection"
+async function intranetSettings(root) {
+  const s = await api("/intranet");
+  const row = (ok, label, val) => `<li>${ok ? "✅" : "⬜"} ${label}${val ? ` <code>${esc(val)}</code>` : ""}</li>`;
+  root.innerHTML = `<div class="panel set-card">
+      <ul class="bchecks">${row(!!s.host && s.https, "Address (INTRANET_URL)", s.url || "")}${row(!!s.keyId, "Key id (INTRANET_KEY_ID)", s.keyId)}${row(s.secretOk, "Secret (INTRANET_SECRET, 32+ characters)", s.secretOk ? "set" : "")}</ul>
+      ${s.host && !s.https ? `<p class="gh-warn">⚠️ Use an <b>https://</b> address (http only works for a test on this computer).</p>` : ""}
+      ${s.ready ? "" : `<details class="small"><summary><b>How to set it</b></summary><ol>
+        <li>Make a secret: 32+ random characters (for example <code>openssl rand -hex 32</code>).</li>
+        <li>Intranet <code>.env</code>: <code>CLASSBOT_KEY_ID=classbot</code>, <code>CLASSBOT_SECRET=…</code>, <code>CLASSBOT_CLASSROOMS=</code> the ids of your classrooms.</li>
+        <li>ClassBot: <code>INTRANET_URL</code> and <code>INTRANET_KEY_ID</code> in <code>wrangler.admin.jsonc</code> (vars), then <code>npx wrangler secret put INTRANET_SECRET -c wrangler.admin.jsonc</code>, and deploy.</li></ol></details>`}
+      <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-ping" ${s.ready ? "" : "disabled"}>🔌 Test the connection</button><span id="in-out" class="small"></span></div></div>`;
+  const b = $("#in-ping", root);
+  if (b) b.onclick = (e) => busy(e.currentTarget, async () => {
+    const out = $("#in-out", root);
+    out.textContent = "";
+    try {
+      const r = await api("/intranet/ping", { method: "POST", body: {} });
+      const skew = r.skew == null ? "" : Math.abs(r.skew) > 60 ? ` · ⚠️ the clocks differ by ${Math.abs(r.skew)} s` : " · clocks in sync";
+      out.innerHTML = `<span style="color:var(--up)">✅ Connected, signature accepted${esc(skew)} · classrooms allowed: ${r.classrooms.length ? esc(r.classrooms.join(", ")) : "none yet (CLASSBOT_CLASSROOMS)"}</span>`;
+    } catch (err) { out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
+  });
+}
+
 async function viewSettings(arg) {
   const [g] = await Promise.all([api("/settings"), loadDiscord()]);
   S.guild = g;
@@ -1608,6 +1632,7 @@ async function viewSettings(arg) {
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
+    ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1755,6 +1780,11 @@ async function viewSettings(arg) {
       <div id="set-library"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="intranet" hidden>
+      ${head("Intranet YouCode", "ClassBot talks to the intranet server to server: every request is signed (HMAC-SHA256), dated (refused after 5 minutes) and used once. The secret stays in Cloudflare: never in the database or this page.")}
+      <div id="set-intranet"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="diag" hidden>
       ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
       <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
@@ -1771,6 +1801,7 @@ async function viewSettings(arg) {
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
       if (k === "ai") aiSettings($("#set-ai"));
       if (k === "library") librarySettings($("#set-library"));
+      if (k === "intranet") intranetSettings($("#set-intranet"));
     }
   };
   $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });
