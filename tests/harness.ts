@@ -298,7 +298,17 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (am && (init.method || "GET") === "GET") {
       const cid = Number(am[1]), from = url.searchParams.get("from") || "", to = url.searchParams.get("to") || "";
       if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
-      return Response.json({ success: true, activities: intranetFake.acts.filter((a) => a.classroom === cid && a.datetime.slice(0, 10) >= from && a.datetime.slice(0, 10) <= to).map((a) => ({ type: a.type, ...info(a) })) });
+      return Response.json({ success: true, activities: intranetFake.acts.filter((a) => a.classroom === cid && a.datetime.slice(0, 10) >= from && a.datetime.slice(0, 10) <= to).map((a) => ({ type: a.type, ...info(a), learner_ids: a.learners })) });
+    }
+    // the presenters added to an activity already there (only added)
+    const alm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/activities\/(\d+)\/learners$/);
+    if (alm && init.method === "POST") {
+      const cid = Number(alm[1]), a = intranetFake.acts.find((x) => x.id === Number(alm[2]) && x.classroom === cid);
+      if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
+      if (!a) return deny("activity_not_found", 404);
+      const add = (JSON.parse(String(init.body || "{}")).learner_ids || []).filter((x: number) => !a.learners.includes(x));
+      a.learners.push(...add);
+      return Response.json({ success: true, added: add.length, ...info(a) });
     }
     if (am && init.method === "POST") {
       (intranetFake as any).lastItems = JSON.parse(body || "{}").items;

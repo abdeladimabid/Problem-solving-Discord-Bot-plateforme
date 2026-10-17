@@ -283,7 +283,7 @@ export async function sendSquads(env: Env, guildId: string, setId: number) {
 // The school's times (Moroccan time, as the intranet keeps them): veille 09:15 for 30 min, live coding 11:00 for 45 min.
 export const ACT_TIME: Record<string, { at: string; minutes: number }> = { veille: { at: "09:15", minutes: 30 }, live: { at: "11:00", minutes: 45 } };
 
-export interface OnIntranet { activity_id: number; subject: string; datetime: string; duration: number; by: string; by_id: number; created: string }
+export interface OnIntranet { activity_id: number; subject: string; datetime: string; duration: number; by: string; by_id: number; created: string; learner_ids?: number[] }
 /** The veilles and live codings already on the intranet for the class over a range (anyone's), by "kind|YYYY-MM-DD HH:MM". */
 async function onIntranet(env: Env, guildId: string, classroomId: number, from: string, to: string): Promise<Map<string, OnIntranet>> {
   const r = await intranetFetch(env, "GET", `/api/classbot/classrooms/${classroomId}/activities?from=${from}&to=${to}`, undefined, guildId);
@@ -322,7 +322,9 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
       return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
         members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null,
         author: (() => { const au = lib.get(`${a.day}:${a.kind}`)?.author; return au && au.toLowerCase() !== me.toLowerCase() ? au : null; })(),
-        existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id } : null };
+        existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id } : null,
+        // already on the intranet: its presenters from ClassBot not assigned there yet (only added, nothing else changes)
+        assign: ex ? members.filter((m) => m.learner && !(ex.learner_ids || []).includes(m.learner.id)).map((m) => ({ id: m.learner!.id, name: m.learner!.name || m.name })) : [] };
     }),
   };
 }
@@ -354,13 +356,21 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
   const view = await activitiesPreview(env, guildId, days[0], days[days.length - 1]);
   if (view.checkError) throw new IntranetError(`Couldn't check what's already on the intranet: ${view.checkError}`, "check");
   const info = new Map(view.items.map((x) => [x.id, x]));
-  const results: Record<number, { ok: boolean; message?: string; existing?: boolean; reused?: string }> = {};
+  const results: Record<number, { ok: boolean; message?: string; existing?: boolean; reused?: string; assigned?: number }> = {};
   const items: any[] = [];
   const lib = await libraryOf(env, guildId, rows);
   for (const a of rows) {
     const v = info.get(a.id)!;
-    if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     if (v.missing.length) { results[a.id] = { ok: false, message: `not linked to an intranet learner: ${v.missing.join(", ")}` }; continue; }
+    if (v.existing && v.assign.length) {
+      // already there: only its presenters are added
+      try {
+        const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities/${v.existing.activity_id}/learners`, { learner_ids: v.assign.map((m) => m.id) }, guildId);
+        results[a.id] = { ok: true, assigned: Number(r.added) || 0 };
+      } catch (e) { results[a.id] = { ok: false, message: String((e as Error).message).slice(0, 200) }; }
+      continue;
+    }
+    if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     const l = lib.get(`${a.day}:${a.kind}`);
     items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: null, type: a.kind, subject: v.title.slice(0, 255),
       datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id),
@@ -380,5 +390,5 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
     }
   }
   const failed = Object.values(results).filter((x) => !x.ok);
-  return { sent: Object.values(results).filter((x) => x.ok).length, reused: Object.values(results).filter((x) => x.reused).length, skipped: failed.filter((x) => x.existing).length, failed: failed.filter((x) => !x.existing).length, results };
+  return { sent: Object.values(results).filter((x) => x.ok && x.assigned === undefined).length, assigned: Object.values(results).filter((x) => x.assigned !== undefined).length, reused: Object.values(results).filter((x) => x.reused).length, skipped: failed.filter((x) => x.existing).length, failed: failed.filter((x) => !x.existing).length, results };
 }
