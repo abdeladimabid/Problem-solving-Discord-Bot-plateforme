@@ -3274,7 +3274,7 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", Math.floor(Date.now() / 1000) + 3000);
   github.repos.tok777 = [
     { full_name: "carol/old-cv", owner: { login: "carol" }, pushed_at: "2025-01-02T10:00:00Z", created_at: "2024-12-01T10:00:00Z", private: false, description: "Old CV", language: "HTML" },
-    { full_name: "carol/site", owner: { login: "carol" }, pushed_at: new Date().toISOString(), created_at: new Date().toISOString(), private: true, description: "Hammam", language: "CSS" }];
+    { full_name: "carol/site", owner: { login: "carol" }, pushed_at: new Date(Date.now()).toISOString(), created_at: new Date(Date.now()).toISOString(), private: true, description: "Hammam", language: "CSS" }];
   const bidR = q1("SELECT id FROM briefs WHERE guild_id = ? AND status = 'assigned' ORDER BY id LIMIT 1", G).id;
   const rp = await api("GET", `/api/briefs/${bidR}/review/repos?g=${G}&who=u:${U.carol.id}`);
   check(rp.status === 200 && rp.data.repos.length === 2 && rp.data.repos[0].repo === "carol/site" && rp.data.repos[0].activity === 1 && rp.data.repos[0].private && !rp.data.repos[1].during, "debrief: the student's GitHub repos to pick from, the one they pushed to during the brief first");
