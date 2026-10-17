@@ -1,6 +1,7 @@
 // Dashboard API for the Activités page: the daily veilles and live codings of a date range (see shared/activities.ts).
 // The page asks for one thing at a time (the week's plan, then each item), so every request stays short and the
 // teacher sees each card fill in. Returns null when the path isn't one of ours (the main API goes on).
+import { IntranetError, activitiesPreview, sendActivities } from "../shared/intranet.ts";
 import type { Env, GuildRow } from "../shared/types.ts";
 import { aiStatus } from "../shared/aikeys.ts";
 import { libCfg, syncLibrary } from "../shared/library.ts";
@@ -20,7 +21,7 @@ export async function activitiesApi(env: Env, path: string, method: string, body
   } catch (e) {
     // the AI's per-minute limit: the page waits that long and asks again by itself
     if (e instanceof ActivityError && e.wait) return Response.json({ error: e.message, retryIn: e.wait });
-    if (e instanceof ActivityError || e instanceof SignupError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof ActivityError || e instanceof SignupError || e instanceof IntranetError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -60,6 +61,12 @@ async function route(env: Env, path: string, method: string, body: any, url: URL
   }
   // ---- sign-ups: shared in Discord, asked for by students, approved, assigned, graded
   const ids = (v: unknown) => (Array.isArray(v) ? v.map(Number).filter((n) => n > 0) : []);
+  // the veilles and live codings → the intranet's activities (a preview of a range, then the ones chosen)
+  if (path === "/activities/intranet") {
+    const g = await guild();
+    if (method === "GET") return ok(await activitiesPreview(env, g.id, String(url.searchParams.get("from") || ""), String(url.searchParams.get("to") || "")));
+    if (method === "POST") return ok(await sendActivities(env, g.id, Array.isArray(body.ids) ? body.ids : []));
+  }
   if (path === "/activities/signups" && method === "GET") {
     const g = await guild();
     return ok(await signupView(env, g, String(url.searchParams.get("from") || "0000"), String(url.searchParams.get("to") || "9999")));
