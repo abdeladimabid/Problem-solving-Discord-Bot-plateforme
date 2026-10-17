@@ -1601,7 +1601,7 @@ async function intranetSettings(root) {
     // connect once: the intranet's address, the trainer's intranet email and password (never kept)
     root.innerHTML = `<div class="panel set-card" id="in-acc"><h3>Connect your intranet account</h3>
         <p class="small muted" style="margin-top:0">Once, with your intranet email and password: ClassBot then sends squads and activities to <b>your</b> classes, as you. Nothing to set on the intranet. The password goes to the intranet only and is never kept.</p>
-        <label for="in-url">Intranet address</label><input type="url" id="in-url" value="${esc(s.url || "")}" placeholder="https://intranet.youcode.ma" style="width:100%">
+        <label for="in-url">Intranet address</label><input type="url" id="in-url" value="${esc(s.url || "")}" placeholder="https://admin.youcode.ma" style="width:100%">
         <div class="field-row"><div><label for="in-email">Intranet email</label><input type="email" id="in-email" autocomplete="username"></div>
           <div><label for="in-pass">Password</label><input type="password" id="in-pass" autocomplete="current-password"></div></div>
         <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-login">🔐 Connect</button><span id="in-login-out" class="small"></span></div></div>`;
