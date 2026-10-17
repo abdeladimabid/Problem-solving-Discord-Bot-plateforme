@@ -61,6 +61,8 @@ async function unseal(env: Env, sealed: unknown): Promise<string | null> {
     return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, await sealKey(env), unb64(ct)));
   } catch { return null; }
 }
+// YouCode's intranet for trainers (INTRANET_URL or the address typed in Settings replace it)
+const DEFAULT_INTRANET = "https://admin.youcode.ma";
 async function stateOf(env: Env, guildId: string): Promise<any> {
   const r = await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId);
   try { return JSON.parse(r?.intranet || "{}") || {}; } catch { return {}; }
@@ -72,7 +74,7 @@ async function saveState(env: Env, guildId: string, st: any) {
 /** What the dashboard may know: the address and the trainer connected (never the token). */
 export async function intranetSetup(env: Env, guildId: string) {
   const st = await stateOf(env, guildId);
-  const u = checkUrl(st.url || env.INTRANET_URL || "");
+  const u = checkUrl(st.url || env.INTRANET_URL || DEFAULT_INTRANET);
   return { url: u.url, host: u.host, https: u.https, ready: u.ok, trainer: st.auth?.tok && st.auth.trainer ? { ...st.auth.trainer, at: st.auth.at || 0 } : null };
 }
 export async function intranetTrainer(env: Env, guildId: string) {
@@ -108,7 +110,7 @@ export async function intranetLogout(env: Env, guildId: string) {
 /** A request to the intranet's ClassBot API (path like "/api/classbot/ping"), as the trainer this class is connected as. */
 export async function intranetFetch(env: Env, method: string, path: string, data: unknown, guildId: string): Promise<any> {
   const st = await stateOf(env, guildId);
-  const u = checkUrl(st.url || env.INTRANET_URL || "");
+  const u = checkUrl(st.url || env.INTRANET_URL || DEFAULT_INTRANET);
   const token = await unseal(env, st.auth?.tok), secret = await unseal(env, st.auth?.sig);
   if (!token || !secret) throw new IntranetError("Connect your intranet account first (Settings → Intranet YouCode).", "no_trainer");
   if (!u.ok) throw new IntranetError("The intranet's address isn't valid: connect again in Settings → Intranet YouCode.", "no_url");
