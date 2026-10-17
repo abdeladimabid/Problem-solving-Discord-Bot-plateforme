@@ -1,7 +1,9 @@
 // End-to-end tests: real Worker code, fake Discord/HackerRank/AI/D1.
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { intranetFake } from "./harness.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
@@ -18,9 +20,11 @@ import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText 
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
+import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -3270,7 +3274,7 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", Math.floor(Date.now() / 1000) + 3000);
   github.repos.tok777 = [
     { full_name: "carol/old-cv", owner: { login: "carol" }, pushed_at: "2025-01-02T10:00:00Z", created_at: "2024-12-01T10:00:00Z", private: false, description: "Old CV", language: "HTML" },
-    { full_name: "carol/site", owner: { login: "carol" }, pushed_at: new Date().toISOString(), created_at: new Date().toISOString(), private: true, description: "Hammam", language: "CSS" }];
+    { full_name: "carol/site", owner: { login: "carol" }, pushed_at: new Date(Date.now()).toISOString(), created_at: new Date(Date.now()).toISOString(), private: true, description: "Hammam", language: "CSS" }];
   const bidR = q1("SELECT id FROM briefs WHERE guild_id = ? AND status = 'assigned' ORDER BY id LIMIT 1", G).id;
   const rp = await api("GET", `/api/briefs/${bidR}/review/repos?g=${G}&who=u:${U.carol.id}`);
   check(rp.status === 200 && rp.data.repos.length === 2 && rp.data.repos[0].repo === "carol/site" && rp.data.repos[0].activity === 1 && rp.data.repos[0].private && !rp.data.repos[1].during, "debrief: the student's GitHub repos to pick from, the one they pushed to during the brief first");
@@ -4102,6 +4106,125 @@ section("AI keys: keys of the same provider take turns; a key at its per-minute 
   await api("PUT", "/api/settings/ai", { g: G, rotate: true });
 }
 
+section("intranet: signed server-to-server requests (the intranet's VerifyClassbotSignature checks the same string)");
+{
+  const body = '{"nom":"Hélène"}';
+  check(await toSign(1791900000, "abcdabcdabcdabcd", "post", "/api/classbot/squads?x=1", body)
+    === `v1
+1791900000
+abcdabcdabcdabcd
+POST
+/api/classbot/squads?x=1
+${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string: version, time, nonce, method, path and query, SHA-256 of the raw body (accents included)");
+  check(!checkUrl("http://intranet.youcode.ma").ok && checkUrl("http://127.0.0.1:8010").ok && checkUrl("https://intranet.youcode.ma/").url === "https://intranet.youcode.ma" && !checkUrl("nope").ok, "the intranet's address: HTTPS (http only on this computer)");
+
+  // names: the same words in any order, without accents or capitals; a learner two students fit goes to nobody
+  const L = [{ id: 1, first_name: "Hélène", last_name: "BEN-ALI" }, { id: 2, first_name: "Mehdi", last_name: "Rahmani" }, { id: 3, first_name: "Sara", last_name: "Idrissi" }, { id: 4, first_name: "Sara", last_name: "Amrani" }];
+  const M = matchNames([{ discord_id: "a", name: "ben ali helene" }, { discord_id: "b", name: "Mehdi R." }, { discord_id: "c", name: "Sara" }, { discord_id: "d", name: "Youssef" }], L);
+  check(M[0].kind === "exact" && M[0].candidates[0] === 1 && M[1].kind === "close" && M[1].candidates[0] === 2 && M[2].kind === "several" && M[2].candidates.length === 2 && M[3].kind === "none",
+    `matching names: exact, close, several, none (${M.map((r) => r.kind).join(", ")})`);
+  check(matchNames([{ discord_id: "a", name: "Mehdi Rahmani" }, { discord_id: "b", name: "Rahmani Mehdi" }], L).every((r) => r.kind === "several"), "…two students on the same learner: nobody gets it automatically");
+
+  // the class's intranet classroom, then each student linked once (kept in ClassBot only)
+  intranetFake.learners[12] = [{ id: 501, first_name: "Alice", last_name: "Martin" }, { id: 502, first_name: "Bob", last_name: "Durand" }, { id: 503, first_name: "Caroline", last_name: "Petit" }];
+  // nothing set on the intranet or in Cloudflare: the trainer types the address and connects once
+  check(/Connect your intranet account/.test((await api("POST", "/api/intranet/ping", { g: G })).data.error) && /Connect your intranet account/.test((await api("GET", `/api/intranet/classrooms?g=${G}`)).data.error), "not connected: nothing is sent");
+  const T = intranetFake.trainer, URL0 = "http://intranet.test";
+  check((await api("POST", "/api/intranet/login", { g: G, url: "http://intranet.youcode.ma", email: T.email, password: T.password })).status === 400, "…an http address (not this computer): refused");
+  const badLogin = await api("POST", "/api/intranet/login", { g: G, url: URL0, email: T.email, password: "wrong" });
+  check(badLogin.status === 400 && /incorrect/.test(badLogin.data.error), "…a wrong password: refused");
+  const lg = await api("POST", "/api/intranet/login", { g: G, url: URL0, email: T.email, password: T.password });
+  const stored = q1("SELECT intranet FROM guilds WHERE id = ?", G).intranet;
+  check(lg.status === 200 && lg.data.trainer.name === T.name && ![...intranetFake.tokens].some((t) => stored.includes(t)) && !stored.includes(T.password) && JSON.parse(stored).auth.trainer.id === T.id && JSON.parse(stored).url === URL0,
+    "the trainer connects with the address and their intranet account: the token and its signing secret are kept encrypted, the password never");
+  const st0 = (await api("GET", `/api/intranet?g=${G}`)).data;
+  check(st0.trainer?.name === T.name && st0.host === "intranet.test" && !JSON.stringify(st0).includes("tok"), "…the page knows who is connected and where, never the token");
+  const ping2 = await api("POST", "/api/intranet/ping", { g: G });
+  check(ping2.data.trainer?.name === T.name && ping2.data.classrooms.join() === "12", "…the ping says who is connected, and their classrooms");
+  const cls = await api("GET", `/api/intranet/classrooms?g=${G}`);
+  check(cls.data.classrooms.length === 1 && cls.data.classrooms[0].id === 12, "…only the classrooms the intranet allows");
+  check((await api("PUT", "/api/intranet/classroom", { g: G, id: 99 })).status === 400, "…another classroom: refused");
+  await api("PUT", "/api/intranet/classroom", { g: G, id: 12 });
+  const mv = await api("GET", `/api/intranet/match?g=${G}`);
+  const row = (d: any, id: string) => d.rows.find((r: any) => r.discord_id === id);
+  check(mv.status === 200 && row(mv.data, U.alice.id).kind === "close" && row(mv.data, U.bob.id).kind === "close" && !row(mv.data, U.alice.id).linked, `…each student and the learner their name fits (${row(mv.data, U.alice.id)?.kind})`);
+  const au = await api("POST", "/api/intranet/match/auto", { g: G });
+  check(au.data.linked >= 2 && row(au.data, U.alice.id).linked?.id === 501 && q1("SELECT learner_id FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).learner_id === 502, "Link automatically: saved in ClassBot");
+  const mine = await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 501 });
+  check(row(mine.data, U.carol.id).linked?.id === 501 && row(mine.data, U.carol.id).linked.by === "you" && !row(mine.data, U.alice.id).linked, "…the teacher's choice wins (the learner moves to that student)");
+  check((await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 777 })).status === 400, "…a learner outside the classroom: refused");
+  // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
+  run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
+    JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
+  const sid = q1("SELECT id FROM squad_sets WHERE guild_id = ? AND name = 'Sprint intranet'", G).id;
+  run1("DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  const pv = await api("GET", `/api/squads/${sid}/intranet?g=${G}`);
+  check(pv.status === 200 && pv.data.groups.length === 2 && pv.data.missing.length === 1 && !pv.data.sent, `preview: each squad with its intranet learners, who isn't linked (${pv.data.missing})`);
+  const before = intranetFake.dists.length;
+  check((await api("POST", `/api/squads/${sid}/intranet`, { g: G })).status === 400 && intranetFake.dists.length === before, "…a student not linked: nothing is sent (all or nothing)");
+  await api("PUT", "/api/intranet/link", { g: G, discord_id: U.alice.id, learner_id: 503 });
+  const s1 = await api("POST", `/api/squads/${sid}/intranet`, { g: G });
+  const d1 = intranetFake.dists.find((x) => x.id === s1.data.distribution_id)!;
+  check(s1.status === 200 && s1.data.groups === 2 && s1.data.learners === 3 && d1.name === "Sprint intranet" && d1.groups[0].learners.join() === "503,502" && !s1.data.again, "sent: a new group distribution, each squad a group with its learners");
+  const g1 = d1.groups.map((x) => x.id);
+  run1("UPDATE squad_sets SET squads = ? WHERE id = ?", JSON.stringify([{ id: "aa1111", name: "Squad A+", members: [U.alice.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id, U.bob.id], sm: U.carol.id }]), sid);
+  const s2 = await api("POST", `/api/squads/${sid}/intranet`, { g: G });
+  const d2 = intranetFake.dists.find((x) => x.id === s2.data.distribution_id)!;
+  check(s2.data.again && s2.data.distribution_id === s1.data.distribution_id && d2.groups.map((x) => x.id).join() === g1.join() && d2.groups[0].name === "Squad A+" && d2.groups[1].learners.join() === "501,502", "sent again: the same distribution and the same groups, updated (activities stay linked)");
+  check((await api("GET", `/api/squads/${sid}/intranet?g=${G}`)).data.sent?.distribution_id === s1.data.distribution_id, "…the preview says it was sent");
+  // the veilles and live codings → activities of the classroom, with their presenters (two: a binôme)
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-07', 'veille', 'Flexbox vs Grid', ?, ?, ?)", G, "# Veille\n**Objectif** : comparer", clock.now(), clock.now());
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-08', 'live', 'Panier en JS', '# Live', ?, ?)", G, clock.now(), clock.now());
+  const va = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-07' AND kind = 'veille'", G).id, la = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-08' AND kind = 'live'", G).id;
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'veille', ?, 'teacher', 'approved', ?)", G, va, JSON.stringify([U.alice.id, U.bob.id]), clock.now());
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'live', ?, 'teacher', 'approved', ?)", G, la, JSON.stringify(["990999"]), clock.now());
+  const ap = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  const it = (id: number) => ap.data.items.find((x: any) => x.id === id);
+  check(ap.status === 200 && it(va).members.length === 2 && it(va).at === "09:15" && it(la).at === "11:00" && it(la).missing.length === 1, "activities preview: the week's veilles and live codings, their presenters' intranet learners, who isn't linked");
+  const as1 = await api("POST", "/api/activities/intranet", { g: G, ids: [va, la] });
+  const fa = intranetFake.acts.find((x) => x.subject === "Flexbox vs Grid")!;
+  check(as1.status === 200 && as1.data.sent === 1 && as1.data.failed === 1 && /not linked/.test(as1.data.results[la].message) && fa.type === "veille" && fa.datetime === "2030-01-07 09:15" && fa.duration === 30 && fa.learners.join() === "503,502" && fa.md.startsWith("# Veille"),
+    "sent: the veille at 09:15 for 30 min with its binôme and its markdown; a live coding with someone not linked is not sent (the others still are)");
+  // never twice: what the intranet already has at that time in the class (whoever made it) is shown and not sent again
+  const as2 = await api("POST", "/api/activities/intranet", { g: G, ids: [va] });
+  check(as2.data.sent === 0 && as2.data.skipped === 1 && intranetFake.acts.filter((x) => x.subject === "Flexbox vs Grid").length === 1 && /already on the intranet: « Flexbox vs Grid », created by Prof YouCode on 16\/10\/2026/.test(as2.data.results[va].message),
+    "sent again: not sent twice, and it says it's already there, created by whom and when");
+  const ap2 = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  check(ap2.data.items.find((x: any) => x.id === va).existing?.mine === true, "…the preview shows it as already on the intranet (sent by ClassBot)");
+  intranetFake.acts.push({ id: 7001, classroom: 12, type: "live", subject: "Panier (fait à la main)", datetime: "2030-01-08 11:00", duration: 60, md: "", learners: [], by: "Achraf Chaoub", by_id: 2002, created: "15/10/2026" });
+  run1("UPDATE activity_claims SET members = ? WHERE activity_id = ?", JSON.stringify([U.carol.id]), la);
+  const ap3 = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
+  const ex = ap3.data.items.find((x: any) => x.id === la).existing;
+  check(ex && ex.by === "Achraf Chaoub" && !ex.mine && ex.subject === "Panier (fait à la main)", "…one made by hand by someone else at that time: shown with who made it");
+  const as3 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
+  check(as3.data.sent === 0 && as3.data.skipped === 1 && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1, "…and not sent: no second live coding at 11:00");
+  check((await api("GET", `/api/intranet/classrooms?g=${G}`)).status === 200, "reading what's on the intranet goes through the same signed, trainer-only access");
+  // from the shared library: the intranet gets the library's key (a second class's copy is a reused one) and the author
+  run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `lib:${G}`, JSON.stringify({ link: "https://hub.example/library/abcdef123456." + "x".repeat(32), name: "A1" }), clock.now());
+  run1("INSERT INTO activities (guild_id, day, kind, title, md, created_at, updated_at) VALUES (?, '2030-01-09', 'veille', 'Promesses', '# V', ?, ?)", G, clock.now(), clock.now());
+  const vb = q1("SELECT id FROM activities WHERE guild_id = ? AND day = '2030-01-09'", G).id;
+  run1("INSERT INTO library_cache (guild_id, kind, key, title, data, version, by, author, updated_at, deleted) VALUES (?, 'activity', '2030-01-09:veille', 'Promesses', NULL, 1, 'DevStorm', 'Achraf Chaoub', ?, 0)", G, clock.now());
+  const pvb = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-09&to=2030-01-09`);
+  check(pvb.data.items.find((x: any) => x.id === vb)?.author === "Achraf Chaoub", "a library activity made by another teacher: the preview says who made it");
+  await api("POST", "/api/activities/intranet", { g: G, ids: [vb] });
+  const sentItem = (intranetFake as any).lastItems?.[0];
+  check(sentItem?.library_key === "abcdef123456:2030-01-09:veille" && sentItem.credit === "Achraf Chaoub", `…the intranet gets the library key and the author to credit (${JSON.stringify({ k: sentItem?.library_key, c: sentItem?.credit })})`);
+  run1("DELETE FROM activities WHERE id = ?", vb);
+  run1("DELETE FROM library_cache WHERE guild_id = ? AND key = '2030-01-09:veille'", G);
+  run1("DELETE FROM app_settings WHERE k = ?", `lib:${G}`);
+  run1("DELETE FROM intranet_sync WHERE kind = 'activity' AND local_id = ?", vb);
+  // these activities were only for the intranet: the next sections use their own
+  run1(`DELETE FROM activity_claims WHERE activity_id IN (${va}, ${la})`);
+  run1(`DELETE FROM activities WHERE id IN (${va}, ${la})`);
+  run1(`DELETE FROM intranet_sync WHERE kind = 'activity' AND local_id IN (${va}, ${la})`);
+  check(intranetFake.nonces.size >= 8, `every request but the login was signed, each with its own nonce (${intranetFake.nonces.size})`);
+  await api("PUT", "/api/intranet/classroom", { g: G, id: 0 });
+  check(!q("SELECT 1 FROM intranet_links WHERE guild_id = ?", G).length, "…no classroom any more: the links go");
+  // disconnect: the intranet forgets the token, ClassBot too
+  await api("POST", "/api/intranet/logout", { g: G });
+  check(!intranetFake.tokens.size && !(JSON.parse(q1("SELECT intranet FROM guilds WHERE id = ?", G).intranet || "{}").auth) && (await api("GET", `/api/intranet?g=${G}`)).data.trainer === null, "Disconnect: the token is revoked on the intranet and forgotten here");
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);
@@ -4615,6 +4738,15 @@ section("📚 shared library: the A1 classes share activities, assessments, quiz
   // leave: the class keeps its copy
   const lv = await api("DELETE", `/api/library?g=${G2}`);
   check(!lv.data.connected && q1("SELECT COUNT(*) AS n FROM activities WHERE guild_id = ?", G2).n >= 1 && !q1("SELECT 1 AS x FROM library_cache WHERE guild_id = ?", G2), "leaving keeps the class's copy");
+  {
+    // the author is whoever made the item first: another class editing it later doesn't change it
+    const tm = db.prepare("SELECT id, secret FROM library_teams LIMIT 1").get() as any;
+    await hubWrite(env, tm.id, tm.secret, [{ kind: "activity", key: "2031-01-06:veille", title: "Auteur", data: { md: "a" } }], "Classe A", "Houssni OUCHAD");
+    await hubWrite(env, tm.id, tm.secret, [{ kind: "activity", key: "2031-01-06:veille", title: "Auteur v2", data: { md: "b" } }], "Classe B", "Achraf Chaoub");
+    const row = db.prepare("SELECT author, by, version FROM library_items WHERE key = '2031-01-06:veille'").get() as any;
+    check(row.author === "Houssni OUCHAD" && row.by === "Classe B" && row.version === 2, `the library keeps the first author (${JSON.stringify(row)})`);
+    db.prepare("DELETE FROM library_items WHERE key = '2031-01-06:veille'").run();
+  }
   const items = JSON.stringify(db.prepare("SELECT data FROM library_items").all());
   check(!items.includes(U.alice.name) && !items.includes(U.bob.name), "no student name in the library");
   await api("DELETE", `/api/library?g=${G}`); await api("DELETE", `/api/library?g=${G3}`);

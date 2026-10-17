@@ -72,6 +72,14 @@ export const runner = { down: false, wandboxDown: false, calls: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
+// a fake YouCode intranet: checks each request's signature like VerifyClassbotSignature.php, then answers
+export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
+  classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
+  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
+  dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
+  acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
+  // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
+  trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
 export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
@@ -240,6 +248,74 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (gtrans.down) return new Response("busy", { status: 429 });
     const q = url.searchParams.get("q") ?? "", tl = url.searchParams.get("tl");
     return Response.json([[[`[${tl}] ${q}`, q, null, null, 1]], null, "fr"]);
+  }
+  if (url.hostname === "intranet.test") {
+    intranetFake.calls++;
+    const h = (k: string) => (init.headers as any)?.[k] ?? "";
+    const body = typeof init.body === "string" ? init.body : "";
+    const { createHash, createHmac } = await import("node:crypto");
+    const deny = (code: string, status = 401) => Response.json({ success: false, code }, { status });
+    const T = intranetFake.trainer;
+    // logging in: the email and password only; it gives a ClassBot token and its signing secret
+    if (url.pathname === "/api/classbot/login") {
+      const b = JSON.parse(body || "{}");
+      if (b.email !== T.email || b.password !== T.password) return Response.json({ success: false, code: "bad_login", message: "Email ou mot de passe incorrect." }, { status: 401 });
+      intranetFake.tokens.clear();
+      const tok = `1|tok${intranetFake.nextId++}`;
+      intranetFake.tokens.add(tok);
+      return Response.json({ success: true, token: tok, signing_secret: createHash("sha256").update("sign|" + tok).digest("hex"), trainer: { id: T.id, name: T.name, classrooms: intranetFake.allowed.length } });
+    }
+    // everything else: a ClassBot token, and the request signed with its secret
+    const auth = String(h("Authorization") || "").replace(/^Bearer /, "");
+    if (!intranetFake.tokens.has(auth)) return deny("no_trainer");
+    const ts = h("X-Classbot-Timestamp"), nonce = h("X-Classbot-Nonce");
+    const toSign = ["v1", ts, nonce, String(init.method || "GET").toUpperCase(), url.pathname + url.search, createHash("sha256").update(body).digest("hex")].join("\n");
+    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return deny("expired");
+    if (createHmac("sha256", createHash("sha256").update("sign|" + auth).digest("hex")).update(toSign).digest("hex") !== h("X-Classbot-Signature")) return deny("bad_signature");
+    if (intranetFake.nonces.has(nonce)) return deny("replay");
+    intranetFake.nonces.add(nonce);
+    const who = { id: T.id, name: T.name, classrooms: intranetFake.allowed.length };
+    if (url.pathname === "/api/classbot/ping") return Response.json({ success: true, server_time: Math.floor(Date.now() / 1000), trainer: who, classrooms: intranetFake.allowed });
+    if (url.pathname === "/api/classbot/logout") { intranetFake.tokens.delete(auth); return Response.json({ success: true }); }
+    if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
+    const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
+    if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);
+    const sm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/squads$/);
+    if (sm && init.method === "POST") {
+      const cid = Number(sm[1]), b = JSON.parse(body || "{}");
+      if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
+      const active = (intranetFake.learners[cid] || []).map((l) => l.id), all = b.groups.flatMap((g: any) => g.learner_ids);
+      if (all.some((x: number) => !active.includes(x))) return Response.json({ success: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }, { status: 422 });
+      let d = intranetFake.dists.find((x) => x.id === b.distribution_id && x.classroom === cid);
+      if (!d) { d = { id: intranetFake.nextId++, classroom: cid, name: b.name, groups: [] }; intranetFake.dists.push(d); }
+      d.name = b.name;
+      const map: Record<string, number> = {};
+      d.groups = b.groups.map((g: any) => { const old = d!.groups.find((x) => x.id === g.group_id); const id = old ? old.id : intranetFake.nextId++; map[g.key] = id; return { id, name: g.name, learners: g.learner_ids }; });
+      return Response.json({ success: true, distribution_id: d.id, groups: map, kept: 0, learners: all.length });
+    }
+    const am = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/activities$/);
+    const info = (a: any) => ({ activity_id: a.id, subject: a.subject, datetime: a.datetime, duration: a.duration, by: a.by || T.name, by_id: a.by_id || T.id, created: a.created || "16/10/2026" });
+    if (am && (init.method || "GET") === "GET") {
+      const cid = Number(am[1]), from = url.searchParams.get("from") || "", to = url.searchParams.get("to") || "";
+      if (!intranetFake.allowed.includes(cid)) return deny("classroom_not_allowed", 403);
+      return Response.json({ success: true, activities: intranetFake.acts.filter((a) => a.classroom === cid && a.datetime.slice(0, 10) >= from && a.datetime.slice(0, 10) <= to).map((a) => ({ type: a.type, ...info(a) })) });
+    }
+    if (am && init.method === "POST") {
+      (intranetFake as any).lastItems = JSON.parse(body || "{}").items;
+      const cid = Number(am[1]), b = JSON.parse(body || "{}"), active = (intranetFake.learners[cid] || []).map((l) => l.id), results: Record<string, any> = {};
+      for (const it of b.items) {
+        if (it.learner_ids.some((x: number) => !active.includes(x))) { results[it.ref] = { ok: false, code: "unknown_learners", message: "Apprenants absents de cette classe." }; continue; }
+        let a = intranetFake.acts.find((x) => x.id === it.activity_id && x.classroom === cid);
+        // like the intranet: never a second one of the same type at the same time in the class
+        const dup = !a && intranetFake.acts.find((x) => x.classroom === cid && x.type === it.type && x.datetime === it.datetime);
+        if (dup) { results[it.ref] = { ok: false, code: "exists", existing: info(dup), message: "Déjà sur l'intranet" }; continue; }
+        if (!a) { a = { id: intranetFake.nextId++, classroom: cid, type: "", subject: "", datetime: "", duration: 0, md: "", learners: [] }; intranetFake.acts.push(a); }
+        Object.assign(a, { type: it.type, subject: it.subject, datetime: it.datetime, duration: it.duration, md: it.description_md, learners: it.learner_ids });
+        results[it.ref] = { ok: true, activity_id: a.id };
+      }
+      return Response.json({ success: true, results });
+    }
+    return deny("not_found", 404);
   }
   if (url.hostname === "other.classbot.test") {
     leagueFake.calls++;

@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -460,6 +461,39 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
 
     // -------------------------------------------------------------- teams
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
+    // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
+    if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
+    if (path.startsWith("/intranet/")) {
+      const g = await guild();
+      try {
+        if (path === "/intranet/ping" && method === "POST") return ok(await intranetPing(env, g.id));
+        // the trainer connects this class's ClassBot with their intranet account (the password is never kept)
+        if (path === "/intranet/login" && method === "POST") return ok({ trainer: await intranetLogin(env, g.id, String(body.url || ""), String(body.email || ""), String(body.password || "")) });
+        if (path === "/intranet/logout" && method === "POST") { await intranetLogout(env, g.id); return ok({ trainer: null }); }
+        // the class's intranet classroom (among those the intranet allows this key)
+        if (path === "/intranet/classrooms" && method === "GET") return ok({ current: intranetClassOf(g as any), classrooms: await intranetClassrooms(env, g.id) });
+        if (path === "/intranet/classroom" && method === "PUT") {
+          const id = Math.floor(Number(body.id)) || 0;
+          const c = id ? (await intranetClassrooms(env, g.id)).find((x) => x.id === id) : null;
+          if (id && !c) throw new HttpError(400, "This classroom isn't one of yours on the intranet.");
+          await setIntranetClass(env, g.id, c ? { id: c.id, name: c.name } : null);
+          return ok({ current: c ? { id: c.id, name: c.name } : null });
+        }
+        // which intranet learner each student is: matched by name, the teacher fixes the rare ones
+        if (path === "/intranet/match" && method === "GET") return ok(await intranetMatchView(env, g.id));
+        if (path === "/intranet/match/auto" && method === "POST") { const n = await intranetAutoLink(env, g.id); return ok({ linked: n, ...(await intranetMatchView(env, g.id)) }); }
+        if (path === "/intranet/link" && method === "PUT") {
+          const sid = String(body.discord_id || "");
+          if (!(await one(env, "SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", g.id, sid))) throw new HttpError(404, "This student isn't in the class.");
+          const v = await intranetMatchView(env, g.id);
+          const lid = Math.floor(Number(body.learner_id)) || 0;
+          const l = lid ? v.learners.find((x) => x.id === lid) : null;
+          if (lid && !l) throw new HttpError(400, "This learner isn't in the intranet classroom.");
+          await setIntranetLink(env, g.id, sid, l ? l.id : null, l ? l.name : null);
+          return ok(await intranetMatchView(env, g.id));
+        }
+      } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+    }
     if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
       const g = await guild();
       const view = async () => ({ ...(await classAiView(env, g.id)), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
@@ -503,6 +537,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         const sm = path.match(/^\/squads\/(\d+)$/);
         if (sm && method === "PUT") { await updateSquadSet(env, g, Number(sm[1]), body); return ok(await sview()); }
         if (sm && method === "DELETE") { await deleteSquadSet(env, g, Number(sm[1])); return ok(await sview()); }
+        // the squads → the intranet's groups (preview first; all or nothing)
+        const im = path.match(/^\/squads\/(\d+)\/intranet$/);
+        if (im) {
+          try {
+            if (method === "GET") return ok(await squadsPreview(env, g.id, Number(im[1])));
+            if (method === "POST") return ok(await sendSquads(env, g.id, Number(im[1])));
+          } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+        }
         const nm = path.match(/^\/squads\/(\d+)\/notify$/);
         if (nm && method === "POST") return ok({ ...(await notifySquads(env, g, Number(nm[1]), body.note, Number.isInteger(body.only) ? body.only : null)), ...(body.last === false ? {} : await sview()) });
       } catch (e) { if (e instanceof SquadError) throw new HttpError(400, e.message); throw e; }

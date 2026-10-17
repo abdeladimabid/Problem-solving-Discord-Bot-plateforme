@@ -1594,6 +1594,88 @@ async function aiSettings(root, flash = null) {
   });
 }
 
+// Settings → Intranet YouCode: what is set (never the secret) and "Test the connection"
+async function intranetSettings(root) {
+  const s = await api("/intranet");
+  if (!s.trainer) {
+    // connect once: the intranet's address, the trainer's intranet email and password (never kept)
+    root.innerHTML = `<div class="panel set-card" id="in-acc"><h3>Connect your intranet account</h3>
+        <p class="small muted" style="margin-top:0">Once, with your intranet email and password: ClassBot then sends squads and activities to <b>your</b> classes, as you. Nothing to set on the intranet. The password goes to the intranet only and is never kept.</p>
+        <label for="in-url">Intranet address</label><input type="url" id="in-url" value="${esc(s.url || "")}" placeholder="https://intranet.youcode.ma" style="width:100%">
+        <div class="field-row"><div><label for="in-email">Intranet email</label><input type="email" id="in-email" autocomplete="username"></div>
+          <div><label for="in-pass">Password</label><input type="password" id="in-pass" autocomplete="current-password"></div></div>
+        <div class="set-foot" style="justify-content:flex-start"><button class="btn primary" id="in-login">🔐 Connect</button><span id="in-login-out" class="small"></span></div></div>`;
+    $("#in-login", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const out = $("#in-login-out", root);
+      out.textContent = "";
+      try {
+        const r = await api("/intranet/login", { method: "POST", body: { url: $("#in-url", root).value, email: $("#in-email", root).value, password: $("#in-pass", root).value } });
+        $("#in-pass", root).value = "";
+        toast(`Connected as ${r.trainer.name}`);
+        intranetSettings(root);
+      } catch (err) { $("#in-pass", root).value = ""; out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
+    });
+    return;
+  }
+  root.innerHTML = `<div class="panel set-card" id="in-acc"><h3>Your intranet account</h3>
+      <p style="margin:0 0 6px">✅ Connected as <b>${esc(s.trainer.name)}</b> · ${s.trainer.classrooms} class(es) · <code>${esc(s.host)}</code> · since ${esc(fmtAgo(s.trainer.at))}</p>
+      <p class="small muted">Squads and activities go to your classes only, as you. Every request is signed; the password isn't kept, only a ClassBot token, encrypted.</p>
+      <div class="set-foot" style="justify-content:flex-start"><button class="btn" id="in-ping">🔌 Test the connection</button><button class="btn" id="in-out-acc">Disconnect</button><span id="in-out" class="small"></span></div></div>
+    <div class="panel set-card" id="in-class"><h3>Intranet classroom</h3><p class="muted small">Loading…</p></div><div id="in-match"></div>`;
+  $("#in-ping", root).onclick = (e) => busy(e.currentTarget, async () => {
+    const out = $("#in-out", root);
+    out.textContent = "";
+    try {
+      const r = await api("/intranet/ping", { method: "POST", body: {} });
+      const skew = r.skew == null ? "" : Math.abs(r.skew) > 60 ? ` · ⚠️ the clocks differ by ${Math.abs(r.skew)} s` : " · clocks in sync";
+      out.innerHTML = `<span style="color:var(--up)">✅ Signature accepted${esc(skew)} · ${r.classrooms.length} class(es)</span>`;
+    } catch (err) { out.innerHTML = `<span style="color:var(--down)">❌ ${esc(err.message)}</span>`; }
+  });
+  $("#in-out-acc", root).onclick = () => confirmDialog("Disconnect your intranet account?", "ClassBot can't send anything to the intranet until you connect again. What was already sent stays.", "Disconnect",
+    async () => { await api("/intranet/logout", { method: "POST", body: {} }); toast("Disconnected"); intranetSettings(root); }, true);
+  intranetClassCard(root);
+}
+async function intranetClassCard(root) {
+  const box = $("#in-class", root);
+  let r;
+  try { r = await api("/intranet/classrooms"); } catch (e) { box.innerHTML = `<h3>Intranet classroom</h3><p class="gh-warn">❌ ${esc(e.message)}</p>`; return; }
+  box.innerHTML = `<h3>Intranet classroom</h3>
+    <p class="small muted" style="margin-top:0">The intranet classroom of this Discord class: one of your classes on the intranet.</p>
+    <div class="toolbar" style="margin:0"><select id="in-cls"><option value="">— Not linked —</option>${r.classrooms.map((c) => `<option value="${c.id}" ${r.current?.id === c.id ? "selected" : ""}>${esc(c.name)} · ${c.learners} learners</option>`).join("")}</select>
+      <button class="btn" id="in-cls-save">Save</button></div>`;
+  const save = async (id) => {
+    r.current = (await api("/intranet/classroom", { method: "PUT", body: { id } })).current;
+    toast(r.current ? `Linked to ${r.current.name}` : "Not linked any more");
+    if (r.current) intranetMatchCard(root); else $("#in-match", root).innerHTML = "";
+  };
+  $("#in-cls-save", box).onclick = (e) => {
+    const id = Number($("#in-cls", box).value) || 0;
+    if (r.current && r.current.id !== id) confirmDialog("Change the intranet classroom?", "The students' links to the intranet are removed: you match them again with the new classroom.", "Change", () => save(id), true);
+    else busy(e.currentTarget, () => save(id));
+  };
+  if (r.current) intranetMatchCard(root);
+  else $("#in-match", root).innerHTML = "";
+}
+const IN_KIND = { exact: ["ok", "Same name"], close: ["warn", "Close name: check"], you: ["ok", "Chosen by you"], several: ["warn", "Several possible: choose"], none: ["bad", "Not found: choose"] };
+async function intranetMatchCard(root, data = null) {
+  const box = $("#in-match", root);
+  if (!data) { box.innerHTML = `<div class="panel set-card"><p class="muted">Loading the intranet's learners…</p></div>`; try { data = await api("/intranet/match"); } catch (e) { box.innerHTML = `<div class="panel set-card"><p class="gh-warn">❌ ${esc(e.message)}</p></div>`; return; } }
+  const linked = data.rows.filter((x) => x.linked).length, todo = data.rows.filter((x) => !x.linked && (x.kind === "exact" || x.kind === "close")).length;
+  const opts = (r) => `<option value="">— Not linked —</option>` + data.learners.map((l) => `<option value="${l.id}" ${(r.linked ? r.linked.id === l.id : false) ? "selected" : ""}>${esc(l.name)}${!r.linked && r.candidates.includes(l.id) ? " ★" : ""}</option>`).join("");
+  const badge = (r) => { const k = r.linked ? (r.linked.by === "you" ? "you" : r.linked.by) : r.kind; const [cls, txt] = IN_KIND[k] || IN_KIND.none; return `<span class="lvl ${r.linked ? cls : k === "exact" || k === "close" ? "warn" : cls}">${r.linked ? (k === "close" ? "✓ Linked · close name" : "✓ Linked") : k === "exact" || k === "close" ? "Found: not saved yet" : txt}</span>`; };
+  box.innerHTML = `<div class="panel set-card"><div class="panel-head"><h3 style="margin:0">Students ↔ intranet learners</h3><span class="small muted">${linked}/${data.rows.length} linked · ${data.classroom.name}</span></div>
+    <p class="small muted">Matched by name in this classroom only: accents, capitals and the order (first name / last name) don't matter. Check the <b>close names</b>; choose the others yourself (★ = possible). Saved once, in ClassBot only.</p>
+    <p class="toolbar" style="margin:0 0 10px"><button class="btn primary" id="in-auto" ${todo ? "" : "disabled"}>🔗 Link automatically${todo ? ` (${todo})` : ""}</button>${data.free.length ? `<span class="small muted">${data.free.length} intranet learner(s) not linked</span>` : ""}</p>
+    <div class="table-wrap"><table class="grid-table"><thead><tr><th>Student (ClassBot)</th><th>Intranet learner</th><th></th></tr></thead><tbody>
+      ${data.rows.map((r) => `<tr><td>${esc(r.name)}</td><td><select data-inl="${esc(r.discord_id)}" style="min-width:200px">${opts(r)}</select></td><td>${badge(r)}</td></tr>`).join("")}</tbody></table></div></div>`;
+  const auto = $("#in-auto", box);
+  if (auto) auto.onclick = (e) => busy(e.currentTarget, async () => { const r = await api("/intranet/match/auto", { method: "POST", body: {} }); toast(`${r.linked} student(s) linked`); intranetMatchCard(root, r); });
+  $$("[data-inl]", box).forEach((sel) => sel.onchange = async () => {
+    try { const r = await api("/intranet/link", { method: "PUT", body: { discord_id: sel.dataset.inl, learner_id: Number(sel.value) || 0 } }); toast("Saved"); intranetMatchCard(root, r); }
+    catch (err) { toast(err.message, true); }
+  });
+}
+
 async function viewSettings(arg) {
   const [g] = await Promise.all([api("/settings"), loadDiscord()]);
   S.guild = g;
@@ -1608,6 +1690,7 @@ async function viewSettings(arg) {
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
+    ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1755,6 +1838,11 @@ async function viewSettings(arg) {
       <div id="set-library"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="intranet" hidden>
+      ${head("Intranet YouCode", "Send your squads and activities to your classes on the YouCode intranet. Server to server: every request is signed (HMAC-SHA256), dated (refused after 5 minutes) and used once.")}
+      <div id="set-intranet"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="diag" hidden>
       ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
       <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
@@ -1771,6 +1859,7 @@ async function viewSettings(arg) {
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
       if (k === "ai") aiSettings($("#set-ai"));
       if (k === "library") librarySettings($("#set-library"));
+      if (k === "intranet") intranetSettings($("#set-intranet"));
     }
   };
   $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });
