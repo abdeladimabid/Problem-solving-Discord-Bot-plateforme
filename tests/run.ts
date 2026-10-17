@@ -4196,8 +4196,13 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const ap3 = await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`);
   const ex = ap3.data.items.find((x: any) => x.id === la).existing;
   check(ex && ex.by === "Achraf Chaoub" && !ex.mine && ex.subject === "Panier (fait à la main)", "…one made by hand by someone else at that time: shown with who made it");
+  check(ex && ex.learner_ids.length === 0 && ap3.data.items.find((x: any) => x.id === la).assign.map((m: any) => m.id).join() === "501", "…its presenters from ClassBot not assigned there yet: to add");
   const as3 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
-  check(as3.data.sent === 0 && as3.data.skipped === 1 && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1, "…and not sent: no second live coding at 11:00");
+  const hand = intranetFake.acts.find((x) => x.id === 7001)!;
+  check(as3.data.sent === 0 && as3.data.assigned === 1 && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1 && hand.learners.join() === "501" && hand.subject === "Panier (fait à la main)" && hand.duration === 60,
+    "…not sent again (no second live coding at 11:00): only its presenters are added, nothing else changes");
+  const as4 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
+  check(as4.data.assigned === 0 && as4.data.skipped === 1 && hand.learners.join() === "501", "…sent again: nothing more to add, skipped");
   check((await api("GET", `/api/intranet/classrooms?g=${G}`)).status === 200, "reading what's on the intranet goes through the same signed, trainer-only access");
   // from the shared library: the intranet gets the library's key (a second class's copy is a reused one) and the author
   run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `lib:${G}`, JSON.stringify({ link: "https://hub.example/library/abcdef123456." + "x".repeat(32), name: "A1" }), clock.now());
