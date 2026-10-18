@@ -11,6 +11,7 @@ import type { Program } from "./program.ts";
 import { compLabel, compName, parseComp } from "./program.ts";
 import { reviewStates, verifHint, checkLabel } from "./review/engine.ts";
 import { getReview } from "./review/debrief.ts";
+import { memberLevel, memberLevelOf } from "./review/members.ts";
 
 /** Which skills each automatic check of a debrief proves (or shows missing). */
 export const CHECK_SKILLS: Record<string, string[]> = {
@@ -95,6 +96,12 @@ export async function finalizeReview(env: Env, g: GuildRow, brief: { id: number;
     if (pts !== prev.pts) await addPoints(env, g, { discordId: uid, amount: pts - prev.pts, reason: "brief", ref: brief.id, note: brief.title.slice(0, 80) });
     if (coins !== prev.coins) await run(env, "UPDATE players SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND discord_id = ?", coins - prev.coins, g.id, uid);
     rec.awarded[uid] = { pts, coins };
+  }
+  // a squad: each member keeps their own level (the teacher's, else the one proposed from their data)
+  for (const m of rec.squad ? rec.contrib || [] : []) {
+    const ms = (rec.members = rec.members || {})[m.gid] || {};
+    const prop = memberLevel(rec, m, ms);
+    rec.members[m.gid] = { ...ms, level: { ...(ms.level || {}), prop, lvl: (ms.level && ms.level.lvl) || prop, by: (ms.level && ms.level.lvl) ? ms.level.by || "you" : "calc" } };
   }
   rec.finalAt = Date.now();
   await run(env, "UPDATE brief_reviews SET record = ?, status = 'final', final_at = ?, updated_at = ? WHERE id = ?", JSON.stringify(rec), t0, t0, r.id);
@@ -230,9 +237,11 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
     const push = await one<{ first: number | null }>(env, "SELECT MIN(t) AS first FROM gh_activity WHERE guild_id = ? AND discord_id = ? AND t >= ? AND commits > 0", g.id, uid, b.start_at ?? b.created_at);
     const rv = await one<{ status: string; final_at: number | null; sent_at: number | null; record: string; level: string | null; plevel: string | null }>(env, "SELECT status, final_at, sent_at, record, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", b.id, who);
     let summary: any = null;
+    let own = { lvl: rv?.level || "", prop: rv?.plevel || "" };   // in a squad: the member's own level
     if (rv) {
       try {
         const rec = JSON.parse(rv.record);
+        if (sq) own = memberLevelOf(rec, uid, { lvl: rv.level, prop: rv.plevel });
         const st = reviewStates(rec);
         const co = rec.members?.[uid]?.co ?? st.co;
         const ex = rec.result?.exigences || [];
@@ -250,7 +259,7 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
       } catch { summary = null; }
     }
     out.push({ id: b.id, title: b.title, status: b.status, start: b.start_at, due: b.due_at, kind: b.kind, squad: sq ? { id: sq.id, name: sq.name, sm: sq.sm === uid } : null, who,
-      handin, pushed: push?.first ? (b.due_at && push.first > b.due_at ? "late" : "on") : null, review: rv ? { status: rv.status, final_at: rv.final_at, sent_at: rv.sent_at, level: rv.level || rv.plevel || null, levelProposed: !rv.level && !!rv.plevel, ...summary } : null });
+      handin, pushed: push?.first ? (b.due_at && push.first > b.due_at ? "late" : "on") : null, review: rv ? { status: rv.status, final_at: rv.final_at, sent_at: rv.sent_at, level: own.lvl || own.prop || null, levelProposed: !own.lvl && !!own.prop, ...summary } : null });
   }
   return out;
 }
