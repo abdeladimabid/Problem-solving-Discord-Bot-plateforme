@@ -579,7 +579,7 @@ section("dashboard API: overview, students, detail, CSV");
   const bonus = await api("POST", `/api/students/${U.bob.id}/points`, { g: G, amount: 15, reason: "Great teamwork", notify: true });
   check(bonus.status === 200 && q1("SELECT COUNT(*) AS n FROM ledger WHERE reason = 'bonus'").n === 1, "bonus points given");
   const csv = await api("GET", `/api/export.csv?g=${G}`);
-  check(typeof csv.data === "string" && csv.data.includes("season_pts") && csv.data.split("\n").length >= 4, "CSV export");
+  check(typeof csv.data === "string" && csv.data.includes("Briefs validated") && csv.data.split("\n").length >= 4, "CSV export: one row per student");
   const claimId = q1("SELECT id FROM attempts WHERE status = 'claimed'").id;
   const rv = await api("POST", `/api/attempts/${claimId}/review`, { g: G, approve: true });
   check(rv.status === 200 && q1("SELECT verified FROM attempts WHERE id = ?", claimId).verified === 1, "teacher approves a self-reported solve");
@@ -2994,6 +2994,10 @@ section("activités: the page's API generates a week item by item, checks, retri
   const lv = await api("PUT", "/api/activities/live", { g: G, monday: from, live: ["2026-10-20"] });
   const after = (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data;
   check(lv.data.removed.join() === "2026-10-22" && after.items.filter((x: any) => x.kind === "live").length === 1 && after.weeks[0].live.join() === "2026-10-20", "live coding only on Tuesday: Thursday's is removed");
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'live', '[]', 'teacher', 'done', ?)", G, lc.data.item.id, clock.now());
+  const kept = await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`);
+  check(kept.status === 400 && /already presented/.test(kept.data.error) && q1("SELECT COUNT(*) AS n FROM activities WHERE id = ?", lc.data.item.id).n === 1, "an activity already presented (graded) can't be deleted");
+  run1("DELETE FROM activity_claims WHERE activity_id = ? AND status = 'done'", lc.data.item.id);
   check((await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`)).status === 200 && !(await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.some((x: any) => x.kind === "live"), "an item is deleted");
   check((await api("GET", `/api/activities?g=g-unknown&from=${from}&to=${to}`)).status === 404, "another class's range: unknown class");
 }
@@ -3615,7 +3619,16 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   const row = (id: string) => V.data.rows.find((r: any) => r.discord_id === id);
   check(V.status === 200 && V.data.briefs.some((b: any) => b.id === bid), "the brief belongs to the sprint of its week");
   check(row(U.alice.id).cells[code].r === "ok" && row(U.bob.id).cells[code].r === "low" && row(U.carol.id).cells[code].r === "ko", "✓ at the level asked, lower level, ✗");
-  check(row(U.alice.id).pct === 50 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", "grid % of the finalized debrief, briefs evaluated, proposal");
+  // the other brief of the sprint (Hammam) is 100 % for Alice once its performance criteria aren't counted: (100 + 50) / 2
+  check(row(U.alice.id).pct === 75 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", `grid % of the finalized debrief, briefs evaluated, proposal (${row(U.alice.id).pct} ${JSON.stringify(V.data.briefs.map((b: any) => b.title))})`);
+  // by default (before ✨ Propose levels): the level of the student's last finalized debrief of the sprint; a draft doesn't count
+  run1("UPDATE briefs SET due_at = ? WHERE id = ?", clock.now() + 400 * 86400, bid);
+  run1("UPDATE brief_reviews SET level = 'bon' WHERE brief_id = ? AND who = ?", bid, `u:${U.alice.id}`);
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'draft', 'excellent', ?)", bid, G, `u:${U.bob.id}`, JSON.stringify(rec), clock.now());
+  V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  check(row(U.alice.id).plevel === "bon" && /last finalized debrief: Brief du sprint/.test(row(U.alice.id).why) && !row(U.alice.id).level, `the sprint level is the last finalized debrief's by default (${row(U.alice.id).plevel} · ${row(U.alice.id).why})`);
+  check(!row(U.bob.id).plevel && row(U.bob.id).drafts === 1, "…a debrief not finalized doesn't count, and the page says it's to finalize");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, `u:${U.bob.id}`);
   // levels: one AI call for the class, without the names
   const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });
   check(lv.status === 200 && lv.data.by === "ai" && lv.data.rows.some((r: any) => r.plevel === "excellent" && r.why === "Tout est validé."), "levels proposed by the AI for the class");
@@ -4960,6 +4973,41 @@ section("squad debriefs: each member's own level (chips, ✨, finalize, Progress
   await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", id);
   run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
+section("Export grades: level, briefs validated (over half the technical competencies), competencies to work on, recurring problems, plan d'action");
+{
+  const sid = "770000000000000001";
+  run1("INSERT INTO players (guild_id, discord_id, name, created_at) VALUES (?, ?, 'Zineb Report', ?)", G, sid, clock.now());
+  const brief = (title: string, due: number) => { run1("INSERT INTO briefs (guild_id, title, status, data, created_at, due_at) VALUES (?, ?, 'assigned', '{}', ?, ?)", G, title, clock.now(), due); return q1("SELECT id FROM briefs WHERE guild_id = ? AND title = ?", G, title).id; };
+  const b1 = brief("Report Portfolio", 4102444800), b2 = brief("Report Todo", 4102531200);
+  const rec = (co: Record<string, boolean>, oralOk: boolean[]) => ({ result: { competences: Object.keys(co).map((code) => ({ code, avis: "validable" })), exigences: [{ texte: "Responsive sur mobile", type: "fonctionnel" }] },
+    oral: [{ q: "?", notion: "flexbox" }, { q: "?", notion: "git rebase" }], final: { co, ex: [false], oral: oralOk } });
+  // B1: 2 of 3 technical validated (over half) · B2: 1 of 2 (only half: not validated); C2 fails twice
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'final', 'moyen', ?)", b1, G, `u:${sid}`, JSON.stringify(rec({ C1N1: true, C2N1: false, C3N1: true, T1: false }, [false, true])), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'final', 'faible', ?)", b2, G, `u:${sid}`, JSON.stringify(rec({ C1N2: true, C2N2: false }, [false, false])), clock.now());
+  for (const st of ["done", "late", "missed", "failed", "open"]) run1("INSERT INTO assignments (guild_id, discord_id, challenge_id, status, created_at, due_at) VALUES (?, ?, 1, ?, ?, ?)", G, sid, st, clock.now(), clock.now() + 86400);
+  const csv = await api("GET", `/api/export.csv?g=${G}`);
+  const lines = String(csv.data).replace(/^\ufeff/, "").split("\r\n");
+  const head = lines[0].split(","), row = lines.find((l) => l.startsWith("Zineb Report")) || "";
+  const cell = (name: string) => { const cells = row.match(/("([^"]|"")*"|[^,]*)(,|$)/g)!.map((c) => c.replace(/,$/, "").replace(/^"|"$/g, "").replace(/""/g, '"')); return cells[head.indexOf(name)]; };
+  check(csv.status === 200 && head.includes("Briefs validated") && !head.includes("season_pts"), `the export has the new columns (${lines[0].slice(0, 120)})`);
+  check(cell("Level") === "faible" && cell("Briefs debriefed") === "2" && cell("Briefs validated") === "1" && cell("Briefs not validated") === "1", `…level and briefs validated or not (${[cell("Level"), cell("Briefs validated"), cell("Briefs not validated")].join(" / ")})`);
+  check(/B\d+ Report Portfolio \(2\/3\)/.test(cell("Validated (technical competencies)")) && /Report Todo \(1\/2\)/.test(cell("Not validated (technical competencies)")), "…a brief counts when more than half of its technical competencies are validated (half is not enough)");
+  check(/^C2.*×2/.test(cell("Competencies to work on")) && cell("Competencies to work on").includes("CT1"), `…the competencies failed again and again first (${cell("Competencies to work on")})`);
+  check(cell("Oral notions to review").startsWith("flexbox ×2") && /Responsive sur mobile ×2/.test(cell("Recurring problems")), `…the notions and requirements missed more than once (${cell("Oral notions to review")} · ${cell("Recurring problems")})`);
+  check(cell("Action plan") === "yes" && cell("Work given") === "5" && cell("Completed") === "2" && cell("Not completed") === "2" && cell("In progress") === "1", `…the plan d'action work done or not (${["Work given", "Completed", "Not completed", "In progress"].map(cell).join("/")})`);
+  run1("DELETE FROM assignments WHERE discord_id = ?", sid);
+  run1("DELETE FROM brief_reviews WHERE who = ?", `u:${sid}`);
+  run1("DELETE FROM briefs WHERE id IN (?, ?)", b1, b2);
+  run1("DELETE FROM players WHERE discord_id = ?", sid);
+}
+
+section("debrief: performance criteria are like bonus (done: a plus; not done: never counted against the level)");
+{
+  const rec = (critOk: boolean) => ({ result: { exigences: [{ type: "story", texte: "Page d'accueil" }, { type: "story", texte: "Formulaire" }, { type: "critere", texte: "W3C valide" }, { type: "critere", texte: "Accessibilité WCAG" }], competences: [] }, final: { ex: [true, true, critOk, critOk] } });
+  const lv = (r: any) => debriefLevel(r, reviewStates(r));
+  check(lv(rec(false)) === lv(rec(true)) && lv(rec(false)) === "excellent", `criteria not done don't lower the level (${lv(rec(false))} / ${lv(rec(true))})`);
 }
 
 section("slash command definitions are valid for Discord");

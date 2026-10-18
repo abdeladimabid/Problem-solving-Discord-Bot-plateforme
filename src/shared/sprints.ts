@@ -10,7 +10,7 @@ import { compLabel, parseComp, programOf } from "./program.ts";
 import type { Program } from "./program.ts";
 import { askReview } from "./review/debrief.ts";
 import { memberLevelOf } from "./review/members.ts";
-import { oneLine, reviewStates } from "./review/engine.ts";
+import { debriefLevel, oneLine, reviewStates } from "./review/engine.ts";
 
 export const SPRINT_LEVELS = ["excellent", "bon", "moyen", "faible", "critique"];
 const LEVEL_FR: Record<string, string> = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
@@ -42,6 +42,8 @@ interface Row {
   discord_id: string; name: string; cells: Record<string, Cell>; ok: number; evald: number; pct: number | null; st: number[];
   prop: string; plevel: string; why: string; level: string; decision: string; note: string;
   blv: string[];   // the level of each finalized debrief of the sprint (a squad member's own level)
+  dlevel: string; dfrom: string;   // the level of the last finalized debrief of the sprint (the default level), and its brief
+  drafts: number;  // debriefs of the sprint not finalized yet (their level doesn't count)
 }
 /** Everything about one class, loaded once: students, briefs, results, debriefs, steps, the teacher's sprint decisions. */
 async function load(env: Env, g: GuildRow) {
@@ -53,11 +55,12 @@ async function load(env: Env, g: GuildRow) {
   const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
     "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id);
   const reviews = await all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);
+  const drafts = await all<{ brief_id: number; who: string }>(env, "SELECT brief_id, who FROM brief_reviews WHERE guild_id = ? AND status != 'final'", g.id);
   const steps = await all<{ brief_id: number; who: string; final: string | null }>(env, "SELECT brief_id, who, final FROM brief_steps WHERE guild_id = ?", g.id);
   const dec = await all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
     "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id);
   const comments = await all<{ sprint: number; comment: string }>(env, "SELECT sprint, comment FROM sprint_comments WHERE guild_id = ? AND program = ?", g.id, p.id);
-  return { p, briefRows, sprints, students, results, reviews, steps, dec, comments };
+  return { p, briefRows, sprints, students, results, reviews, drafts, steps, dec, comments };
 }
 type Loaded = Awaited<ReturnType<typeof load>>;
 
@@ -85,14 +88,20 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     const evaluated = new Set(mine.filter((r) => r.source === "brief").map((r) => r.ref));
     // part of each finalized debrief's grid that is valid (the student's own, or their squad's)
     const pcts: number[] = [], blv: string[] = [];
-    for (const bid of sp.briefs) {
+    let dlevel = "", dfrom = "";
+    // in the briefs' order (due date): the last finalized debrief gives the default level
+    const order = [...sp.briefs].sort((a, b) => (L.briefRows.find((x) => x.id === a)?.due_at ?? 0) - (L.briefRows.find((x) => x.id === b)?.due_at ?? 0) || a - b);
+    const drafts = order.filter((bid) => L.drafts.some((r) => r.brief_id === bid && r.who === whoOf(bid, uid))).length;
+    for (const bid of order) {
       const rv = L.reviews.find((r) => r.brief_id === bid && r.who === whoOf(bid, uid));
       if (!rv) continue;
       try {
         const rec = JSON.parse(rv.record), st = reviewStates(rec);
         const own = rv.who.startsWith("s:") ? memberLevelOf(rec, uid, { lvl: rv.level, prop: rv.plevel }) : { lvl: rv.level || "", prop: rv.plevel || "" };
-        if (own.lvl || own.prop) blv.push(own.lvl || own.prop);
-        const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
+        // a finalized debrief with no level saved (older ones): the level its switches give
+        const lv = own.lvl || own.prop || (rv.who.startsWith("u:") ? debriefLevel(rec, st) || "" : "");
+        if (lv) { blv.push(lv); dlevel = lv; dfrom = L.briefRows.find((x) => x.id === bid)?.title || ""; }
+        const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus|crit|oral/i.test(String(e.type || "")));
         if (main.length) pcts.push(main.filter(([, v]: any) => v).length / main.length);
       } catch { /* old record */ }
     }
@@ -103,8 +112,9 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     const evald = sp.briefs.filter((b) => evaluated.has(b)).length;
     const prop = !evald || !vals.length ? "" : okN === vals.length ? "valide" : vals.some((c) => c.r === "ko") ? "non_valide" : "";
     const d = L.dec.find((x) => x.sprint === sp.n && x.discord_id === uid);
+    // the level proposed: "Propose levels" when it was used, else the last finalized debrief's; the teacher's level wins
     return { discord_id: uid, name: s.name || uid, cells, ok: okN, evald, pct: pcts.length ? Math.round((100 * pcts.reduce((a, b) => a + b, 0)) / pcts.length) : null, st,
-      prop, plevel: d?.plevel || "", why: d?.why || "", level: d?.level || "", decision: d?.decision || "", note: d?.note || "", blv };
+      prop, plevel: d?.plevel || dlevel, why: d?.plevel ? d?.why || "" : dlevel ? `last finalized debrief: ${dfrom}` : "", level: d?.level || "", decision: d?.decision || "", note: d?.note || "", blv, dlevel, dfrom, drafts };
   });
 }
 

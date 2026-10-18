@@ -31,7 +31,7 @@ export function memberLevel(rec: any, m: any, ms: any = {}, states?: any): strin
   if (!rec || !m) return "";
   const st = reviewStates({ ...rec, final: states ?? rec.final });
   const ex: any[] = (rec.result && rec.result.exigences) || [];
-  const main = ex.map((_, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const main = ex.map((_, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const parts: [number, number][] = [[0.3, contribution(m, rec.contrib || [])]];
   const co: Record<string, boolean> = ms && ms.co && Object.keys(ms.co).length ? ms.co : st.co;
   const codes = Object.keys(co);
