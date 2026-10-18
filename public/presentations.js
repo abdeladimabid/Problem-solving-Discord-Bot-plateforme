@@ -5,6 +5,7 @@
 /* global $, $$, api, esc, toast, busy, view, openDialog, confirmDialog, dlg, loadDiscord, loadStudents, channelOptions, avatar, fmtAgo, table, refreshPills, routes */
 let presTab = (() => { try { return localStorage.getItem("presTab") || "acts"; } catch { return "acts"; } })();
 let presFilter = "all";
+let presType = "all";   // all | veille | live | workshop
 // the week shared (or assigned at random) from the "Share in Discord" panel: remembered in this browser
 let presWeek = (() => { try { return localStorage.getItem("presWeek") || ""; } catch { return ""; } })();
 const PR_LV = { easy: "Easy", medium: "Medium", hard: "Hard" };
@@ -60,12 +61,15 @@ async function viewPresentations() {
 
 // ------------------------------------------------------------- 📚 Activities
 function prActsPane(P, free) {
-  const shown = P.items.filter((i) => presFilter === "all" ? !i.past || i.claim?.status === "approved"
+  // the type chosen (veille, live coding…) narrows everything below, counts included
+  const byType = P.items.filter((i) => presType === "all" || i.kind === presType);
+  const shown = byType.filter((i) => presFilter === "all" ? !i.past || i.claim?.status === "approved"
     : presFilter === "free" ? !i.claim && !i.past : presFilter === "taken" ? i.claim && i.claim.status === "approved" : presFilter === "done" ? i.claim?.status === "done" : true);
   const weeks = [];
   for (const it of shown) { const m = prMonday(it.day); let w = weeks.find((x) => x.m === m); if (!w) weeks.push((w = { m, items: [] })); w.items.push(it); }
   const fweeks = prFreeWeeks(free), sel = fweeks.find((w) => w.m === presWeek) || fweeks[0];
-  const counts = { all: P.items.filter((i) => !i.past || i.claim?.status === "approved").length, free: free.length, taken: P.items.filter((i) => i.claim?.status === "approved").length, done: P.items.filter((i) => i.claim?.status === "done").length };
+  const counts = { all: byType.filter((i) => !i.past || i.claim?.status === "approved").length, free: byType.filter((i) => !i.claim && !i.past).length, taken: byType.filter((i) => i.claim?.status === "approved").length, done: byType.filter((i) => i.claim?.status === "done").length };
+  const kinds = [["all", "All types"], ["veille", "Veilles"], ["live", "Live codings"], ...(P.items.some((i) => i.kind === "workshop") ? [["workshop", "Workshops"]] : [])];
   return `
     <section class="panel pr-share">
       <div class="pr-share-l"><h2>📣 Share in Discord</h2></div>
@@ -77,8 +81,11 @@ function prActsPane(P, free) {
         <div class="pr-share-btns"><button class="btn primary" id="pr-share" ${sel ? "" : "disabled"}>📣 Share the week (${sel?.items.length ?? 0})</button><button class="btn" id="pr-rand" ${sel ? "" : "disabled"}>🎲 Assign the week at random</button></div>
       </div>
     </section>
-    <div class="seg pr-filter" role="group" aria-label="Show">
-      ${[["all", "Upcoming"], ["free", "Free"], ["taken", "Taken"], ["done", "Presented"]].map(([k, l]) => `<button type="button" data-pf="${k}" aria-pressed="${presFilter === k}">${l} <span class="muted">${counts[k]}</span></button>`).join("")}
+    <div class="toolbar pr-filters" style="margin:0 0 12px;align-items:center">
+      <div class="seg pr-filter" role="group" aria-label="Show" style="margin:0">
+        ${[["all", "Upcoming"], ["free", "Free"], ["taken", "Taken"], ["done", "Presented"]].map(([k, l]) => `<button type="button" data-pf="${k}" aria-pressed="${presFilter === k}">${l} <span class="muted">${counts[k]}</span></button>`).join("")}
+      </div>
+      <select id="pr-type" aria-label="Type of activity">${kinds.map(([k, l]) => `<option value="${k}" ${presType === k ? "selected" : ""}>${l} (${k === "all" ? P.items.length : P.items.filter((i) => i.kind === k).length})</option>`).join("")}</select>
     </div>
     ${weeks.length ? weeks.map((w) => `<section class="pr-week"><h3>Week of ${prDay(w.m, { day: "numeric", month: "long" })}</h3>
       <div class="pr-grid">${w.items.map(prCard).join("")}</div></section>`).join("")
@@ -196,6 +203,8 @@ function prWire(P, free) {
   });
   $("#pr-rand").onclick = () => prRandom(weekFree().map((i) => i.id), reload);
   $$("[data-pf]").forEach((b) => b.onclick = () => { presFilter = b.dataset.pf; $("#pt-acts").innerHTML = prActsPane(P, free); prWire(P, free); });
+  const ty = $("#pr-type");
+  if (ty) ty.onchange = () => { presType = ty.value; $("#pt-acts").innerHTML = prActsPane(P, free); prWire(P, free); };
   $$(".pr-card").forEach((card) => {
     const it = P.items.find((x) => x.id === Number(card.dataset.act));
     const slot = (b) => api(`/activities/${it.id}/slot`, { method: "PUT", body: b }).then(() => toast("Saved")).catch((e) => toast(e.message, true));
