@@ -3628,6 +3628,9 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
   check(row(U.alice.id).plevel === "bon" && /last finalized debrief: Brief du sprint/.test(row(U.alice.id).why) && !row(U.alice.id).level, `the sprint level is the last finalized debrief's by default (${row(U.alice.id).plevel} · ${row(U.alice.id).why})`);
   check(!row(U.bob.id).plevel && row(U.bob.id).drafts === 1, "…a debrief not finalized doesn't count, and the page says it's to finalize");
+  const sp1 = (await api("GET", `/api/students/${U.alice.id}?g=${G}`)).data.learning.sprints.find((x: any) => x.sprint === sp.n);
+  const spB = (await api("GET", `/api/students/${U.bob.id}?g=${G}`)).data.learning.sprints.find((x: any) => x.sprint === sp.n);
+  check(sp1?.plevel === "bon" && !sp1.level && /last finalized debrief/.test(sp1.why) && spB?.drafts === 1 && !spB.plevel, `…the student's page shows the same sprint level, and the debriefs to finalize (${JSON.stringify(sp1)})`);
   run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, `u:${U.bob.id}`);
   // levels: one AI call for the class, without the names
   const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });

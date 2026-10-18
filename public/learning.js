@@ -2346,8 +2346,8 @@ function learningPanel(d, sid, part = "comps") {
       </div>
       ${(L.sprints || []).length ? `<section class="panel"><div class="panel-head"><h2>🏁 Sprint reviews</h2><a class="btn small" href="#/sprints">Sprints →</a></div>
         <div class="spr-list">${L.sprints.map((x) => `<div class="spr"><b>Sprint ${x.sprint}</b><span class="small muted">${esc(x.title || "")}</span>
-          <div>${levelChip(x.level || x.plevel, !x.level && !!x.plevel)} ${x.decision ? `<span class="lvl ${x.decision === "valide" ? "ok" : "bad"}">${x.decision === "valide" ? "✓ validated" : "✗ not validated"}</span>` : `<span class="muted small">no decision yet</span>`}</div>
-          ${x.note ? `<div class="small">${esc(x.note)}</div>` : ""}</div>`).join("")}</div></section>` : ""}
+          <div title="${esc(x.level ? "Chosen by you" : x.why ? (/^last finalized debrief/.test(x.why) ? "From their last finalized debrief" : "Proposed: " + x.why) : "")}">${x.level || x.plevel ? levelChip(x.level || x.plevel, !x.level && !!x.plevel) : `<span class="muted small">no level yet</span>`} ${x.decision ? `<span class="lvl ${x.decision === "valide" ? "ok" : "bad"}">${x.decision === "valide" ? "✓ validated" : "✗ not validated"}</span>` : `<span class="muted small">no decision yet</span>`}</div>
+          ${x.note ? `<div class="small">${esc(x.note)}</div>` : ""}${x.drafts ? `<div class="small" style="color:var(--warn,#b45309)">⚠ ${x.drafts} debrief(s) to finalize</div>` : ""}</div>`).join("")}</div></section>` : ""}
       <section class="panel" id="learn-briefs">
         <div class="panel-head"><h2>📄 Briefs and their debriefs</h2><span class="small muted">open one to see what they built, the competencies and the comment</span></div>
         ${L.briefs.length ? `<div class="sbx-stack">${L.briefs.slice(0, 12).map((b, i, arr) => studentBriefCard(b, arr.findIndex((x) => x.review) === i ? 0 : 1, nameOf)).join("")}</div>` : `<p class="muted small">No brief assigned yet.</p>`}
