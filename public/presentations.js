@@ -99,7 +99,7 @@ function prCard(it) {
         <label>People<select data-sz>${sizes.map((n) => `<option value="${n}" ${it.size === n ? "selected" : ""}>${n}</option>`).join("")}</select></label>`}
       <span class="pr-btns">${c?.status === "done" ? `<button class="btn small" data-a="grade">Change the grades</button>`
         : c ? `<button class="btn small primary" data-a="grade">🎤 Grade</button><button class="btn small" data-a="who">Presenters</button><button class="btn small" data-a="free">Free it</button>`
-        : `<button class="btn small primary" data-a="assign">Assign</button>`}</span>
+        : `<button class="btn small primary" data-a="assign">Assign</button>`}${c && (it.kind === "veille" || it.kind === "live") ? `<button class="btn small" data-a="intra" title="Send this one to the intranet with its presenters">🏫 Intranet</button>` : ""}</span>
     </div>
   </article>`;
 }
@@ -206,6 +206,7 @@ function prWire(P, free) {
       const a = b.dataset.a;
       if (a === "assign" || a === "who") prPick(it, a === "who" ? it.claim : null, P, reload);
       if (a === "grade") prGrade(it, it.claim, P, reload);
+      if (a === "intra") intranetSendOne(it, b);
       if (a === "free") confirmDialog("Free this activity?", `${it.claim.members.map((m) => m.name).join(" & ")} won't present it anymore (they get a DM). Other students can ask for it again.`, "Free it",
         async () => { await api(`/activities/claims/${it.claim.id}/cancel`, { method: "POST" }); await reload("Freed"); }, true);
     });
@@ -339,8 +340,25 @@ function intranetActsDialog(from = null) {
   }).catch((e) => { const box = $("#ia-body", dlg); if (box) box.innerHTML = `<p style="color:var(--down)">❌ ${esc(e.message)}</p>`; });
 }
 
+// 🏫 one activity from its card: the same checks as the week's list, then the same confirmation
+async function intranetSendOne(it, btn) {
+  const x = new Date(it.day + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7));
+  const monday = x.toISOString().slice(0, 10);
+  let p;
+  btn.disabled = true;
+  try { p = await api(`/activities/intranet?from=${it.day}&to=${it.day}`); } catch (e) { toast(e.message, true); return; } finally { btn.disabled = false; }
+  const one = (p.items || []).find((y) => y.id === it.id);
+  if (!p.classroom) return toast("Choose the class's intranet classroom first (Settings → Intranet YouCode)", true);
+  if (p.checkError) return toast(`Couldn't check what's already on the intranet: ${p.checkError}`, true);
+  if (!one) return toast("This activity can't be sent to the intranet", true);
+  if (one.missing.length) return toast(`Link them to their intranet learner first (Settings → Intranet YouCode): ${one.missing.join(", ")}`, true);
+  if (one.existing && !one.existing.same) return toast(`Another activity is at this time on the intranet: « ${one.existing.subject} », created by ${one.existing.by} on ${one.existing.created}. Free that time on the intranet first.`, true);
+  if (one.existing && !one.assign.length) return toast(`Already on the intranet with its presenters: « ${one.existing.subject} »`);
+  intranetActsConfirm(monday, [one], true);
+}
+
 // the last look before sending: each activity checked, untick the ones not needed, then confirm
-function intranetActsConfirm(start, list) {
+function intranetActsConfirm(start, list, single = false) {
   const who = (it) => (it.members.length ? it.members.map((m) => esc(m.learner?.name || m.name)).join(", ") : `<span class="muted">nobody</span>`);
   openDialog(`🏫 Confirm: ${list.length} activit${list.length > 1 ? "ies" : "y"} to the intranet`, `
     <p class="small muted" style="margin-top:4px">Untick what you don't want to send. If another class already has the same library activity on the intranet, yours is a <b>reused copy</b> (linked to it, its content stored once); its author is credited.</p>
@@ -350,14 +368,14 @@ function intranetActsConfirm(start, list) {
         <span><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}
           <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)}${it.author ? ` · conçue par ${esc(it.author)}` : ""}</span>${it.existing ? `<span class="small" style="display:block;color:var(--up)">➕ Already on the intranet: only the presenters are added (${it.assign.map((m) => esc(m.name)).join(", ")})</span>` : ""}</span></label>`).join("")}
     </div>`,
-    [{ label: "← Back", action: () => intranetActsDialog(start) }, { label: "🏫 Confirm and send", primary: true, action: async () => {
+    [{ label: single ? "Cancel" : "← Back", action: () => (single ? dlg.close() : intranetActsDialog(start)) }, { label: "🏫 Confirm and send", primary: true, action: async () => {
       const ids = $$("[data-iac]:checked", dlg).map((x) => Number(x.dataset.iac));
       if (!ids.length) throw new Error("Nothing is ticked");
       const r = await api("/activities/intranet", { method: "POST", body: { ids } });
       toast(`${r.sent} sent to the intranet${r.assigned ? ` · presenters added to ${r.assigned}` : ""}${r.reused ? ` (${r.reused} reused from another class: linked, content stored once)` : ""}${r.skipped ? ` · ${r.skipped} already there (not sent again)` : ""}${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent && !r.assigned);
       const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message);
       if (why.length) toast(why[0], !!r.failed);
-      intranetActsDialog(start);
+      if (single) dlg.close(); else intranetActsDialog(start);
     } }]);
   const btn = $(".dlg-foot .btn.primary", dlg);
   const count = () => { const n = $$("[data-iac]:checked", dlg).length; btn.textContent = `🏫 Confirm and send (${n})`; btn.disabled = !n; };
