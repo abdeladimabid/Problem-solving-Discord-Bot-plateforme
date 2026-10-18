@@ -834,7 +834,7 @@ function wPropLevel() {
   const ex = DB.R.review?.result?.exigences || [];
   const s = currentStates();
   const exOn = (i) => (typeof s.ex[i] === "boolean" ? s.ex[i] : !!(DB.R.states?.ex || [])[i]);
-  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const parts = [];
   if (main.length) parts.push([0.4, main.filter(exOn).length / main.length]);
   const co = Object.values(s.co);

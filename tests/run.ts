@@ -4994,6 +4994,13 @@ section("Export grades: level, briefs validated (over half the technical compete
   run1("DELETE FROM players WHERE discord_id = ?", sid);
 }
 
+section("debrief: performance criteria are like bonus (done: a plus; not done: never counted against the level)");
+{
+  const rec = (critOk: boolean) => ({ result: { exigences: [{ type: "story", texte: "Page d'accueil" }, { type: "story", texte: "Formulaire" }, { type: "critere", texte: "W3C valide" }, { type: "critere", texte: "Accessibilité WCAG" }], competences: [] }, final: { ex: [true, true, critOk, critOk] } });
+  const lv = (r: any) => debriefLevel(r, reviewStates(r));
+  check(lv(rec(false)) === lv(rec(true)) && lv(rec(false)) === "excellent", `criteria not done don't lower the level (${lv(rec(false))} / ${lv(rec(true))})`);
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;

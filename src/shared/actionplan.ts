@@ -204,7 +204,7 @@ export async function gapsOf(env: Env, g: GuildRow, sid: string) {
     if (!rec?.result) { out.push({ b: i + 1, bid: b.id, who: c.who, title: b.title, lv: c.lv || c.plv, final: c.final, analyzed: false }); continue; }
     const st = statesOf(rec)!;
     const ex = (rec.result.exigences || []) as any[];
-    const req = ex.map((e, k) => ({ e, ok: st.ex[k] })).filter((x) => !x.ok && x.e.type !== "bonus").map((x) => String(x.e.texte || "").replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim()).filter(Boolean);
+    const req = ex.map((e, k) => ({ e, ok: st.ex[k] })).filter((x) => !x.ok && x.e.type !== "bonus" && x.e.type !== "critere").map((x) => String(x.e.texte || "").replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim()).filter(Boolean);
     const comps = ((rec.result.competences || []) as any[]).filter((x) => st.co[x.code] === false).map((x) => ({ code: compLabel(String(x.code)), why: String(x.preuve || x.justification || "").slice(0, 200) }));
     const oral = ((rec.oral || []) as any[]).map((q, k) => ({ q, ok: st.oral[k] })).filter((x) => !x.ok).map((x) => String(x.q.notion || x.q.q || "")).filter(Boolean);
     const mes = rec.challenge && st.mes.r && st.mes.r !== "valide" ? { title: String(rec.challenge.titre || rec.challenge.title || "Mise en situation"), r: st.mes.r, note: st.mes.note } : null;
