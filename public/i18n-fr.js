@@ -563,6 +563,8 @@ window.CB_FR = {
 "Default scoring restored": "Barème par défaut rétabli",
 "Default scoring.": "Barème par défaut.",
 "Delete": "Supprimer",
+"Current week": "Semaine en cours",
+"Show or hide this week": "Afficher ou masquer cette semaine",
 "Delete this activity": "Supprimer cette activité",
 "Delete this activity?": "Supprimer cette activité ?",
 "The activity is deleted": "L’activité est supprimée",

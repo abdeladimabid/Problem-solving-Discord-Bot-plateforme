@@ -507,12 +507,19 @@ function actResults() {
   if (!box) return;
   const weeks = (ACT.sel?.weeks || []).filter((w) => w.work.length);
   if (!ACT.sel || !weeks.length) { box.innerHTML = ""; return; }
+  // each week folds: the current one opens by default (else the first), the teacher's choice is kept while on the page
+  // on Saturday and Sunday, the week coming is the current one
+  const today = new Date(), cur = actAdd(actMonday(today.toLocaleDateString("sv")), [0, 6].includes(today.getDay()) ? 7 : 0);
+  const dflt = weeks.some((w) => w.monday === cur) ? cur : weeks[0].monday;
+  ACT.wopen = ACT.wopen || {};
   box.innerHTML = weeks.map((w) => {
     const days = Array.from({ length: 5 }, (_, i) => actAdd(w.monday, i)).filter((d) => d >= w.from && d <= w.to);
     const has = (ACT.sel.items || []).some((i) => i.day >= w.monday && i.day <= actAdd(w.monday, 4));
-    return `<section class="panel act-week" style="--sp:${spColor(w.sprint?.n)}">
-      <div class="panel-head"><h2>Week of ${esc(actDate(w.monday, { day: "numeric", month: "long" }))} ${w.weeks.map((x) => `<span class="tag">S${x.n}</span>`).join(" ")}</h2>
+    const open = ACT.wopen[w.monday] ?? w.monday === dflt;
+    return `<section class="panel act-week${open ? "" : " folded"}" style="--sp:${spColor(w.sprint?.n)}" data-week="${w.monday}">
+      <div class="panel-head"><h2><button type="button" class="act-wfold" data-wfold="${w.monday}" aria-expanded="${open}" title="Show or hide this week">${open ? "▾" : "▸"}</button> Week of ${esc(actDate(w.monday, { day: "numeric", month: "long" }))} ${w.weeks.map((x) => `<span class="tag">S${x.n}</span>`).join(" ")}${w.monday === cur ? ` <span class="tag current">📍 Current week</span>` : ""}</h2>
         ${has ? `<div class="toolbar" style="margin:0"><button class="btn small" data-wcopy="${w.monday}">📋 Copy all</button><button class="btn small" data-wdl="${w.monday}">${icon("download")} .md</button></div>` : ""}</div>
+      <div class="act-wbody"${open ? "" : " hidden"}>
       ${actCard("week", w.monday)}
       <div class="act-days">${days.map((d) => {
         const info = ACT.sel.days.find((x) => x.day === d) || {};
@@ -520,8 +527,14 @@ function actResults() {
         return `<div class="act-day${work ? "" : " off"}">
           <div class="act-dl"><b>${ACT_WD[actDow(d)]}</b><span>${esc(actDate(d, { day: "numeric", month: "short" }))}</span>${w.closing.includes(d) ? `<span class="tag" title="Last day of the programme week: a lighter veille">end of week</span>` : ""}</div>
           <div class="act-cards">${work ? actCard("veille", d) + (shop ? actCard("workshop", d) : "") + (live ? actCard("live", d) : "") + (shop || live ? "" : actFree(d)) : `<p class="small muted act-offtxt">${esc(info.label || ACT_KIND[info.kind] || "")}</p>`}</div></div>`;
-      }).join("")}</div></section>`;
+      }).join("")}</div></div></section>`;
   }).join("");
+  $$("[data-wfold]", box).forEach((b) => b.onclick = () => {
+    const sec = b.closest(".act-week"), body = $(".act-wbody", sec), open = body.hidden;
+    body.hidden = !open; sec.classList.toggle("folded", !open);
+    b.textContent = open ? "▾" : "▸"; b.setAttribute("aria-expanded", String(open));
+    ACT.wopen[b.dataset.wfold] = open;
+  });
   actWire();
 }
 /** The free 11:00 of a day without a live coding: the teacher may add one, or a workshop. */
