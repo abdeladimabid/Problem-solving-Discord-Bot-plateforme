@@ -67,7 +67,7 @@ async function route(env: Env, path: string, method: string, body: any, url: URL
   if (path === "/activities/intranet") {
     const g = await guild();
     if (method === "GET") return ok(await activitiesPreview(env, g.id, String(url.searchParams.get("from") || ""), String(url.searchParams.get("to") || "")));
-    if (method === "POST") return ok(await sendActivities(env, g.id, Array.isArray(body.ids) ? body.ids : []));
+    if (method === "POST") return ok(await sendActivities(env, g.id, Array.isArray(body.ids) ? body.ids : [], body.at && typeof body.at === "object" ? body.at : {}));
   }
   if (path === "/activities/signups" && method === "GET") {
     const g = await guild();

@@ -281,6 +281,8 @@ export async function sendSquads(env: Env, guildId: string, setId: number) {
 
 // ------------------------------------------------------------ veilles and live codings → the intranet's activities
 // The school's times (Moroccan time, as the intranet keeps them): veille 09:15 for 30 min, live coding 11:00 for 45 min.
+/** "2026-10-22 14:00" (a date and time chosen by the teacher). */
+const WHEN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 export const ACT_TIME: Record<string, { at: string; minutes: number }> = { veille: { at: "09:15", minutes: 30 }, live: { at: "11:00", minutes: 45 } };
 
 export interface OnIntranet { activity_id: number; subject: string; datetime: string; duration: number; by: string; by_id: number; created: string; learner_ids?: number[] }
@@ -310,8 +312,10 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
   const presenters = new Map(claims.map((x) => [x.activity_id, (parseJson(x.members, []) as unknown[]).map(String)]));
   const links = new Map((await all<{ discord_id: string; learner_id: number; learner_name: string | null }>(env, "SELECT discord_id, learner_id, learner_name FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x.name || x.discord_id]));
-  const sent = new Map((await all<{ local_id: number; remote_id: number | null; at: number | null }>(env, "SELECT local_id, remote_id, at FROM intranet_sync WHERE guild_id = ? AND kind = 'activity'", guildId)).map((x) => [x.local_id, x]));
-  const days = acts.map((a) => a.day).sort();
+  const sent = new Map((await all<{ local_id: number; remote_id: number | null; map: string | null; at: number | null }>(env, "SELECT local_id, remote_id, map, at FROM intranet_sync WHERE guild_id = ? AND kind = 'activity'", guildId)).map((x) => [x.local_id, x]));
+  // sent at another date than its slot (the slot had another activity): where it is on the intranet
+  const movedTo = (id: number) => { const m = parseJson(sent.get(id)?.map ?? null, null) as { at?: string } | null; return m && typeof m.at === "string" && WHEN.test(m.at) ? m.at : null; };
+  const days = [...acts.map((a) => a.day), ...acts.map((a) => movedTo(a.id)?.slice(0, 10)).filter(Boolean) as string[]].sort();
   const lib = await libraryOf(env, guildId, acts);
   const me = (await intranetTrainer(env, guildId))?.name || "";
   let existing = new Map<string, OnIntranet>(), checkError: string | null = null;
@@ -323,8 +327,9 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
     items: acts.map((a) => {
       const members = (presenters.get(a.id) || []).map((m) => { const l = links.get(m); return { id: m, name: names.get(m) || m, learner: l ? { id: l.learner_id, name: l.learner_name || "" } : null }; });
       const s = sent.get(a.id);
-      const ex = existing.get(`${a.kind}|${a.day} ${ACT_TIME[a.kind].at}`) || null;
-      return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
+      const moved = movedTo(a.id);
+      const ex = existing.get(`${a.kind}|${moved || `${a.day} ${ACT_TIME[a.kind].at}`}`) || null;
+      return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes, moved,
         members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null,
         author: (() => { const au = lib.get(`${a.day}:${a.kind}`)?.author; return au && au.toLowerCase() !== me.toLowerCase() ? au : null; })(),
         existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id,
@@ -350,7 +355,7 @@ async function libraryOf(env: Env, guildId: string, rows: { day: string; kind: s
 }
 
 /** Send the chosen activities (each on its own: one refused doesn't stop the others); what the intranet already has is skipped. */
-export async function sendActivities(env: Env, guildId: string, ids: number[]) {
+export async function sendActivities(env: Env, guildId: string, ids: number[], when: Record<string, unknown> = {}) {
   const want = [...new Set(ids.map((x) => Math.floor(Number(x))).filter((x) => x > 0))].slice(0, 20);
   if (!want.length) throw new IntranetError("Choose the activities to send.", "empty");
   const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
@@ -369,7 +374,11 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
   for (const a of rows) {
     const v = info.get(a.id)!;
     if (v.missing.length) { results[a.id] = { ok: false, message: `not linked to an intranet learner: ${v.missing.join(", ")}` }; continue; }
-    if (v.existing && v.assign.length) {
+    // its slot has another activity on the intranet: sent at the date the teacher chose, else not sent
+    const other = !!v.existing && !v.existing.same;
+    const at = other ? String(when?.[a.id] ?? "").replace("T", " ").slice(0, 16) : "";
+    if (other && !WHEN.test(at)) { results[a.id] = { ok: false, existing: true, message: `you already have a ${a.kind === "live" ? "live coding" : "veille"} at this date on the intranet: « ${v.existing!.subject} », created by ${v.existing!.by} on ${v.existing!.created}. Choose another date.` }; continue; }
+    if (!other && v.existing && v.assign.length) {
       // already there: only its presenters are added
       try {
         const r = await intranetFetch(env, "POST", `/api/classbot/classrooms/${c.id}/activities/${v.existing.activity_id}/learners`, { learner_ids: v.assign.map((m) => m.id) }, guildId);
@@ -377,11 +386,10 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
       } catch (e) { results[a.id] = { ok: false, message: String((e as Error).message).slice(0, 200) }; }
       continue;
     }
-    if (v.existing && !v.existing.same) { results[a.id] = { ok: false, existing: true, message: `another activity is at this time on the intranet: « ${v.existing.subject} », created by ${v.existing.by} on ${v.existing.created} (nothing sent; free that time on the intranet first)` }; continue; }
-    if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
+    if (!other && v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     const l = lib.get(`${a.day}:${a.kind}`);
     items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: null, type: a.kind, subject: v.title.slice(0, 255),
-      datetime: `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id),
+      datetime: other ? at : `${a.day} ${ACT_TIME[a.kind].at}`, duration: ACT_TIME[a.kind].minutes, description_md: String(a.md || "").slice(0, 60000), learner_ids: v.members.map((m) => m.learner!.id),
       ...(l ? { library_key: l.key.slice(0, 160), credit: l.author ? l.author.slice(0, 120) : null } : {}) });
   }
   if (items.length) {
@@ -390,8 +398,10 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
       const id = Number(String(it.ref).split(":").pop());
       const res = r.results?.[it.ref];
       if (res?.ok) {
-        await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'activity', ?, ?, NULL, ?)
-          ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, at = excluded.at`, guildId, id, Number(res.activity_id) || null, now());
+        // a date other than its slot is kept: the next checks look for it there
+        const moved = it.datetime !== `${rows.find((r) => r.id === id)!.day} ${ACT_TIME[it.type].at}` ? JSON.stringify({ at: it.datetime }) : null;
+        await run(env, `INSERT INTO intranet_sync (guild_id, kind, local_id, remote_id, map, at) VALUES (?, 'activity', ?, ?, ?, ?)
+          ON CONFLICT (guild_id, kind, local_id) DO UPDATE SET remote_id = excluded.remote_id, map = excluded.map, at = excluded.at`, guildId, id, Number(res.activity_id) || null, moved, now());
         results[id] = { ok: true, ...(res.reused_from ? { reused: `reused from « ${res.reused_from.subject} », created by ${res.reused_from.by} on ${res.reused_from.created}` } : {}) };
       } else if (res?.code === "exists" && res.existing) results[id] = { ok: false, existing: true, message: alreadyText(res.existing) };
       else results[id] = { ok: false, message: String(res?.message || "refused by the intranet").slice(0, 200) };
