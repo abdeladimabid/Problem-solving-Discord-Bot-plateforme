@@ -334,6 +334,8 @@ function spCell(c) {
   return `<td class="ctr"><span class="lvl ${cls}">${c.r === "ok" ? "✓" : "✗"} N${c.level || 1}</span></td>`;
 }
 
+// where the level shown comes from: the last finalized debrief (by default), or ✨ Propose levels
+const spFrom = (r) => (r.dlevel && r.plevel === r.dlevel && /^last finalized debrief/.test(r.why || "") ? "Last debrief" : "Proposed");
 function renderSprint() {
   const { D } = SPR;
   const codes = D.sprint.codes, tech = codes.filter((c) => !/^T/.test(c)), soft = codes.filter((c) => /^T/.test(c));
@@ -357,6 +359,7 @@ function renderSprint() {
     <section class="panel"><div class="panel-head"><h2>Sprint ${D.sprint.n} · ${esc(D.sprint.title)}</h2><span class="muted small">${dayLabelOf(D.sprint.start)} → ${dayLabelOf(D.sprint.end)}</span></div>
       <p class="small" style="margin:0"><b>Briefs:</b> ${D.briefs.length ? D.briefs.map((b) => `<a href="#/brief/${b.id}">${esc(b.title)}</a>`).join(" · ") : `<span class="muted">none yet</span>`}</p>
       <p class="small"><b>Competencies:</b> ${codes.map((c) => compChip(c)).join(" ") || `<span class="muted">none</span>`}</p>
+      ${D.rows.some((r) => r.drafts) ? `<div class="notice warn small" style="margin:0 0 10px">${D.rows.reduce((a, r) => a + r.drafts, 0)} debrief(s) of this sprint are not finalized: a student's level is their <b>last finalized debrief</b>'s, so finalize them (Progress) to count them. You can still choose a level yourself.</div>` : ""}
       <div class="toolbar" style="margin:0">${segHtml("spf", FILTERS, SPR.filter)}
         <select id="sp-sort"><option value="name">Name</option><option value="level" ${SPR.sort === "level" ? "selected" : ""}>Level</option><option value="most" ${SPR.sort === "most" ? "selected" : ""}>Most validated</option></select></div>
     </section>
@@ -367,7 +370,8 @@ function renderSprint() {
         <td>${avatar(r.name, r.discord_id)} <a href="#/student/${esc(r.discord_id)}">${esc(r.name)}</a></td>
         ${tech.map((c) => spCell(r.cells[c])).join("")}${soft.length ? ctCell(r) : ""}
         <td class="num">${r.evald}/${D.briefs.length}</td><td class="num">${r.pct == null ? "—" : r.pct + "%"}</td>
-        <td><select data-lvl title="${esc(r.plevel ? `Proposed: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "")}"><option value="">${r.plevel ? "Proposed: " + SP_LVL_NAME[r.plevel] : "—"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+        <td><select data-lvl title="${esc(r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "No finalized debrief in this sprint yet")}"><option value="">${r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}` : "—"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+          ${r.drafts ? `<div class="small" style="color:var(--warn,#b45309)" title="Their level counts once finalized">⚠ ${r.drafts} debrief(s) to finalize</div>` : ""}</td>
         <td class="sp-decs">${dec(r)}<button type="button" class="sp-dec note ${r.note ? "has" : ""}" data-note title="${esc(r.note || "Note")}">📝</button>
           <input type="text" data-notein value="${esc(r.note)}" placeholder="Note" ${r.note ? "" : "hidden"}></td></tr>`).join("") || `<tr><td colspan="${tech.length + 6}" class="empty">No students.</td></tr>`}</tbody>
     </table></div></section>

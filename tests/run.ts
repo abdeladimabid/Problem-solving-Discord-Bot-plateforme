@@ -3619,7 +3619,16 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   const row = (id: string) => V.data.rows.find((r: any) => r.discord_id === id);
   check(V.status === 200 && V.data.briefs.some((b: any) => b.id === bid), "the brief belongs to the sprint of its week");
   check(row(U.alice.id).cells[code].r === "ok" && row(U.bob.id).cells[code].r === "low" && row(U.carol.id).cells[code].r === "ko", "✓ at the level asked, lower level, ✗");
-  check(row(U.alice.id).pct === 50 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", "grid % of the finalized debrief, briefs evaluated, proposal");
+  // the other brief of the sprint (Hammam) is 100 % for Alice once its performance criteria aren't counted: (100 + 50) / 2
+  check(row(U.alice.id).pct === 75 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", `grid % of the finalized debrief, briefs evaluated, proposal (${row(U.alice.id).pct} ${JSON.stringify(V.data.briefs.map((b: any) => b.title))})`);
+  // by default (before ✨ Propose levels): the level of the student's last finalized debrief of the sprint; a draft doesn't count
+  run1("UPDATE briefs SET due_at = ? WHERE id = ?", clock.now() + 400 * 86400, bid);
+  run1("UPDATE brief_reviews SET level = 'bon' WHERE brief_id = ? AND who = ?", bid, `u:${U.alice.id}`);
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'draft', 'excellent', ?)", bid, G, `u:${U.bob.id}`, JSON.stringify(rec), clock.now());
+  V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
+  check(row(U.alice.id).plevel === "bon" && /last finalized debrief: Brief du sprint/.test(row(U.alice.id).why) && !row(U.alice.id).level, `the sprint level is the last finalized debrief's by default (${row(U.alice.id).plevel} · ${row(U.alice.id).why})`);
+  check(!row(U.bob.id).plevel && row(U.bob.id).drafts === 1, "…a debrief not finalized doesn't count, and the page says it's to finalize");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, `u:${U.bob.id}`);
   // levels: one AI call for the class, without the names
   const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });
   check(lv.status === 200 && lv.data.by === "ai" && lv.data.rows.some((r: any) => r.plevel === "excellent" && r.why === "Tout est validé."), "levels proposed by the AI for the class");
