@@ -32,7 +32,7 @@ async function debriefsOf(env: Env, P: Awaited<ReturnType<typeof progressView>>,
     const techOk = tech.filter((k) => co[k]).length;
     briefs.push({ b: i + 1, title: b.title, ok: tech.length > 0 && techOk * 2 > tech.length, tech: tech.length, techOk, failed: Object.keys(co).filter((k) => co[k] === false).map((k) => assessBase(k)), passed: Object.keys(co).filter((k) => co[k]).map((k) => assessBase(k)) });
     ((rec.oral || []) as any[]).forEach((q, k) => { if (!st.oral[k] && (q.notion || q.q)) oral.push(String(q.notion || q.q).trim()); });
-    ((rec.result.exigences || []) as any[]).forEach((e, k) => { if (!st.ex[k] && e.type !== "bonus" && e.texte) req.push(String(e.texte).replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim()); });
+    ((rec.result.exigences || []) as any[]).forEach((e, k) => { if (!st.ex[k] && e.type !== "bonus" && e.type !== "critere" && e.texte) req.push(String(e.texte).replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, "").trim()); });
     if (rec.challenge && st.mes.r && st.mes.r !== "valide") mesKo++;
   }
   return { briefs, oral, req, mesKo };

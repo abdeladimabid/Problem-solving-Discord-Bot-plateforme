@@ -402,7 +402,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     "- Les vérifications automatiques sont EXACTES : ne les contredis jamais.",
     "- Juge sur des preuves visibles dans le code (fichier, balise, règle CSS) et cite-les en quelques mots.",
     "- Juge l’état actuel du projet : une page créée il y a longtemps est faite si son fichier existe.",
-    "- Les bonus sont facultatifs : un bonus non fait n’est pas un défaut.",
+    "- Les bonus et les critères de performance sont facultatifs : non faits, ce n’est pas un défaut (ils comptent seulement en plus quand ils sont faits).",
     "- Ce que le code ne peut pas montrer (analyse, réunion, maquette sans lien, oral, présentation) : \"non_verifiable\".",
     "- Compétences transversales (codes CT…) : sans preuve claire dans le dépôt, \"a_verifier\" (jamais \"non_visible\").",
     assessText ? "- L’ÉVALUATION a été faite en classe, sans aide : c’est la preuve la plus sûre de ce que l’apprenant maîtrise. Ton \"avis\" reste celui du projet, mais dans \"raison\" dis si le projet confirme ou contredit l’évaluation (ex. « le projet le montre mais l’évaluation ne l’a pas validée : code copié ou fait avec une IA ? à vérifier à l’oral »)." : "",
@@ -543,7 +543,7 @@ export async function makeMemberLevel(env: Env, g: GuildRow, briefId: number, wh
   const calc = memberLevel(rec, m, ms);
   const co: Record<string, boolean> = ms.co && Object.keys(ms.co).length ? ms.co : st.co;
   const ex = rec.result.exigences || [];
-  const main = ex.map((_: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const main = ex.map((_: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const mean = (k: string) => Math.round((squad.reduce((a: number, x: any) => a + (x[k] || 0), 0) / Math.max(1, squad.length)) * 10) / 10;
   const MES: Record<string, string> = { valide: "réussie", partiel: "partiellement réussie", non_valide: "non validée" };
   const system = [
@@ -585,7 +585,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   };
   const calc = debriefLevel(rec, st);
   const ex = rec.result.exigences || [];
-  const main = ex.map((e: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const main = ex.map((e: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const missing = main.filter((i: number) => !st.ex[i]).map((i: number) => ex[i].texte).slice(0, 8);
   const co = Object.keys(st.co);
   const oral = rec.oral || [];
@@ -599,7 +599,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   ].join("\n");
   const user = [
     assessForAi(rec.assess) ? `ÉVALUATION (en classe, sans aide) :\n${assessForAi(rec.assess)}` : "ÉVALUATION : aucune évaluation liée à ce brief.",
-    `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
+    `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus ni les critères de performance)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
     co.length ? `COMPÉTENCES : validées ${co.filter((c) => st.co[c]).map(skillText).join(", ") || "aucune"} ; non validées ${co.filter((c) => !st.co[c]).map(skillText).join(", ") || "aucune"}` : "",
     oral.length ? `QUESTIONS ORALES : ${st.oral.filter(Boolean).length}/${oral.length} réussies${st.oral.some((v: boolean) => !v) ? ` ; notions à revoir : ${oral.filter((q: any, i: number) => !st.oral[i]).map((q: any) => q.notion || q.q).join(", ")}` : ""}` : "",
     st.mes.r ? `MISE EN SITUATION : ${MES[st.mes.r]}${st.mes.note ? ` (${oneLine(st.mes.note, 200)})` : ""}` : "",
@@ -650,7 +650,7 @@ export async function lacunesOf(env: Env, briefId: number, who: string, rec: any
   const brief: string[] = [];
   if (rec?.result) {
     const st = reviewStates(rec);
-    (rec.result.exigences || []).forEach((e: any, i: number) => { if (!st.ex[i] && e.type !== "bonus") brief.push(oneLine(e.texte, 160)); });
+    (rec.result.exigences || []).forEach((e: any, i: number) => { if (!st.ex[i] && e.type !== "bonus" && e.type !== "critere") brief.push(oneLine(e.texte, 160)); });
     for (const c of rec.result.competences || []) if (c.avis && c.avis !== "validable") brief.push(`compétence ${c.code} à vérifier${c.preuve ? ` : ${oneLine(c.preuve, 120)}` : ""}`);
   }
   if (rec?.remarks?.text) brief.unshift(`remarques du formateur (face-à-face) : ${oneLine(rec.remarks.text, 400)}`);
@@ -668,7 +668,7 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   const tech = String(b.grid?.tech || b.data.tags.join(", "));
   const levels = b.skills.filter((c) => /^C/.test(c)).map((c) => Number(c.slice(-1)));
   const lvl = levels.length ? Math.min(...levels) : 1;
-  const points = (rec.result.exigences || []).filter((e: any) => e.type !== "bonus" && e.type !== "oral").map((e: any) => "- " + e.texte).slice(0, 25).join("\n");
+  const points = (rec.result.exigences || []).filter((e: any) => e.type !== "bonus" && e.type !== "critere" && e.type !== "oral").map((e: any) => "- " + e.texte).slice(0, 25).join("\n");
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
     "Prépare les questions orales de la soutenance : au plus 5 questions courtes que le formateur pose à l’apprenant pour vérifier qu’il comprend son projet.",

@@ -206,7 +206,7 @@ export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'
 // chooses the level, and can change it.
 export function debriefLevel(rec, st) {
   const ex = ((rec && rec.result) || {}).exigences || [];
-  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'oral');
+  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'critere' && ex[i].type !== 'oral');
   const parts = [];
   if (main.length) parts.push([0.4, main.filter((i) => st.ex[i]).length / main.length]);
   const co = Object.values(st.co || {});
