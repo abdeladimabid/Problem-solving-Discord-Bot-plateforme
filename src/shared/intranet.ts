@@ -174,7 +174,7 @@ export async function setIntranetClass(env: Env, guildId: string, c: { id: numbe
 }
 
 // "Hélène  BEN-ALI" → ["ben", "ali", "helene"]: no accents, no case, no punctuation, any order
-export const nameTokens = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+export const nameTokens = (s: string) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
 const keyOf = (t: string[]) => [...t].sort().join(" ");
 // every word of a matches a word of b (a single letter matches a word that starts with it: "Mehdi R." ~ "Mehdi Rahmani")
 const covers = (a: string[], b: string[]) => a.length > 0 && a.every((x) => b.some((y) => y === x || (x.length === 1 && y.startsWith(x)))) && a.some((x) => x.length > 1 && b.includes(x));
@@ -289,6 +289,11 @@ async function onIntranet(env: Env, guildId: string, classroomId: number, from: 
   const r = await intranetFetch(env, "GET", `/api/classbot/classrooms/${classroomId}/activities?from=${from}&to=${to}`, undefined, guildId);
   return new Map((r.activities || []).map((a: OnIntranet & { type: string }) => [`${a.type}|${a.datetime}`, a]));
 }
+/** The same subject, whatever the accents, capitals, spaces and punctuation. */
+export const sameSubject = (a: string, b: string) => {
+  const k = (x: string) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return !!k(a) && k(a) === k(b);
+};
 /** "Already on the intranet: « … », created by X on 16/10/2026" */
 export const alreadyText = (e: OnIntranet) => `already on the intranet: « ${e.subject} », created by ${e.by} on ${e.created}`;
 
@@ -322,9 +327,11 @@ export async function activitiesPreview(env: Env, guildId: string, from: string,
       return { id: a.id, day: a.day, kind: a.kind, title: a.title || (a.kind === "live" ? "Live coding" : "Veille"), at: ACT_TIME[a.kind].at, minutes: ACT_TIME[a.kind].minutes,
         members, missing: members.filter((m) => !m.learner).map((m) => m.name), sent: s?.at ? { at: s.at, activity_id: s.remote_id } : null,
         author: (() => { const au = lib.get(`${a.day}:${a.kind}`)?.author; return au && au.toLowerCase() !== me.toLowerCase() ? au : null; })(),
-        existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id } : null,
+        existing: ex ? { ...ex, text: alreadyText(ex), mine: !!s?.remote_id && s.remote_id === ex.activity_id,
+          // the same activity (sent by ClassBot, or the same subject), or another one made at that time on the intranet
+          same: (!!s?.remote_id && s.remote_id === ex.activity_id) || sameSubject(ex.subject, a.title || "") } : null,
         // already on the intranet: its presenters from ClassBot not assigned there yet (only added, nothing else changes)
-        assign: ex ? members.filter((m) => m.learner && !(ex.learner_ids || []).includes(m.learner.id)).map((m) => ({ id: m.learner!.id, name: m.learner!.name || m.name })) : [] };
+        assign: ex && ((!!s?.remote_id && s.remote_id === ex.activity_id) || sameSubject(ex.subject, a.title || "")) ? members.filter((m) => m.learner && !(ex.learner_ids || []).includes(m.learner.id)).map((m) => ({ id: m.learner!.id, name: m.learner!.name || m.name })) : [] };
     }),
   };
 }
@@ -370,6 +377,7 @@ export async function sendActivities(env: Env, guildId: string, ids: number[]) {
       } catch (e) { results[a.id] = { ok: false, message: String((e as Error).message).slice(0, 200) }; }
       continue;
     }
+    if (v.existing && !v.existing.same) { results[a.id] = { ok: false, existing: true, message: `another activity is at this time on the intranet: « ${v.existing.subject} », created by ${v.existing.by} on ${v.existing.created} (nothing sent; free that time on the intranet first)` }; continue; }
     if (v.existing) { results[a.id] = { ok: false, existing: true, message: v.existing.text }; continue; }
     const l = lib.get(`${a.day}:${a.kind}`);
     items.push({ ref: `${guildId}:activity:${a.id}`, activity_id: null, type: a.kind, subject: v.title.slice(0, 255),

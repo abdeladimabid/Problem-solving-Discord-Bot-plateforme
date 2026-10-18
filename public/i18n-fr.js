@@ -563,6 +563,8 @@ window.CB_FR = {
 "Default scoring restored": "Barème par défaut rétabli",
 "Default scoring.": "Barème par défaut.",
 "Delete": "Supprimer",
+"Another activity at this time on the intranet": "Une autre activité à cette heure sur l’intranet",
+"The intranet already has another activity at this time: nothing is sent or added to it. To send this one, free that time on the intranet first.": "L’intranet a déjà une autre activité à cette heure : rien n’est envoyé ni ajouté. Pour envoyer celle-ci, libérez d’abord ce créneau sur l’intranet.",
 "From their last finalized debrief": "D’après son dernier débrief finalisé",
 "no level yet": "pas encore de niveau",
 "Last debrief": "Dernier débrief",
