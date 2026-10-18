@@ -29,6 +29,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
+import { classReport, reportCsv } from "../shared/classreport.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -1462,17 +1463,11 @@ async function overview(env: Env, g: GuildRow) {
 }
 
 // ================================================================ export
+/** Export grades: each student's level, briefs validated or not, competencies to work on, recurring problems, plan d'action. */
 async function exportCsv(env: Env, g: GuildRow) {
-  const rows = await students(env, g);
-  const cols = ["name", "discord_id", "hr_display", "team", "season_pts", "total_pts", "level", "solved", "failed", "accuracy", "open_asg", "missed_asg", "rating", "daily_streak", "coins", "trend", "last_active"];
-  const esc = (v: unknown) => {
-    const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [cols.join(",")];
-  for (const r of rows) lines.push(cols.map((c) => esc(c === "last_active" && r[c] ? new Date(r[c] * 1000).toISOString().slice(0, 10) : r[c])).join(","));
-  return new Response("﻿" + lines.join("\n"), {
-    headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="students-${g.season.replace(/[^\w-]+/g, "_")}.csv"` },
+  const rows = await classReport(env, g, await students(env, g));
+  return new Response(reportCsv(rows, g.lang === "fr"), {
+    headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="report-${g.season.replace(/[^\w-]+/g, "_")}.csv"` },
   });
 }
 
