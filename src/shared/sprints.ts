@@ -146,6 +146,16 @@ export async function sprintsOverview(env: Env, g: GuildRow) {
   };
 }
 
+/** One student's sprints for their page, as the Sprints page shows them: the teacher's level, else the one proposed
+ *  (✨ Propose levels, else their last finalized debrief's), the decision, the note, the debriefs left to finalize. */
+export async function studentSprints(env: Env, g: GuildRow, uid: string) {
+  const L = await load(env, g);
+  return L.sprints.map((sp) => {
+    const r = sprintRows(L, sp).find((x) => x.discord_id === uid);
+    return r ? { sprint: sp.n, title: sp.title, level: r.level || null, plevel: r.plevel || null, why: r.why, decision: r.decision || null, note: r.note || null, drafts: r.drafts } : null;
+  }).filter((x) => x && (x.level || x.plevel || x.decision || x.note || x.drafts));
+}
+
 /** One sprint in detail. */
 export async function sprintView(env: Env, g: GuildRow, n: number) {
   const L = await load(env, g);
