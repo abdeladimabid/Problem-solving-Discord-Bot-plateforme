@@ -9,6 +9,7 @@ import { all, now, run } from "./db.ts";
 import { compLabel, parseComp, programOf } from "./program.ts";
 import type { Program } from "./program.ts";
 import { askReview } from "./review/debrief.ts";
+import { memberLevelOf } from "./review/members.ts";
 import { oneLine, reviewStates } from "./review/engine.ts";
 
 export const SPRINT_LEVELS = ["excellent", "bon", "moyen", "faible", "critique"];
@@ -40,6 +41,7 @@ interface Cell { r: "ok" | "low" | "ko" | "none"; level: number | null; ref: num
 interface Row {
   discord_id: string; name: string; cells: Record<string, Cell>; ok: number; evald: number; pct: number | null; st: number[];
   prop: string; plevel: string; why: string; level: string; decision: string; note: string;
+  blv: string[];   // the level of each finalized debrief of the sprint (a squad member's own level)
 }
 /** Everything about one class, loaded once: students, briefs, results, debriefs, steps, the teacher's sprint decisions. */
 async function load(env: Env, g: GuildRow) {
@@ -50,7 +52,7 @@ async function load(env: Env, g: GuildRow) {
   const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
   const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
     "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id);
-  const reviews = await all<{ brief_id: number; who: string; record: string }>(env, "SELECT brief_id, who, record FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);
+  const reviews = await all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);
   const steps = await all<{ brief_id: number; who: string; final: string | null }>(env, "SELECT brief_id, who, final FROM brief_steps WHERE guild_id = ?", g.id);
   const dec = await all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
     "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id);
@@ -82,12 +84,14 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     }
     const evaluated = new Set(mine.filter((r) => r.source === "brief").map((r) => r.ref));
     // part of each finalized debrief's grid that is valid (the student's own, or their squad's)
-    const pcts: number[] = [];
+    const pcts: number[] = [], blv: string[] = [];
     for (const bid of sp.briefs) {
       const rv = L.reviews.find((r) => r.brief_id === bid && r.who === whoOf(bid, uid));
       if (!rv) continue;
       try {
         const rec = JSON.parse(rv.record), st = reviewStates(rec);
+        const own = rv.who.startsWith("s:") ? memberLevelOf(rec, uid, { lvl: rv.level, prop: rv.plevel }) : { lvl: rv.level || "", prop: rv.plevel || "" };
+        if (own.lvl || own.prop) blv.push(own.lvl || own.prop);
         const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
         if (main.length) pcts.push(main.filter(([, v]: any) => v).length / main.length);
       } catch { /* old record */ }
@@ -100,7 +104,7 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     const prop = !evald || !vals.length ? "" : okN === vals.length ? "valide" : vals.some((c) => c.r === "ko") ? "non_valide" : "";
     const d = L.dec.find((x) => x.sprint === sp.n && x.discord_id === uid);
     return { discord_id: uid, name: s.name || uid, cells, ok: okN, evald, pct: pcts.length ? Math.round((100 * pcts.reduce((a, b) => a + b, 0)) / pcts.length) : null, st,
-      prop, plevel: d?.plevel || "", why: d?.why || "", level: d?.level || "", decision: d?.decision || "", note: d?.note || "" };
+      prop, plevel: d?.plevel || "", why: d?.why || "", level: d?.level || "", decision: d?.decision || "", note: d?.note || "", blv };
   });
 }
 
@@ -172,6 +176,7 @@ const statsLine = (r: Row, codes: string[]) => {
   return [
     `compétences du sprint : ${vals.filter((c) => c.r === "ok").length}/${codes.length} atteintes${vals.some((c) => c.r === "low") ? `, ${vals.filter((c) => c.r === "low").length} validée(s) à un niveau inférieur` : ""}${failed.length ? `, non validées : ${failed.join(", ")}` : ""}`,
     `grille des briefs : ${r.pct ?? "?"} %`, `briefs évalués : ${r.evald}`,
+    r.blv.length ? `niveaux des débriefs : ${r.blv.map((l) => LEVEL_FR[l] || l).join(", ")}` : "",
     r.st[0] + r.st[1] + r.st[2] ? `étapes : ${r.st[0]} à temps, ${r.st[1]} en retard, ${r.st[2]} non validée(s)` : "",
   ].filter(Boolean).join(" · ");
 };
@@ -183,7 +188,7 @@ export async function proposeLevels(env: Env, g: GuildRow, n: number) {
   if (!rows.length) throw new SprintError("No finalized debrief in this sprint yet.");
   const system = [
     "Tu aides un formateur en développement web à classer chaque apprenant à la fin d’un sprint, selon son niveau technique : \"excellent\", \"bon\", \"moyen\", \"faible\" ou \"critique\".",
-    "Tu reçois pour chaque apprenant (A1, A2…) : les compétences du sprint atteintes au niveau demandé, la part de la grille des briefs validée, les briefs évalués, les étapes rendues à temps, et un niveau calculé (\"calc\").",
+    "Tu reçois pour chaque apprenant (A1, A2…) : les compétences du sprint atteintes au niveau demandé, la part de la grille des briefs validée, les briefs évalués, le niveau de chacun de ses débriefs (en squad : son niveau à lui), les étapes rendues à temps, et un niveau calculé (\"calc\").",
     "Garde le niveau calculé sauf raison claire. Ne juge que sur ces données.",
     'Réponds UNIQUEMENT avec ce JSON : {"niveaux":[{"id":"A1","niveau":"bon","raison":"max 15 mots, en français"}]}',
   ].join("\n");

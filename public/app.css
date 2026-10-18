@@ -1567,6 +1567,9 @@ div.asl-opt { cursor: default; }
 .db-fold > summary::-webkit-details-marker { display: none; }
 .db-fold > summary::before { content: "▸"; color: var(--ink-faint); transition: transform .15s; } .db-fold[open] > summary::before { transform: rotate(90deg); }
 .db-fold > summary h3 { margin: 10px 0; }
+/* a whole panel folded (the debrief's other automatic checks): no line above, its title as the summary */
+.db-fold.db-fold-top { border-top: 0; margin-top: 0; }
+.db-fold > summary h2 { margin: 0; }
 .iv-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .res-table td:first-child { white-space: nowrap; min-width: 280px; }
 .res-name { display: flex; align-items: center; gap: 12px; }
@@ -1726,6 +1729,13 @@ a.gm-card:hover { text-decoration: none; }
 .act-kind { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); width: 100%; }
 .act-kind.k-veille { color: var(--blue); }
 .act-kind.k-live { color: var(--s5); }
+.act-kind.k-workshop { color: var(--s3); }
+/* the free 11:00 of a day without a live coding: a live coding or a workshop can be added */
+.act-free { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border: 1px dashed var(--line); border-radius: var(--radius-m); padding: 10px 14px; min-width: 0; }
+dialog.confirm-dlg.act-exists { width: min(720px, calc(100vw - 32px)); }
+.act-exists .dlg-body { text-align: left; display: grid; gap: 8px; }
+.act-exists h2 { text-align: left; }
+.act-exists .act-scroll { max-height: 50vh; }
 .act-t { flex: 1 1 200px; min-width: 0; font-size: 15px; line-height: 1.35; }
 .act-tags { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .act-btns { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; margin-top: 4px; }

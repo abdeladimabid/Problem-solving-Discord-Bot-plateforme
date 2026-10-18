@@ -24,6 +24,9 @@ import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { contribution as memberContribution, memberLevel, memberLevelOf, memberLevels } from "../src/shared/review/members.ts";
+import { pickFiles, taskChecks, taskFallback, taskTarget } from "../src/shared/review/task.ts";
+import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, workshopTimingErrors } from "../src/shared/activities.ts";
 import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -2667,15 +2670,17 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   const st = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: true } } });
   check(st.status === 200 && st.data.states.co.T1 === true && /^Bonjour Alice/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
   const ch = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
-  check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.observer.length === 2, "mise en situation drawn on a point of the brief");
+  check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.criteres.length === 3 && ch.data.review.challenge.observer.length === 3
+    && ch.data.review.challenge.regarder && ch.data.review.challenge.fichiers.length === 1 && ch.data.review.challenge.by === "ai", "mise en situation: a task on their project (what to do, files, 3 criteria, a hint for the teacher)");
   {
     const sys = ai.prompts[ai.prompts.length - 1], usr = ai.users[ai.users.length - 1];
-    check(sys.includes("Une seule chose à faire, sur le point tiré au sort") && sys.includes("Ne nomme aucune technique ou propriété que le brief ne cite pas") && !sys.includes("disposition d’une section sur mobile"), "…one thing on the drawn point, no technique the brief doesn't cite");
+    check(sys.includes("soit d’AJOUTER une petite fonctionnalité à son code, soit de MODIFIER son code") && sys.includes("une seule chose, sur le POINT VISÉ") && sys.includes("Ne nomme aucune technique ou propriété que le brief ne cite pas") && sys.includes("au vouvoiement"),
+      "…add or change one feature of their own code, on the point aimed at, no technique the brief doesn't cite, « vous »");
     check(usr.includes("BRIEF :\n") && !usr.includes("CE QUE LE PROJET UTILISE"), "…the whole brief, not what the student's code uses");
     ai.chTech = true; const n0 = ai.users.length;
     const ct = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
     ai.chTech = false;
-    const again = ai.users.slice(n0).filter((u) => u.includes("POINT DU BRIEF TIRÉ AU SORT"));
+    const again = ai.users.slice(n0).filter((u) => u.includes("POINT VISÉ"));
     check(ct.status === 200 && again.length === 2 && /elle nomme [^)]*@media[^)]*, que le brief ne demande pas/.test(again[1]) && !/flexbox|@media/i.test(ct.data.review.challenge.consigne), "…a task naming Flexbox / @media is refused and asked again");
   }
   await api("POST", `/api/briefs/${id}/review/comment`, { g: G, who, text: "Bonjour Alice, mon commentaire." });
@@ -2749,7 +2754,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/Lors de notre échange : Revois la différence entre margin et padding\./.test(rm.data.review.result.feedback), "…and they go into the comment, for the learner");
+  check(rm.data.review.result.feedback.includes("Notions à revoir\nÀ la suite de notre échange, je vous invite à revoir les notions suivantes :\n– la différence entre margin et padding"), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -2758,7 +2763,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  check(!/questions orales sur/.test(fb) && fb.includes(`Lors de notre échange, une notion t’a posé problème : revois ${o2.data.review.oral[2].notion}.`) && /\nBonne continuation !$/.test(fb), "the comment: the oral questions, the notions to review");
+  check(fb.toLowerCase().includes(`– ${o2.data.review.oral[2].notion.toLowerCase()}`) && fb.includes("Notions à revoir") && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => fb.toLowerCase().includes(`– ${x.notion.toLowerCase()}`)) && /\nCordialement,$/.test(fb) && !/\btu\b/.test(fb), "the comment: the oral question not answered is a notion to review, in « vous »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
   const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
@@ -3167,6 +3172,59 @@ section("assessments: several competencies per question, why each grade, invitat
   check(ovr.data.takers[0].grades[st.paper[0].id].right === "Il utilise display: flex.", "changing a grade keeps the AI's explanation");
 }
 
+section("squads: each member's own level; the mise en situation's target; the workshop's déroulé; one activity per slot");
+{
+  const ex = [{ type: "story", texte: "En tant que visiteur, je vois la page des soins", statut: "fait" }, { type: "story", texte: "En tant que visiteur, je réserve un soin", statut: "non_fait" },
+    { type: "technique", texte: "Le menu est responsive", statut: "fait" }];
+  const contrib = [{ gid: "101", login: "a", commits: 30, days: 8, prs: 4, reviews: 3 }, { gid: "102", login: "b", commits: 0, days: 0, prs: 0, reviews: 0 }, { gid: "103", login: "c", commits: 10, days: 3, prs: 1, reviews: 0 }];
+  const rec: any = { result: { exigences: ex, competences: [{ code: "C3", avis: "validable" }, { code: "C4", avis: "validable" }] }, squad: { members: contrib.map((m) => ({ gid: m.gid })) }, contrib,
+    final: { ex: [true, true, true] }, members: {} };
+  check(memberContribution(contrib[0], contrib) === 1 && memberContribution(contrib[1], contrib) === 0, "a member's part of the work: the strong one 1, without a commit 0");
+  check(memberLevel(rec, contrib[0]) === "excellent" && memberLevel(rec, contrib[2]) === "bon", "the same squad work, two members, two levels: the one who did most is Excellent, the other Bon");
+  check(memberLevel(rec, contrib[1]) === "faible", "no commit: never better than Faible, even when the squad's work is all validated");
+  check(memberLevel(rec, contrib[1], { co: { C3: false, C4: false }, quiz: 20 }) === "critique", "…and lower with their own competencies off and a weak quiz");
+  const L = memberLevels(rec);
+  check(Object.keys(L).length === 3 && L["101"].prop === "excellent" && L["102"].prop === "faible" && !L["101"].lvl, "every member's proposal, none chosen yet");
+  rec.members["101"] = { level: { lvl: "bon", by: "you" } };
+  check(memberLevelOf(rec, "101").lvl === "bon" && memberLevelOf(rec, "101").prop === "excellent", "the teacher's choice is the member's level, the proposal stays");
+  const old = memberLevelOf({ result: rec.result }, "101", { lvl: "moyen", prop: "bon" });
+  check(old.lvl === "moyen" && old.prop === "bon" && memberLevelOf(rec, "999", { lvl: "", prop: "faible" }).prop === "faible", "an old record (no member data): the squad's level");
+
+  const t1 = taskTarget(rec, { ex: [true, false, true] });
+  check(t1?.why === "todo" && t1.item === 1 && !t1.done && t1.texte.includes("réserve un soin"), "mise en situation: a point of the brief not validated comes first");
+  const t2 = taskTarget(rec, { ex: [true, false, true] }, { exclude: [1], rnd: () => 0 });
+  check(t2?.why === "done" && t2.item === 0 && t2.done, "…another member already has it: a validated point, to change");
+  const t3 = taskTarget({ ...rec, oral: [{ q: "À quoi sert flex-wrap ?", notion: "flex-wrap" }] }, { ex: [true, true, true], oral: [false] });
+  check(t3?.why === "oral" && t3.notion === "flex-wrap", "…all validated: a notion missed at the oral");
+  const t4 = taskTarget(rec, { ex: [true, true, true] }, { rnd: () => 0.99 });
+  check(t4?.why === "done" && t4.item === 2, "…nothing missed: a point done in the project, to change");
+  check(pickFiles(["index.html", "soins.html", "css/style.css", "img/a.png", "node_modules/x.js"], { ...t1!, texte: ex[0].texte }, ["css/style.css"]).join() === "css/style.css,soins.html", "the files: theirs first, then the one the point names; never images or node_modules");
+  const good = { titre: "Ajouter une carte", contexte: "Vous ajoutez un soin à votre page.", consigne: "Ajoutez une carte pour le hammam dans soins.html.", fichiers: ["soins.html"],
+    criteres: ["La carte est visible", "Elle a un titre", "Le reste de la page fonctionne"], regarder: "Observez s'il retrouve le bon fichier." };
+  const o = { js: false, scope: "page des soins carte hammam", files: ["index.html", "soins.html"], duree: "15 min" };
+  check(!taskChecks(good, o).length, "a task on their files, 3 criteria, « vous »: accepted");
+  const bad = taskChecks({ ...good, consigne: "Tu ajoutes une carte dans contact.html.", fichiers: ["contact.html"], criteres: ["La carte est visible", "Elle a un titre"] }, o);
+  check(bad.some((e) => e.includes("vouvoie")) && bad.some((e) => e.includes("exactement 3")) && bad.some((e) => e.includes("n’existent pas")), "« tu », 2 criteria, a file not in the repo: refused, with why");
+  const fb = taskFallback(t1!, { project: "Hammam", files: ["soins.html"], duree: "15 min" });
+  check(fb.titre.startsWith("Ajouter : ") && fb.criteres.length === 3 && fb.fichiers.join() === "soins.html" && !taskChecks(fb, o).some((e) => e.includes("vouvoie")), "without the AI: a task from the template, on their files, in « vous »");
+
+  const ws = { duree: 50, deroule: [5, 15, 15, 10, 5].map((minutes) => ({ minutes })) };
+  check(!workshopTimingErrors(ws).length, "a workshop of 50 min in 5 steps that add up: fine");
+  check(workshopTimingErrors({ ...ws, deroule: [5, 15, 15, 5, 5].map((minutes) => ({ minutes })) }).some((e) => e.includes("exactement la durée")), "…steps that don't add up to the duration: refused");
+  check(workshopTimingErrors({ duree: 40, deroule: [10, 10, 10, 10].map((minutes) => ({ minutes })) }).some((e) => e.includes("45 à 60")) && workshopTimingErrors({ duree: 45, deroule: [15, 15, 15].map((minutes) => ({ minutes })) }).some((e) => e.includes("4 à 6")), "…shorter than 45 min, or fewer than 4 steps: refused");
+  const w = cleanWorkshop({ titre: "Une liste de cartes", objectifs: ["Créer des éléments", "Parcourir un tableau", "Ajouter un élément"], contexte: "On pratique la veille. Chaque groupe affiche une liste.", organisation: "Groupes de 2.", duree: 50,
+    deroule: [5, 15, 15, 10, 5].map((minutes, i) => ({ minutes, etape: `Étape ${i + 1}`, notions: "DOM" })), consignes: [1, 2, 3].map((i) => ({ titre: `Étape ${i}`, detail: "Faites-le." })),
+    starter: null, donnees: "Trois produits.", criteres: ["a", "b", "c"], plus_loin: ["d"], reflexion: ["e ?", "f ?"] }, "js");
+  check(!validateWorkshop(w, { stack: "js", allowed: [], concepts: "" }).length, "a workshop with every section of the template: no warning");
+  check(validateWorkshop({ ...w, criteres: ["a"], consignes: [] }, { stack: "js", allowed: [], concepts: "" }).length === 2, "…missing criteria and instructions: warned");
+  const md = renderWorkshop(w, "2026-10-19");
+  check(md.startsWith("## Lundi 19/10 — Workshop : Une liste de cartes\n\n11:00 · 50 min · Workshop") && md.includes("| 0–5 | Étape 1 | DOM |") && md.includes("| 45–50 | Étape 5 |")
+    && ["🎯 Objectifs", "📌 Contexte", "⏱️ Déroulé", "🧭 Consignes par étapes", "💻 Données", "✅ Critères de réussite", "➕ Pour aller plus loin", "❓ Points de réflexion"].every((h) => md.includes(h)), "the workshop's markdown: the template's sections, a timed déroulé");
+  check(slotOf("live") === slotOf("workshop") && slotOf("veille") !== slotOf("live") && slotOf("week") === "week", "slots: 09:15 the veille, 11:00 a live coding OR a workshop");
+  const rows = [{ day: "2026-10-19", kind: "live" }, { day: "2026-10-19", kind: "veille" }];
+  check(slotTaken(rows, "2026-10-19", "workshop")?.kind === "live" && slotTaken(rows, "2026-10-20", "workshop") === null && slotTaken([rows[0]], "2026-10-19", "veille") === null, "…a workshop's slot is taken by the day's live coding, not by another day's or the veille");
+}
+
 section("assessments: shared with other teachers by a link, linked to a brief (debrief and comment), AI questions keep the competencies");
 {
   // the AI forgot the competencies: the ones the teacher picked are used
@@ -3211,7 +3269,7 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
   const st = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(st.status === 200 && st.data.states.co.C3 === false && st.data.states.co.C4 === true, `the assessment's "not validated" counts in the debrief (${JSON.stringify(st.data.states?.co)})`);
   const afb = st.data.review.result.feedback;
-  check(/Lors de l’évaluation « CSS de base », certaines notions t’ont posé problème\. Documente-toi et entraîne-toi en priorité sur [^\n]+\./.test(afb) && !afb.includes(mk.data.assessment.questions[0].prompt.slice(0, 40)), `…and the comment names the notions to study, not the questions (${afb.match(/priorité sur ([^\n]+)/)?.[1]})`);
+  check(!/Lors de l’évaluation|posé problème/.test(afb) && !afb.includes(mk.data.assessment.questions[0].prompt.slice(0, 40)), "…the assessment is not in the comment (its notions: the one-to-one and the oral questions)");
   check(st.data.review.assess?.[0]?.title === "CSS de base", "…the debrief page shows the assessment");
   check(!/%|niveau|Critique|Moyen|Compétences|C3|-Évaluation/.test(afb), "…with no score, no level and no competency codes");
   {
@@ -3443,45 +3501,95 @@ section("brief steps: found in the brief, dated in working days, proposed from t
     result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
   const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
-  check(/Fais aussi plus attention à ces points\..*Partie 2 : validée en retard\. Les pages sont arrivées en retard\./.test(fb), "Suivi du projet: the teacher's result for each step, with the note (a late step in what to watch)");
-  check(fb.includes("La majorité de ton travail (83 % des commits) a été faite pendant la dernière étape") && fb.includes("terminer chaque partie à la date prévue"), "…work done at the end, and the advice");
-  check(!/Partie 3 :/.test(fb), "a step not decided is not written");
+  check(/^Bonjour Carol,/.test(fb) && !/Partie 2|en retard|83 %|dernière étape/.test(fb), "the steps of the brief stay on the page for the teacher: not in the comment");
   const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
   check(rv.data.steps.length === 3 && rv.data.stepRecs[2].note === "Les pages sont arrivées en retard.", "the debrief page gets the steps and the results");
   env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
 }
 
-section("the debrief comment: what went well, what to improve, what to watch; no deliverables, criteria, bonus to do, scores or codes");
+section("the debrief comment: professional, « vous », only from the teacher's decisions (requirements, bonus, competencies, one-to-one, oral)");
 {
-  const { buildFeedback } = await import("../src/shared/review/engine.ts");
-  const fb = buildFeedback("Sara", [{ id: "nav", ok: true }, { id: "docs", ok: false }, { id: "seo", ok: false }], [
-    { type: "story", texte: "En tant que visiteur, je veux voir le menu", statut: "fait", check: "nav" },
-    { type: "story", texte: "En tant que visiteur, je veux une page contact", statut: "absent" },
-    { type: "livrable", texte: "README avec le lien de la maquette", statut: "absent", check: "docs" },
+  const C = await import("../src/shared/review/comment.ts");
+  const ex = [
+    { type: "story", texte: "En tant que visiteur, je vais voir le menu sur toutes les pages, afin de naviguer.", statut: "fait", check: "nav", bound: true },
+    { type: "story", texte: "En tant que visiteur, je vais voir une page contact avec un formulaire, afin d'écrire au hammam.", statut: "absent" },
+    { type: "story", texte: "En tant que développeur, je vais rendre le site adaptatif aux points de rupture 768 px et 1024 px, afin de l'afficher sur mobile.", statut: "absent" },
+    { type: "technique", texte: "Utiliser Flexbox pour la mise en page", statut: "fait" },
+    { type: "livrable", texte: "Documenter la planification du projet dans le README", statut: "absent" },
     { type: "critere", texte: "Code indenté proprement", statut: "absent" },
-    { type: "bonus", texte: "En tant que visiteur, je veux un mode sombre", statut: "fait" },
-    { type: "bonus", texte: "En tant que visiteur, je veux une animation", statut: "absent" }],
-    [{ code: "C1N1", ok: true }, { code: "C3N1", ok: false }], null, null, null,
-    [{ title: "HTML de base", score: 56, comps: { C1N1: { ok: true } }, gaps: ["les sélecteurs CSS (balise, classe, id)", "la mise en forme du texte et des couleurs en CSS"] }]);
-  check(/^Bonjour Sara,\n\nVoici ce que tu as bien réussi dans ce projet : tu as réalisé la plupart des fonctionnalités demandées dans le brief\. Tu maîtrises bien la navigation entre les pages\. Tu as aussi réalisé le bonus \(un mode sombre\)/.test(fb), "what went well first, short: the features as a whole, what they master, the bonus done");
-  const fb2 = buildFeedback("Sara", [{ id: "pages", ok: true, detail: "4 page(s) : index, contact" }, { id: "nav", ok: true }, { id: "semantic", ok: true }, { id: "alt", ok: true }, { id: "w3c", ok: true }, { id: "form", ok: true }, { id: "commits", ok: true, n: 7, days: 4 }, { id: "git", ok: true, total: 7, conv: 0 }],
-    [{ type: "story", texte: "Une page contact", statut: "fait" }], [], null, null, [{ notion: "alt", ok: true }]);
-  check(fb2.includes("tu as réalisé toutes les fonctionnalités demandées dans le brief. Tu maîtrises bien la navigation entre les pages, les balises sémantiques, les bonnes pratiques (l’accessibilité et un code HTML valide) et Git (commits réguliers et messages clairs). Tu as bien répondu à toutes les questions orales.")
-    && !/index, contact|formulaire est présent|7 commits/.test(fb2) && fb2.includes("utiliser la convention de nommage"), "…no detail of every page or feature; the commit convention is advice");
-  check(fb.includes("de travailler sur une page contact") && !/partie du brief/.test(fb) && fb.includes("meta description"), "…what to improve: the stories and the checks of the work, as actions");
-  const fbA = buildFeedback("Sara", [], [{ type: "story", texte: "En tant que développeur, je vais appliquer les bonnes pratiques UX/UI (lisibilité), afin d'offrir une expérience agréable.", statut: "absent" },
-    { type: "story", texte: "En tant que développeur, je vais créer la page contact, afin que l'internaute écrive.", statut: "partiel" }, { type: "technique", texte: "Utiliser Flexbox pour la mise en page.", statut: "absent" }], []);
-  check(fbA.includes("Pour améliorer ton travail, je te conseille d’appliquer les bonnes pratiques UX/UI (lisibilité), de finir de créer la page contact et d’utiliser Flexbox pour la mise en page."), "a story or a technical demand not done: what to do, as an action");
-  check(!/README|indenté|animation|essayer ce|Compétences|C1N1|C3N1|56|niveau|Moyen/.test(fb), "…no deliverable, criterion, bonus to do, competency code, score or level");
-  check(fb.includes("Lors de l’évaluation « HTML de base », certaines notions t’ont posé problème. Documente-toi et entraîne-toi en priorité sur les sélecteurs CSS (balise, classe, id) et la mise en forme du texte et des couleurs en CSS.") && /\nBonne continuation !$/.test(fb), "…what to watch: the notions behind the questions missed, grouped");
-  const fb3 = buildFeedback("Sara", [], [], [], null, null, [{ notion: "Attribut alt", ok: false }, { notion: "Flexbox", ok: false }, { notion: "Doctype", ok: true }], null,
-    { forStudent: "Tu dois revoir les bases du HTML : l’utilité du doctype, des attributs label/for et alt, et améliorer l’aspect UI de ton site." });
-  check(fb3.includes("Lors de notre échange : Tu dois revoir les bases du HTML : l’utilité du doctype, des attributs label/for et alt, et améliorer l’aspect UI de ton site. Revois aussi Flexbox.")
-    && !/Attribut alt|Fais aussi plus attention/.test(fb3), "the one-to-one in one paragraph: the remarks, plus only the oral notions they don't already mention");
-  const { conceptsOf } = await import("../src/shared/review/engine.ts");
-  check(conceptsOf("Crée un formulaire avec un champ texte et un bouton submit. Utilise les attributs id et class appropriés.").join() === "les formulaires HTML (form, input, label, button)"
-    && conceptsOf("Ajoute un lien hypertexte qui ouvre https://example.com dans un nouvel onglet").join() === "les liens hypertextes (a, href, target)"
-    && conceptsOf("Écris le code HTML d’une page minimale : le doctype et les balises").join() === "la structure d’une page HTML (doctype, head, body)", "a question → the notion it tests (an HTML id is not a CSS selector, class appropriés is not OOP)");
+    { type: "bonus", texte: "En tant que visiteur, je vais activer un mode sombre, afin de lire la nuit.", statut: "fait" },
+    { type: "bonus", texte: "En tant que visiteur, je vais voir une animation", statut: "absent" },
+  ];
+  const rec: any = {
+    first: "Sara", brief: "Hammam Al Andalous",
+    checks: [{ id: "nav", label: "Menu", ok: true }, { id: "commits", label: "Commits réguliers", ok: false, n: 2, days: 1 }, { id: "branches", label: "Branches", ok: false }, { id: "active", label: "Page en cours", ok: false }],
+    result: { exigences: ex, competences: [{ code: "C3", avis: "validable" }, { code: "C4", avis: "non_visible" }] },
+    oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "…" }, { q: "Que fait <main> ?", notion: "Le rôle de la balise <main>", a: "…" }],
+    final: { oral: [true, false] },
+    remarks: { text: "Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox." },
+  };
+  const d = C.commentData({ first: "Sara", project: rec.brief, rec });
+  const fb = C.commentText(d);
+  check(fb.startsWith("Bonjour Sara,\n\nVoici le bilan du débriefing de votre projet « Hammam Al Andalous ».\n\nPoints forts\n") && /\n\nCordialement,$/.test(fb), "the opening (first name, the project) and the closing");
+  check(!/\b(tu|ton|ta|tes|toi)\b/i.test(fb) && !/\*\*|#|!/.test(fb) && /\bvous\b/i.test(fb), "« vous », plain text, no markdown, no exclamation mark");
+  check(fb.includes("Bonus\nVous avez également travaillé le bonus suivant : activer un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes.") && !/animation/.test(fb), "Bonus: only the bonus done, valued");
+  const imp = fb.slice(fb.indexOf("Axes d'amélioration"), fb.indexOf("Notions à revoir"));
+  check(imp.includes("– Permettre à l’utilisateur de voir une page contact avec un formulaire.") && imp.includes("– Rendre le site adaptatif aux points de rupture 768 px et 1024 px.") && imp.includes("– Documenter la planification du projet dans le README."),
+    "what to improve: the requirements not validated, as actions");
+  check(!/indenté|commit|branche|page en cours|menu sur toutes/i.test(imp), "…never the performance criteria nor the other automatic checks");
+  const not = fb.slice(fb.indexOf("Notions à revoir"));
+  check(not.includes("À la suite de notre échange, je vous invite à revoir les notions suivantes :\n– la différence entre margin et padding ;\n– le rôle de la balise <main>.") && !/flexbox|attribut alt/i.test(not),
+    "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
+  check(fb.includes("compétence suivante : « réaliser des interfaces utilisateur statiques web ou web mobile »") && !/C3|C4|niveau|%/.test(fb), "strengths: the validated requirements in themes, the competencies validated by name (no codes, no score)");
+  // the other automatic checks never change it
+  // (the menu check is bound to a requirement: that one is the requirement's switch, so it stays)
+  const flipped = { ...rec, checks: rec.checks.map((c: any) => (c.id === "nav" ? c : { ...c, ok: !c.ok })), final: { ...rec.final, ck: { commits: true, branches: true, active: true } } };
+  check(C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: flipped })) === fb, "the other automatic checks don't feed the comment");
+  check(C.wordCount(fb) >= 120 && C.wordCount(fb) <= 250, `between 120 and 250 words (${C.wordCount(fb)})`);
+  check(C.actionOf("Page des soins avec les prix") === "Compléter le point du brief « Page des soins avec les prix »." && C.actionOf("Utiliser Flexbox pour la mise en page") === "Utiliser Flexbox pour la mise en page."
+    && !C.themesOf(["Site en ligne sur GitHub Pages"]).some((t: string) => /Git$/.test(t)), "a grid line becomes something to complete; GitHub Pages is the deployment, not Git");
+  // nothing to improve, no bonus, no one-to-one: those sections go
+  const good: any = { ...rec, result: { exigences: ex.filter((e) => e.statut === "fait" && e.type !== "bonus"), competences: [{ code: "C3", avis: "validable" }] }, oral: [], remarks: null, final: {} };
+  const fg = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: good }));
+  check(!fg.includes("Bonus") && !fg.includes("Notions à revoir") && fg.includes("Axes d'amélioration\nL'ensemble des points du brief est validé. Pour aller plus loin") && fg.includes("Félicitations pour ce travail de qualité"),
+    "everything validated: how to go further; no bonus, no notions sections");
+  // a squad: everyone, « vous »; a member's own competencies and note
+  check(/^Bonjour Les Pixels,\n/.test(C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final)), "a squad's comment: to everyone");
+  const mc = C.memberComment({ name: "omar_benali" }, rec, { co: { C3: false, C4: true }, note: "Confond flex et grid." });
+  check(mc.startsWith("Bonjour Omar,") && mc.includes("– la différence entre flex et grid ;") && !mc.includes("margin et padding") && mc.includes("« développer la partie dynamique"), "a squad member: their own note and competencies");
+  // the AI only phrases the same sections; its answer is checked
+  const pr = C.aiCommentPrompt(d);
+  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("activer un mode sombre") && !/commits|branches/i.test(pr), "the AI gets the decisions (no name, no automatic checks)");
+  const j = { points_forts: "Votre site est bien structuré et la navigation entre les pages est cohérente sur l’ensemble du projet. La mise en page avec Flexbox est maîtrisée, ce qui donne un rendu propre et lisible. Vous avez également validé la réalisation d’interfaces statiques, une base solide pour la suite de la formation.",
+    bonus: "Vous avez également travaillé les bonus suivants : un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes.", amelioration: ["Ajouter la page contact avec son formulaire.", "Rendre le site adaptatif aux points de rupture demandés (768 px et 1024 px).", "Documenter la planification du projet dans le README."],
+    aller_plus_loin: "", notions: ["la différence entre margin et padding", "le rôle de la balise <main> dans une page"], conclusion: "Je reste disponible pour toute question. Bonne continuation pour le prochain brief." };
+  const at = C.aiCommentText(d, j);
+  check(!!at && at.startsWith("Bonjour Sara,\n\nVoici le bilan") && at.includes("Points forts\nVotre site est bien structuré") && at.includes("– le rôle de la balise <main> dans une page.") && /Cordialement,$/.test(at!), "the AI's phrasing, assembled in the same sections");
+  check(C.aiCommentText(d, { ...j, points_forts: "Tu as bien travaillé la structure de ton site." }) === null && C.aiCommentText(d, { ...j, amelioration: [...j.amelioration, "Ajouter des tests.", "Utiliser Git.", "Autre."] }) === null
+    && C.aiCommentText(d, { ...j, bonus: "" }) === null && C.aiCommentText({ ...d, remarks: "", oralMissed: [], notions: [] }, j) === null && C.aiCommentText(d, { ...j, points_forts: "**Bravo** !" }) === null,
+    "an AI answer that says « tu », adds points, drops the bonus, invents notions or uses markdown is refused (the template is used)");
+  // ✨ through the API: the AI phrases it; kept when a switch changes; ↻ Rebuild writes it from the switches again
+  const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
+  const bid = mk.data.brief.id, who = `u:${U.carol.id}`;
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify({ ...rec, at: Date.now(), result: { ...rec.result, feedback: "" } }), clock.now());
+  const w = await api("POST", `/api/briefs/${bid}/review/commentai`, { g: G, who, states: {} });
+  const wf = w.data.review?.result?.feedback || "";
+  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Bonjour Sara,") && wf.includes("Points forts\nVotre projet est bien structuré") && wf.includes("Bonus\n") && !!w.data.review.edited, `✨ the AI phrases the comment (${w.data.by} ${w.data.msg || ""})`);
+  check(!ai.users[ai.users.length - 1].includes("Sara") && !/commits|branches/i.test(ai.users[ai.users.length - 1]), "…without the name, nor the automatic checks");
+  const k = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { co: { C4: true }, keepComment: true, comment: wf } });
+  check(k.data.review.result.feedback === wf, "…kept when a switch changes");
+  const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
+  check(rb.data.review.result.feedback.startsWith("Bonjour Sara,\n\nVoici le bilan") && rb.data.review.result.feedback.includes("Points forts\nVotre travail est solide") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
+  // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
+  // on, goes in the strengths, and no oral notion is left to review
+  const one = await api("POST", `/api/briefs/${bid}/review/remarks`, { g: G, who, text: "il sont reponder sur tous les questions", ai: true });
+  const of = one.data.review?.result?.feedback || "";
+  check(one.status === 200 && JSON.stringify(one.data.states.oral) === "[true,true]" && one.data.review.remarks.oralSet === 1 && ai.users[ai.users.length - 1].includes("QUESTIONS ORALES :\n1. À quoi sert alt ?"),
+    "one-to-one: the oral questions it says were answered are switched on");
+  check(of.includes("Lors de notre échange, vous avez répondu correctement à toutes les questions de l’échange.") && !of.includes("Notions à revoir") && !/\btu\b/.test(of) && !/\btu\b/.test(one.data.review.remarks.forStudent),
+    "…what went well goes in the strengths (« vous »), nothing left to review");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
+  run1("DELETE FROM briefs WHERE id = ?", bid);
 }
 
 section("sprints: competencies reached in the sprint's briefs, levels for the report (AI for the class, no names), decision, sprint comment");
@@ -4771,6 +4879,87 @@ section("AI keys: a request too large for the per-minute token limit is sent aga
     const t = await AK.callStep({ id: "g", label: "Groq", type: "groq", key: "k", model: "m", base: "https://api.groq.com/openai/v1", source: "class" } as any, [{ role: "user", content: "hi" }], { maxTokens: 6000, temperature: 0.5, json: true });
     check(t === '{"ok":1}' && asked.join() === "6000,4300", "413 'Limit 6000, Requested 7400': sent again with 4300 tokens, and it answers");
   } finally { (globalThis as any).fetch = real; }
+}
+
+section("activités: the extra activity of a day (live coding or workshop), never over an existing one, one per slot");
+{
+  const mon = "2026-11-16", fri = "2026-11-20";
+  const n = (kind: string, day = mon) => q1("SELECT COUNT(*) AS n FROM activities WHERE guild_id = ? AND day = ? AND kind = ?", G, day, kind).n;
+  const w1 = await api("POST", "/api/activities/week", { g: G, monday: mon, from: mon, to: fri });
+  check(w1.status === 200 && w1.data.item?.kind === "week", "the week's plan");
+  const w2 = await api("POST", "/api/activities/week", { g: G, monday: mon, from: mon, to: fri });
+  check(w2.status === 200 && !w2.data.item && w2.data.exists?.id === w1.data.item.id && n("week") === 1, "the week again: the plan that exists comes back, nothing is written over");
+  const w3 = await api("POST", "/api/activities/week", { g: G, monday: mon, from: mon, to: fri, replace: true });
+  check(w3.data.item?.id === w1.data.item.id && n("week") === 1, "…replaced only when the teacher says so");
+  const u0 = ai.users.length;
+  ai.wsBad = 1;
+  const ws = await api("POST", "/api/activities/item", { g: G, day: mon, kind: "workshop" });
+  ai.wsBad = 0;
+  const asked = ai.users.slice(u0);
+  check(ws.status === 200 && ws.data.item?.kind === "workshop" && ws.data.item.md.startsWith("## Lundi 16/11 — Workshop : Construire une liste de cartes") && !ws.data.item.warnings.length, "Monday: a workshop at 11:00, on its template");
+  check(asked.length === 2 && asked[0].includes("WORKSHOP À ÉCRIRE") && asked[0].includes("HORS PÉRIMÈTRE") && asked[1].includes("les minutes du déroulé font exactement la durée"), "…from the programme only; a déroulé that doesn't add up is asked again");
+  const wk = q1("SELECT md FROM activities WHERE guild_id = ? AND day = ? AND kind = 'week'", G, mon).md;
+  check(wk.includes("Atelier : Construire une liste de cartes"), "…the week's overview shows it");
+  const again = await api("POST", "/api/activities/item", { g: G, day: mon, kind: "workshop" });
+  check(!again.data.item && again.data.exists?.id === ws.data.item.id && n("workshop") === 1, "generated again: the one that exists is shown (the page asks before replacing it)");
+  const lv0 = await api("POST", "/api/activities/item", { g: G, day: mon, kind: "live", extra: true });
+  check(lv0.data.exists?.kind === "workshop" && !n("live"), "a live coding where the workshop is: the slot is taken, nothing written");
+  const lv = await api("POST", "/api/activities/item", { g: G, day: mon, kind: "live", extra: true, replace: true });
+  const v1 = (await api("GET", `/api/activities?g=${G}&from=${mon}&to=${fri}`)).data;
+  check(lv.data.item?.kind === "live" && !n("workshop") && n("live") === 1 && v1.weeks[0].live.includes(mon), "replaced: the live coding takes the slot, the workshop goes, Monday joins the week's live codings");
+  const ws2 = await api("POST", "/api/activities/item", { g: G, day: mon, kind: "workshop", replace: true });
+  const v2 = (await api("GET", `/api/activities?g=${G}&from=${mon}&to=${fri}`)).data;
+  check(ws2.data.item?.kind === "workshop" && !n("live") && !v2.weeks[0].live.includes(mon), "…and back: a workshop again, Monday has no live coding anymore");
+  check((await api("POST", "/api/activities/item", { g: G, day: fri, kind: "live" })).data.error?.includes("No live coding planned"), "Friday: no live coding unless it's the day's extra activity");
+  const xw = await api("POST", "/api/activities/item", { g: G, day: fri, kind: "live", extra: true });
+  check(xw.data.item?.md.includes("## Vendredi 20/11 — Live coding") && (await api("GET", `/api/activities?g=${G}&from=${mon}&to=${fri}`)).data.weeks[0].live.includes(fri), "…the extra live coding of Friday (Wednesday 18/11 is a holiday)");
+  const ve = await api("POST", "/api/activities/item", { g: G, day: fri, kind: "veille" });
+  const ve2 = await api("POST", "/api/activities/item", { g: G, day: fri, kind: "veille" });
+  check(ve.data.item && ve2.data.exists?.id === ve.data.item.id && n("veille", fri) === 1, "a veille that exists isn't generated again (the week's generation skips it)");
+  const pv = await api("POST", "/api/activities/item", { g: G, day: fri, kind: "veille", preview: true, proposal: "Plus simple" });
+  check(!!pv.data.draft && n("veille", fri) === 1, "…Regenerate still previews a new version (Replace in the dialog keeps it)");
+  let threw = false;
+  try { run1("INSERT INTO activities (guild_id, day, kind, md, created_at, updated_at) VALUES (?, ?, 'live', 'x', 0, 0)", G, mon); } catch { threw = true; }
+  check(threw && n("live") === 0, "the database refuses a live coding and a workshop in the same slot (unique index)");
+  run1("DELETE FROM activities WHERE guild_id = ? AND day >= ? AND day <= ?", G, mon, fri);
+}
+
+section("squad debriefs: each member's own level (chips, ✨, finalize, Progress, their page)");
+{
+  const A = U.alice.id, B = U.bob.id, sq = "abc123", who = `s:${sq}`;
+  run1("INSERT INTO briefs (guild_id, title, status, data, kind, squads, created_at) VALUES (?, 'Squad levels', 'assigned', '{}', 'squad', ?, ?)", G, JSON.stringify([{ id: sq, name: "Squad 1", members: [A, B], sm: A }]), clock.now());
+  const id = q1("SELECT MAX(id) AS id FROM briefs").id as number;
+  const rec = {
+    at: Date.now(), first: "", model: "test", brief: "Hammam", repos: ["sq/hammam"], count: 30, files: true, skills: ["C3"], checks: [],
+    squad: { id: sq, name: "Squad 1", members: [{ gid: A }, { gid: B }] },
+    contrib: [{ gid: A, login: "alice-gh", name: "Alice", commits: 28, days: 7, prs: 3, merged: 3, reviews: 2 }, { gid: B, login: "bob-gh", name: "Bob", commits: 0, days: 0, prs: 0, merged: 0, reviews: 0 }],
+    result: { resume: "Bien.", commits: [], forts: [], ameliorer: [], feedback: "", exigences: [{ type: "story", texte: "Page des soins", statut: "fait", preuve: "soins.html" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] },
+    challenge: null, members: {},
+  };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(rec), clock.now());
+  const r0 = await api("GET", `/api/briefs/${id}/review?g=${G}&who=${who}`);
+  check(r0.status === 200 && r0.data.memberLevels?.[A]?.prop === "excellent" && r0.data.memberLevels?.[B]?.prop === "faible", "each member's level proposed from their own data: the strong one Excellent, the one without a commit Faible");
+  const c1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, member: B, level: "critique" });
+  check(c1.data.memberLevels[B].lvl === "critique" && c1.data.memberLevels[B].by === "you" && c1.data.memberLevels[A].lvl === "", "a chip sets one member's level (the others don't move)");
+  const u0 = ai.users.length;
+  const a1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, member: B, ai: true });
+  const asked = ai.users.slice(u0).join("\n");
+  check(a1.data.memberLevels[B].lvl === "faible" && a1.data.memberLevels[B].by === "calc" && asked.includes("SA PART DU TRAVAIL : 0 commits") && !asked.includes("Bob"), "✨ on the member without a commit: the AI says Excellent, kept at most Faible (no name sent)");
+  const a2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, member: A, ai: true });
+  check(a2.data.memberLevels[A].lvl === "excellent" && a2.data.memberLevels[A].by === "ai", "✨ on the strong member: the AI's level");
+  check((await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, member: "999", level: "bon" })).status === 400, "an unknown member is refused");
+  await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, member: B, level: "" });
+  const P = await api("GET", `/api/progress?g=${G}`);
+  check(P.data.cells?.[`${id}:${A}`]?.lv === "excellent" && P.data.cells?.[`${id}:${B}`]?.lv === "" && P.data.cells?.[`${id}:${B}`]?.plv === "faible", "Progress: each member's square has their own level, not the squad's");
+  const fin = await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  const saved = JSON.parse(q1("SELECT record FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).record);
+  check(fin.status === 200 && saved.members[A].level.lvl === "excellent" && saved.members[B].level.lvl === "faible" && saved.members[B].level.by === "calc", "finalize stores every member's level (the proposal when none was chosen)");
+  const mb = (await api("GET", `/api/students/${B}?g=${G}`)).data.learning?.briefs?.find((x: any) => x.id === id);
+  const ma = (await api("GET", `/api/students/${A}?g=${G}`)).data.learning?.briefs?.find((x: any) => x.id === id);
+  check(mb?.review?.level === "faible" && ma?.review?.level === "excellent", "the student page: each member sees their own level");
+  await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", id);
+  run1("DELETE FROM briefs WHERE id = ?", id);
 }
 
 section("slash command definitions are valid for Discord");

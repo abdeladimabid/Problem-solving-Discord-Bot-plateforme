@@ -269,7 +269,7 @@ export async function syncLibrary(env: Env, g: GuildRow, o: { force?: boolean; s
 async function apply(env: Env, g: GuildRow, it: LibItem) {
   if (it.kind === "activity") {
     const [day, kind] = it.key.split(":");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !["week", "veille", "live"].includes(kind)) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !["week", "veille", "live", "workshop"].includes(kind)) return;
     const local = await one<{ id: number; lib_v: number | null }>(env, "SELECT id, lib_v FROM activities WHERE guild_id = ? AND day = ? AND kind = ?", g.id, day, kind);
     if (it.deleted) {
       if (!local) return;
@@ -282,6 +282,17 @@ async function apply(env: Env, g: GuildRow, it: LibItem) {
       return;
     }
     if (local && (local.lib_v ?? 0) >= it.version) return;
+    // 11:00 is a live coding OR a workshop: the library's one replaces the other kind here, unless students already present it
+    if (kind === "live" || kind === "workshop") {
+      const other = await one<{ id: number }>(env, "SELECT id FROM activities WHERE guild_id = ? AND day = ? AND kind = ?", g.id, day, kind === "live" ? "workshop" : "live");
+      if (other) {
+        const busy = await one(env, "SELECT 1 AS x FROM activity_claims WHERE activity_id = ? AND status IN ('approved', 'done')", other.id).catch(() => null);
+        if (busy) return;
+        await run(env, "DELETE FROM activities WHERE id = ?", other.id);
+        await run(env, "DELETE FROM activity_slots WHERE activity_id = ?", other.id).catch(() => {});
+        await run(env, "UPDATE activity_claims SET status = 'cancelled' WHERE activity_id = ? AND status = 'pending'", other.id).catch(() => {});
+      }
+    }
     const d = it.data || {};
     const t = now();
     await run(env, `INSERT INTO activities (guild_id, program, day, kind, week, title, data, md, warnings, edited, model, created_at, updated_at, lib_v, lib_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

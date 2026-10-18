@@ -39,20 +39,22 @@ async function route(env: Env, path: string, method: string, body: any, url: URL
   }
   if (path === "/activities/week" && method === "POST") {
     const g = await guild();
-    return ok({ item: await generateWeek(env, g, { monday: String(body.monday || ""), from: String(body.from || ""), to: String(body.to || ""), live: Array.isArray(body.live) ? body.live.map(String) : null, keep: !!body.keep }) });
+    // { exists } when the week already has its plan and the teacher didn't say to replace (or complete) it
+    return ok(await generateWeek(env, g, { monday: String(body.monday || ""), from: String(body.from || ""), to: String(body.to || ""), live: Array.isArray(body.live) ? body.live.map(String) : null, keep: !!body.keep, replace: !!body.replace }));
   }
   if (path === "/activities/live" && method === "PUT") {
     const g = await guild();
     return ok(await setLiveDays(env, g, String(body.monday || ""), Array.isArray(body.live) ? body.live.map(String) : []) ?? { live: null, removed: [] });
   }
   if (path === "/activities/item" && method === "POST") {
-    // with the teacher's proposal (Regenerate), and as a preview first: { draft } instead of { item }
+    // with the teacher's proposal (Regenerate), and as a preview first: { draft } instead of { item };
+    // { exists } when the slot already has an activity and the teacher didn't say to replace it; extra: a day's added live coding
     const g = await guild();
-    return ok(await generateItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), proposal: body.proposal, preview: !!body.preview, mode: body.mode, theme: body.theme }));
+    return ok(await generateItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), proposal: body.proposal, preview: !!body.preview, mode: body.mode, theme: body.theme, replace: !!body.replace, extra: !!body.extra }));
   }
   if (path === "/activities/item/keep" && method === "POST") {
     const g = await guild();
-    return ok({ item: await keepItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), data: body.data, proposal: body.proposal, model: body.model }) });
+    return ok({ item: await keepItem(env, g, { day: String(body.day || ""), kind: String(body.kind || ""), data: body.data, proposal: body.proposal, model: body.model, extra: !!body.extra }) });
   }
   if ((m = path.match(/^\/activities\/(\d+)$/))) {
     const g = await guild();

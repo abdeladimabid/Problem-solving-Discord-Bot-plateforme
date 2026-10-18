@@ -10,8 +10,9 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, saveRemarks, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
+import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
@@ -281,7 +282,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -322,7 +323,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     }
     if (act === "states") { await saveStates(env, g, id, who, body.states ?? {}); return ok(await reviewView(env, g, id, who)); }
     if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
-    if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || "")); return ok(await reviewView(env, g, id, who)); }
+    // ✨ the comment phrased by the AI from the switches on the screen (the template when it can't)
+    if (act === "commentai" && method === "POST") { const w = await writeComment(env, g, id, who, body.states ?? null); return ok({ ...w, ...(await reviewView(env, g, id, who)) }); }
+    if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     if (act === "oral" && method === "POST") {
@@ -331,6 +334,12 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok(await reviewView(env, g, id, who));
     }
     if (act === "level" && method === "POST") {
+      // a squad member's own level (their card), or the debrief's
+      if (body.member) {
+        if (body.ai) await makeMemberLevel(env, g, id, who, String(body.member));
+        else await setMemberLevel(env, g, id, who, String(body.member), String(body.level || ""));
+        return ok(await reviewView(env, g, id, who));
+      }
       if (body.ai) await makeReviewLevel(env, g, id, who, body.states ?? null, String(body.comment || "").slice(0, 6000));
       else await setReviewLevel(env, g, id, who, String(body.level || ""));
       return ok(await reviewView(env, g, id, who));
@@ -720,7 +729,7 @@ async function reviewView(env: Env, g: GuildRow, briefId: number, who: string) {
   const r = await getReview(env, briefId, who);
   if (!r) return { review: null, status: null, steps, stepRecs: stepRes, assess: await briefAssessments(env, briefId, who) };
   const states = statesOf(r.rec);
-  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at, steps, stepRecs: stepRes };
+  return { review: r.rec, states, status: r.status, final_at: r.final_at, sent_at: r.sent_at, steps, stepRecs: stepRes, memberLevels: r.rec.squad ? memberLevels(r.rec) : null };
 }
 
 async function assessView(env: Env, g: GuildRow, id: number) {

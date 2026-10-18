@@ -984,7 +984,8 @@ async function viewDebrief(arg) {
   const [bid, rawWho] = String(arg || "").split("~");
   const who = decodeURIComponent(rawWho || "");
   const [B, R] = await Promise.all([api(`/briefs/${bid}`), api(`/briefs/${bid}/review?who=${encodeURIComponent(who)}`), loadRef()]);
-  DB = { B, R, who, bid, commentEdited: false, timer: null };
+  // a comment edited by hand (or written by ✨) stays when a switch changes, also after the page is opened again
+  DB = { B, R, who, bid, commentEdited: !!R?.review?.edited, timer: null };
   renderDebrief();
 }
 
@@ -1058,10 +1059,11 @@ function renderDebrief() {
         </div>
         <p class="muted small">Repo${(rec.repos || []).length > 1 ? "s" : ""}: ${(rec.repos || []).map((x) => `<a href="https://github.com/${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>`).join(", ") || "—"} · ${rec.count ?? 0} commit(s) during the brief</p>
       </section>
-      ${otherChecks.length ? `<section class="panel"><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">read in the code: sure${otherChecks.length < checks.length ? " · the others are in the requirements" : ""}</span></h2>
+      ${otherChecks.length ? `<section class="panel"><details class="db-fold db-fold-top"><summary><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">· ${otherChecks.length}</span></h2></summary>
+        <p class="muted small" style="margin:8px 0 0">Read in the code: sure${otherChecks.length < checks.length ? " · the others are in the requirements" : ""}. For your information only: they don't go in the comment.</p>
         <div class="db-rows">${otherChecks.map((c) => `<div class="db-row ${c.info ? "info" : ""}">
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
-          <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></section>` : ""}
+          <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
       <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
         ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
           const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${/bonus/i.test(type) ? " · not counted in the %" : ""}</span>`;
@@ -1083,6 +1085,7 @@ function renderDebrief() {
       <section class="panel" id="db-oral"></section>
       <section class="panel" id="db-rem"><div class="panel-head" style="margin:0"><h2>One-to-one remarks</h2>${rec.remarks?.at ? `<span class="muted small">saved ${fmtAgo(Math.floor(rec.remarks.at / 1000))}</span>` : ""}</div>
         <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
+        <p class="muted small" style="margin:-4px 0 8px">With ✨, what went well goes in the comment's strengths, what to review in its notions, and the oral questions your remarks say were answered are switched on.</p>
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>
@@ -1098,9 +1101,9 @@ function renderDebrief() {
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
-      <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button>`}</span></div>
+      <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
-        <p class="muted small" id="db-cst">${final ? "" : "Written from your switches. Edit it freely: your text is kept."}</p></section>
+        <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
       <section class="panel" id="db-level"></section>
       <section class="panel">${final ? `<h2>✅ Finalized</h2>
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
@@ -1114,7 +1117,8 @@ function renderDebrief() {
     toast(ai ? "⏳ The AI reads your remarks…" : "Saving…");
     const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text: $("#db-rm").value, ai } });
     DB.R = { ...DB.R, ...R };
-    toast(ai ? "Remarks saved: see the competencies and the comment" : "Remarks saved (in the comment and the level)");
+    const n = ai ? R.review?.remarks?.oralSet || 0 : 0;
+    toast(!ai ? "Remarks saved (in the comment and the level)" : n ? `Remarks saved: ${n} oral question${n > 1 ? "s" : ""} switched on as answered; see the competencies and the comment` : "Remarks saved: see the competencies and the comment");
     renderDebrief();
   };
   if ($("#db-rms")) $("#db-rms").onclick = (e) => busy(e.currentTarget, saveRm(false));
@@ -1176,15 +1180,29 @@ function renderSteps(final) {
 
 function mesHtml(ch, mes, final, member = "") {
   const mk = member ? ` data-mm="${esc(member)}"` : "";
-  if (!ch) return `<h2>Mise en situation</h2><p class="small muted">One small task, done in front of you on their own project, on a point of the brief drawn at random (${member ? "for this member" : "about 10 to 20 minutes"}).</p>
-    ${final ? "" : `<button class="btn" data-draw${mk}>🎲 Draw a mise en situation</button>`}`;
-  return `<div class="panel-head"><h2>Mise en situation</h2>${final ? "" : `<button class="btn small" data-draw${mk}>🎲 Draw another</button>`}</div>
-    <p style="margin:0"><b>${esc(ch.titre)}</b> <span class="tag">${esc(ch.duree || "")}</span> <span class="tag">N${ch.niveau || 1}</span></p>
-    <p>${esc(ch.consigne)}</p>
-    ${(ch.observer || []).length ? `<p class="small" style="margin:0"><b>Check:</b></p><ul class="small">${ch.observer.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}
-    <p class="small muted">Point drawn: ${esc(ch.point || "")} (${ch.done ? "done in the project" : "not done in the project"})</p>
+  if (!ch) return `<h2>Mise en situation</h2><p class="small muted">A short task on ${member ? "this member's" : "their"} own project, done live in front of you (10 to 20 minutes): add a small feature to their code, or change it to do one. Built from the brief, the programme week and their repo${member ? " (the files of their own commits)" : ""}, on what they didn't fully validate first.</p>
+    ${final ? "" : `<button class="btn" data-draw${mk}>✨ Generate</button>`}`;
+  const crit = ch.criteres || ch.observer || [];
+  return `<div class="panel-head"><h2>Mise en situation</h2>${final ? "" : `<button class="btn small" data-redraw${mk}>✨ Regenerate</button>`}</div>
+    <p style="margin:0"><b data-notr>${esc(ch.titre)}</b> <span class="tag">⏱ ${esc(ch.duree || "")}</span> <span class="tag">N${ch.niveau || 1}</span>${ch.by === "template" ? ` <span class="tag" title="The AI couldn't write it: built from the point of the brief">template</span>` : ""}</p>
+    <div data-notr>${ch.contexte ? `<p class="small muted" style="margin:6px 0 0">${esc(ch.contexte)}</p>` : ""}
+    <p style="margin:6px 0">${esc(ch.consigne)}</p>
+    ${(ch.fichiers || []).length ? `<p class="small" style="margin:0 0 6px"><b>Files:</b> ${ch.fichiers.map((f) => `<code>${esc(f)}</code>`).join(" ")}</p>` : ""}
+    ${crit.length ? `<p class="small" style="margin:0"><b>Acceptance criteria:</b></p><ul class="small">${crit.map((o) => `<li>${esc(o)}</li>`).join("")}</ul>` : ""}</div>
+    ${ch.regarder ? `<p class="small db-adv"><b>For you:</b> <span data-notr>${esc(ch.regarder)}</span></p>` : ""}
+    <p class="small muted">Aimed at: <span data-notr>${esc(ch.point || "")}</span> (${ch.why === "oral" ? "a notion missed at the oral" : ch.done ? "done in the project: they change it" : "not done in the project"})</p>
     ${member ? "" : `<label>Result</label>${final ? `<b>${esc(MES.find(([v]) => v === mes.r)?.[1] || "—")}</b>${mes.note ? ` · ${esc(mes.note)}` : ""}`
       : `${segHtml("mes", [["", "Not done yet"], ...MES], mes.r || "")}<input type="text" id="db-mn" value="${esc(mes.note || "")}" placeholder="What you saw (optional)" style="width:100%;margin-top:8px">`}`}`;
+}
+
+// A squad member's own level: proposed from their data (dashed), theirs when you click; ✨ asks the AI on their data
+function memberLevelHtml(gid, final) {
+  const L = (DB.R.memberLevels || {})[gid] || {}, cur = L.lvl || "", p = L.prop || "";
+  const LV = typeof W_LV !== "undefined" ? W_LV : [["excellent", "Excellent"], ["bon", "Bon"], ["moyen", "Moyen"], ["faible", "Faible"], ["critique", "Critique"]];
+  const name = (v) => (LV.find(([k]) => k === v) || [, v])[1];
+  return `<div class="m-lv"><div class="panel-head" style="margin:10px 0 4px"><b>Level</b>${final ? "" : `<button class="btn small" data-mlvai="${esc(gid)}" title="Generate this member's level">✨</button>`}</div>
+    ${p ? `<p class="small muted" style="margin:0 0 6px">Proposed: <b>${esc(name(p))}</b>${cur && L.why && L.by !== "you" ? ` · ${L.by === "ai" ? "✨ " : ""}${esc(L.why)}` : ""}</p>` : ""}
+    <div class="toolbar" style="margin:0">${LV.map(([v, l]) => `<button class="btn small w-lv pgc-${v} ${cur === v ? "on" : !cur && p === v ? "prop" : ""}" data-mlv="${v}" data-gid="${esc(gid)}" ${final ? "disabled" : ""}>${l}</button>`).join("")}</div></div>`;
 }
 
 function squadMembersHtml(rec, st, final) {
@@ -1201,6 +1219,7 @@ function squadMembersHtml(rec, st, final) {
         <div class="field-row"><div><label>Quiz / oral (%)</label><input type="number" min="0" max="100" data-q value="${ms.quiz ?? ""}" ${final ? "disabled" : ""}></div>
           <div><label>Mise en situation</label><select data-mr ${final ? "disabled" : ""}><option value="">—</option>${MES.map(([v, l]) => `<option value="${v}" ${ms.mes?.r === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
         <div class="db-rows" style="margin-top:8px">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span></div></div>`).join("")}</div>
+        ${memberLevelHtml(m.gid, final)}
         <label>Note</label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${final ? "disabled" : ""}>
         <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div>
         ${ms.comment ? `<details class="small"><summary>Their comment</summary><pre class="code-view" style="white-space:pre-wrap">${esc(ms.comment)}</pre></details>` : ""}
@@ -1257,11 +1276,30 @@ function wireDebrief() {
     const R = await api(`/briefs/${bid}/review/states`, { method: "POST", body: { who, states: currentStates() } });
     DB.R = { ...DB.R, ...R }; c.value = R.review?.result?.feedback ?? ""; $("#db-cst").textContent = "Written again from the switches";
   });
-  $$("[data-draw]").forEach((b) => b.onclick = () => busy(b, async () => {
-    toast("⏳ The AI picks a point and writes the task…");
-    const R = await api(`/briefs/${bid}/review/challenge`, { method: "POST", body: { who, states: currentStates(), member: b.dataset.mm || "" } });
+  if ($("#db-cai")) $("#db-cai").onclick = (e) => busy(e.currentTarget, async () => {
+    if (DB.commentEdited && c.value.trim() && DB.R.review?.commentBy !== "ai" && !(await askConfirm("Write the comment with the AI?", "Your edits of the comment are replaced by a new text, written from the switches.", "Write it"))) return;
+    clearTimeout(DB.timer);
+    $("#db-cst").textContent = "⏳ The AI writes the comment…";
+    const R = await api(`/briefs/${bid}/review/commentai`, { method: "POST", body: { who, states: currentStates() } });
+    DB.R = { ...DB.R, ...R }; DB.commentEdited = true; c.value = R.review?.result?.feedback ?? c.value;
+    $("#db-cst").textContent = R.by === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : `${R.msg || "The AI didn't answer."} Written from your switches instead.`;
+    if (R.by !== "ai") toast(R.msg || "The AI didn't answer: the comment is written from your switches", true);
+  });
+  const drawTask = async (member, proposal = "") => {
+    toast("⏳ The AI reads the project and writes the task…");
+    const R = await api(`/briefs/${bid}/review/challenge`, { method: "POST", body: { who, states: currentStates(), member, proposal } });
     DB.R = { ...DB.R, ...R }; renderDebrief();
-  }));
+  };
+  $$("[data-draw]").forEach((b) => b.onclick = () => busy(b, () => drawTask(b.dataset.mm || "")));
+  // ✨ Regenerate: the teacher can say what the task should be (the AI follows it, within the brief and the week)
+  $$("[data-redraw]").forEach((b) => b.onclick = () => {
+    const ch = b.dataset.mm ? DB.R.review?.members?.[b.dataset.mm]?.ch : DB.R.review?.challenge;
+    openDialog("Regenerate the mise en situation", `<p class="small muted" style="margin-top:0">Now: <b data-notr>${esc(ch?.titre || "—")}</b></p>
+      <label for="ms-p">Your proposal <span class="muted">(optional)</span></label>
+      <textarea id="ms-p" rows="4" maxlength="1000" placeholder="e.g. ajouter un état actif sur le lien du menu de la page en cours, sur sa page contact">${esc(ch?.proposal || "")}</textarea>
+      <p class="small muted">The AI follows it within the brief, the programme week and their files. Empty: another task on another point.</p>`,
+    [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: async () => { const p = $("#ms-p", dlg).value; dlg.close(); await drawTask(b.dataset.mm || "", p); } }]);
+  });
   const saveMembers = async () => {
     const members = Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
       quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
@@ -1270,6 +1308,22 @@ function wireDebrief() {
     DB.R = { ...DB.R, ...R };
   };
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+  // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data (saved first)
+  $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
+    const cur = (DB.R.memberLevels || {})[b.dataset.gid]?.lvl || "";
+    const next = cur === b.dataset.mlv ? "" : b.dataset.mlv;
+    const R = await api(`/briefs/${bid}/review/level`, { method: "POST", body: { who, member: b.dataset.gid, level: next } });
+    DB.R = { ...DB.R, ...R }; renderDebrief();
+    toast(next ? `Level saved: ${b.textContent.trim()}` : "Level removed");
+  }));
+  $$("[data-mlvai]").forEach((b) => b.onclick = () => busy(b, async () => {
+    toast("⏳ The AI reads this member's work…");
+    await saveMembers();
+    const R = await api(`/briefs/${bid}/review/level`, { method: "POST", body: { who, member: b.dataset.mlvai, ai: true } });
+    DB.R = { ...DB.R, ...R }; renderDebrief();
+    const L = (DB.R.memberLevels || {})[b.dataset.mlvai] || {};
+    toast(L.lvl ? `Level: ${$(`[data-mlv="${L.lvl}"]`)?.textContent.trim() || L.lvl}` : "Level proposed from their data");
+  }));
   // everything as it is now (switches, mise en situation, oral questions, your comment), right away: a draft to finish later
   if ($("#db-save")) $("#db-save").onclick = (e) => busy(e.currentTarget, async () => {
     clearTimeout(DB.timer);

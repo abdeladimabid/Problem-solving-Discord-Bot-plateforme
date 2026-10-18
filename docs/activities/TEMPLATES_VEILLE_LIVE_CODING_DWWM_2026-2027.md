@@ -1,6 +1,6 @@
-# Templates Veille & Live Coding — YouCode / DWWM 2026-2027 (A1)
+# Templates Veille, Live Coding & Workshop — YouCode / DWWM 2026-2027 (A1)
 
-> **Purpose:** the reference format Claude must follow every time it generates a daily *veille* or a *live coding* for the A1 promotion.
+> **Purpose:** the reference format Claude must follow every time it generates a daily *veille*, a *live coding* or a *workshop* for the A1 promotion.
 > **Companion of:** `A1_DWWM_2026-2027_context_analysis.md`, `VEILLE_INSPIRATION_DWWM.md`.
 > **Conventions:** rules in English, templates and generated content in **French**. Learners are addressed with **« tu »** in veilles (as in the original template).
 >
@@ -21,6 +21,7 @@
 - Skip any topic already covered as an introduction (e.g. "intro DOM done this week" → next week starts at the next step).
 - The last day of the programme week (usually Friday) = lighter topic (good practices, debugging, quality): the week's work is handed in.
 - **Never require a concept taught in a later week** (check the next planning row and list it as *Hors périmètre*).
+- **Extra activity:** a day without a live coding can get one, or a **workshop** (section 4), at 11:00. One activity per slot: the page asks before replacing what a slot already has, and a week's generation skips what exists ("already generated").
 - Public holidays / vacation days → no veille, no live coding that day.
 
 ### Week overview block (start of the document)
@@ -215,13 +216,96 @@ Tu dois répondre à ces questions dans ta présentation :
 
 ---
 
-## 4. Pre-delivery checklist
+## 4. Workshop template
+
+An **extra activity** for a day without a live coding (Monday, Wednesday, Friday by default): on the Activités page,
+**✨ Generate an activity** on the day's free 11:00 lets the teacher choose a **live coding** (template 3) or a **workshop**.
+The 11:00 slot holds one of them, never both. Like everything else, a workshop comes from the programme week only.
+
+### Rules
+
+- **Learners at the keyboard, in small groups (2 or 3); the trainer goes from group to group.** Every step must be doable alone with its instructions.
+- **45 to 60 min.** The déroulé has **4 to 6 steps** whose minutes **add up exactly** to the duration given.
+- **One short, guided exercise** on the day's concept (usually the morning's veille), reusable in any project of the week.
+- **3 objectives** (each starts with an action verb in the infinitive), a context of **2 to 4 sentences**, the groups' organisation.
+- **3 to 6 step-by-step instructions** (*Consignes par étapes*), each saying precisely what to do.
+- **Data or a starter:** max 5 data items, max 3 form fields, a starter of **40 lines max**.
+- **3 to 5 success criteria** (observable), **1 or 2** ideas *Pour aller plus loin*, **2 or 3** *Points de réflexion*.
+- **Only notions seen in the week's veilles** (or before); no advanced pattern; no JavaScript in an HTML/CSS week.
+
+### Template
+
+````markdown
+## {Jour JJ/MM} — Workshop : {Titre}
+
+11:00 · {45–60} min · Workshop (les apprenants codent en petits groupes, le formateur circule)
+
+**🎯 Objectifs pédagogiques**
+
+- {Objectif 1 — verbe d'action}
+- {Objectif 2}
+- {Objectif 3}
+
+**📌 Contexte**
+
+{2–4 phrases : le concept du programme pratiqué, la compétence visée, ce que les groupes construisent.}
+
+Organisation : {groupes de 2 ou 3, le formateur circule et aide}
+
+**⏱️ Déroulé**
+
+| Minutes | Étape | Notions travaillées |
+| --- | --- | --- |
+| 0–5 | Présentation de l'exercice et des groupes | {notions} |
+| 5–20 | {Étape 1} | {notions} |
+| 20–35 | {Étape 2} | {notions} |
+| 35–45 | {Étape 3} | {notions} |
+| 45–50 | Mise en commun, récap | — |
+
+**🧭 Consignes par étapes**
+
+1️⃣ {Étape 1 : titre}
+
+{Ce que les apprenants font, précisément.}
+
+2️⃣ {Étape 2 : titre}
+
+{…}
+
+**💻 Données / starter — {fichier}**
+
+```{langage}
+{40 lignes max}
+```
+
+{ou, sans starter : **💻 Données de l'exercice** puis les données en une phrase ou une courte liste}
+
+**✅ Critères de réussite**
+
+- {Critère observable 1}
+- {Critère observable 2}
+- {Critère observable 3}
+
+**➕ Pour aller plus loin**
+
+- {Pour les groupes en avance}
+
+**❓ Points de réflexion**
+
+- {Question}
+- {Question}
+````
+
+---
+
+## 5. Pre-delivery checklist
 
 1. Veilles follow the order of the week's concepts; no topic already covered as intro.
 2. No concept from a later week is required (checked against the next planning row).
 3. Each veille has all 8 sections in the template order, with a live demo in the deliverable.
 4. Each live coding: déroulé totals 45 min, ≤ 60 lines of JS, ≤ 2 functions, ≤ 5 data items / ≤ 3 fields.
 5. Live coding uses only notions from the week's veilles (or earlier).
-6. Métier, names and data are fictional and coherent with the sprint.
-7. Links are real (MDN fr, JavaScript.info fr, official docs); no invented URL.
-8. French, « tu » in veilles, code names in backticks.
+6. Each workshop: 45–60 min, déroulé of 4–6 steps adding up exactly, 3–6 instructions, 3–5 success criteria, starter ≤ 40 lines.
+7. Métier, names and data are fictional and coherent with the sprint.
+8. Links are real (MDN fr, JavaScript.info fr, official docs); no invented URL.
+9. French, « tu » in veilles, code names in backticks.
