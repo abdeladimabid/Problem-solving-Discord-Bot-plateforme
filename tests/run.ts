@@ -2994,6 +2994,10 @@ section("activités: the page's API generates a week item by item, checks, retri
   const lv = await api("PUT", "/api/activities/live", { g: G, monday: from, live: ["2026-10-20"] });
   const after = (await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data;
   check(lv.data.removed.join() === "2026-10-22" && after.items.filter((x: any) => x.kind === "live").length === 1 && after.weeks[0].live.join() === "2026-10-20", "live coding only on Tuesday: Thursday's is removed");
+  run1("INSERT INTO activity_claims (guild_id, activity_id, kind, members, by, status, created_at) VALUES (?, ?, 'live', '[]', 'teacher', 'done', ?)", G, lc.data.item.id, clock.now());
+  const kept = await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`);
+  check(kept.status === 400 && /already presented/.test(kept.data.error) && q1("SELECT COUNT(*) AS n FROM activities WHERE id = ?", lc.data.item.id).n === 1, "an activity already presented (graded) can't be deleted");
+  run1("DELETE FROM activity_claims WHERE activity_id = ? AND status = 'done'", lc.data.item.id);
   check((await api("DELETE", `/api/activities/${lc.data.item.id}?g=${G}`)).status === 200 && !(await api("GET", `/api/activities?g=${G}&from=${from}&to=${to}`)).data.items.some((x: any) => x.kind === "live"), "an item is deleted");
   check((await api("GET", `/api/activities?g=g-unknown&from=${from}&to=${to}`)).status === 404, "another class's range: unknown class");
 }
