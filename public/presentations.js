@@ -331,10 +331,10 @@ function intranetActsDialog(from = null) {
     box.innerHTML = `${p.checkError ? `<div class="notice warn" style="margin-bottom:10px">Couldn't check what's already on the intranet: ${esc(p.checkError)} Nothing can be sent until it can be checked.</div>` : ""}
       <p class="small muted" style="margin-top:0">Classroom <b>${esc(p.classroom.name)}</b>. Veille 09:15 (30 min), live coding 11:00 (45 min). Two presenters are a binôme. What the intranet already has at that time is never sent again.</p>
       <div class="table-wrap" style="max-height:360px"><table class="grid-table"><thead><tr><th></th><th>Day</th><th>Activity</th><th>Presenters (intranet)</th><th></th></tr></thead><tbody>
-      ${p.items.map((it) => `<tr${it.existing && !it.assign.length ? ' style="opacity:.75"' : ""}><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length || (it.existing && !it.assign.length) || p.checkError ? "disabled" : "checked"} aria-label="Send ${esc(it.title)}"></td>
-        <td class="small">${esc(it.day)} ${esc(it.at)}</td><td><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}${it.author ? `<div class="small muted">conçue par ${esc(it.author)}</div>` : ""}</td>
+      ${p.items.map((it) => `<tr${it.existing && it.existing.same && !it.assign.length ? ' style="opacity:.75"' : ""}><td><input type="checkbox" data-ia="${it.id}" ${it.missing.length || (it.existing && it.existing.same && !it.assign.length) || p.checkError ? "disabled" : it.existing && !it.existing.same ? "" : "checked"} aria-label="Send ${esc(it.title)}"></td>
+        <td class="small">${esc(it.day)} ${esc(it.at)}${it.moved ? `<div class="muted" title="Sent at another date: its slot had another activity">→ ${esc(it.moved)}</div>` : ""}</td><td><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}${it.author ? `<div class="small muted">conçue par ${esc(it.author)}</div>` : ""}</td>
         <td class="small">${it.members.length ? it.members.map((m) => (m.learner ? esc(m.learner.name || m.name) : `<span style="color:var(--down)">⚠ ${esc(m.name)}</span>`)).join(", ") : `<span class="muted">nobody yet</span>`}</td>
-        <td class="small">${it.existing && !it.existing.same ? `<span style="color:var(--warn,#b45309)" title="The intranet already has another activity at this time: nothing is sent or added to it. To send this one, free that time on the intranet first.">⚠ Another activity at this time on the intranet<br><span class="muted">« ${esc(it.existing.subject)} » · created by <b>${esc(it.existing.by)}</b> on ${esc(it.existing.created)}</span></span>`
+        <td class="small">${it.existing && !it.existing.same ? `<span style="color:var(--warn,#b45309)" title="Tick it to send it at another date (chosen at the confirmation); the intranet's activity stays as it is.">⚠ You already have a ${it.kind === "live" ? "live coding" : "veille"} at this date on the intranet: tick it to choose another date<br><span class="muted">« ${esc(it.existing.subject)} » · created by <b>${esc(it.existing.by)}</b> on ${esc(it.existing.created)}</span></span>`
           : it.existing ? `<span title="${esc(it.existing.text)}">✓ Already on the intranet${it.existing.mine ? " (sent by ClassBot)" : ""}<br><span class="muted">« ${esc(it.existing.subject)} » · created by <b>${esc(it.existing.by)}</b> on ${esc(it.existing.created)}</span></span>`
           : it.missing.length ? `<span style="color:var(--down)">link them first</span>` : "new"}${it.existing && it.assign.length && !it.missing.length ? `<br><b style="color:var(--up)">➕ Add presenters: ${it.assign.map((m) => esc(m.name)).join(", ")}</b>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
   }).catch((e) => { const box = $("#ia-body", dlg); if (box) box.innerHTML = `<p style="color:var(--down)">❌ ${esc(e.message)}</p>`; });
@@ -352,8 +352,7 @@ async function intranetSendOne(it, btn) {
   if (p.checkError) return toast(`Couldn't check what's already on the intranet: ${p.checkError}`, true);
   if (!one) return toast("This activity can't be sent to the intranet", true);
   if (one.missing.length) return toast(`Link them to their intranet learner first (Settings → Intranet YouCode): ${one.missing.join(", ")}`, true);
-  if (one.existing && !one.existing.same) return toast(`Another activity is at this time on the intranet: « ${one.existing.subject} », created by ${one.existing.by} on ${one.existing.created}. Free that time on the intranet first.`, true);
-  if (one.existing && !one.assign.length) return toast(`Already on the intranet with its presenters: « ${one.existing.subject} »`);
+  if (one.existing && one.existing.same && !one.assign.length) return toast(`Already on the intranet with its presenters: « ${one.existing.subject} »`);
   intranetActsConfirm(monday, [one], true);
 }
 
@@ -366,12 +365,21 @@ function intranetActsConfirm(start, list, single = false) {
       ${list.map((it) => `<label class="check" style="align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:10px">
         <input type="checkbox" data-iac="${it.id}" checked>
         <span><b>${esc(it.kind === "live" ? "Live coding" : "Veille")}</b> · ${esc(it.title)}
-          <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)}${it.author ? ` · conçue par ${esc(it.author)}` : ""}</span>${it.existing ? `<span class="small" style="display:block;color:var(--up)">➕ Already on the intranet: only the presenters are added (${it.assign.map((m) => esc(m.name)).join(", ")})</span>` : ""}</span></label>`).join("")}
+          <span class="small muted" style="display:block">${esc(it.day)} ${esc(it.at)} · ${it.minutes} min · ${who(it)}${it.author ? ` · conçue par ${esc(it.author)}` : ""}</span>${it.existing && !it.existing.same ? `<span class="small" style="display:block;color:var(--warn,#b45309)">⚠ You already have a ${it.kind === "live" ? "live coding" : "veille"} at this date on the intranet: « ${esc(it.existing.subject)} ». Choose another date:</span>
+            <input type="datetime-local" data-iat="${it.id}" step="900" style="margin-top:6px" aria-label="Another date for ${esc(it.title)}">`
+            : it.existing ? `<span class="small" style="display:block;color:var(--up)">➕ Already on the intranet: only the presenters are added (${it.assign.map((m) => esc(m.name)).join(", ")})</span>` : ""}</span></label>`).join("")}
     </div>`,
     [{ label: single ? "Cancel" : "← Back", action: () => (single ? dlg.close() : intranetActsDialog(start)) }, { label: "🏫 Confirm and send", primary: true, action: async () => {
       const ids = $$("[data-iac]:checked", dlg).map((x) => Number(x.dataset.iac));
       if (!ids.length) throw new Error("Nothing is ticked");
-      const r = await api("/activities/intranet", { method: "POST", body: { ids } });
+      // the ones whose slot has another activity: the date chosen
+      const at = {};
+      for (const it of list.filter((x) => ids.includes(x.id) && x.existing && !x.existing.same)) {
+        const v = $(`[data-iat="${it.id}"]`, dlg)?.value || "";
+        if (!v) throw new Error(`Choose another date for « ${it.title} »`);
+        at[it.id] = v.replace("T", " ");
+      }
+      const r = await api("/activities/intranet", { method: "POST", body: { ids, at } });
       toast(`${r.sent} sent to the intranet${r.assigned ? ` · presenters added to ${r.assigned}` : ""}${r.reused ? ` (${r.reused} reused from another class: linked, content stored once)` : ""}${r.skipped ? ` · ${r.skipped} already there (not sent again)` : ""}${r.failed ? ` · ${r.failed} not sent` : ""}`, !!r.failed && !r.sent && !r.assigned);
       const why = Object.values(r.results).filter((x) => !x.ok).map((x) => x.message);
       if (why.length) toast(why[0], !!r.failed);

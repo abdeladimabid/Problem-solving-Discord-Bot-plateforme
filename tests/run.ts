@@ -4324,7 +4324,7 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   check(ex && !ex.same && ap3.data.items.find((x: any) => x.id === la).assign.length === 0, "…another subject at that time: not the same activity, nothing to add");
   const as3 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
   const hand = intranetFake.acts.find((x) => x.id === 7001)!;
-  check(as3.data.sent === 0 && !as3.data.assigned && as3.data.skipped === 1 && hand.learners.length === 0 && /another activity is at this time/.test(as3.data.results[la].message) && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1,
+  check(as3.data.sent === 0 && !as3.data.assigned && as3.data.skipped === 1 && hand.learners.length === 0 && /already have a live coding at this date/.test(as3.data.results[la].message) && intranetFake.acts.filter((x) => x.datetime === "2030-01-08 11:00").length === 1,
     "…not sent (no second live coding at 11:00) and its presenters are NOT added to the other activity");
   // the same subject made by hand (accents, capitals aside): its presenters are added, nothing else changes
   hand.subject = "PANIER en js";
@@ -4332,6 +4332,17 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   check(as5.data.assigned === 1 && hand.learners.join() === "501" && hand.duration === 60, "…the same activity (same subject): only its presenters are added");
   const as4 = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
   check(as4.data.assigned === 0 && as4.data.skipped === 1 && hand.learners.join() === "501", "…sent again: nothing more to add, skipped");
+  // its slot has another activity: not sent without a date; sent at the date chosen, the other one left as it is
+  hand.subject = "Manipulation des Cards";
+  const noDate = await api("POST", "/api/activities/intranet", { g: G, ids: [la] });
+  check(noDate.data.sent === 0 && /already have a live coding at this date on the intranet: « Manipulation des Cards ».*Choose another date/.test(noDate.data.results[la].message), "another activity in its slot: it asks for another date");
+  const moved = await api("POST", "/api/activities/intranet", { g: G, ids: [la], at: { [la]: "2030-01-08T14:00" } });
+  const made = intranetFake.acts.find((x) => x.datetime === "2030-01-08 14:00");
+  check(moved.data.sent === 1 && made?.subject === "Panier en JS" && made.learners.join() === "501" && hand.subject === "Manipulation des Cards" && hand.learners.join() === "501", "…sent at the date chosen, with its presenters; the intranet's own activity is left as it is");
+  const after = (await api("GET", `/api/activities/intranet?g=${G}&from=2030-01-06&to=2030-01-12`)).data.items.find((x: any) => x.id === la);
+  check(after.moved === "2030-01-08 14:00" && after.existing?.mine && after.existing.same, "…the preview finds it at its new date (sent by ClassBot)");
+  const again = await api("POST", "/api/activities/intranet", { g: G, ids: [la], at: { [la]: "2030-01-09T14:00" } });
+  check(again.data.sent === 0 && intranetFake.acts.filter((x) => x.subject === "Panier en JS").length === 1, "…never sent twice");
   check((await api("GET", `/api/intranet/classrooms?g=${G}`)).status === 200, "reading what's on the intranet goes through the same signed, trainer-only access");
   // from the shared library: the intranet gets the library's key (a second class's copy is a reused one) and the author
   run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `lib:${G}`, JSON.stringify({ link: "https://hub.example/library/abcdef123456." + "x".repeat(32), name: "A1" }), clock.now());
