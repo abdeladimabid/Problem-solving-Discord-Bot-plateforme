@@ -518,7 +518,7 @@ function actResults() {
     const open = ACT.wopen[w.monday] ?? w.monday === dflt;
     return `<section class="panel act-week${open ? "" : " folded"}" style="--sp:${spColor(w.sprint?.n)}" data-week="${w.monday}">
       <div class="panel-head"><h2><button type="button" class="act-wfold" data-wfold="${w.monday}" aria-expanded="${open}" title="Show or hide this week">${open ? "▾" : "▸"}</button> Week of ${esc(actDate(w.monday, { day: "numeric", month: "long" }))} ${w.weeks.map((x) => `<span class="tag">S${x.n}</span>`).join(" ")}${w.monday === cur ? ` <span class="tag current">📍 Current week</span>` : ""}</h2>
-        ${has ? `<div class="toolbar" style="margin:0"><button class="btn small" data-wcopy="${w.monday}">📋 Copy all</button><button class="btn small" data-wdl="${w.monday}">${icon("download")} .md</button></div>` : ""}</div>
+        ${has ? `<div class="toolbar" style="margin:0"><button class="btn small" data-wintra="${w.monday}" title="Send this week's veilles and live codings to the intranet (you tick which ones)">🏫 Send the week</button><button class="btn small" data-wcopy="${w.monday}">📋 Copy all</button><button class="btn small" data-wdl="${w.monday}">${icon("download")} .md</button></div>` : ""}</div>
       <div class="act-wbody"${open ? "" : " hidden"}>
       ${actCard("week", w.monday)}
       <div class="act-days">${days.map((d) => {
@@ -569,6 +569,7 @@ function actCard(kind, day) {
         <button class="btn small" data-a="edit">✏️ Edit</button>
         <button class="btn small" data-a="regen" title="Write it again">✨ Regenerate</button>
         <button class="btn small" data-a="copy">📋 Copy</button>
+        ${kind === "veille" || kind === "live" ? `<button class="btn small" data-a="intra" title="Send this one to the intranet">🏫 Intranet</button>` : ""}
         ${kind === "week" ? "" : `<button class="btn small danger" data-a="del" title="Delete this activity">🗑 Delete</button>`}
       </div>`)}
     ${job?.state === "error" ? `<p class="act-err small">${esc(job.text)}</p>` : ""}
@@ -595,9 +596,11 @@ function actWire() {
       }
       if (a === "edit") actEdit(card, it);
       if (a === "del") actDelete(kind, it);
+      if (a === "intra") intranetSendOne(it, b);
     });
   });
   $$("[data-extra]").forEach((b) => b.onclick = () => actExtra(b.dataset.extra));
+  $$("[data-wintra]").forEach((b) => b.onclick = () => intranetActsDialog(b.dataset.wintra));
   $$("[data-wcopy]").forEach((b) => b.onclick = () => copyText(actWeekText(ACT.sel.weeks.find((w) => w.monday === b.dataset.wcopy)), "The whole week is copied"));
   $$("[data-wdl]").forEach((b) => b.onclick = () => saveBlob(new Blob([actWeekText(ACT.sel.weeks.find((w) => w.monday === b.dataset.wdl))], { type: "text/markdown;charset=utf-8" }), `activites-${b.dataset.wdl}.md`));
   if (ACT.running) actButtons(true);
