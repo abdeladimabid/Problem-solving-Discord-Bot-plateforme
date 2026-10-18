@@ -1117,6 +1117,9 @@ export async function editItem(env: Env, g: GuildRow, id: number, md: string, ti
 export async function deleteItem(env: Env, g: GuildRow, id: number) {
   const r = await one<ActivityRow>(env, "SELECT * FROM activities WHERE id = ? AND guild_id = ?", id, g.id);
   if (!r) return;
+  // already presented (and graded): it stays, with its grades
+  if (await one(env, "SELECT 1 AS x FROM activity_claims WHERE activity_id = ? AND guild_id = ? AND status = 'done'", id, g.id).catch(() => null))
+    throw new ActivityError("Students already presented it: it stays, with their grades.");
   await run(env, "DELETE FROM activities WHERE id = ?", id);
   await libGone(env, g.id, "activity", `${r.day}:${r.kind}`);
   if (r.kind !== "week") await refreshWeek(env, g, await programOf(env, g), mondayOf(r.day), await overridesOf(env, g.id));
