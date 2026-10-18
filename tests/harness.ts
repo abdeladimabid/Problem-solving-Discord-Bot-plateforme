@@ -379,6 +379,7 @@ export const ai = {
   chTech: false,
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
+  wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -416,6 +417,23 @@ function activityAnswer(user: string): string {
       final: { fichier: "app.js", code: final }, tests: [{ action: "Nom", saisie: "Msemen", resultat: "Ajouté" }], attention: "`innerHTML` avec du texte tapé est dangereux. Utilise `textContent`.",
       extensions: ["Supprimer un produit"], reflexion: ["Pourquoi vider la liste avant d'afficher ?", "Que se passe-t-il sans `preventDefault` ?"], resultat: ["La liste du menu s'affiche", "Il sait expliquer la boucle"] });
   }
+  if (user.includes("WORKSHOP À ÉCRIRE")) {
+    // wsBad: the déroulé doesn't add up (a retry is asked)
+    const bad = ai.wsBad > 0;
+    if (bad) ai.wsBad--;
+    return JSON.stringify({ titre: proposal ? "Workshop sur mesure : les cartes" : "Construire une liste de cartes", ecarte: outside ? ["fetch"] : [],
+      objectifs: ["Créer des éléments avec `createElement`", "Parcourir un tableau avec `for...of`", "Ajouter un élément à la page"],
+      contexte: "Les groupes pratiquent la création d'éléments vue en veille. Chaque groupe affiche une petite liste à partir d'un tableau.",
+      organisation: "Groupes de 2 ou 3, le formateur passe de groupe en groupe.", duree: 50,
+      deroule: [{ minutes: 5, etape: "Présentation de l'exercice et des groupes", notions: "HTML" }, { minutes: 15, etape: "Une carte à la main", notions: "createElement" },
+        { minutes: 15, etape: "Toutes les cartes avec une boucle", notions: "for...of" }, { minutes: bad ? 5 : 10, etape: "Ajouter une carte", notions: "append" }, { minutes: 5, etape: "Mise en commun, récap", notions: "" }],
+      consignes: [{ titre: "Étape 1 : une carte", detail: "Créez un élément li avec le nom du premier produit." }, { titre: "Étape 2 : la boucle", detail: "Affichez tous les produits du tableau avec for...of." },
+        { titre: "Étape 3 : ajouter", detail: "Ajoutez un produit au tableau puis affichez la liste à nouveau." }],
+      starter: { fichier: "app.js", code: "const produits = [\n  { nom: \"Msemen\", prix: 5 },\n  { nom: \"Thé\", prix: 4 },\n];\nconst liste = document.querySelector(\"#liste\");" },
+      donnees: "Deux produits de départ, dans le starter.",
+      criteres: ["La liste affiche tous les produits", "Un produit ajouté apparaît", "Le code utilise createElement"], plus_loin: ["Supprimer un produit au clic"],
+      reflexion: ["Pourquoi vider la liste avant de l'afficher à nouveau ?", "Quand préférer textContent à innerHTML ?"] });
+  }
   return "{}";
 }
 
@@ -443,6 +461,14 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      if (sys.includes("rédiger le commentaire de débriefing")) {
+        const improve = ((user.match(/POINTS DU BRIEF NON VALIDÉS[^\n]*:\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- "));
+        const notes = /REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n<<</.test(user) || /NOTIONS DES QUESTIONS ORALES NON RÉUSSIES :\n- /.test(user);
+        return { response: JSON.stringify({ points_forts: "Votre projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site. Vous avez également validé les compétences visées par ce brief, ce qui constitue une base solide pour la suite de la formation.",
+          bonus: /BONUS RÉALISÉS :\n- /.test(user) ? "Vous avez également travaillé les bonus suivants : un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes." : "",
+          amelioration: improve.map((l) => "Compléter ce point du brief : " + l.slice(2).replace(/\.$/, "")), aller_plus_loin: improve.length ? "" : "Pour aller plus loin, approfondissez les notions de ce projet et soignez la lisibilité de votre code.",
+          notions: notes ? ["la différence entre margin et padding"] : [], conclusion: "Je reste disponible pour toute question et vous souhaite une bonne continuation pour le prochain brief." }) };
+      }
       if (sys.includes("You help a programming teacher prepare a class")) return { response: JSON.stringify({ topic: "running totals with prefix sums", why: "They practise prefix sums on a real input." }) };
       if (sys.includes("game master of a class boss battle")) return { response: JSON.stringify({ name: "Lord Segfault", topic: "running totals with prefix sums", setting: "A cursed vault under the Atlas.", why: "They practise prefix sums on a real input.",
         intro: "Deep under the Atlas, the vault trembles. Lord Segfault awakens, hungry for your memory. Heroes, draw your keyboards!", hits: ["{hero} casts a loop of fire: {dmg} damage!", "{hero} strikes with a sharp index: {dmg} damage!"],
@@ -544,8 +570,14 @@ function fakeAI() {
       if (sys.includes("commentaire de fin de sprint")) return { response: JSON.stringify({ commentaire: "Les objectifs technologiques de ce sprint se sont concentrés sur HTML et CSS.\n\nGlobalement, la majorité des apprenants ont atteint les objectifs fixés." }) };
       if (sys.includes("PARTIES À VALIDER")) return { response: JSON.stringify({ etapes: user.includes("trois temps") ? [{ nom: "Maquette", jour: 1, attendu: "La maquette" }, { nom: "Pages", jour: 3, attendu: "Les pages" }] : [] }) };
       if (sys.includes("Une ÉTAPE du brief")) return { response: JSON.stringify(user.includes("maquette.png") ? { statut: "a_temps", raison: "La maquette est dans le dépôt à la date." } : { statut: "en_retard", raison: "Visible seulement après la date." }) };
+      if (sys.includes("Donne le niveau d’UN membre d’un squad")) return { response: JSON.stringify({ niveau: ai.levelAnswer || "Excellent", pourquoi: "Il a porté une grande part du travail." }) };
       if (sys.includes("Donne le niveau de l’apprenant")) return { response: JSON.stringify({ niveau: ai.levelAnswer || "Bon", pourquoi: "Le brief est presque complet, une notion à revoir." }) };
-      if (sys.includes("remarques après un face-à-face")) return { response: JSON.stringify({ competences: [{ code: "C3", avis: "ko", raison: "Ne sait pas expliquer margin et padding." }, { code: "C99", avis: "ok", raison: "?" }], pour_apprenant: "Revois la différence entre margin et padding." }) };
+      if (sys.includes("remarques après un face-à-face")) {
+        // "ils ont répondu à toutes les questions" (even misspelled): all the oral questions answered, something positive
+        const all = /r[ée]pon\w*\s+(sur|à|a)\s+tou\w*\s+les\s+questions/i.test(user);
+        return { response: JSON.stringify({ competences: [{ code: "C3", avis: all ? "ok" : "ko", raison: all ? "Explique bien son code." : "Ne sait pas expliquer margin et padding." }, { code: "C99", avis: "ok", raison: "?" }],
+          positif: all ? "Vous avez répondu correctement à toutes les questions de l’échange." : "", a_revoir: /margin/.test(user) ? ["la différence entre margin et padding"] : [], questions_reussies: all ? "toutes" : [] }) };
+      }
       if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
         { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },
         { q: "Comment écrire une variable avec Sass ?", a: "Avec un $ devant le nom.", notion: "variables Sass" },
@@ -556,8 +588,13 @@ function fakeAI() {
         { q: "Pourquoi un seul h1 par page ?", a: "Pour le titre principal et le SEO.", notion: "titre h1" },
         { q: "Que fait git push ?", a: "Envoie les commits sur GitHub.", notion: "git push" },
       ] }) };
-      if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", consigne: "Modifie la couleur du fond du formulaire en utilisant Flexbox, ajoute une règle @media pour la taille du texte.", observer: ["Flexbox appliqué", "règle @media ajoutée"] }) };
-      if (sys.includes("Propose UNE mise en situation")) return { response: JSON.stringify({ titre: "Ajouter une carte", consigne: "Ajoute une carte de soin avec le même style que les autres.", observer: ["Reprend les classes", "Rendu mobile correct"] }) };
+      if (sys.includes("Propose UNE mise en situation") && ai.chTech && !user.includes("ATTENTION")) return { response: JSON.stringify({ titre: "Modifier le formulaire", contexte: "Vous travaillez sur votre page contact.", consigne: "Modifiez la couleur du fond du formulaire en utilisant Flexbox et ajoutez une règle @media pour la taille du texte.", fichiers: ["contact.html"], criteres: ["Flexbox appliqué", "Règle @media ajoutée", "Le formulaire s’affiche"], regarder: "Observez la règle CSS." }) };
+      if (sys.includes("Propose UNE mise en situation")) {
+        // the file named is one of the repo's when they are listed (the member's own first)
+        const file = (user.match(/FICHIERS QU’IL A MODIFIÉS LUI-MÊME[^\n]*\n- ([^\n]+)/) || user.match(/FICHIERS DU PROJET :\n- ([^\n]+)/) || [])[1] || "soins.html";
+        return { response: JSON.stringify({ titre: "Ajouter une carte", contexte: "Vous travaillez sur la page des soins de votre site.", consigne: "Ajoutez une carte de soin avec le même style que les autres.", fichiers: [file],
+          criteres: ["La nouvelle carte apparaît dans la grille", "Elle reprend les classes des autres cartes", "Le rendu sur mobile reste correct"], regarder: "Observez s’il réutilise les classes existantes au lieu d’en créer de nouvelles." }) };
+      }
       if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
       if (sys.includes('"code relay" class game')) return { response: JSON.stringify({ title: "Le double", text: "Écris doubler(tableau) qui double chaque nombre.", fn: "doubler", params: ["tableau"], level: "medium",

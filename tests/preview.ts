@@ -274,7 +274,7 @@ env.ASSETS = {
     habits: { good: ["Pushes most working days", "Separates features into their own commits"], improve: ["Write what changed: “fix: burger menu not closing” instead of “fix”", "Avoid “wip” commits on main"] }, days: 30, model: "preview" }), now - 3600);
   const { saveBrief } = await import("../src/shared/briefs.ts");
   const { finalizeReview } = await import("../src/shared/learning.ts");
-  const { buildComment } = await import("../src/shared/review/engine.ts");
+  const { buildComment } = await import("../src/shared/review/comment.ts");
   const gRow = db.prepare("SELECT * FROM guilds WHERE id = ?").get(G);
   const stories = (role: string, xs: string[]) => ({ title: role, emoji: role === "Visiteur" ? "👤" : "🛠️", stories: xs });
   const b1 = await saveBrief(env as any, gRow, null, { program: "builtin:dwwm-2026", week: 1, status: "assigned", source: "ai", data: {

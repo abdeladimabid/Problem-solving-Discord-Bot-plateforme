@@ -15,11 +15,16 @@ import { cleanBrief, simplonText } from "../briefs.ts";
 import type { Program } from "../program.ts";
 import { programOf } from "../program.ts";
 import {
-  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, buildComment, challengePool, conceptsOf, checkLabel, checkList,
-  DEBRIEF_LEVELS, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, memberComment, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
+  CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, challengePool, conceptsOf, checkLabel, checkList,
+  DEBRIEF_LEVELS, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
-import { githubGet, githubText, installationToken, repoSnapshot, squadContribution } from "./gh.ts";
+import { githubGet, githubText, installationToken, repoFiles, repoSnapshot, squadContribution } from "./gh.ts";
+import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
+import type { Task, TaskTarget } from "./task.ts";
+import { nextProgrammeWeek, techSoFar } from "../activities.ts";
+import { memberLevel, memberLevelOf } from "./members.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment } from "./comment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -459,24 +464,8 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   }
   rec.assess = squad ? await briefAssessments(env, b.id, who, rec) : assess;
   result.feedback = buildComment(first, rec, undefined);
-  if (squad) result.feedback = await groupComment(env, result.feedback, squad.name);
   await putReview(env, g, b.id, who, rec, "draft");
   return { ok: true, msg: squad ? `Squad review ready for ${squad.name}.` : `Review ready for ${lead.name ?? login}.`, who };
-}
-
-/** The squad comment, written to the whole squad ("vous"). Without AI: the same text, new greeting. */
-async function groupComment(env: Env, text: string, name: string) {
-  const plain = String(text || "").replace(/^Bonjour[^\n]*/, `Bonjour chers ${name},`);
-  const system = [
-    "Tu aides un formateur. Réécris ce commentaire pour tout un squad : vouvoiement collectif (\"vous\", \"votre\", \"vos\") à la place de \"tu\", \"ton\", \"ta\", \"tes\", et accorde les verbes.",
-    "Garde EXACTEMENT les mêmes points, dans le même ordre, avec les mêmes titres de partie (les lignes qui commencent par \"-\") et la même mise en forme. N’ajoute rien, ne retire rien.",
-    `La première ligne reste "Bonjour chers ${name},".`,
-    'Réponds UNIQUEMENT avec ce JSON : {"texte":"le commentaire réécrit"}',
-  ].join("\n");
-  const ask = await askReview(env, system, plain, 1).catch(() => null);
-  const t = ask && ask.ok && typeof ask.data?.texte === "string" ? ask.data.texte.trim() : "";
-  const heads = (s: string) => (s.match(/^-[^\n]*:$/gm) || []).join("|");
-  return t && /^Bonjour/.test(t) && heads(t) === heads(plain) && t.length > plain.length * 0.7 && t.length < plain.length * 1.5 ? t : plain;
 }
 
 /** The teacher's switches are saved with the review, and the comment is written from them. */
@@ -500,8 +489,9 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
   const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
   rec.suivi = steps.length ? await suiviFor(env, briefId, who, steps, rec.rhythm ?? null) : null;
   rec.result.feedback = buildComment(rec.first || "", rec, final);
-  if (rec.squad) rec.result.feedback = await groupComment(env, rec.result.feedback, rec.squad.name);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
+  // written again from the switches (↻ Rebuild): the next changes rewrite it too
+  else if (!raw?.keepComment) { delete rec.edited; delete rec.commentBy; }
   rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)) };
   await putReview(env, g, briefId, who, rec);
   await levelCols(env, briefId, who, rec);
@@ -525,6 +515,62 @@ export async function setReviewLevel(env: Env, g: GuildRow, briefId: number, who
 /** "Generate the level": 1 AI call reads the switches as they are on the screen (brief, competencies), the oral questions,
  *  the mise en situation and the teacher's comment (without the "Bonjour …" line: no name), and sets the level with a short
  *  reason (still editable). Without a usable answer: the level computed from the switches. */
+/** A squad member's level, chosen by the teacher (or none: the proposal is used). */
+export async function setMemberLevel(env: Env, g: GuildRow, briefId: number, who: string, gid: string, lvl: string) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result || !r.rec.squad) throw new DebriefError("Analyze the squad repo first.");
+  const rec = r.rec;
+  const m = (rec.contrib || []).find((x: any) => String(x.gid) === String(gid));
+  if (!m) throw new DebriefError("Unknown squad member.");
+  rec.members = rec.members || {};
+  const ms = rec.members[gid] || {};
+  rec.members[gid] = { ...ms, level: { ...(ms.level || {}), prop: memberLevel(rec, m, ms), lvl: DEBRIEF_LEVELS.includes(lvl) ? lvl : "", why: "", by: "you", at: Date.now() } };
+  await putReview(env, g, briefId, who, rec);
+}
+
+/** ✨ A squad member's level: 1 AI call on THAT member's data (their part of the work, competencies, quiz, mise en
+ *  situation, the teacher's note about them), no name sent. Without a usable answer: the proposal from their data. */
+export async function makeMemberLevel(env: Env, g: GuildRow, briefId: number, who: string, gid: string) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result || !r.rec.squad) throw new DebriefError("Analyze the squad repo first.");
+  const rec = r.rec;
+  const squad: any[] = rec.contrib || [];
+  const m = squad.find((x: any) => String(x.gid) === String(gid));
+  if (!m) throw new DebriefError("Unknown squad member.");
+  rec.members = rec.members || {};
+  const ms = rec.members[gid] || {};
+  const st = reviewStates(rec);
+  const calc = memberLevel(rec, m, ms);
+  const co: Record<string, boolean> = ms.co && Object.keys(ms.co).length ? ms.co : st.co;
+  const ex = rec.result.exigences || [];
+  const main = ex.map((_: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "oral");
+  const mean = (k: string) => Math.round((squad.reduce((a: number, x: any) => a + (x[k] || 0), 0) / Math.max(1, squad.length)) * 10) / 10;
+  const MES: Record<string, string> = { valide: "réussie", partiel: "partiellement réussie", non_valide: "non validée" };
+  const system = [
+    "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
+    "Donne le niveau d’UN membre d’un squad pour ce brief : excellent, bon, moyen, faible ou critique.",
+    "Juge SA part du travail (comparée à la moyenne du squad), ses compétences, son quiz ou oral, sa mise en situation et la note du formateur sur lui. Le travail commun du squad compte peu : un membre qui n’a rien fait n’a pas le niveau du squad.",
+    'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
+  ].join("\n");
+  const user = [
+    `SA PART DU TRAVAIL : ${m.commits || 0} commits sur ${m.days || 0} jours, ${m.prs || 0} pull requests (${m.merged || 0} fusionnées), ${m.reviews || 0} relectures${m.cards != null ? `, ${m.cardsDone || 0}/${m.cards} cartes terminées` : ""}${m.sm ? " ; scrum master" : ""}${m.collaborator === false ? " ; pas collaborateur du dépôt" : ""}`,
+    `MOYENNE DU SQUAD (${squad.length} membres) : ${mean("commits")} commits, ${mean("days")} jours, ${mean("prs")} pull requests, ${mean("reviews")} relectures`,
+    `COMPÉTENCES : validées ${Object.keys(co).filter((c) => co[c]).map((c) => skillText(c)).join(", ") || "aucune"} ; non validées ${Object.keys(co).filter((c) => !co[c]).map((c) => skillText(c)).join(", ") || "aucune"}`,
+    `TRAVAIL COMMUN DU SQUAD : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points du brief validés`,
+    typeof ms.quiz === "number" ? `QUIZ / ORAL : ${ms.quiz} %` : "",
+    ms.mes?.r ? `MISE EN SITUATION : ${MES[ms.mes.r] || ms.mes.r}` : "",
+    ms.note ? `NOTE DU FORMATEUR SUR CE MEMBRE :\n<<<\n${oneLine(ms.note, 600)}\n>>>` : "",
+    `NIVEAU CALCULÉ À PARTIR DE SES DONNÉES : ${calc}`,
+  ].filter(Boolean).join("\n");
+  const ask = await askReview(env, system, user, 1).catch(() => null);
+  const ai = ask && ask.ok && ask.data ? String(ask.data.niveau || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim() : "";
+  // never better than Faible without a commit, whatever the AI says
+  const fromAi = DEBRIEF_LEVELS.includes(ai) && !(!m.commits && DEBRIEF_LEVELS.indexOf(ai) < DEBRIEF_LEVELS.indexOf("faible"));
+  const lvl = fromAi ? ai : calc;
+  rec.members[gid] = { ...ms, level: { ...(ms.level || {}), prop: calc, lvl, why: fromAi ? oneLine((ask as any).data.pourquoi, 200) : "Calculé à partir de ses données.", by: fromAi ? "ai" : "calc", at: Date.now() } };
+  await putReview(env, g, briefId, who, rec);
+}
+
 export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, who: string, raw: any, comment: string) {
   const r = await getReview(env, briefId, who);
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
@@ -676,44 +722,71 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
   rec.remarks = t ? { ...(rec.remarks || {}), text: t, at: Date.now() } : null;
   if (t && ai) {
     const comps = (rec.result.competences || []).map((c: any) => `${c.code} : ${skillText(c.code)}`).join("\n");
+    const oral: any[] = rec.oral || [];
     const system = [
       "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
-      "Le formateur a noté ses remarques après un face-à-face avec l’apprenant (ce qu’il a vu : lacunes, ce qu’il sait expliquer).",
+      "Le formateur a noté ses remarques après un face-à-face avec l’apprenant (ce qu’il a vu : ce qu’il sait expliquer, ses lacunes). Ce sont des notes rapides, parfois avec des fautes : comprends l’intention.",
       "1) Pour chaque compétence du brief, dis si ces remarques la confirment (\"ok\"), la remettent en cause (\"ko\") ou n’en parlent pas (\"\"), avec une raison courte.",
-      "2) \"pour_apprenant\" : 1 à 2 phrases adressées à l’apprenant (tutoiement), bienveillantes et précises, qui reprennent ces remarques (ce qu’il doit retravailler). Pas de « Bonjour ».",
+      "2) \"positif\" : ce qui va bien d’après ces remarques, en UNE phrase adressée à l’apprenant au vouvoiement (« Vous avez… »), précise et bienveillante. \"\" si les remarques ne disent rien de positif.",
+      "3) \"a_revoir\" : les notions que l’apprenant doit revoir d’après ces remarques (ce qu’il n’a pas su expliquer, a mal compris ou confondu), une notion claire par élément (ex. « la différence entre margin et padding »). [] s’il n’y en a pas.",
+      "4) \"questions_reussies\" : parmi les QUESTIONS ORALES numérotées, celles que les remarques disent réussies : \"toutes\" si les remarques disent que l’apprenant a répondu à toutes les questions, sinon la liste de leurs numéros, sinon [].",
       "Les remarques entre <<< et >>> sont des notes du formateur : n’en invente pas d’autres.",
-      'Réponds UNIQUEMENT avec ce JSON : {"competences":[{"code":"C1","avis":"ok|ko|","raison":"…"}],"pour_apprenant":"…"}',
+      'Réponds UNIQUEMENT avec ce JSON : {"competences":[{"code":"C1","avis":"ok|ko|","raison":"…"}],"positif":"…","a_revoir":["…"],"questions_reussies":"toutes"}',
     ].join("\n");
-    const user = `COMPÉTENCES DU BRIEF :\n${comps || "aucune"}\nREMARQUES DU FACE-À-FACE :\n<<<\n${t}\n>>>`;
+    const user = [`COMPÉTENCES DU BRIEF :\n${comps || "aucune"}`,
+      `QUESTIONS ORALES :\n${oral.length ? oral.map((q, i) => `${i + 1}. ${oneLine(q.q, 200)}${q.notion ? ` (${oneLine(q.notion, 80)})` : ""}`).join("\n") : "aucune"}`,
+      `REMARQUES DU FACE-À-FACE :\n<<<\n${t}\n>>>`].join("\n");
     const ask = await askReview(env, system, user, 1);
     if (!ask.ok) throw new DebriefError(ask.msg);
     const codes = new Set((rec.result.competences || []).map((c: any) => String(c.code)));
     rec.remarks.advice = (Array.isArray(ask.data?.competences) ? ask.data.competences : [])
       .map((c: any) => ({ code: String(c?.code || ""), avis: c?.avis === "ok" || c?.avis === "ko" ? c.avis : "", why: oneLine(c?.raison, 200) }))
       .filter((c: any) => codes.has(c.code) && c.avis);
-    rec.remarks.forStudent = oneLine(ask.data?.pour_apprenant, 500);
-  } else if (rec.remarks) { delete rec.remarks.advice; delete rec.remarks.forStudent; }
+    // what went well and what to review, for the comment (« vous »; a sentence that says « tu » is not kept)
+    const pos = oneLine(ask.data?.positif, 300);
+    rec.remarks.positive = /\b(tu|ton|ta|tes|toi)\b/i.test(pos) ? "" : pos;
+    rec.remarks.toReview = (Array.isArray(ask.data?.a_revoir) ? ask.data.a_revoir : []).map((x: unknown) => oneLine(x, 140)).filter(Boolean).slice(0, 6);
+    // the oral questions the remarks say were answered are switched on (the teacher can switch them back)
+    const said = ask.data?.questions_reussies;
+    const okIdx = said === "toutes" || said === "all" ? oral.map((_, i) => i)
+      : (Array.isArray(said) ? said : []).map((n: unknown) => Number(n) - 1).filter((i: number) => Number.isInteger(i) && i >= 0 && i < oral.length);
+    const st = reviewStates(rec);
+    const before = st.oral.filter(Boolean).length;
+    const oralNow = st.oral.map((v: boolean, i: number) => v || okIdx.includes(i));
+    rec.final = { ...(rec.final || {}), oral: oralNow };
+    rec.remarks.oralSet = oralNow.filter(Boolean).length - before;
+    rec.remarks.forStudent = [rec.remarks.positive, rec.remarks.toReview.length ? `À revoir : ${rec.remarks.toReview.join(", ")}.` : ""].filter(Boolean).join(" ");
+    rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)) };
+  } else if (rec.remarks) { for (const k of ["advice", "forStudent", "positive", "toReview", "oralSet"]) delete rec.remarks[k]; }
   // the comment follows (unless the teacher wrote it by hand)
   if (!rec.edited) {
     rec.result.feedback = buildComment(rec.first || "", rec, rec.final || reviewStates(rec));
-    if (rec.squad) rec.result.feedback = await groupComment(env, rec.result.feedback, rec.squad.name);
   }
   await putReview(env, g, b.id, who, rec);
+  await levelCols(env, b.id, who, rec);
 }
 
 /** Progress: one column per brief, one square per debrief (its level); a squad's debrief counts for each member. */
 export async function progressView(env: Env, g: GuildRow) {
   const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null; kind: string | null }>(env,
     "SELECT id, title, due_at, squads, kind FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
-  const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string }>(env,
-    "SELECT brief_id, who, level, plevel, status FROM brief_reviews WHERE guild_id = ?", g.id);
+  // a squad's record too: each member has their own level
+  const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string; record: string | null }>(env,
+    "SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?", g.id);
   const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
   const squadsOf = new Map(briefs.map((b) => [b.id, cleanSquads(b.squads || "[]")]));
   const cells: Record<string, { lv: string; plv: string; who: string; final: boolean }> = {};
   for (const r of rows.sort((a, b) => (a.who < b.who ? 1 : -1))) {
     const c = { lv: r.level || "", plv: r.plevel || "", who: r.who, final: r.status === "final" };
     if (r.who.startsWith("u:")) cells[`${r.brief_id}:${r.who.slice(2)}`] = c;
-    else for (const m of (squadsOf.get(r.brief_id) || []).find((s) => `s:${s.id}` === r.who)?.members || []) cells[`${r.brief_id}:${m}`] = c;
+    else {
+      let rec: any = null;
+      try { rec = r.record ? JSON.parse(r.record) : null; } catch { rec = null; }
+      for (const m of (squadsOf.get(r.brief_id) || []).find((s) => `s:${s.id}` === r.who)?.members || []) {
+        const own = rec ? memberLevelOf(rec, m, { lvl: r.level, prop: r.plevel }) : { lvl: c.lv, prop: c.plv };
+        cells[`${r.brief_id}:${m}`] = { ...c, lv: own.lvl, plv: own.prop };
+      }
+    }
   }
   // every published brief gets a column; in a squad brief, a student's square opens their squad's debrief
   const squadOfMember: Record<string, string> = {};
@@ -739,6 +812,25 @@ export async function progressView(env: Env, g: GuildRow) {
   };
 }
 
+/**
+ * ✨ The comment phrased by the AI from the same sections as the template (comment.ts): one call, the answer checked;
+ * the template when the AI can't follow the rules. Like a comment edited by hand, it is kept when switches change.
+ */
+export async function writeComment(env: Env, g: GuildRow, briefId: number, who: string, raw: any) {
+  if (raw && typeof raw === "object") await saveStates(env, g, briefId, who, { ...raw, keepComment: false });
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
+  const rec = r.rec;
+  const d = commentData({ first: rec.first || "", group: rec.squad ? rec.squad.name : "", project: String(rec.brief || ""), rec });
+  const ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
+  const text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  rec.result.feedback = text ?? commentText(d);
+  rec.edited = Date.now();
+  rec.commentBy = text ? "ai" : "template";
+  await putReview(env, g, briefId, who, rec);
+  return { by: rec.commentBy as string, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+}
+
 /** The teacher edited the comment by hand: keep their text. */
 export async function saveCommentText(env: Env, g: GuildRow, briefId: number, who: string, text: string) {
   const r = await getReview(env, briefId, who);
@@ -749,82 +841,96 @@ export async function saveCommentText(env: Env, g: GuildRow, briefId: number, wh
   await putReview(env, g, briefId, who, r.rec);
 }
 
-/** "Mise en situation": one small task on a point of the brief drawn at random, done in front of the teacher. */
-export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: string, rawStates: any = null, member = "") {
+/**
+ * "Mise en situation": a short task on the learner's OWN project (task.ts), done live in front of the teacher in 10, 15
+ * or 20 min: add a small feature, or change their code so it does one. Built from the brief, the programme week and
+ * their repo (their files; in a squad, the files of their own commits, and never another member's target). One AI call,
+ * checked, asked again once with what's wrong, else a template. Saved in the debrief (not drawn again on reload).
+ */
+export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: string, rawStates: any = null, member = "", proposal = "") {
   const r = await getReview(env, b.id, who);
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
   const rec = r.rec;
   const ex = rec.result.exigences || [];
-  let valid = reviewStates(rec).ex;
-  if (rawStates && Array.isArray(rawStates.ex)) valid = valid.map((v: boolean, i: number) => (typeof rawStates.ex[i] === "boolean" ? rawStates.ex[i] : v));
-  const lac = await lacunesOf(env, b.id, who, rec);
-  let pool = challengePool(ex);
-  // a point not reached in the project first: that's where the mise en situation shows the most
-  const weak = pool.filter((i: number) => !valid[i]);
-  if (weak.length && Math.random() < 0.75) pool = weak;
-  if (!pool.length) throw new DebriefError("The brief has no user story to build a challenge on.");
+  const saved = reviewStates(rec);
+  const states = rawStates && Array.isArray(rawStates.ex) ? { ...(rec.final || {}), ex: saved.ex.map((v: boolean, i: number) => (typeof rawStates.ex[i] === "boolean" ? rawStates.ex[i] : v)) } : rec.final;
   const mine = member && rec.contrib && rec.contrib.some((m: any) => m.gid === String(member)) ? String(member) : "";
   if (member && !mine) throw new DebriefError("Unknown squad member.");
   const owned = mine ? (rec.members || {})[mine]?.ch : rec.challenge;
-  if (pool.length > 1) pool = pool.filter((i: number) => i !== owned?.item);
-  const item = pool[Math.floor(Math.random() * pool.length)];
-  const done = !!valid[item];
+  // in a squad, each member gets another target than the others (they can't copy)
+  const others = Object.entries(rec.members || {}).filter(([gid]) => gid !== mine).map(([, ms]: any) => ms?.ch).filter(Boolean);
+  if (mine && rec.challenge) others.push(rec.challenge);
+  const exclude = [owned?.item, ...others.map((c: any) => c.item)].filter((i: any) => Number.isInteger(i));
+  const target = taskTarget(rec, states, { exclude });
+  if (!target) throw new DebriefError("The brief has no user story to build a task on.");
   const levels = b.skills.filter((c) => /^C/.test(c)).map((c) => Number(c.slice(-1)));
   const lvl = levels.length ? Math.min(...levels) : 1;
   const [lvlName, duree, lvlRule] = (CH_LEVEL as any)[lvl] || (CH_LEVEL as any)[1];
   const tech = String(b.grid?.tech || b.data.tags.join(", "));
   const js = JS_BRIEF.test(b.text) || /javascript|\bjs\b|php|laravel|sql|react|vue|node|symfony|python/i.test(tech);
-  const c = Object.fromEntries((rec.checks || []).map((x: any) => [x.id, x]));
-  const pages = (String(c.pages?.detail || "").match(/page\(s\) : ([^;]+)/) || [])[1] || "";
-  // not what the project's code uses (Flexbox, Grid…): the AI took it for something the brief asks
-  const system = [
-    "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
-    `Propose UNE mise en situation : une seule petite tâche que l’apprenant réalise seul, devant le formateur, sur son propre projet, en ${duree}, pour vérifier qu’il comprend et sait faire le point du brief tiré au sort.`,
-    "Règles :",
-    `- Niveau ${lvl} (${lvlName}) : ${lvlRule}`,
-    `- Taille : la tâche doit vraiment tenir en ${duree}. Jamais une page entière, une fonctionnalité entière ou plusieurs éléments : seulement un petit morceau du point tiré au sort.`,
-    done ? "- Ce point est réussi dans son projet : il refait ou modifie un petit morceau de ce qu’il a fait, pour montrer qu’il le maîtrise."
-      : "- Ce point n’est pas réussi ou pas terminé dans son projet : il en réalise un petit morceau, pour montrer s’il a compris comment le faire.",
-    `- Utilise seulement ce que le brief demande et ce que le projet utilise déjà.${js ? "" : " Le brief est en HTML et CSS : pas de JavaScript, rien d’interactif."}`,
-    "- Pas de nouvelle fonctionnalité, pas de bonus, rien que le brief ne demande pas.",
-    "- Une seule chose à faire, sur le point tiré au sort uniquement : pas un autre élément, pas deux consignes en une.",
-    "- Ne nomme aucune technique ou propriété que le brief ne cite pas (ex. Flexbox, Grid, @media, Bootstrap) : décris le résultat visible à obtenir, l’apprenant choisit comment faire.",
-    "- Le résultat se vérifie en moins d’une minute.",
-    "- Consigne en 1 à 3 phrases courtes, en tutoyant l’apprenant, avec un exemple concret tiré de son projet.",
-    'Réponds UNIQUEMENT avec ce JSON : {"titre":"max 8 mots","consigne":"1 à 3 phrases","observer":["ce que le formateur vérifie, max 12 mots"]} avec 2 ou 3 éléments dans "observer".',
-  ].join("\n");
-  const user = (extra: string) => [
-    `PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`,
-    `POINT DU BRIEF TIRÉ AU SORT (${done ? "réussi" : "pas réussi ou pas terminé"} dans le projet) : ${ex[item].texte}`,
-    pages ? `PAGES DU PROJET : ${pages}` : "", tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "",
-    lac.assess.length ? `SES LACUNES À L’ÉVALUATION (vise l’une d’elles si elle touche ce point du brief) :\n${lac.assess.slice(0, 8).map((x) => "- " + x).join("\n")}` : "",
-    rec.remarks?.text ? `REMARQUES DU FORMATEUR (face-à-face) : ${oneLine(rec.remarks.text, 400)}` : "", extra,
-  ].filter(Boolean).join("\n");
-  let extra = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const ask = await askReview(env, system, user(extra), 1);
-    if (!ask.ok) throw new DebriefError(ask.msg);
-    const d = ask.data || {};
-    const cand = {
-      titre: oneLine(d.titre, 80), consigne: oneLine(d.consigne, 600), duree, niveau: lvl,
-      observer: (Array.isArray(d.observer) ? d.observer : []).map((x: unknown) => oneLine(x, 140)).filter(Boolean).slice(0, 3),
-      item, point: oneLine(ex[item].texte, 200), done, at: Date.now(), result: "", note: "",
-    };
-    if (!cand.titre || !cand.consigne) throw new DebriefError("The AI answer could not be read. Click again.");
-    const text = cand.titre + " " + cand.consigne;
-    const outside = chOutsideBrief(text + " " + cand.observer.join(" "), b.text + " " + tech);
-    const why = !js && CH_NEEDS_JS.test(text + " " + cand.observer.join(" ")) ? "elle demandait du JavaScript ou une nouvelle fonctionnalité"
-      : CH_TOO_BIG.test(text) ? `elle était trop grosse pour ${duree} (une page entière)`
-      : outside.length ? `elle nomme ${outside.join(", ")}, que le brief ne demande pas` : "";
-    if (!why) {
-      if (mine) { rec.members = rec.members || {}; rec.members[mine] = { ...(rec.members[mine] || {}), ch: cand }; }
-      else rec.challenge = cand;
-      await putReview(env, g, b.id, who, rec);
-      return cand;
-    }
-    extra = `ATTENTION : ta proposition précédente ne convient pas (${why}). Propose une tâche plus petite, en ${duree}, sur ce que le projet a déjà${js ? "" : ", en HTML et CSS"}${outside.length ? ", en décrivant le résultat sans nommer de technique" : ""}.`;
+  // the programme week of the brief: its concepts, what the class has seen, the next week (out of scope)
+  const wk = await one<{ week: number | null }>(env, "SELECT week FROM briefs WHERE id = ?", b.id);
+  const pw = b.program && wk?.week ? b.program.weeks.find((w) => w.n === wk.week) : null;
+  const next = b.program && pw ? nextProgrammeWeek(b.program, pw) : null;
+  const week = pw ? { n: pw.n, concepts: pw.concepts || pw.objective, tech: techSoFar(b.program!, pw) } : null;
+  // the repo: every file, the member's own files (their last commits), two files to read
+  const read = await repoForTask(env, g, rec, who, mine, target).catch(() => ({ files: [] as string[], mine: [] as string[], excerpts: [] as { path: string; text: string }[] }));
+  const lac = await lacunesOf(env, b.id, who, rec);
+  const scope = `${b.text} ${tech} ${week?.concepts || ""}`;
+  const base = { project: b.title, brief: b.text, target, week, next: next ? next.concepts || next.objective : "", files: read.files, mine: read.mine, excerpts: read.excerpts,
+    lacunes: lac.assess, remarks: (mine ? (rec.members || {})[mine]?.note : "") || rec.remarks?.text || "", others: others.map((c: any) => `${c.titre} (${c.point || c.consigne || ""})`.slice(0, 200)),
+    proposal: String(proposal || "").trim().slice(0, 1000) };
+  const system = TASK_SYSTEM({ duree, lvl, lvlName, lvlRule, js });
+  let task: Task | null = null, by = "template", extra = "";
+  for (let attempt = 0; attempt < 2 && !task; attempt++) {
+    const ask = await askReview(env, system, taskPrompt({ ...base, extra }), 1).catch(() => null);
+    if (!ask || !ask.ok) break;
+    const cand = cleanTask(ask.data);
+    const errs = taskChecks(cand, { js, scope, files: read.files, duree });
+    if (!errs.length) { task = cand; by = "ai"; break; }
+    extra = `ATTENTION : ta proposition précédente ne convient pas : ${errs.join(" ; ")}. Propose une tâche plus petite, en ${duree}, sur son projet${js ? "" : ", en HTML et CSS"}, en décrivant le résultat sans nommer de technique.`;
   }
-  throw new DebriefError("The AI proposed something too big or outside the brief. Click again.");
+  task = task || taskFallback(target, { project: b.title, files: pickFiles(read.files, target, read.mine), duree });
+  const cand = {
+    ...task, consigne: task.consigne, observer: task.criteres, duree, niveau: lvl, by,
+    item: target.item, point: target.item != null ? oneLine(ex[target.item].texte, 200) : `Notion : ${target.notion}`, done: target.done, why: target.why,
+    proposal: base.proposal, at: Date.now(), result: "", note: "",
+  };
+  if (mine) { rec.members = rec.members || {}; rec.members[mine] = { ...(rec.members[mine] || {}), ch: cand }; }
+  else rec.challenge = cand;
+  await putReview(env, g, b.id, who, rec);
+  return cand;
+}
+
+/** The repo for a task: its files, the files of the member's own commits, and two files' text (best effort). */
+async function repoForTask(env: Env, g: GuildRow, rec: any, who: string, member: string, target: TaskTarget) {
+  const repo = String((rec.repos || [])[0] || "");
+  const out = { files: [] as string[], mine: [] as string[], excerpts: [] as { path: string; text: string }[] };
+  if (!repo.includes("/")) return out;
+  const app = await ghAppOf(env, g.id);
+  if (!githubCanRead(app)) return out;
+  // whoever of the class can read it (the member first, then the squad, then the student)
+  const ids = [...new Set([member, ...(rec.squad ? (rec.squad.members || []).map((m: any) => String(m.gid)) : [who.slice(2)])].filter(Boolean))];
+  const players = ids.length ? await all<{ discord_id: string; gh_inst: string | null; github_login: string | null }>(env,
+    `SELECT discord_id, gh_inst, github_login FROM players WHERE guild_id = ? AND discord_id IN (${ids.map(() => "?").join(",")}) AND gh_inst IS NOT NULL`, g.id, ...ids) : [];
+  let token = "";
+  for (const p of players.sort((a, b) => Number(b.discord_id === member) - Number(a.discord_id === member))) {
+    try { token = await installationToken(env, app, p.gh_inst!); out.files = (await repoFiles(token, repo)).map((f: any) => f.path).slice(0, 400); break; } catch { token = ""; }
+  }
+  if (!token) return out;
+  const login = member ? (rec.contrib || []).find((m: any) => m.gid === member)?.login : "";
+  if (login) {
+    const list = await githubGet(`/repos/${repo}/commits?author=${encodeURIComponent(login)}&per_page=6`, token).catch(() => []);
+    for (const c of (Array.isArray(list) ? list : []).slice(0, 4)) {
+      const d = await githubGet(`/repos/${repo}/commits/${c.sha}`, token).catch(() => null);
+      for (const f of (d?.files || []) as any[]) if (f?.filename && !out.mine.includes(f.filename)) out.mine.push(String(f.filename));
+    }
+  }
+  for (const path of pickFiles(out.files, target, out.mine)) {
+    const text = await githubText(`/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}`, token, "application/vnd.github.raw", 6000).catch(() => "");
+    if (text) out.excerpts.push({ path, text });
+  }
+  return out;
 }
 
 /** A squad: each member's quiz, competencies, challenge and note; returns one comment per member. */
@@ -845,7 +951,7 @@ export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: s
       quiz: Number.isFinite(qRaw) ? Math.max(0, Math.min(100, Math.round(qRaw))) : null,
       co: Object.fromEntries(Object.keys(base).map((code) => [code, typeof xc[code] === "boolean" ? xc[code] : typeof pc[code] === "boolean" ? pc[code] : base[code]])),
       mes: { r: CH_RESULTS.includes(x.mes?.r) ? x.mes.r : "", note: oneLine(x.mes?.note, 500) },
-      note: oneLine(x.note, 600), ch: prev.ch || null,
+      note: oneLine(x.note, 600), ch: prev.ch || null, level: prev.level,
     };
     rec.members[m.gid] = ms;
     comments[m.gid] = ms.comment = memberComment(m, rec, ms);
