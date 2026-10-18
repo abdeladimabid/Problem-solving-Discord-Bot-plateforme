@@ -361,7 +361,7 @@ async function intranetSendOne(it, btn) {
   if (p.checkError) return toast(`Couldn't check what's already on the intranet: ${p.checkError}`, true);
   if (!one) return toast("This activity can't be sent to the intranet", true);
   if (one.missing.length) return toast(`Link them to their intranet learner first (Settings → Intranet YouCode): ${one.missing.join(", ")}`, true);
-  if (one.existing && one.existing.same && !one.assign.length) return toast(`Already on the intranet with its presenters: « ${one.existing.subject} »`);
+  if (one.existing && one.existing.same && !one.assign.length) return toast(`${one.members.length ? "Already on the intranet with its presenters" : "Already on the intranet"}: « ${one.existing.subject} »`);
   intranetActsConfirm(monday, [one], true);
 }
 
