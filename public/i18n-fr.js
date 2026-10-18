@@ -563,6 +563,8 @@ window.CB_FR = {
 "Default scoring restored": "Barème par défaut rétabli",
 "Default scoring.": "Barème par défaut.",
 "Delete": "Supprimer",
+"From their last finalized debrief": "D’après son dernier débrief finalisé",
+"no level yet": "pas encore de niveau",
 "Last debrief": "Dernier débrief",
 "No finalized debrief in this sprint yet": "Aucun débrief finalisé dans ce sprint",
 "Their level counts once finalized": "Leur niveau compte une fois finalisé",

@@ -30,6 +30,7 @@ import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/crea
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
+import { studentSprints } from "../shared/sprints.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -1030,14 +1031,13 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
       questions: qs.map((q, i) => ({ n: i + 1, type: q.type, prompt: String(q.prompt || "").slice(0, 140), points: q.points || 1, verdict: gr[q.id]?.verdict ?? null, score: gr[q.id]?.score ?? null })),
       comps: acomps.filter((c) => c.ref === r.id).map((c) => ({ code: c.code, ok: !!c.ok, level: c.level, note: c.note })) };
   });
-  // the sprint reviews (level and decision per sprint)
-  const sprints = await all<{ sprint: number; level: string | null; plevel: string | null; decision: string | null; note: string | null; updated_at: number | null }>(env,
-    "SELECT sprint, level, plevel, decision, note, updated_at FROM sprint_reviews WHERE guild_id = ? AND discord_id = ? ORDER BY sprint", g.id, did).catch(() => []);
+  // the sprint reviews (level and decision per sprint), as the Sprints page shows them
+  const sprints = await studentSprints(env, g, did).catch(() => []);
   const learning = {
     github: { login: (s.player as any)?.github_login ?? null, linkedAt: (s.player as any)?.gh_linked_at ?? null, activity: act, days: actAll?.days ?? [] },
     competencies: await competencyMap(env, g, did, program), levels: program.levels, program: program.name,
     briefs: await studentBriefs(env, g, did), assessments,
-    sprints: sprints.map((x) => ({ ...x, title: program.sprints?.find((y: any) => y.n === x.sprint)?.title ?? `Sprint ${x.sprint}` })),
+    sprints,
   };
   return {
     ...s, level: { ...s.level, title: t("en", titleKey(s.level.level)) },
