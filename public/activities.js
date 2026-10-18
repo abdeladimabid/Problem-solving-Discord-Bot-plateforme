@@ -556,6 +556,7 @@ function actCard(kind, day) {
         <button class="btn small" data-a="edit">✏️ Edit</button>
         <button class="btn small" data-a="regen" title="Write it again">✨ Regenerate</button>
         <button class="btn small" data-a="copy">📋 Copy</button>
+        ${kind === "week" ? "" : `<button class="btn small danger" data-a="del" title="Delete this activity">🗑 Delete</button>`}
       </div>`)}
     ${job?.state === "error" ? `<p class="act-err small">${esc(job.text)}</p>` : ""}
     ${warn.length ? `<details class="act-warn small"><summary>What doesn't follow the template yet</summary><ul>${warn.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><p class="muted">Edit it by hand, or regenerate it.</p></details>` : ""}
@@ -580,12 +581,20 @@ function actWire() {
         return;
       }
       if (a === "edit") actEdit(card, it);
+      if (a === "del") actDelete(kind, it);
     });
   });
   $$("[data-extra]").forEach((b) => b.onclick = () => actExtra(b.dataset.extra));
   $$("[data-wcopy]").forEach((b) => b.onclick = () => copyText(actWeekText(ACT.sel.weeks.find((w) => w.monday === b.dataset.wcopy)), "The whole week is copied"));
   $$("[data-wdl]").forEach((b) => b.onclick = () => saveBlob(new Blob([actWeekText(ACT.sel.weeks.find((w) => w.monday === b.dataset.wdl))], { type: "text/markdown;charset=utf-8" }), `activites-${b.dataset.wdl}.md`));
   if (ACT.running) actButtons(true);
+}
+async function actDelete(kind, it) {
+  const shared = ACT.sel?.library ? " It's removed from the classes that share your library too (not where students already present it)." : "";
+  try {
+    await api(`/activities/${it.id}`, { method: "DELETE", confirmTitle: "Delete this activity?", confirmText: `« ${it.title || kind} » is deleted, and the students' sign-ups for it are cancelled.${shared}` });
+    toast("The activity is deleted"); await actLoadSel();
+  } catch (e) { if (e.message !== CANCELLED) toast(e.message, true); }
 }
 function actEdit(card, it) {
   const body = $(".act-body", card);
