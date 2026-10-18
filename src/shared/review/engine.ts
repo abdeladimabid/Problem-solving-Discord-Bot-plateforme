@@ -3,7 +3,7 @@
 //   • sure checks on the project files (HTML/CSS, JavaScript, PHP/POO, SQL, Laravel, API, Git…)
 //   • the evaluation grid of a brief (what it asks, and which check proves each line)
 //   • reconciling the AI with the checks (the checks always win), Valid / Not valid states
-//   • the comment for the learner (in the teacher's style), squad member comments, the live challenge pool
+//   • the live challenge pool (the comment for the learner: comment.ts)
 // Ported from GitHub Watcher (worker.js), where it was tested on real classes; storage and Discord live elsewhere.
 /* eslint-disable */
 // ---------------- Commit checks: size + message ----------------
@@ -159,226 +159,8 @@ export const itemValid = (e) => (typeof e.ok === 'boolean' ? e.ok : e.statut ===
 // A requirement whose status comes from a sure check shares that check's switch
 const isBound = (e) => !!e.check && (!!e.bound || /^Vérification automatique/.test(e.preuve || ''));
 
-// Comment in the teacher's style, built only from the checklist (checks + brief requirements + competencies).
-// Each item may carry ok: true/false (the teacher's final choice); otherwise its first status is used.
 // "Responsive (vérif : responsive)" → "Responsive": the grid's hint, never shown to the learner
 export const noVerif = (t) => String(t ?? '').replace(/\s*\(\s*v[ée]rif\s*:[^)]*\)/gi, '').trim();
-export function buildFeedback(firstName, checks, exigences = [], competences = [], challenge = null, suivi = null, oral = null, assess = null, remarks = null) {
-  exigences = (exigences || []).map((x) => ({ ...x, texte: noVerif(x.texte) }));
-  const c = Object.fromEntries(checks.filter((x) => !x.info && x.ok !== null && x.ok !== undefined).map((x) => [x.id, x]));
-  const ok = (id) => !!c[id] && c[id].ok === true;
-  const ko = (id) => !!c[id] && c[id].ok === false;
-  const d = (id) => String((c[id] && c[id].detail) || '');
-  const listFr = (s) => String(s).replace(/, ([^,]+)$/, ' et $1');
-  const andList = (a) => (a.length > 1 ? `${a.slice(0, -1).join(', ')} et ${a[a.length - 1]}` : a[0] || '');
-  const part = (t) => { const m = String(t).match(/je (vais|veux|dois|souhaite|peux)\s+(.+?)(,?\s+(afin|pour que|pour qu’|pour qu')\b|$)/i); return (m ? m[2] : String(t)).replace(/\.$/, ''); };
-  const tw = /Tailwind/.test(d('responsive'));
-  const sec = { 'Fonctionnalités': [], 'Intégration': [], 'Responsive': [], 'JavaScript': [], 'POO / Architecture': [], 'Base de données': [], 'Sécurité': [], 'API': [], 'Tests': [],
-    'Bonnes pratiques': [], 'Git / GitHub': [], 'Suivi du projet': [], 'Hébergement': [], 'Bonus': [], 'Mise en situation': [] };
-  const pages = (d('pages').match(/page\(s\) : ([^;]+)/) || [])[1];
-  if (ok('pages') && pages) sec['Intégration'].push(`Ton site contient bien plusieurs pages (${pages.trim()}).`);
-  if (ok('nav')) sec['Intégration'].push(`Le menu permet d’accéder à toutes les pages${ok('active') ? ' et indique la page en cours' : ''}.`);
-  if (ok('semantic')) sec['Intégration'].push('Tu as utilisé les balises sémantiques (header, nav, main, footer).');
-  if (ok('form')) sec['Intégration'].push(`Le formulaire est présent${/, 0 avec/.test(d('form')) ? '' : ', avec des champs obligatoires'}.`);
-  if (ok('map')) sec['Intégration'].push('Le plan d’accès est intégré à la page.');
-  if (ok('layout')) sec['Intégration'].push(`Tu as organisé la mise en page avec ${listFr(d('layout').replace(/variables CSS/, 'des variables CSS'))}.`);
-  if (ok('anim')) sec['Intégration'].push(/keyframes|animate-/.test(d('anim')) ? 'Tu as ajouté une animation CSS.' : 'Tu as ajouté des transitions CSS.');
-  if (ok('responsive')) {
-    const how = tw ? 'grâce aux classes responsive de Tailwind' : /Bootstrap/.test(d('responsive')) ? 'grâce à la grille de Bootstrap' : 'grâce aux media queries';
-    sec['Responsive'].push(ok('breakpoints') || !c.breakpoints ? `Le site s’adapte aux différentes tailles d’écran ${how}.` : `Le site commence à s’adapter aux écrans (${(d('responsive').match(/points de rupture : (.+)$/) || [])[1] || how}).`);
-  }
-  if (ok('alt')) sec['Bonnes pratiques'].push('Toutes tes images ont un texte alternatif (alt).');
-  if (ok('seo')) sec['Bonnes pratiques'].push('Les balises meta (viewport, description) et les titres des pages sont en place.');
-  if (ok('w3c')) sec['Bonnes pratiques'].push('Ta page d’accueil passe le validateur W3C sans erreur.');
-  if (ok('docs')) sec['Bonnes pratiques'].push('Le projet est documenté avec un README.');
-  if (ok('planning')) {
-    const tool = (d('planning').match(/^lien (.+?) (trouvé|donné au rendu)/) || [])[1];
-    sec['Bonnes pratiques'].push(`Ta planification est partagée${tool && tool !== 'de planification' ? ` sur ${tool}` : ''}, avec le lien dans le README.`);
-  }
-  if (ok('pages_site')) sec['Hébergement'].push(`Le projet est correctement hébergé${/GitHub Pages/.test(d('pages_site')) ? ' sur GitHub Pages' : ' en ligne'}.`);
-  // A check that only proves a bonus is judged with the bonus (praised there, never asked for)
-  const lineChecks = (x) => [x.check, ...String(x.verif || '').split(/[\s,]+/)].filter(Boolean);
-  const forMain = new Set(exigences.filter((x) => x.type !== 'bonus').flatMap(lineChecks));
-  const bonusOnly = new Set(exigences.filter((x) => x.type === 'bonus').flatMap(lineChecks).filter((id) => !forMain.has(id)));
-  // deliverables and criteria are not in the learner's comment: a check that only proves one of them is not asked for
-  const forWork = new Set(exigences.filter((x) => x.type === 'story' || x.type === 'technique').flatMap(lineChecks));
-  const docOnly = new Set(exigences.filter((x) => x.type === 'livrable' || x.type === 'critere').flatMap(lineChecks).filter((id) => !forWork.has(id)));
-  // JavaScript, PHP, SQL, Laravel… checks of the brief grid: praised in their own part
-  for (const id of Object.keys(DETECTORS)) if (ok(id) && !bonusOnly.has(id)) sec[DETECTORS[id][1]].push(DETECTORS[id][2]);
-  const stories = exigences.filter((x) => x.type === 'story');
-  const front = ['pages', 'nav', 'semantic', 'h1', 'alt', 'seo', 'responsive', 'layout', 'anim', 'map'].some((id) => c[id]);
-  if (stories.length && stories.every(itemValid)) sec[front ? 'Intégration' : 'Fonctionnalités'].push('Toutes les fonctionnalités demandées dans le brief sont réalisées.');
-  // Bonus = performance: praised when done, never asked for
-  const bonus = exigences.filter((x) => x.type === 'bonus' && itemValid(x));
-  if (bonus.length === 1) sec['Bonus'].push(`Tu as aussi réalisé le bonus (${part(bonus[0].texte)}) : tu as fait plus que demandé, bravo pour ce travail.`);
-  else if (bonus.length > 1) sec['Bonus'].push(`Tu as aussi réalisé ${bonus.length} bonus : tu as fait plus que demandé, bravo pour ce travail.`);
-  // Live challenge done in front of the teacher
-  const ch = challenge && challenge.result ? challenge : null;
-  const watch = [];   // what the learner must give more attention to
-  if (ch) {
-    const t = ch.titre ? ` (« ${ch.titre} »)` : '';
-    if (ch.result === 'valide') { sec['Mise en situation'].push(`Tu as réussi la mise en situation${t}.`); if (ch.note) sec['Mise en situation'].push(String(ch.note).trim()); }
-    else watch.push(`${ch.result === 'partiel' ? `La mise en situation${t} n’est que partiellement réussie` : `La mise en situation${t} n’est pas validée`}${ch.note ? ` : ${String(ch.note).trim().replace(/\.$/, '')}` : ''}.`);
-  }
-  // Oral questions asked: the notions still Not valid are notions to review
-  const asked = Array.isArray(oral) ? oral : [];
-  const toReview = asked.filter((x) => !x.ok).map((x) => String(x.notion).trim()).filter(Boolean);
-  const nOk = asked.length - toReview.length;
-  if (asked.length && nOk) sec['Questions orales'] = [toReview.length ? `Tu as bien répondu à ${nOk} question${nOk > 1 ? 's' : ''} orale${nOk > 1 ? 's' : ''} sur ${asked.length}.` : 'Tu as bien répondu à toutes les questions orales.'];
-
-  // Git / GitHub, always judged: number and regularity of commits, messages and their style, branches when used
-  const gitAdvice = [];
-  const G = sec['Git / GitHub'];
-  if (c.commits) {
-    const k = c.commits;
-    const n = Number(k.n != null ? k.n : (d('commits').match(/(\d+) commit/) || [])[1] || 0);
-    const days = Number(k.days != null ? k.days : (d('commits').match(/sur (\d+) jour/) || [])[1] || 0);
-    const nTxt = k.capped ? `plus de ${n}` : String(n);
-    const onDays = days === 1 ? 'un seul jour' : `${days} jours`;
-    if (ok('commits')) G.push(`Tu as fait ${nTxt} commits sur ${onDays} : tu commites régulièrement, c’est une bonne habitude.`);
-    else if (n === 0) gitAdvice.push('de commiter ton travail dès le début du projet, à chaque étape (aucun commit depuis le début du brief)');
-    else if (n < 5) gitAdvice.push(`de commiter plus souvent, à chaque étape (une page, une section, une correction) : ${nTxt} commit${n > 1 ? 's' : ''} seulement pendant le projet`);
-    else gitAdvice.push(`de commiter régulièrement, chaque jour de travail, et pas tout à la fin (${nTxt} commits sur ${onDays})`);
-  }
-  if (c.git) {
-    const k = c.git;
-    const m = d('git').match(/^(\d+) commit\(s\) lus, (\d+) au format conventionnel.*?(\d+) message/) || [];
-    const total = Number(k.total != null ? k.total : m[1] || 0), conv = Number(k.conv != null ? k.conv : m[2] || 0), vague = Number(k.vague != null ? k.vague : m[3] || 0);
-    if (ok('git')) {
-      if (total && conv === total) G.push('Tes messages de commit sont clairs et suivent la convention (feat:, fix:…), bravo.');
-      else {
-        G.push(`Tes messages de commit sont clairs${conv ? ` ; ${conv} sur ${total} suivent la convention (feat:, fix:…)` : ''}.`);
-        gitAdvice.push(`d’utiliser la convention de nommage pour ${conv ? 'tous tes' : 'tes'} commits (feat:, fix:, docs:, style:…)`);
-      }
-    } else {
-      gitAdvice.push(`d’écrire des messages de commit clairs et précis, par exemple « feat: ajout de la page contact »${vague ? ` (${vague} message${vague > 1 ? 's' : ''} trop vague${vague > 1 ? 's' : ''}${k.vagueEx ? ` comme « ${k.vagueEx} »` : ''})` : ''}`);
-    }
-  }
-  if (c.branches) {
-    const k = c.branches;
-    const names = Array.isArray(k.names) ? k.names : [];
-    if (ok('branches')) {
-      const fus = k.merges ? `${names.length ? ' et tu les fusionnes' : 'Tu fusionnes tes branches'} (${k.merges} fusion${k.merges > 1 ? 's' : ''}${k.prs ? `, dont ${k.prs} pull request${k.prs > 1 ? 's' : ''}` : ''})` : '';
-      G.push(`${names.length ? `Tu travailles avec des branches (${names.join(', ')})` : ''}${fus} : très bonne pratique de travail en équipe.`);
-    } else gitAdvice.push('d’organiser ton travail avec des branches (une branche par fonctionnalité, fusionnée dans main)');
-  }
-
-  // Squad briefs: every member commits, pull requests are approved before the merge
-  if (c.members_commit) {
-    if (ok('members_commit')) G.push('Chaque membre du squad a committé son travail dans le dépôt commun.');
-    else gitAdvice.push(`que chaque membre committe et pousse son propre travail dans le dépôt du squad${(c.members_commit.zero || []).length ? ` (aucun commit de ${listFr(c.members_commit.zero.join(', '))})` : ''}`);
-  }
-  if (ok('pr_review')) G.push('Les pull requests sont relues et approuvées avant d’être fusionnées : très bonne pratique de travail en équipe.');
-  else if (ko('pr_review')) gitAdvice.push(c.pr_review.none ? 'de passer par des pull requests relues et approuvées avant chaque fusion dans main'
-    : `de faire approuver chaque pull request avant de la fusionner (${c.pr_review.unapproved} fusionnée${c.pr_review.unapproved > 1 ? 's' : ''} sans approbation), par exemple en protégeant la branche main`);
-
-  // Not valid requirement: advice, unless a not valid check already gives it
-  const own = (e) => !itemValid(e) && !isBound(e) && !(e.check && ko(e.check));
-  const advice = [];
-  // what to work on, said as an action ("appliquer les bonnes pratiques UX/UI…"), never "réaliser cette partie du brief"
-  const de = (t) => (/^[aeiouyhéèêàâîôû]/i.test(t) ? `d’${t}` : `de ${t}`);
-  const action = (t, started) => {
-    const p = part(t).replace(/[\s:;,.]+$/, '');
-    const low = p.charAt(0).toLowerCase() + p.slice(1);
-    if (/^\S+(er|ir|re|oir)\b/i.test(p) && !/^(une?|les?|la|des?|mon|ma|mes|son|sa|ses|leur|page|carte|section)\b/i.test(p)) return de(started ? `finir ${de(low)}` : low);
-    return `de travailler sur ${/^(une?|les?|la|l’|l'|des?)\b/i.test(low) ? low : `ce point : ${low}`}`;
-  };
-  for (const e of stories.filter(own)) advice.push(action(e.texte, e.statut !== 'absent'));
-  for (const e of exigences.filter((x) => x.type === 'technique' && own(x))) advice.push(action(e.texte, false));
-  const TWN = { 640: 'sm', 768: 'md', 1024: 'lg', 1280: 'xl', 1536: '2xl' };
-  const bp = ((d('breakpoints').match(/manquants : (.+)$/) || [])[1] || '').trim();
-  const bpText = bp && tw ? bp.split(/,\s*/).map((x) => (TWN[parseInt(x, 10)] ? `${TWN[parseInt(x, 10)]}: ${x}` : x)).join(', ') : bp;
-  const w3c = d('w3c').match(/^(\d+) erreur/);
-  const ex = ((d('w3c').match(/ex\. : (.+)$/) || [])[1] || '').replace(/\s*\(Suppressing[^)]*\)?\.?/, '').trim().replace(/\.+$/, '');
-  const h1 = c.h1 || {};
-  const ADV = [
-    ['pages', 'de créer toutes les pages demandées et de les relier entre elles'],
-    ['layout', 'd’organiser la mise en page avec Flexbox ou Grid'],
-    ['pages_site', 'de publier ton site sur GitHub Pages et de mettre le lien dans le README'],
-    ['breakpoints', `d’ajouter les points de rupture demandés dans le brief${bpText ? ` (${bpText})` : ''}`],
-    ['responsive', tw ? 'de rendre ton site responsive avec les préfixes de Tailwind (sm:, md:, lg:)' : 'de rendre ton site responsive avec des media queries'],
-    ['nav', 'de relier toutes les pages dans le menu'],
-    ['map', 'd’intégrer le plan d’accès (Google Maps ou OpenStreetMap)'],
-    ['form', 'd’ajouter le formulaire demandé dans le brief'],
-    ['w3c', `de corriger ${w3c && w3c[1] === '1' ? 'l’erreur' : w3c ? `les ${w3c[1]} erreurs` : 'les erreurs'} du validateur W3C${ex ? ` (ex. : ${ex})` : ''}`],
-    ['semantic', 'd’utiliser les balises sémantiques sur toutes les pages, notamment <main>'],
-    ['h1', h1.zero && h1.many ? 'd’avoir exactement un <h1> par page' : h1.zero ? 'de mettre un titre <h1> sur chaque page' : 'de n’utiliser qu’un seul <h1> par page'],
-    ['docs', 'd’ajouter un README qui présente le projet et tes acquis'],
-    ['active', 'd’indiquer la page en cours dans le menu (classe active)'],
-    ['alt', 'd’ajouter un texte alternatif (alt) à toutes les images'],
-    ['seo', 'd’ajouter une meta description et un title sur chaque page'],
-    ['anim', 'd’ajouter une animation ou une transition CSS'],
-    ['figma', 'd’ajouter le lien de ta maquette Figma dans le README'],
-    ['planning', 'd’ajouter le lien de ta planification (GitHub Projects, Trello…) dans le README'],
-  ];
-  for (const [id, text] of ADV) if (ko(id) && !bonusOnly.has(id) && !docOnly.has(id) && !(id === 'responsive' && ko('breakpoints'))) advice.push(text);
-  for (const id of Object.keys(DETECTORS)) if (ko(id) && !bonusOnly.has(id) && !docOnly.has(id)) advice.push(DETECTORS[id][3]);
-  advice.push(...gitAdvice);
-  // Steps of the brief: the teacher's result for each step, and when the work was done (see steps.ts)
-  const stepsDone = suivi && Array.isArray(suivi.steps) ? suivi.steps.filter((x) => STEP_RESULTS.includes(x.final)) : [];
-  const SP = sec['Suivi du projet'];
-  if (stepsDone.length) {
-    if (stepsDone.length === suivi.steps.length && stepsDone.every((x) => x.final === 'a_temps')) {
-      SP.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
-      for (const x of stepsDone) if (x.note) SP.push(`${x.name} : ${x.note}`);
-    } else for (const x of stepsDone) (x.final === 'a_temps' ? SP : watch).push(`${x.name} : ${STEP_FR[x.final]}.${x.note ? ' ' + x.note : ''}`);
-    if (stepsDone.some((x) => x.final !== 'a_temps')) advice.push('de terminer chaque partie à la date prévue : découpe le travail et avance à chaque étape');
-  }
-  const rh = suivi && suivi.rhythm, nSteps = suivi && suivi.steps ? suivi.steps.length : 0;
-  const total = rh ? rh.reduce((a, b) => a + b, 0) : 0;
-  if (rh && nSteps >= 2 && total >= 5) {
-    const last = (rh[nSteps - 1] || 0) + (rh[nSteps] || 0);
-    if (last / total >= 0.6) watch.push(`La majorité de ton travail (${Math.round((100 * last) / total)} % des commits) a été faite pendant la dernière étape : avance régulièrement à chaque étape.`);
-  }
-  const parts = [`Bonjour${firstName ? ` ${firstName}` : ''},`];
-  // 1. what went well, short: the features as a whole, what they master, the bonuses, the live task, the oral, the rhythm
-  const good = [];
-  const nStories = stories.length, okStories = stories.filter(itemValid).length;
-  if (nStories && okStories === nStories) good.push('tu as réalisé toutes les fonctionnalités demandées dans le brief.');
-  else if (nStories && okStories / nStories >= 0.5) good.push('tu as réalisé la plupart des fonctionnalités demandées dans le brief.');
-  const fine = (id) => ok(id) && !bonusOnly.has(id) && !docOnly.has(id);
-  const tags = [];
-  if (fine('nav')) tags.push('la navigation entre les pages');
-  if (fine('semantic')) tags.push('les balises sémantiques');
-  if (fine('layout')) tags.push(/grid/i.test(d('layout')) && /flex/i.test(d('layout')) ? 'la mise en page avec Flexbox et Grid' : /grid/i.test(d('layout')) ? 'la mise en page avec Grid' : 'la mise en page avec Flexbox');
-  if (fine('responsive') && (ok('breakpoints') || !c.breakpoints)) tags.push('le responsive design');
-  if (fine('anim')) tags.push('les animations CSS');
-  const bpr = [fine('alt') && 'l’accessibilité', fine('seo') && 'le SEO', fine('w3c') && 'un code HTML valide'].filter(Boolean);
-  if (bpr.length) tags.push(`les bonnes pratiques (${listFr(bpr.join(', '))})`);
-  for (const id of Object.keys(DETECTORS)) if (fine(id)) tags.push(DETECTORS[id][0].charAt(0).toLowerCase() + DETECTORS[id][0].slice(1));
-  if (ok('commits') && ok('git')) tags.push('Git (commits réguliers et messages clairs)');
-  else if (ok('commits')) tags.push('des commits réguliers');
-  if (ok('branches') || ok('pr_review')) tags.push('le travail en équipe avec les branches et les pull requests');
-  if (tags.length) good.push(`Tu maîtrises bien ${andList(tags.slice(0, 7))}.`);
-  good.push(...sec['Bonus'], ...sec['Mise en situation']);
-  if (asked.length && !toReview.length) good.push('Tu as bien répondu à toutes les questions orales.');
-  if (stepsDone.length && stepsDone.length === (suivi.steps || []).length && stepsDone.every((x) => x.final === 'a_temps')) good.push('Tu as validé chaque partie du projet à temps : très bonne organisation.');
-  if (good.length) {
-    const g0 = good[0].charAt(0).toLowerCase() + good[0].slice(1);
-    parts.push(`Voici ce que tu as bien réussi dans ce projet : ${[g0, ...good.slice(1)].join(' ')}`);
-  }
-  // 2. what to improve in the work
-  // one sentence: "je te conseille d’appliquer …, de … et d’utiliser …"
-  if (advice.length) parts.push(`Pour améliorer ton travail, je te conseille ${andList(advice.map((x) => x.replace(/^d'/, 'd’')))}.`);
-  // 3. what needs more attention: the questions of the assessment not answered or wrong, the oral notions, the live task, the rhythm
-  const gaps = (assess || []).filter((a) => a.score != null && Array.isArray(a.gaps) && a.gaps.length);
-  for (const a of gaps) {
-    const notions = a.gaps.slice(0, 8);
-    parts.push(`Lors de l’évaluation « ${a.title} », certaines notions t’ont posé problème. Documente-toi et entraîne-toi en priorité sur ${andList(notions)}.`);
-  }
-  if (watch.length) parts.push(`Fais aussi plus attention à ces points. ${watch.join(' ')}`);
-  // the one-to-one (oral questions + what the teacher noticed): one paragraph. The teacher's remarks say it all when written
-  // (rewritten for the learner when the AI did it); otherwise the oral notions missed
-  const said = remarks ? String(remarks.forStudent || remarks.text || '').trim() : '';
-  if (said) {
-    // the oral notions missed that the remarks don't already talk about
-    const extra = toReview.filter((n) => !saidIn(n, said));
-    parts.push(`Lors de notre échange : ${said}${/[.!?]$/.test(said) ? '' : '.'}${extra.length ? ` Revois aussi ${andList(extra)}.` : ''}`);
-  } else if (toReview.length) parts.push(`Lors de notre échange, ${toReview.length > 1 ? 'certaines notions t’ont posé problème' : 'une notion t’a posé problème'} : revois ${andList(toReview)}.`);
-  const unfinished = advice.length || gaps.length || watch.length || toReview.length || competences.some((x) => x.ok === false) || !!(ch && ch.result !== 'valide');
-  parts.push(unfinished ? 'Bonne continuation !' : 'Très bon travail, bonne continuation !');
-  return parts.join('\n\n');
-}
 
 // Valid / Not valid of every criterion: the teacher's choice if saved, otherwise the first decision (checks and AI)
 export function reviewStates(rec) {
@@ -486,18 +268,6 @@ export function saidIn(notion, text) {
   const words = new Set(plain(text).split(/[^a-z0-9#.-]+/).map((w) => w.replace(/s$/, '')));
   const keys = plain(notion).split(/[^a-z0-9#.-]+/).filter((w) => w.length >= 2 && !GENERIC.has(w) && !['du', 'de', 'la', 'le', 'et', 'en', 'un', 'a'].includes(w)).map((w) => w.replace(/s$/, ''));
   return keys.length > 0 && keys.every((k) => words.has(k));
-}
-
-// The comment from the final checklist states
-export function buildComment(firstName, rec, states) {
-  const st = reviewStates({ ...rec, final: states });
-  const r = rec.result || {};
-  const checks = (rec.checks || []).filter((x) => x.id in st.ck).map((x) => ({ ...x, ok: st.ck[x.id] }));
-  const items = (r.exigences || []).map((e, i) => ({ ...e, ok: st.ex[i] }));
-  const comps = (r.competences || []).map((x) => ({ code: x.code, ok: st.co[x.code] }));
-  const ch = rec.challenge ? { ...rec.challenge, result: st.mes.r, note: st.mes.note } : null;
-  const oral = (rec.oral || []).map((q, i) => ({ notion: q.notion || q.q, ok: !!st.oral[i] }));
-  return buildFeedback(firstName, checks, items, comps, ch, rec.suivi || null, oral, rec.assess || null, rec.remarks || null);
 }
 
 // The sure checks win over the AI: a requirement that a check proves (or disproves) gets the check's answer
@@ -1191,50 +961,6 @@ function backlogMember(b, login, name) {
 
 // ---------- One comment per squad member ----------
 // m: the member's contribution, rec: the squad review (final squad states), ms: the member's own states
-export function memberComment(m, rec, ms) {
-  const first = firstNameOf(m.name, m.login);
-  const st = reviewStates(rec);
-  const ck = (id) => st.ck[id];
-  const lines = [];
-  // Role and part in the squad repo
-  if (!m.commits) {
-    lines.push(`Je ne vois aucun commit de ta part dans le dépôt du squad${m.collaborator === false ? ' (tu n’es pas collaborateur du dépôt)' : ''} : chaque membre doit committer et pousser son propre travail.`);
-  } else {
-    const work = `${m.commits} commit${m.commits > 1 ? 's' : ''} sur ${m.days} jour${m.days > 1 ? 's' : ''}${m.prs ? ` et ${m.prs} pull request${m.prs > 1 ? 's' : ''}` : ''}`;
-    lines.push(m.sm
-      ? `En tant que Scrum Master, tu as organisé le travail du squad${ck('planning') ? ' avec une planification partagée' : ''}${m.reviews ? ` et tu as relu ${m.reviews} pull request${m.reviews > 1 ? 's' : ''}` : ''}. Tu as aussi contribué au projet avec ${work}.`
-      : `Ton travail au sein du squad est bien visible : ${work}${m.reviews ? `, et ${m.reviews} relecture${m.reviews > 1 ? 's' : ''} de pull request` : ''}.`);
-    if (m.cards != null) lines.push(m.cards ? `Sur le tableau de planification, ${m.cards} carte${m.cards > 1 ? 's' : ''} t’${m.cards > 1 ? 'étaient attribuées' : 'était attribuée'}, dont ${m.cardsDone} terminée${m.cardsDone > 1 ? 's' : ''}.`
-      : 'Aucune carte ne t’était attribuée sur le tableau de planification : pense à t’assigner tes tâches.');
-    if (Array.isArray(m.perStep) && Array.isArray(rec.stepNames) && rec.stepNames.length) {
-      lines.push(`Tes commits par étape : ${rec.stepNames.map((nm, i) => `${nm} : ${m.perStep[i] || 0}`).join(', ')}${m.perStep[rec.stepNames.length] ? `, après la dernière étape : ${m.perStep[rec.stepNames.length]}` : ''}.`);
-    }
-    if (m.sm && ck('pr_review') === false) lines.push('Pense à faire approuver chaque pull request avant de la fusionner : c’est ton rôle de garantir la qualité du code fusionné.');
-  }
-  // Quiz
-  if (ms.quiz != null) {
-    lines.push(ms.quiz >= 70 ? `Tu as obtenu un bon score au quiz avec une précision de ${ms.quiz} %.`
-      : ms.quiz >= 50 ? `Tu as obtenu une précision de ${ms.quiz} % au quiz, c’est un bon début.`
-      : `Avec une précision de ${ms.quiz} % au quiz, il est important de revoir les notions du brief pour renforcer tes compétences.`);
-  }
-  // Mise en situation: their own challenge, or the squad's
-  const ch = ms.ch || rec.challenge || null;
-  if (ms.mes && ms.mes.r) {
-    const t = ch && ch.titre ? ` (« ${ch.titre} »)` : '';
-    lines.push(ms.mes.r === 'valide' ? `Tu as réussi la mise en situation${t}.` : ms.mes.r === 'partiel' ? `Ta mise en situation${t} est partiellement réussie.` : `Ta mise en situation${t} n’est pas validée.`);
-    if (ms.mes.note) lines.push(ms.mes.note);
-  }
-  if (ms.note) lines.push(ms.note);
-  const parts = [`Bonjour ${first},`];
-  if (lines.length) parts.push(lines.join('\n'));
-  const codes = Object.keys(ms.co || {});
-  const koC = codes.filter((c) => ms.co[c] === false);   // never written in the comment (no codes for the learner), only for the closing words
-  const weak = !m.commits || (ms.quiz != null && ms.quiz < 50);
-  const allOk = !koC.length && !weak && (!ms.mes || !ms.mes.r || ms.mes.r === 'valide');
-  parts.push(allOk ? 'Très bon travail, bonne continuation !' : weak ? 'Bon courage, je suis sûr que tu peux y arriver !' : 'Bonne continuation !');
-  return parts.join('\n\n');
-}
-
 // "Mise en situation": one small task on a user story of the brief drawn at random (done or not done in the project),
 // carried out in front of the teacher. It follows the brief (technologies, level) and is a small slice: never a whole page.
 export const CH_LEVEL = {
