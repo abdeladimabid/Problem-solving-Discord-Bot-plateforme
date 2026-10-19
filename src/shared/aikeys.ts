@@ -23,6 +23,8 @@ export const PRESETS: Record<string, Preset> = {
     keyUrl: "https://console.mistral.ai/api-keys", keyHint: "", free: "Free “Experiment” plan." },
   openai: { label: "OpenAI (ChatGPT)", base: "https://api.openai.com/v1", models: ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"],
     keyUrl: "https://platform.openai.com/api-keys", keyHint: "sk-…", free: "Paid (pay as you go)." },
+  anthropic: { label: "Anthropic (Claude)", base: "https://api.anthropic.com/v1", models: ["claude-haiku-5-5", "claude-sonnet-5-5"], anthropic: true,
+    keyUrl: "https://console.anthropic.com/settings/keys", keyHint: "sk-ant-…", free: "Paid (pay as you go)." },
   deepseek: { label: "DeepSeek", base: "https://api.deepseek.com/v1", models: ["deepseek-chat"],
     keyUrl: "https://platform.deepseek.com/api_keys", keyHint: "sk-…", free: "Paid, very cheap." },
   custom: { label: "Other (OpenAI-compatible)", base: "", models: [], custom: true,

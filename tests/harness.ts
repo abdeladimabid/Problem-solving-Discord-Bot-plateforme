@@ -214,11 +214,13 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   }
   if (url.hostname === "generativelanguage.googleapis.com" && url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "models/gemini-busy-flash" }, { id: "models/text-embedding-004" }, { id: "models/gemini-2.5-flash" }] });
   if (url.hostname === "generativelanguage.googleapis.com" && /busy/.test(String(body?.model))) return new Response(JSON.stringify([{ error: { code: 503, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" } }]), { status: 503 });
+  if (url.hostname === "generativelanguage.googleapis.com" || url.hostname === "api.anthropic.com") {
     const h = new Headers(init.headers || {});
     const key = (h.get("authorization") || "").replace(/^Bearer /, "") || h.get("x-api-key") || "";
     aiFake.calls.push(`${url.hostname}:${body?.model}`);
     if (!/good/.test(key)) return new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 401 });
     if (aiFake.down.includes(url.hostname)) return new Response(JSON.stringify({ error: { message: "Resource exhausted" } }), { status: 429 });
+    if (url.hostname === "api.anthropic.com") return Response.json({ content: [{ type: "text", text: "claude-answer" }] });
     return Response.json({ choices: [{ message: { content: "gemini-answer" } }] });
   }
   if (url.hostname === "openrouter.ai") {
