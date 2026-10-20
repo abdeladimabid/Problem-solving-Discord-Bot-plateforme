@@ -1082,7 +1082,7 @@ function renderDebrief() {
     <aside class="stack db-side">
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
-      <section class="panel" id="db-oral"></section>
+      <section class="panel" id="db-oral" ${rec.squad ? `style="display:none"` : ""}></section>
       <section class="panel" id="db-rem"><div class="panel-head" style="margin:0"><h2>One-to-one remarks</h2>${rec.remarks?.at ? `<span class="muted small">saved ${fmtAgo(Math.floor(rec.remarks.at / 1000))}</span>` : ""}</div>
         <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
         <p class="muted small" style="margin:-4px 0 8px">With ✨, what went well goes in the comment's strengths, what to review in its notions, and the oral questions your remarks say were answered are switched on.</p>
@@ -1101,20 +1101,21 @@ function renderDebrief() {
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>
-      <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
+      ${rec.squad ? squadCommentsHtml(rec, final) : `<section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
-        <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
+        <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>`}
       <section class="panel" id="db-level"></section>
       <section class="panel">${final ? `<h2>✅ Finalized</h2>
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
         : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
-          <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
+          <label class="check"><input type="checkbox" id="db-dm"> ${rec.squad ? "Send each member their own comment by Discord DM" : "Send the comment by Discord DM"}</label>
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>`;
   wireAssessLink(body);
   const saveRm = (ai) => async () => {
     toast(ai ? "⏳ The AI reads your remarks…" : "Saving…");
+    await DB.flushMembers?.();
     const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text: $("#db-rm").value, ai } });
     DB.R = { ...DB.R, ...R };
     const n = ai ? R.review?.remarks?.oralSet || 0 : 0;
@@ -1151,7 +1152,7 @@ function renderSteps(final) {
     const cur = $(`[data-seg="st${n}"] [aria-pressed="true"]`, box)?.dataset.v ?? "";
     const R2 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: cur, note: $(`[data-stnote="${n}"]`, box).value } });
     DB.R = { ...DB.R, stepRecs: R2.stepRecs };
-    if (DB.R.review && $("#db-c")) saveStatesSoon();
+    if (DB.R.review && $("#db-cst")) saveStatesSoon();
   };
   for (const s of R.steps) {
     wireSeg(box, `st${s.n}`, (v) => {
@@ -1172,7 +1173,7 @@ function renderSteps(final) {
     if (!(DB.R.stepRecs[n] || {}).final && ["a_temps", "en_retard", "non_fait"].includes(st)) {
       const R3 = await api(`/briefs/${bid}/review/step`, { method: "POST", body: { who, n, final: st, note: (DB.R.stepRecs[n] || {}).note || "" } });
       DB.R = { ...DB.R, stepRecs: R3.stepRecs };
-      if (DB.R.review && $("#db-c")) saveStatesSoon();
+      if (DB.R.review && $("#db-cst")) saveStatesSoon();
     }
     renderSteps(false);
   }));
@@ -1205,10 +1206,34 @@ function memberLevelHtml(gid, final) {
     <div class="toolbar" style="margin:0">${LV.map(([v, l]) => `<button class="btn small w-lv pgc-${v} ${cur === v ? "on" : !cur && p === v ? "prop" : ""}" data-mlv="${v}" data-gid="${esc(gid)}" ${final ? "disabled" : ""}>${l}</button>`).join("")}</div></div>`;
 }
 
+// a squad member's score in the quiz of the brief (graded linked assessments: their average), else null
+const memberQuiz = (rec, gid) => { const s = (rec.assess || []).map((a) => a.per?.[gid]?.score).filter((v) => typeof v === "number"); return s.length ? Math.round(s.reduce((a, b) => a + b, 0) / s.length) : null; };
+// a squad member's own assessment result (theirs only): their score, not graded yet, not taken, not invited
+function memberAssessHtml(rec, gid) {
+  const list = rec.assess || [];
+  if (!list.length) return "";
+  return `<p class="small m-as">${list.map((a) => { const p = a.per?.[gid];
+    return `<span>📝 <span class="muted">${esc(a.title)}:</span> ${!p ? `<span class="muted">not invited</span>` : p.score != null ? `<b style="color:${masteryInk(p.score)}">${p.score}%</b>`
+      : `<span class="lvl warn">${p.status === "submitted" ? "not graded yet" : "not taken"}</span>`}</span>${p && p.score != null ? `${(p.good || []).length ? `<span class="small"><span class="muted">Mastered:</span> ${esc(p.good.join(", "))}</span>` : ""}${(p.gaps || []).length ? `<span class="small"><span class="muted">Missed:</span> ${esc(p.gaps.join(", "))}</span>` : ""}` : ""}`; }).join("")}</p>`;
+}
+const MC_BY = { ai: "written by the AI from their data", template: "written from their data", you: "your text" };
+function memberCommentState(ms) {
+  return !ms.comment ? "Not written yet: ✨ Generate writes it from this member's data."
+    : ms.commentBy === "ai" ? "Written by the AI from this member's data: edit it freely, your text is kept."
+    : ms.commentBy === "you" ? "Your text: kept as it is (✨ Regenerate replaces it)."
+    : ms.commentBy === "template" ? "Written from this member's data: it follows their data until you edit it. ✨ Regenerate to have it phrased by the AI."
+    : "Written before: ✨ Regenerate to write it again from this member's data.";
+}
+// their own comment: sent by DM at Finalize, on their record, to copy into Simplonline
+function memberCommentHtml(ms, gid, final) {
+  return `<div class="m-com"><div class="panel-head"><b>Commentaire</b><span class="toolbar" style="margin:0"><button class="btn small" data-mcp="${esc(gid)}">Copy</button>${final ? "" : `<button class="btn small" data-mcai="${esc(gid)}">${ms.comment ? "✨ Regenerate" : "✨ Generate"}</button>`}</span></div>
+    <textarea data-mc="${esc(gid)}" ${final ? "readonly" : ""} placeholder="${final ? "" : "✨ Generate writes it from what this member did and showed"}">${esc(ms.comment || "")}</textarea>
+    ${final ? "" : `<p class="small muted" data-mcst="${esc(gid)}">${esc(memberCommentState(ms))}</p>`}</div>`;
+}
 function squadMembersHtml(rec, st, final) {
   const comps = Object.keys(st.co);
   return `<section class="panel"><div class="panel-head"><h2>Squad members</h2>${final ? "" : `<button class="btn small primary" id="db-msave">Save members</button>`}</div>
-    <p class="muted small" style="margin-top:0">The squad's work is judged above. Here, what each member did, and their own result: it's what goes on their record.</p>
+    <p class="muted small" style="margin-top:0">The squad's work is judged above. Here, what each member did and showed, and their own result and comment: it's what goes on their record. Saved as you go.</p>
     <div class="members">${(rec.contrib || []).map((m) => {
       const ms = rec.members?.[m.gid] || {};
       const co = ms.co || st.co;
@@ -1216,15 +1241,27 @@ function squadMembersHtml(rec, st, final) {
         <header>${avatar(m.name || m.login, m.gid)} <b>${esc(m.name || m.login)}</b> ${m.sm ? `<span class="tag">SM</span>` : ""} <span class="muted small">${esc(m.login || "")}</span></header>
         <p class="small mstats"><span>${m.commits ?? 0} commits</span><span>${m.days ?? 0} days</span><span>${m.prs ?? 0} PRs (${m.merged ?? 0} merged)</span><span>${m.reviews ?? 0} reviews</span>${m.cards != null ? `<span>${m.cardsDone ?? 0}/${m.cards} cards done</span>` : ""}
           ${m.collaborator === false ? `<span class="lvl bad">not a collaborator</span>` : ""}${!m.commits ? `<span class="lvl bad">no commit</span>` : ""}</p>
-        <div class="field-row"><div><label>Quiz / oral (%)</label><input type="number" min="0" max="100" data-q value="${ms.quiz ?? ""}" ${final ? "disabled" : ""}></div>
+        ${memberAssessHtml(rec, m.gid)}
+        <div class="field-row"><div><label>Quiz (%)</label><input type="number" min="0" max="100" data-q value="${ms.quiz ?? ""}" ${final ? "disabled" : ""}
+          ${memberQuiz(rec, m.gid) != null ? `placeholder="${memberQuiz(rec, m.gid)} (quiz)" title="Their score in the quiz of the brief: used as it is unless you type another one"` : ""}></div>
           <div><label>Mise en situation</label><select data-mr ${final ? "disabled" : ""}><option value="">—</option>${MES.map(([v, l]) => `<option value="${v}" ${ms.mes?.r === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
         <div class="db-rows" style="margin-top:8px">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span></div></div>`).join("")}</div>
         ${memberLevelHtml(m.gid, final)}
-        <label>Note</label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${final ? "disabled" : ""}>
+        <label>One-to-one remarks <span class="muted">about this member</span></label>
+        <textarea data-mn rows="3" ${final ? "readonly" : ""} placeholder="e.g. A fait le menu responsive et sait l'expliquer. Confond margin et padding.">${esc(ms.note || "")}</textarea>
         <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div>
-        ${ms.comment ? `<details class="small"><summary>Their comment</summary><pre class="code-view" style="white-space:pre-wrap">${esc(ms.comment)}</pre></details>` : ""}
+        ${memberCommentHtml(ms, m.gid, final)}
       </article>`;
     }).join("")}</div></section>`;
+}
+// the squad's Comments panel: each member's comment and where it stands (written in their card)
+function squadCommentsHtml(rec, final) {
+  return `<section class="panel" id="db-mcs"><div class="panel-head"><h2>Comments</h2>${final ? "" : `<button class="btn small" id="db-mcall" title="One AI call per member, one after the other">✨ Generate all</button>`}</div>
+    <p class="muted small" style="margin:0 0 8px">Each member gets their own comment, written from what they did and showed. It's in their card: Finalize sends it to them by DM and puts it on their record.</p>
+    <div class="db-rows">${(rec.contrib || []).map((m) => { const ms = rec.members?.[m.gid] || {};
+      return `<div class="db-row"><span class="db-i">${ms.comment ? "✅" : "·"}</span><div><button type="button" class="ap-link" data-mgo="${esc(m.gid)}">${esc(m.name || m.login)}</button>
+        <span class="small muted" data-mcsum="${esc(m.gid)}">${ms.comment ? MC_BY[ms.commentBy] || "written before" : "not written yet"}</span></div></div>`; }).join("")}</div>
+    <p class="muted small" id="db-cst" style="margin:8px 0 0"></p></section>`;
 }
 
 function currentStates() {
@@ -1246,15 +1283,17 @@ function updateMeter() {
 function saveStatesSoon() {
   updateMeter();
   clearTimeout(DB.timer);
-  $("#db-cst").textContent = "Saving…";
+  // a squad has no comment of its own here: each member's is in their card
+  const box = $("#db-c"), cst = $("#db-cst");
+  if (cst) cst.textContent = "Saving…";
   DB.timer = setTimeout(async () => {
     try {
-      const keep = DB.commentEdited;
-      const R = await api(`/briefs/${DB.bid}/review/states`, { method: "POST", body: { who: DB.who, states: { ...currentStates(), keepComment: keep, comment: keep ? $("#db-c").value : undefined } } });
+      const keep = !!box && DB.commentEdited;
+      const R = await api(`/briefs/${DB.bid}/review/states`, { method: "POST", body: { who: DB.who, states: { ...currentStates(), keepComment: keep, comment: keep ? box.value : undefined } } });
       DB.R = { ...DB.R, ...R };
-      if (!keep) $("#db-c").value = R.review?.result?.feedback ?? $("#db-c").value;
-      $("#db-cst").textContent = keep ? "Saved · your edited comment is kept (↻ Rebuild to write it from the switches)" : "Saved · comment updated";
-    } catch (e) { $("#db-cst").textContent = ""; toast(e.message, true); }
+      if (box && !keep) box.value = R.review?.result?.feedback ?? box.value;
+      if (cst) cst.textContent = !box ? "Saved" : keep ? "Saved · your edited comment is kept (↻ Rebuild to write it from the switches)" : "Saved · comment updated";
+    } catch (e) { if (cst) cst.textContent = ""; toast(e.message, true); }
   }, 700);
 }
 
@@ -1267,10 +1306,11 @@ function wireDebrief() {
   }));
   wireSeg(document, "mes", saveStatesSoon);
   if ($("#db-mn")) $("#db-mn").onchange = saveStatesSoon;
-  $("#db-cp").onclick = () => copyText($("#db-c").value, "Comment copied");
+  // the comment (one student; a squad's are in the members' cards)
   const c = $("#db-c");
-  c.oninput = () => { DB.commentEdited = true; $("#db-cst").textContent = "Edited · saved when you leave the box"; };
-  c.onchange = () => api(`/briefs/${bid}/review/comment`, { method: "POST", body: { who, text: c.value } }).then(() => ($("#db-cst").textContent = "Your comment is saved")).catch((e) => toast(e.message, true));
+  if ($("#db-cp")) $("#db-cp").onclick = () => copyText(c.value, "Comment copied");
+  if (c) c.oninput = () => { DB.commentEdited = true; $("#db-cst").textContent = "Edited · saved when you leave the box"; };
+  if (c) c.onchange = () => api(`/briefs/${bid}/review/comment`, { method: "POST", body: { who, text: c.value } }).then(() => ($("#db-cst").textContent = "Your comment is saved")).catch((e) => toast(e.message, true));
   if ($("#db-rb")) $("#db-rb").onclick = (e) => busy(e.currentTarget, async () => {
     DB.commentEdited = false;
     const R = await api(`/briefs/${bid}/review/states`, { method: "POST", body: { who, states: currentStates() } });
@@ -1287,6 +1327,7 @@ function wireDebrief() {
   });
   const drawTask = async (member, proposal = "") => {
     toast("⏳ The AI reads the project and writes the task…");
+    await DB.flushMembers?.();
     const R = await api(`/briefs/${bid}/review/challenge`, { method: "POST", body: { who, states: currentStates(), member, proposal } });
     DB.R = { ...DB.R, ...R }; renderDebrief();
   };
@@ -1300,18 +1341,79 @@ function wireDebrief() {
       <p class="small muted">The AI follows it within the brief, the programme week and their files. Empty: another task on another point.</p>`,
     [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: async () => { const p = $("#ms-p", dlg).value; dlg.close(); await drawTask(b.dataset.mm || "", p); } }]);
   });
-  const saveMembers = async () => {
-    const members = Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
-      quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
-      co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])) }]));
-    const R = await api(`/briefs/${bid}/review/members`, { method: "POST", body: { who, members } });
-    DB.R = { ...DB.R, ...R };
+  // each member: quiz, mise en situation, competencies, one-to-one remarks
+  const membersNow = () => Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
+    quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
+    co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])) }]));
+  // what the server wrote back: the members' comments written from their data follow it (never one you're editing)
+  const showMembers = () => {
+    for (const [gid, ms] of Object.entries(DB.R.review?.members || {})) {
+      const ta = $(`[data-mc="${CSS.escape(gid)}"]`);
+      if (ta && document.activeElement !== ta && ms.commentBy === "template") ta.value = ms.comment || "";
+      if ($(`[data-mcst="${CSS.escape(gid)}"]`)) $(`[data-mcst="${CSS.escape(gid)}"]`).textContent = memberCommentState(ms);
+      if ($(`[data-mcsum="${CSS.escape(gid)}"]`)) $(`[data-mcsum="${CSS.escape(gid)}"]`).textContent = ms.comment ? MC_BY[ms.commentBy] || "written before" : "not written yet";
+      const ai = $(`[data-mcai="${CSS.escape(gid)}"]`);
+      if (ai) ai.textContent = ms.comment ? "✨ Regenerate" : "✨ Generate";
+    }
   };
-  if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+  const saveMembers = async () => {
+    clearTimeout(DB.mtimer);
+    const R = await api(`/briefs/${bid}/review/members`, { method: "POST", body: { who, members: membersNow() } });
+    DB.R = { ...DB.R, ...R };
+    showMembers();
+  };
+  // saved as you go, like the switches
+  const saveMembersSoon = () => { clearTimeout(DB.mtimer); DB.mtimer = setTimeout(() => saveMembers().catch((e) => toast(e.message, true)), 800); };
+  DB.flushMembers = $("#db-msave") ? saveMembers : null;
+  if ($("#db-msave")) {
+    $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+    $$(".member [data-q], .member [data-mr], .member [data-mn], .member [data-mco]").forEach((x) => x.addEventListener("change", saveMembersSoon));
+  }
+  // each member's own comment: ✨ one AI call for this member, your edits kept, copy for Simplonline
+  const writeOne = async (gid) => {
+    const R = await api(`/briefs/${bid}/review/mcomment`, { method: "POST", body: { who, member: gid, members: membersNow() } });
+    clearTimeout(DB.mtimer);
+    DB.R = { ...DB.R, ...R };
+    const ms = DB.R.review?.members?.[gid] || {};
+    const ta = $(`[data-mc="${CSS.escape(gid)}"]`);
+    if (ta) ta.value = ms.comment || "";
+    showMembers();
+    return R;
+  };
+  $$("[data-mcp]").forEach((b) => b.onclick = () => copyText($(`[data-mc="${CSS.escape(b.dataset.mcp)}"]`).value, "Comment copied"));
+  $$("[data-mc]").forEach((ta) => {
+    const gid = ta.dataset.mc;
+    ta.oninput = () => { const s = $(`[data-mcst="${CSS.escape(gid)}"]`); if (s) s.textContent = "Edited · saved when you leave the box"; };
+    ta.onchange = () => api(`/briefs/${bid}/review/mcomment`, { method: "POST", body: { who, member: gid, text: ta.value } })
+      .then((R) => { DB.R = { ...DB.R, ...R }; showMembers(); }).catch((e) => toast(e.message, true));
+  });
+  $$("[data-mcai]").forEach((b) => b.onclick = async () => {
+    const gid = b.dataset.mcai, ms = DB.R.review?.members?.[gid] || {};
+    if (ms.commentBy === "you" && ms.comment && !(await askConfirm("Write this comment again?", "Your text is replaced by a new one, written from this member's data.", "Write it"))) return;
+    busy(b, async () => {
+      toast("⏳ The AI writes this member's comment…");
+      const R = await writeOne(gid);
+      if (R.by !== "ai") toast(R.msg || "The AI didn't answer: the comment is written from this member's data", true);
+    });
+  });
+  if ($("#db-mcall")) $("#db-mcall").onclick = (e) => busy(e.currentTarget, async () => {
+    const list = (DB.R.review?.contrib || []).map((m) => m.gid);
+    const mine = list.filter((gid) => DB.R.review?.members?.[gid]?.commentBy === "you" && DB.R.review.members[gid].comment);
+    const keepYours = mine.length && !(await askConfirm("Replace your edited comments too?", `${mine.length} comment${mine.length > 1 ? "s were" : " was"} edited by you. Replace ${mine.length > 1 ? "them" : "it"} too? Cancel keeps yours: the others are written all the same.`, "Replace mine too"));
+    let ai = 0, n = 0;
+    for (const gid of list) {
+      if (keepYours && mine.includes(gid)) continue;
+      $("#db-cst").textContent = `⏳ ${++n}/${list.length - (keepYours ? mine.length : 0)} · ${(DB.R.review.contrib.find((m) => m.gid === gid) || {}).name || ""}…`;
+      if ((await writeOne(gid)).by === "ai") ai++;
+    }
+    $("#db-cst").textContent = `${n} comment${n > 1 ? "s" : ""} written${ai < n ? ` · ${n - ai} from the template (the AI didn't follow the rules or didn't answer)` : ""}`;
+  });
+  $$("[data-mgo]").forEach((b) => b.onclick = () => { const card = $(`.member[data-gid="${CSS.escape(b.dataset.mgo)}"]`); card?.scrollIntoView({ behavior: "smooth", block: "start" }); $("[data-mc]", card)?.focus({ preventScroll: true }); });
   // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data (saved first)
   $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
     const cur = (DB.R.memberLevels || {})[b.dataset.gid]?.lvl || "";
     const next = cur === b.dataset.mlv ? "" : b.dataset.mlv;
+    await DB.flushMembers?.();
     const R = await api(`/briefs/${bid}/review/level`, { method: "POST", body: { who, member: b.dataset.gid, level: next } });
     DB.R = { ...DB.R, ...R }; renderDebrief();
     toast(next ? `Level saved: ${b.textContent.trim()}` : "Level removed");
@@ -1327,16 +1429,17 @@ function wireDebrief() {
   // everything as it is now (switches, mise en situation, oral questions, your comment), right away: a draft to finish later
   if ($("#db-save")) $("#db-save").onclick = (e) => busy(e.currentTarget, async () => {
     clearTimeout(DB.timer);
-    const keep = DB.commentEdited;
+    if ($(".member") && $("#db-msave")) await saveMembers();
+    const keep = !!c && DB.commentEdited;
     const R = await api(`/briefs/${bid}/review/states`, { method: "POST", body: { who, states: { ...currentStates(), keepComment: keep, comment: keep ? c.value : undefined } } });
     DB.R = { ...DB.R, ...R };
-    if (!keep) c.value = R.review?.result?.feedback ?? c.value;
+    if (c && !keep) c.value = R.review?.result?.feedback ?? c.value;
     $("#db-cst").textContent = "Draft saved";
     toast("Draft saved · finalize it when you're ready");
   });
   if ($("#db-fin")) $("#db-fin").onclick = (e) => busy(e.currentTarget, async () => {
     if ($(".member")) await saveMembers();
-    const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
+    const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: c && DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
     const aw = Object.values(R.awarded || {});
     toast(`Finalized: recorded for ${R.students} student(s)${aw.length ? ` · +${aw.reduce((s, x) => s + (x.pts || 0), 0)} pts` : ""}${R.sent ? " · comment sent" : ""}`);
     DB.R = { ...DB.R, ...R };

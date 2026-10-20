@@ -881,8 +881,9 @@ function wDebriefExtras() {
     });
     go();   // more questions are added after the ones there (their switches stay)
   };
-  // the first 5 questions are written by themselves when the debrief is opened
-  if (!final && !qs.length && !DB.oralAuto) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
+  // the first 5 questions are written by themselves when the debrief is opened (never in a squad: no oral questions
+  // there, each member's comment comes from their quiz and your one-to-one remarks)
+  if (!final && !qs.length && !DB.oralAuto && !rec.squad) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
   $$("[data-ordel]", box).forEach((b) => b.onclick = () => busy(b, async () => {
     const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who, del: Number(b.dataset.ordel), states: { oral: currentStates().oral } } });
     DB.R = { ...DB.R, ...R };

@@ -273,7 +273,7 @@ Ways to start a brief:
    - The bonus, 👍 Strengths / 🛠️ To improve, commits, and the **other automatic checks** (folded; for your information only).
 3. **One-to-one remarks:** what you noticed face to face. They count in the level and the comment. With ✨, the AI sorts them into strengths and notions to review, switches on the oral questions your remarks say were answered, and says which competencies they confirm or question.
 4. **Competencies:** from the assessment, the project, the one-to-one, the mise en situation and the oral questions. Your switch decides.
-5. **Oral questions:** ✨ up to 5, on the brief only, each with its expected answer. Each one starts Not valid, and those still Not valid go into the comment as *Notions à revoir*.
+5. **Oral questions** (a solo debrief): ✨ up to 5, on the brief only, each with its expected answer. Each one starts Not valid, and those still Not valid go into the comment as *Notions à revoir*. A squad debrief has none: each member's comment comes from their quiz and your one-to-one remarks.
 6. **Mise en situation:** a short task on the learner's own project, done live (10/15/20 min by level).
    - It either adds a small feature to their code or changes it to do one.
    - It is built from the brief's requirements, the programme week's concepts and technologies (never a later week) and their real repo files, aiming first at what they didn't fully validate.
@@ -282,15 +282,17 @@ Ways to start a brief:
    - **✨ Generate** / **✨ Regenerate** (with your proposal). It is one checked AI call with one retry, else a template (tagged *template*). You then record the result (valid / partial / not valid).
 7. **Steps:** **Propose validation** reads the repo as it was at the step's date and proposes on time / late / not validated / to check.
 8. **Level:** Excellent → Critique, proposed from your switches. ✨ generates it from the switches, the oral questions and the comment, without the name.
-9. **Squad members:** for each member, their commits, active days, PRs, reviews and cards.
-   - Their own quiz/oral %, mise en situation, competency switches and note.
+9. **Squad members:** for each member, their commits, active days, PRs, reviews and cards, and their own result in the quiz of the brief (the linked assessment): their score with the notions their answers show they master and those they missed, else *not graded yet*, *not taken* or *not invited*.
+   - Their own quiz/oral %, mise en situation, competency switches and **one-to-one remarks** (a few lines about them; the squad's own One-to-one remarks panel is for the whole squad). Saved as you go.
    - Their own **Level**: five chips, a *Proposed:* line from their own data, and ✨. A member with no commit is never proposed above Faible.
    - The squad's Level panel stays as the overall level.
 10. **Comment:** a professional comment in French, using « vous ». It comes only from your decisions: requirements and bonus, competencies, level, one-to-one remarks, oral questions not answered and the steps. The automatic checks never feed it.
     - Edit it freely and your text is kept. **↻ Rebuild** writes it again from the switches.
     - **✨ Write with AI** phrases the same points, checked, else the template.
-    - In a squad, each member gets their own comment.
-11. **💾 Save draft** or **Finalize** (optionally **Send the comment by Discord DM**). Finalize writes the competencies (at the brief's level), the skill evidence, the points and coins, and each squad member's own level onto each student's record. **Reopen** takes it all back.
+    - **In a squad, each member gets their own comment**, in their card (*Commentaire*: ✨ Generate / ✨ Regenerate, edit, Copy for Simplonline). The squad's Comment panel becomes **Comments**: where each one stands, and **✨ Generate all** (one AI call per member, one after the other).
+    - A member's comment rests first on **their own paper in the brief's quiz** (the linked assessment): the grader's bilan and what was right or wrong in each question. It's in French with « vous » (the grader's « tu » rewritten), professional, 150 to 300 words: *Bonjour {prénom}*, the project and the squad; **Bilan de l'évaluation** (only if they took it: what their answers show they master, then what is inexact or missing, by notion, no score); **Bilan du projet d'équipe** (the main user stories the squad validated, by theme); **Votre contribution** (their commits, days, PRs and reviews, what their commits built, Scrum Master, their mise en situation, their competencies; no commit, or few: said as a fact); **Bonus** (*Votre équipe…*, or *Vous avez…* when their own commits show it); **Notions à revoir** (only from the quiz questions they missed, their mise en situation and your one-to-one remarks about them). No *Axes d'amélioration*; never the performance criteria, the deliverables or the other automatic checks.
+    - The sections are built in code; the AI only phrases them (checked, asked again once, else the template). Your edited text is kept; a comment written from their data follows their data until you edit it.
+11. **💾 Save draft** or **Finalize** (optionally **Send the comment by Discord DM**; in a squad, each member gets their own comment, and a member with none gets one written from their data, never the squad's). Finalize writes the competencies (at the brief's level), the skill evidence, the points and coins, and each squad member's own level onto each student's record. **Reopen** takes it all back.
 
 #### Activités
 The daily activities of a period, from the **programme only**: no brief is used, because the classes of a programme run different briefs but study the same concepts.

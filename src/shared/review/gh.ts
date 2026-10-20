@@ -240,6 +240,8 @@ export async function squadContribution(token, repo, squad, commits, startT) {
       prs: prs.filter((p) => low(p.user && p.user.login) === lg).length,
       merged: merged.filter((p) => low(p.user && p.user.login) === lg).length,
       reviews: reviewsBy[lg] || 0,
+      // what they wrote about their work (their own comment says what they built)
+      msgs: mine.slice(0, 12).map((c) => String(c.msg || '').split('\n')[0].slice(0, 120)).filter(Boolean),
     };
   });
   const nameOf = (m) => m.name || m.login;

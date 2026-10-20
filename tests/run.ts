@@ -5092,6 +5092,182 @@ section("squad debriefs: each member's own level (chips, ✨, finalize, Progress
   run1("DELETE FROM briefs WHERE id = ?", id);
 }
 
+section("squad debriefs: each member's own comment, from their answers to the brief's quiz first, then their part and the one-to-one");
+{
+  const MC = await import("../src/shared/review/membercomment.ts");
+  const A = U.alice.id, B = U.bob.id, C = U.carol.id;
+  const ex = [
+    { type: "story", texte: "En tant que visiteur, je vais voir le menu sur toutes les pages, afin de naviguer.", statut: "fait" },
+    { type: "story", texte: "En tant que visiteur, je vais voir une page contact avec un formulaire, afin d'écrire au hammam.", statut: "absent" },
+    { type: "story", texte: "En tant que visiteur, je vais voir la page des soins avec les prix, afin de choisir.", statut: "fait" },
+    { type: "technique", texte: "Utiliser Flexbox pour la mise en page", statut: "fait" },
+    { type: "livrable", texte: "Documenter la planification du projet dans le README", statut: "absent" },
+    { type: "critere", texte: "Code indenté proprement", statut: "absent" },
+    { type: "bonus", texte: "En tant que visiteur, je vais activer un mode sombre, afin de lire la nuit.", statut: "fait" },
+    { type: "bonus", texte: "En tant que visiteur, je vais voir une animation", statut: "absent" },
+  ];
+  // the grader's bilan of a paper (written to the learner, « tu ») and what was right / wrong question by question
+  const bilanA = "Tu maîtrises bien Flexbox et l'alignement des éléments. Tu dois retravailler les media queries et la stratégie mobile-first.";
+  const base = (): any => ({
+    at: Date.now(), first: "Les Pixels", model: "test", brief: "Hammam Al Andalous", repos: ["pixels/hammam"], count: 30, files: true, skills: ["C3", "C4"],
+    checks: [{ id: "commits", label: "Commits réguliers", ok: false }],
+    result: { resume: "", commits: [], forts: [], ameliorer: [], feedback: "", exigences: ex, competences: [{ code: "C3", avis: "validable" }, { code: "C4", avis: "validable" }] },
+    final: { ex: ex.map((e) => e.statut === "fait"), co: { C3: true, C4: true } },
+    squad: { id: "a1b2c3", name: "Les Pixels", sm: A, members: [{ gid: A }, { gid: B }, { gid: C }] },
+    contrib: [
+      { gid: A, login: "alice-gh", name: "Alice", sm: true, commits: 24, days: 7, prs: 4, merged: 4, reviews: 3, msgs: ["feat(menu): ajout du menu burger", "update", "ajout du mode sombre", "Merge branch 'main'"] },
+      { gid: B, login: "bob-gh", name: "Bob", commits: 0, days: 0, prs: 0, merged: 0, reviews: 0, msgs: [] },
+      { gid: C, login: "carol-gh", name: "Carol", commits: 4, days: 2, prs: 0, merged: 0, reviews: 0, msgs: ["page des soins"] },
+    ],
+    // oral answers marked per member before (an earlier version): never used in a squad
+    oral: [{ q: "À quoi sert alt ?", a: "…", notion: "L'attribut alt", by: { [A]: true, [B]: false } }],
+    remarks: { text: "Le squad a du mal avec Git." },
+    challenge: null,
+    members: {
+      [A]: { co: { C3: true, C4: true }, mes: { r: "valide", note: "" }, ch: { titre: "Un lien actif dans le menu", point: "voir le menu" }, note: "Maîtrise bien Flexbox.", work: { files: ["index.html", "css/style.css", "js/menu.js", "contact.html", "img/logo.png"], msgs: [] } },
+      [B]: { co: { C3: false, C4: false }, mes: { r: "non_valide", note: "" }, ch: { titre: "Une carte de soin", point: "Notion : les media queries" }, note: "Ne sait pas expliquer la différence entre margin et padding." },
+    },
+    assess: [{ id: 1, title: "Quiz HTML/CSS", score: 70, done: 1, of: 2, comps: {}, per: {
+      [A]: { score: 85, status: "graded", gaps: ["le responsive (media queries)"], good: ["Flexbox", "les images et le texte alternatif (img, alt)"], bilan: bilanA,
+        right: ["justify-content: center centre bien les cartes sur l'axe principal."], wrong: ["La media query min-width: 768px manque : le site n'est pas mobile-first."] },
+      [C]: { score: null, status: "invited", gaps: [], good: [], bilan: "", right: [], wrong: [] } } }],
+  });
+  const rec = base();
+  // ---- the sections, built in code from the stored decisions
+  const dA = MC.memberCommentData({ rec, gid: A }), dB = MC.memberCommentData({ rec, gid: B }), dC = MC.memberCommentData({ rec, gid: C });
+  check(dA.greeting === "Bonjour Alice," && dA.intro.includes("« Hammam Al Andalous »") && dA.intro.includes("« Les Pixels »") && dA.sm && dA.work.share === "strong", "a member's comment: their first name, the project and the squad, their role and part of the work");
+  check(dA.quiz?.level === "bonne" && dA.quiz.good.join("|") === "Flexbox|les images et le texte alternatif (img, alt)" && dA.quiz.bilan === bilanA && dA.quiz.right.length === 1 && dA.quiz.wrong[0].startsWith("La media query"),
+    "their quiz: the grader's bilan of their paper, what was right and wrong question by question, the notions they master");
+  check(dB.quiz === null && dC.quiz === null, "not invited, or invited but not taken: no quiz (nothing said about it)");
+  check(dA.work.areas.join("|") === "la page d’accueil|les styles CSS|les scripts JavaScript|la page contact" && dA.work.msgs.join("|") === "ajout du menu burger|ajout du mode sombre", `what they built: from the files and the messages of their own commits (${dA.work.areas.join(", ")} · ${dA.work.msgs.join(", ")})`);
+  check(dA.team.done.length === 3 && dA.bonus.length === 1 && dA.bonus[0].mine && !dB.bonus[0].mine, "the squad's main stories validated; a bonus is theirs when their own commits show it, else the team's");
+  check(dA.notions.join("|") === "le responsive (media queries)" && !dB.notions.includes("l'attribut alt") && dB.notions.includes("les media queries") && dB.notions.some((n) => /margin et padding/.test(n)) && !dB.notions.some((n) => /git/i.test(n)) && !dC.notions.length,
+    `the notions to review: only theirs (their quiz, mise en situation, their one-to-one), never the squad's remarks nor old oral answers (${dB.notions.join(" | ")})`);
+  // ---- the template text: the quiz first, no « Axes d'amélioration »
+  const tA = MC.memberCommentText(dA), tB = MC.memberCommentText(dB), tC = MC.memberCommentText(dC);
+  const titles = (t: string) => ["Bilan de l'évaluation", "Bilan du projet d'équipe", "Votre contribution", "Bonus", "Axes d'amélioration", "Notions à revoir"].filter((x) => t.includes(`\n\n${x}\n`));
+  check(tA.startsWith("Bonjour Alice,\n\nVoici le bilan du débriefing du projet « Hammam Al Andalous », réalisé en équipe au sein de « Les Pixels ».\n\nBilan de l'évaluation\n") && /\n\nCordialement,$/.test(tA)
+    && titles(tA).join("|") === "Bilan de l'évaluation|Bilan du projet d'équipe|Votre contribution|Bonus|Notions à revoir", `the quiz first, then the project, their part, the bonus, the notions (${titles(tA).join(" · ")})`);
+  check(![tA, tB, tC].some((t) => t.includes("Axes d'amélioration")) && !/page contact avec un formulaire|README|indenté/i.test(tA + tB + tC), "no « Axes d'amélioration »: the points the squad didn't reach aren't listed in a member's comment");
+  check(tA.includes("Bilan de l'évaluation\nL'évaluation liée au brief montre une bonne maîtrise des notions travaillées. Vos réponses sont justes notamment sur Flexbox et les images et le texte alternatif (img, alt).")
+    && tA.includes("En revanche, une réponse reste incomplète ou inexacte sur le responsive (media queries)"), "the template's quiz section: how it went, what their answers show they master, what they missed");
+  check(!/\b(tu|ton|ta|tes|toi)\b/i.test(tA + tB + tC) && !/\*\*|#|!|C3|C4|%/.test(tA + tB + tC) && /\bvous\b/i.test(tA), "« vous », plain text, no score, no competency code");
+  check(tA.includes("Vous avez réalisé 24 commits sur 7 jours de travail, ouvert 4 pull requests et relu 3 pull requests de vos coéquipiers.") && tA.includes("Scrum Master") && tA.includes("Vous avez également travaillé le bonus suivant : activer un mode sombre.")
+    && tA.includes("« Un lien actif dans le menu », vous avez réalisé la tâche demandée"), "their part in the project: what they did, their role, their bonus, their mise en situation");
+  check(!tB.includes("Bilan de l'évaluation") && !/quiz|évaluation/i.test(tB) && tB.includes("aucun commit de votre part") && tB.includes("Votre équipe a également travaillé le bonus suivant") && /Prenez le temps de reprendre ces points/.test(tB),
+    "a member who wasn't invited: nothing about the quiz; no commit: a clear, respectful remark from the facts");
+  check(!/quiz|évaluation/i.test(tC) && tC.includes("en dessous de la moyenne de l'équipe") && !tC.includes("Notions à revoir") && tC.includes("Félicitations"), "invited but not taken: nothing about it; few commits: said as a fact; no notion: none invented");
+  const words = (t: string) => (t.match(/[A-Za-zÀ-ÿ0-9’'-]+/g) || []).length;
+  check(words(tA) >= 130 && words(tA) <= 320, `a full comment (${words(tA)} words)`);
+  check(MC.memberCommentText(MC.memberCommentData({ rec: { ...rec, members: { [A]: rec.members[A] } }, gid: A })) === tA, "a member's comment never depends on another member's remarks or result");
+  check(MC.cleanCommitMsg("fix: update") === "" && MC.cleanCommitMsg("feat(nav)!: menu burger animé\n\ndétails") === "menu burger animé" && MC.bonusMine("je vais activer un mode sombre", ["dark.css"]) === false && MC.bonusMine("je vais activer un mode sombre", ["toggle du theme sombre"]) === true,
+    "commit messages cleaned; a bonus is theirs only when their commits name it");
+  // their quiz score comes from the quiz of the brief, unless you typed one
+  {
+    const M = await import("../src/shared/review/members.ts");
+    const withScore = (score: number) => ({ ...rec, assess: [{ per: { [C]: { score, gaps: [], good: [] } } }] });
+    const lv = (r: any, ms: any = {}) => ["excellent", "bon", "moyen", "faible", "critique"].indexOf(M.memberLevel(r, r.contrib[2], ms));
+    check(M.quizOf(rec, A) === 85 && M.quizOf(rec, C) === null && M.quizOf(rec, B) === null && lv(withScore(100)) < lv(withScore(0)) && lv(withScore(0), { quiz: 100 }) === lv(withScore(100)),
+      "a member's quiz %: their score in the brief's quiz (not taken: none), unless you typed one; it counts in their level");
+  }
+  // ---- the AI rewrites the quiz's correction in « vous », for ONE member; its answer is checked
+  const pA = MC.memberCommentPrompt(dA), pB = MC.memberCommentPrompt(dB);
+  check(!/Alice|Bob|Carol|Pixels/.test(pA + pB) && pA.startsWith("ÉVALUATION DU BRIEF (quiz fait en classe, sans aide) : bonne maîtrise des notions") && pA.includes(`<<<\n${bilanA}\n>>>`)
+    && pA.includes("CE QUI EST FAUX OU MANQUE (question par question) :\n<<<\n- La media query min-width: 768px manque") && pB.includes("ÉVALUATION DU BRIEF : (non fournie") && !/POINTS À AMÉLIORER|un formulaire/.test(pA),
+    "the AI gets the member's quiz first (the grader's bilan, right and wrong per question), as data; no name; no points to improve");
+  const j = { evaluation: "Vos réponses à l’évaluation montrent une bonne maîtrise de Flexbox : vous centrez correctement les éléments avec justify-content. En revanche, la stratégie mobile-first n’est pas encore acquise : la media query attendue à partir de 768 px manque dans votre code.",
+    bilan_equipe: "Votre équipe a livré un site cohérent : la navigation est en place sur toutes les pages et la page des soins présente clairement les prix.",
+    contribution: "Vous avez pris une part très active au projet, avec 24 commits sur 7 jours, 4 pull requests et 3 relectures. En tant que Scrum Master, vous avez organisé le travail de l’équipe, et la mise en situation sur le lien actif du menu a été réussie.",
+    bonus: "Vous avez également travaillé le bonus suivant : un mode sombre. Cette initiative montre une capacité à aller au-delà des attentes.",
+    notions: ["les media queries et la stratégie mobile-first"], conclusion: "Je reste disponible pour toute question et vous souhaite une bonne continuation pour le prochain brief." };
+  const okA = MC.memberAiCheck(dA, j);
+  check(!!okA.text && okA.text.includes("Les Pixels ».\n\nBilan de l'évaluation\nVos réponses à l’évaluation montrent") && !okA.text.includes("Axes d'amélioration") && okA.text.includes("Notions à revoir\nÀ la suite de l'évaluation et de notre échange, je vous invite à revoir les notions suivantes :\n– les media queries et la stratégie mobile-first."),
+    `the AI's phrasing, assembled in the same sections, the quiz first (${okA.why.join(", ")})`);
+  check(!MC.memberAiCheck(dA, { ...j, evaluation: "Tu maîtrises bien Flexbox." }).text && !MC.memberAiCheck(dA, { ...j, evaluation: "" }).text && !MC.memberAiCheck(dB, { ...j, bonus: "Votre équipe a également travaillé le bonus suivant : un mode sombre." }).text
+    && !MC.memberAiCheck(dA, { ...j, evaluation: j.evaluation + " Vous avez obtenu 85 % au quiz." }).text && !MC.memberAiCheck({ ...dA, notions: [], remarks: "", quiz: null }, { ...j, evaluation: "" }).text && !MC.memberAiCheck(dA, { ...j, contribution: "Bien.", bilan_equipe: "Bien.", evaluation: "Bien." }).text,
+    "refused: « tu » (the correction copied as it is), no quiz section when they took it, a quiz section when they didn't, a score, notions without a source, too short");
+  check(MC.memberAiCheck(dA, { ...j, evaluation: "Tu maîtrises bien Flexbox." }).why.some((w) => /vouvoiement/.test(w)), "…with what's wrong (asked again once)");
+
+  // ---- through the dashboard: each member's quiz (their paper) and one-to-one remarks, ✨ one member at a time, finalize and the DMs
+  run1("INSERT INTO briefs (guild_id, title, status, data, kind, squads, created_at) VALUES (?, 'Hammam Al Andalous', 'assigned', '{}', 'squad', ?, ?)", G, JSON.stringify([{ id: "a1b2c3", name: "Les Pixels", members: [A, B, C], sm: A }]), clock.now());
+  const id = q1("SELECT MAX(id) AS id FROM briefs").id as number, who = "s:a1b2c3";
+  run1("INSERT INTO assessments (guild_id, title, brief_id, status, settings, questions, created_at) VALUES (?, 'Quiz HTML/CSS', ?, 'closed', '{}', ?, ?)", G, id,
+    JSON.stringify([{ id: "q1", type: "open", prompt: "Que fait une media query ?" }, { id: "q2", type: "open", prompt: "À quoi sert l'attribut alt ?" }, { id: "q3", type: "open", prompt: "Donne le nom de ton projet" }]), clock.now());
+  const aid = q1("SELECT MAX(id) AS id FROM assessments").id as number;
+  run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, answers, grades, score, summary) VALUES (?, ?, ?, 'graded', 1, ?, ?, 50, ?)", aid, G, A,
+    JSON.stringify({ q1: "?", q2: "texte alternatif" }), JSON.stringify({ q1: { verdict: "wrong", right: "", wrong: "La media query ne précise pas le point de rupture.", comment: "…" }, q2: { verdict: "correct", right: "Bonne réponse.", wrong: "" }, q3: { verdict: "empty" } }),
+    "Tu as de bonnes bases sur l'attribut alt. Tu dois retravailler les media queries.");
+  run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed) VALUES (?, ?, ?, 'invited', 2)", aid, G, C);
+  const stored = base();
+  delete stored.assess;
+  stored.members[A].comment = "Ancien commentaire (avant cette version)."; delete stored.members[B].note;
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(stored), clock.now());
+  const r0 = await api("GET", `/api/briefs/${id}/review?g=${G}&who=${who}`);
+  const per = r0.data.review?.assess?.[0]?.per || {};
+  check(r0.status === 200 && per[A]?.score === 50 && per[A]?.gaps?.join() === "le responsive (media queries)" && per[A]?.good?.join() === "les images et le texte alternatif (img, alt)"
+    && per[A]?.bilan === "Tu as de bonnes bases sur l'attribut alt. Tu dois retravailler les media queries." && per[A]?.wrong?.join("|") === "La media query ne précise pas le point de rupture.|question non tentée : Donne le nom de ton projet"
+    && !per[A]?.right?.length && per[C]?.score === null && !(B in per),
+    `each member's own paper: score, notions right and missed, the grader's bilan, what was wrong per question (a "Bonne réponse." says nothing); invited but not taken; not invited (${(per[A]?.wrong || []).join(" | ")})`);
+  const s1 = await api("POST", `/api/briefs/${id}/review/members`, { g: G, who, members: {
+    [A]: { quiz: "", mes: { r: "valide" }, co: { C3: true, C4: true }, note: "Maîtrise bien Flexbox.\nExplique clairement son menu." },
+    [B]: { quiz: "", mes: { r: "non_valide" }, co: { C3: false, C4: false }, note: "Ne sait pas expliquer la différence entre margin et padding." },
+    [C]: { quiz: "", mes: { r: "" }, co: { C3: true, C4: false }, note: "" } } });
+  const R1 = s1.data.review;
+  check(s1.status === 200 && R1.members[A].note === "Maîtrise bien Flexbox.\nExplique clairement son menu." && R1.members[B].note.startsWith("Ne sait pas"), "per member: their one-to-one remarks (a few lines)");
+  check(R1.members[A].comment === "Ancien commentaire (avant cette version)." && R1.members[B].commentBy === "template" && R1.members[B].comment.startsWith("Bonjour Bob,") && R1.members[C].comment.startsWith("Bonjour Carol,"),
+    "an old draft opens: a comment written before is kept; the others are written from each member's data");
+  // ✨ one member: one AI call for them only
+  const u0 = ai.users.length;
+  const g1 = await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: A });
+  const askedA = ai.users.slice(u0);
+  const cA = g1.data.review?.members?.[A]?.comment || "";
+  check(g1.status === 200 && g1.data.by === "ai" && askedA.length === 1 && cA.startsWith("Bonjour Alice,\n\nVoici le bilan du débriefing du projet « Hammam Al Andalous », réalisé en équipe au sein de « Les Pixels ».\n\nBilan de l'évaluation\nVos réponses à l’évaluation")
+    && !cA.includes("Axes d'amélioration") && cA.includes("– les media queries et la stratégie mobile-first"), `✨ a member's comment: one AI call for them only, built on their quiz (${g1.data.by} ${g1.data.msg || ""})`);
+  check(!/Alice|Bob|Carol|Pixels/.test(askedA[0] || "") && (askedA[0] || "").includes("Tu as de bonnes bases sur l'attribut alt. Tu dois retravailler les media queries.") && (askedA[0] || "").includes("- La media query ne précise pas le point de rupture\n- question non tentée : Donne le nom de ton projet"),
+    "…the AI gets their own paper (the grader's bilan, what was wrong), no name");
+  ai.memberBad = 1;
+  const u1 = ai.users.length;
+  const g2 = await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: B });
+  const cB = g2.data.review?.members?.[B]?.comment || "";
+  check(g2.data.by === "ai" && ai.users.length - u1 === 2 && ai.users[ai.users.length - 1].includes("ATTENTION : ta réponse précédente ne respectait pas les règles") && cB.startsWith("Bonjour Bob,") && !cB.includes("Bilan de l'évaluation") && cB.includes("aucun commit de votre part"),
+    "an answer that breaks the rules is asked again once; a member who wasn't invited gets no quiz section");
+  ai.memberBad = 2;
+  const g3 = await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: C });
+  ai.memberBad = 0;
+  check(g3.data.by === "template" && g3.data.review.members[C].commentBy === "template" && g3.data.review.members[C].comment.startsWith("Bonjour Carol,") && !!g3.data.msg, "twice wrong: the template, written from their data");
+  // the teacher's own text is kept
+  await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: C, text: "Bonjour Carol,\n\nMon commentaire pour Carol." });
+  const s2 = await api("POST", `/api/briefs/${id}/review/members`, { g: G, who, members: { [C]: { mes: { r: "partiel" }, note: "Hésite sur Git." } } });
+  check(s2.data.review.members[C].comment === "Bonjour Carol,\n\nMon commentaire pour Carol." && s2.data.review.members[C].commentBy === "you", "a comment you edited stays when the member's data changes");
+  // finalize: each member gets THEIR comment by DM and on their record; locked until reopened
+  const calls0 = discordCalls.length;
+  const fin = await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, notify: true });
+  const sent = discordCalls.slice(calls0).map((c) => JSON.stringify(c.body ?? {}));
+  check(fin.status === 200 && fin.data.sent === 3 && sent.some((x) => x.includes("Bonjour Alice,")) && sent.some((x) => x.includes("Bonjour Bob,")) && sent.some((x) => x.includes("Mon commentaire pour Carol")) && !sent.some((x) => x.includes("Bonjour Les Pixels")),
+    `finalize sends each member their own comment by DM, never the squad's (${fin.data.sent} sent)`);
+  const pageB = (await api("GET", `/api/students/${B}?g=${G}`)).data.learning?.briefs?.find((x: any) => x.id === id);
+  const pageC = (await api("GET", `/api/students/${C}?g=${G}`)).data.learning?.briefs?.find((x: any) => x.id === id);
+  check(pageB?.review?.comment === cB && pageC?.review?.comment === "Bonjour Carol,\n\nMon commentaire pour Carol.", "their page and /brief show their own comment");
+  const locked = await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: A });
+  const lockedM = await api("POST", `/api/briefs/${id}/review/members`, { g: G, who, members: {} });
+  check(locked.status === 400 && /finalized/.test(locked.data.error || "") && lockedM.status === 400, "a finalized debrief is locked: no comment or member change until it's reopened");
+  await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  check((await api("POST", `/api/briefs/${id}/review/mcomment`, { g: G, who, member: A, text: "Bonjour Alice, nouveau." })).status === 200, "reopened: the comments can change again");
+  // a member with no comment at all at finalize gets their own (the template), never the squad's
+  const noCom = JSON.parse(q1("SELECT record FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).record);
+  delete noCom.members[A].comment; delete noCom.members[A].commentBy;
+  run1("UPDATE brief_reviews SET record = ? WHERE brief_id = ? AND who = ?", JSON.stringify(noCom), id, who);
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who });
+  const afterFin = JSON.parse(q1("SELECT record FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).record);
+  check(afterFin.members[A].comment.startsWith("Bonjour Alice,") && afterFin.members[A].commentBy === "template" && afterFin.members[A].comment.includes("Bilan de l'évaluation") && afterFin.members[C].comment === "Bonjour Carol,\n\nMon commentaire pour Carol.",
+    "finalize writes the missing comment from the member's data (their quiz first), and keeps the others");
+  await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid);
+  run1("DELETE FROM assessments WHERE id = ?", aid);
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", id);
+  run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
 section("Export grades: level, briefs validated (over half the technical competencies), competencies to work on, recurring problems, plan d'action");
 {
   const sid = "770000000000000001";

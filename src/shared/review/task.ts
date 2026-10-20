@@ -59,7 +59,7 @@ export function cleanTask(j: any): Task {
   };
 }
 // « tu » anywhere, or an order given with « tu » at the start of a sentence (« Ajoute… », not « Ajoutez… »)
-const TU = /\b(tu|ton|ta|tes|toi)\b|(^|[.!?:]\s+)(ajoute|modifie|cr[ée]e|change|utilise|fais|mets|v[ée]rifie|rends|place)\b/i;
+const TU = /(?<![\p{L}\p{N}])(tu|ton|ta|tes|toi)(?![\p{L}\p{N}])|(^|[.!?:]\s+)(ajoute|modifie|cr[ée]e|change|utilise|fais|mets|v[ée]rifie|rends|place)(?![\p{L}\p{N}])/iu;
 const sentences = (s: string) => (s.match(/[^.!?]+[.!?]+(?=\s|$)/g) ?? []).length + (/[^.!?\s]\s*$/.test(s) ? 1 : 0);
 /** What doesn't follow the rules (in French: it goes back to the AI). `files`: the repo's files when they were read. */
 export function taskChecks(t: Task, o: { js: boolean; scope: string; files?: string[]; duree: string }): string[] {

@@ -23,8 +23,9 @@ import { githubGet, githubText, installationToken, repoFiles, repoSnapshot, squa
 import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
-import { memberLevel, memberLevelOf } from "./members.ts";
-import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment } from "./comment.ts";
+import { memberLevel, memberLevelOf, quizOf } from "./members.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText } from "./comment.ts";
+import { MEMBER_COMMENT_SYSTEM, memberAiCheck, memberCommentData, memberCommentPrompt, memberCommentText } from "./membercomment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -158,12 +159,23 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
   }
   if (!ids.length) return [];
-  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[] }[] = [];
+  type Per = Record<string, { score: number | null; status: string; gaps: string[]; good: string[]; bilan: string; right: string[]; wrong: string[] }>;
+  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[]; per: Per }[] = [];
   for (const a of list) {
-    const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null }>(env,
-      `SELECT discord_id, score, status, grades, answers FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
+    const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null; summary: string | null }>(env,
+      `SELECT discord_id, score, status, grades, answers, summary FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const graded = takers.filter((t) => t.status === "graded");
-    if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
+    // each one's own result (a squad member's comment uses only theirs): absent = not invited; a score only when graded
+    const per: Per = {};
+    for (const t of takers) {
+      const graded = t.status === "graded";
+      const gaps = graded ? gapsOf(a.questions, [t]) : [];
+      // what their answers show they master: the notions of the questions they got right (never one they also missed)
+      per[t.discord_id] = { score: graded ? t.score ?? 0 : null, status: t.status, gaps, good: graded ? gapsOf(a.questions, [t], true).filter((c) => !gaps.includes(c)) : [],
+        // the grader's bilan of their paper, and what was right / wrong question by question (their own comment rests on it)
+        ...(graded ? paperOf(a.questions, t) : { bilan: "", right: [], wrong: [] }) };
+    }
+    if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {}, per }); continue; }
     const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
       `SELECT discord_id, code, ok, level, note FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const comps: Record<string, { ok: boolean; level: number | null; note: string | null }> = {};
@@ -172,18 +184,18 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
       // a squad: validated only if every member who took it validated it
       comps[r.code] = c ? { ok: c.ok && !!r.ok, level: Math.min(c.level ?? 1, r.level ?? 1), note: c.note } : { ok: !!r.ok, level: r.level, note: r.note };
     }
-    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(a.questions, graded) });
+    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(a.questions, graded), per });
   }
   return out;
 }
 /** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
  *  what to study, grouped (the most missed first), never the list of questions. */
-function gapsOf(questions: string | null, takers: { grades: string | null; answers: string | null }[]): string[] {
+function gapsOf(questions: string | null, takers: { grades: string | null; answers: string | null }[], right = false): string[] {
   let qs: any[] = [];
   try { qs = JSON.parse(questions || "[]"); } catch { return []; }
   const count = new Map<string, number>();
   for (const q of qs) {
-    let missed = false;
+    let missed = false, ok = false;
     for (const t of takers) {
       let g: any = {}, an: any = {};
       try { g = JSON.parse(t.grades || "{}")[q.id]; an = JSON.parse(t.answers || "{}"); } catch { /* old row */ }
@@ -191,14 +203,31 @@ function gapsOf(questions: string | null, takers: { grades: string | null; answe
       const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
       const v = g?.verdict || (empty ? "empty" : "");
       if (v && v !== "correct") missed = true;
+      if (v === "correct") ok = true;
     }
-    if (!missed) continue;
+    // right: the notions of the questions answered correctly (what they master) instead
+    if (right ? !ok || missed : !missed) continue;
     // the question's own notion first (its prompt), then its expected answer when the prompt says nothing
     let cs = conceptsOf(String(q.prompt || ""));
     if (!cs.length) cs = conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`);
     for (const c of cs.slice(0, 3)) count.set(c, (count.get(c) || 0) + 1);
   }
   return [...count.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c).slice(0, 8);
+}
+/** One graded paper, for a squad member's comment: the grader's bilan, and what was right / wrong in each question
+ *  (in the questions' order; a question not attempted says so). */
+function paperOf(questions: string | null, t: { grades: string | null; summary?: string | null }): { bilan: string; right: string[]; wrong: string[] } {
+  let qs: any[] = [], gr: Record<string, any> = {};
+  try { qs = JSON.parse(questions || "[]"); gr = JSON.parse(t.grades || "{}"); } catch { /* old row */ }
+  const right: string[] = [], wrong: string[] = [];
+  for (const q of qs) {
+    const g = gr[q.id];
+    if (!g) continue;
+    if (g.verdict === "empty") { wrong.push(`question non tentée : ${oneLine(q.prompt, 120)}`); continue; }
+    if (g.right && !/^(bonne réponse|right answer)\.?$/i.test(String(g.right).trim())) right.push(oneLine(g.right, 220));
+    if (g.wrong && g.verdict !== "correct") wrong.push(oneLine(g.wrong, 220));
+  }
+  return { bilan: oneLine(t.summary, 1500), right: right.slice(0, 8), wrong: wrong.slice(0, 8) };
 }
 /** The graded assessments of the brief, for the AI: what the learner showed in class, without help (never a name). */
 export function assessForAi(assess: any[] | null | undefined): string {
@@ -557,7 +586,7 @@ export async function makeMemberLevel(env: Env, g: GuildRow, briefId: number, wh
     `MOYENNE DU SQUAD (${squad.length} membres) : ${mean("commits")} commits, ${mean("days")} jours, ${mean("prs")} pull requests, ${mean("reviews")} relectures`,
     `COMPÉTENCES : validées ${Object.keys(co).filter((c) => co[c]).map((c) => skillText(c)).join(", ") || "aucune"} ; non validées ${Object.keys(co).filter((c) => !co[c]).map((c) => skillText(c)).join(", ") || "aucune"}`,
     `TRAVAIL COMMUN DU SQUAD : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points du brief validés`,
-    typeof ms.quiz === "number" ? `QUIZ / ORAL : ${ms.quiz} %` : "",
+    typeof ms.quiz === "number" ? `QUIZ / ORAL : ${ms.quiz} %` : quizOf(rec, String(gid)) != null ? `QUIZ DU BRIEF (en classe, sans aide) : ${quizOf(rec, String(gid))} %` : "",
     ms.mes?.r ? `MISE EN SITUATION : ${MES[ms.mes.r] || ms.mes.r}` : "",
     ms.note ? `NOTE DU FORMATEUR SUR CE MEMBRE :\n<<<\n${oneLine(ms.note, 600)}\n>>>` : "",
     `NIVEAU CALCULÉ À PARTIR DE SES DONNÉES : ${calc}`,
@@ -744,7 +773,7 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
       .filter((c: any) => codes.has(c.code) && c.avis);
     // what went well and what to review, for the comment (« vous »; a sentence that says « tu » is not kept)
     const pos = oneLine(ask.data?.positif, 300);
-    rec.remarks.positive = /\b(tu|ton|ta|tes|toi)\b/i.test(pos) ? "" : pos;
+    rec.remarks.positive = /(?<![\p{L}\p{N}])(tu|ton|ta|tes|toi)(?![\p{L}\p{N}])/iu.test(pos) ? "" : pos;
     rec.remarks.toReview = (Array.isArray(ask.data?.a_revoir) ? ask.data.a_revoir : []).map((x: unknown) => oneLine(x, 140)).filter(Boolean).slice(0, 6);
     // the oral questions the remarks say were answered are switched on (the teacher can switch them back)
     const said = ask.data?.questions_reussies;
@@ -919,13 +948,7 @@ async function repoForTask(env: Env, g: GuildRow, rec: any, who: string, member:
   }
   if (!token) return out;
   const login = member ? (rec.contrib || []).find((m: any) => m.gid === member)?.login : "";
-  if (login) {
-    const list = await githubGet(`/repos/${repo}/commits?author=${encodeURIComponent(login)}&per_page=6`, token).catch(() => []);
-    for (const c of (Array.isArray(list) ? list : []).slice(0, 4)) {
-      const d = await githubGet(`/repos/${repo}/commits/${c.sha}`, token).catch(() => null);
-      for (const f of (d?.files || []) as any[]) if (f?.filename && !out.mine.includes(f.filename)) out.mine.push(String(f.filename));
-    }
-  }
+  if (login) out.mine = (await commitsOf(repo, token, login).catch(() => ({ files: [] as string[] }))).files;
   for (const path of pickFiles(out.files, target, out.mine)) {
     const text = await githubText(`/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}`, token, "application/vnd.github.raw", 6000).catch(() => "");
     if (text) out.excerpts.push({ path, text });
@@ -933,31 +956,116 @@ async function repoForTask(env: Env, g: GuildRow, rec: any, who: string, member:
   return out;
 }
 
-/** A squad: each member's quiz, competencies, challenge and note; returns one comment per member. */
+/**
+ * A squad: each member's quiz, competencies, mise en situation and one-to-one remarks. A member's comment written from
+ * these (the template) follows; one written by the AI or by the teacher (or from before: imported, an older version) is
+ * kept as it is.
+ */
 export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: string, data: any) {
   const r = await getReview(env, briefId, who);
   if (!r || !r.rec.squad || !Array.isArray(r.rec.contrib)) throw new DebriefError("Analyze the squad repo first.");
+  if (r.status === "final") throw new DebriefError("This debrief is finalized: reopen it first.");
   const rec = r.rec;
   const base = reviewStates(rec).co;
   rec.members = rec.members || {};
   const comments: Record<string, string> = {};
   for (const m of rec.contrib) {
-    const x = data?.[m.gid] && typeof data[m.gid] === "object" ? data[m.gid] : {};
+    // a member not sent stays as they are
+    if (!data?.[m.gid] || typeof data[m.gid] !== "object") continue;
+    const x = data[m.gid];
     const prev = rec.members[m.gid] || {};
     const qRaw = x.quiz === "" || x.quiz == null ? NaN : Number(x.quiz);
     const xc = x.co && typeof x.co === "object" ? x.co : {};
     const pc = prev.co || {};
     const ms: any = {
+      ...prev,
       quiz: Number.isFinite(qRaw) ? Math.max(0, Math.min(100, Math.round(qRaw))) : null,
       co: Object.fromEntries(Object.keys(base).map((code) => [code, typeof xc[code] === "boolean" ? xc[code] : typeof pc[code] === "boolean" ? pc[code] : base[code]])),
-      mes: { r: CH_RESULTS.includes(x.mes?.r) ? x.mes.r : "", note: oneLine(x.mes?.note, 500) },
-      note: oneLine(x.note, 600), ch: prev.ch || null, level: prev.level,
+      mes: { r: CH_RESULTS.includes(x.mes?.r) ? x.mes.r : "", note: oneLine(x.mes?.note ?? prev.mes?.note, 500) },
+      // the one-to-one remarks about this member: a few lines
+      note: x.note === undefined ? prev.note || "" : String(x.note ?? "").replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim().slice(0, 1500),
+      ch: prev.ch || null, level: prev.level,
     };
     rec.members[m.gid] = ms;
-    comments[m.gid] = ms.comment = memberComment(m, rec, ms);
+  }
+  for (const m of rec.contrib) {
+    const ms = (rec.members[m.gid] = rec.members[m.gid] || {});
+    if (!ms.comment || ms.commentBy === "template") { ms.comment = memberCommentText(memberCommentData({ rec, gid: m.gid })); ms.commentBy = "template"; }
+    comments[m.gid] = ms.comment;
   }
   await putReview(env, g, briefId, who, rec);
   return { comments, members: rec.members };
+}
+
+/** The files and messages of a squad member's own last commits (read once, kept in members[gid].work). Best effort. */
+async function memberWork(env: Env, g: GuildRow, rec: any, gid: string): Promise<{ files: string[]; msgs: string[]; at: number }> {
+  const out = { files: [] as string[], msgs: [] as string[], at: Date.now() };
+  const repo = String((rec.repos || [])[0] || "");
+  const login = (rec.contrib || []).find((m: any) => String(m.gid) === gid)?.login;
+  if (!repo.includes("/") || !login) return out;
+  const app = await ghAppOf(env, g.id);
+  if (!githubCanRead(app)) return out;
+  const ids = [...new Set([gid, ...(rec.squad?.members || []).map((m: any) => String(m.gid))])];
+  const players = await all<{ discord_id: string; gh_inst: string | null }>(env,
+    `SELECT discord_id, gh_inst FROM players WHERE guild_id = ? AND discord_id IN (${ids.map(() => "?").join(",")}) AND gh_inst IS NOT NULL`, g.id, ...ids);
+  for (const p of players.sort((a, b) => Number(b.discord_id === gid) - Number(a.discord_id === gid))) {
+    try {
+      const token = await installationToken(env, app, p.gh_inst!);
+      Object.assign(out, await commitsOf(repo, token, login));
+      return out;
+    } catch { /* the next member's access */ }
+  }
+  return out;
+}
+/** A login's last commits in a repo: the files they touched and their messages (what the mise en situation and the
+ *  member's comment read). */
+async function commitsOf(repo: string, token: string, login: string, n = 4): Promise<{ files: string[]; msgs: string[] }> {
+  const out = { files: [] as string[], msgs: [] as string[] };
+  const list = await githubGet(`/repos/${repo}/commits?author=${encodeURIComponent(login)}&per_page=${Math.max(6, n)}`, token);
+  for (const c of (Array.isArray(list) ? list : []).slice(0, n)) {
+    const msg = String(c?.commit?.message || "").split("\n")[0].slice(0, 120);
+    if (msg) out.msgs.push(msg);
+    const d = await githubGet(`/repos/${repo}/commits/${c.sha}`, token).catch(() => null);
+    for (const f of (d?.files || []) as any[]) if (f?.filename && !out.files.includes(f.filename)) out.files.push(String(f.filename));
+  }
+  return out;
+}
+
+/**
+ * ✨ One squad member's own comment (memberComment.ts): their sections built from the stored decisions, then ONE AI call
+ * for this member only (never one for the whole squad: a long squad can't cut the answers), checked, asked again once
+ * with what was wrong, else the template. `text`: the teacher's own text, kept as it is.
+ */
+export async function writeMemberComment(env: Env, g: GuildRow, briefId: number, who: string, gid: string, o: { text?: string; members?: any } = {}) {
+  if (o.members && typeof o.members === "object") await saveMembers(env, g, briefId, who, o.members);
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result || !r.rec.squad) throw new DebriefError("Analyze the squad repo first.");
+  if (r.status === "final") throw new DebriefError("This debrief is finalized: reopen it first.");
+  const rec = r.rec;
+  if (!(rec.contrib || []).some((m: any) => String(m.gid) === String(gid))) throw new DebriefError("Unknown squad member.");
+  rec.members = rec.members || {};
+  const ms = (rec.members[gid] = rec.members[gid] || {});
+  if (typeof o.text === "string") {
+    ms.comment = o.text.replace(/\r/g, "").slice(0, 6000); ms.commentBy = "you"; ms.commentAt = Date.now();
+    await putReview(env, g, briefId, who, rec);
+    return { by: "you", msg: "" };
+  }
+  // what they built: the files of their own commits (read once)
+  if (!ms.work || !(ms.work.files || []).length) ms.work = await memberWork(env, g, rec, String(gid)).catch(() => ({ files: [], msgs: [], at: Date.now() }));
+  const d = memberCommentData({ rec, gid: String(gid) });
+  let text: string | null = null, msg = "", extra = "";
+  for (let attempt = 0; attempt < 2 && !text; attempt++) {
+    const ask = await askReview(env, MEMBER_COMMENT_SYSTEM, memberCommentPrompt(d) + extra, 1, { maxTokens: 2500 }).catch(() => null);
+    if (!ask || !ask.ok) { msg = ask && !ask.ok ? ask.msg : "The AI didn't answer."; break; }
+    const c = memberAiCheck(d, ask.data);
+    text = c.text;
+    if (!text) { msg = "The AI's version didn't follow the rules: the comment is written from the debrief."; extra = `\n\nATTENTION : ta réponse précédente ne respectait pas les règles : ${c.why.join(" ; ")}. Corrige-la.`; }
+  }
+  ms.comment = text ?? memberCommentText(d);
+  ms.commentBy = text ? "ai" : "template";
+  ms.commentAt = Date.now();
+  await putReview(env, g, briefId, who, rec);
+  return { by: ms.commentBy as string, msg: text ? "" : msg };
 }
 
 export const statesOf = (rec: any) => (rec && rec.result ? reviewStates(rec) : null);

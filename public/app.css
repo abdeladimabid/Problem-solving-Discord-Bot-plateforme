@@ -679,6 +679,13 @@ ol.league li.me b { color: var(--blue); }
 .member > header { display: flex; gap: 8px; align-items: center; }
 .mstats { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-soft); }
 .mch { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+/* a squad member's own quiz result, one-to-one remarks and comment */
+.member .m-as { margin: 6px 0 0; display: grid; gap: 2px; }
+.member textarea[data-mn] { width: 100%; min-height: 64px; }
+.member .m-com { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.member .m-com .panel-head { margin: 4px 0 6px; }
+.member .m-com textarea { width: 100%; min-height: 220px; }
+.member .m-com p { margin: 4px 0 0; }
 .mch h2 { font-size: 14px; }
 
 /* assessments */
@@ -732,6 +739,9 @@ ol.league li.me b { color: var(--blue); }
 @media (max-width: 1100px) {
   .brief-grid, .db-grid { grid-template-columns: 1fr; }
   .bf-side, .db-side { position: static; }
+  /* the debrief never wider than the screen: its column shrinks to it (the member cards too) */
+  .db-grid { grid-template-columns: minmax(0, 1fr); }
+  .db-grid .members { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
 }
 @media (max-width: 640px) {
   .week { grid-template-columns: 1fr; }

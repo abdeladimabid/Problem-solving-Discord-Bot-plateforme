@@ -12,6 +12,7 @@ import { compLabel, compName, parseComp } from "./program.ts";
 import { reviewStates, verifHint, checkLabel } from "./review/engine.ts";
 import { getReview } from "./review/debrief.ts";
 import { memberLevel, memberLevelOf } from "./review/members.ts";
+import { memberCommentData, memberCommentText } from "./review/membercomment.ts";
 
 /** Which skills each automatic check of a debrief proves (or shows missing). */
 export const CHECK_SKILLS: Record<string, string[]> = {
@@ -102,6 +103,12 @@ export async function finalizeReview(env: Env, g: GuildRow, brief: { id: number;
     const ms = (rec.members = rec.members || {})[m.gid] || {};
     const prop = memberLevel(rec, m, ms);
     rec.members[m.gid] = { ...ms, level: { ...(ms.level || {}), prop, lvl: (ms.level && ms.level.lvl) || prop, by: (ms.level && ms.level.lvl) ? ms.level.by || "you" : "calc" } };
+  }
+  // …and their own comment: written from the debrief as it is now when none was written (or it was the template),
+  // so the DM, their page and /brief never get the squad's text
+  for (const m of rec.squad ? rec.contrib || [] : []) {
+    const ms = rec.members[m.gid];
+    if (!ms.comment || ms.commentBy === "template") rec.members[m.gid] = { ...ms, comment: memberCommentText(memberCommentData({ rec, gid: String(m.gid) })), commentBy: "template", commentAt: Date.now() };
   }
   rec.finalAt = Date.now();
   await run(env, "UPDATE brief_reviews SET record = ?, status = 'final', final_at = ?, updated_at = ? WHERE id = ?", JSON.stringify(rec), t0, t0, r.id);

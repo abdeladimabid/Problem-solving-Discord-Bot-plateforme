@@ -10,7 +10,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, saveRemarks, writeComment, writeMemberComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
@@ -282,7 +282,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|mcomment|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -345,6 +345,11 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok(await reviewView(env, g, id, who));
     }
     if (act === "members") { await saveMembers(env, g, id, who, body.members ?? {}); return ok(await reviewView(env, g, id, who)); }
+    // a squad member's own comment: ✨ one AI call for this member (the members' data saved first), or the teacher's text
+    if (act === "mcomment" && method === "POST") {
+      const w = await writeMemberComment(env, g, id, who, String(body.member || ""), { text: typeof body.text === "string" ? body.text : undefined, members: body.members });
+      return ok({ ...w, ...(await reviewView(env, g, id, who)) });
+    }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);
       if (typeof body.comment === "string" && body.comment.trim()) await saveCommentText(env, g, id, who, body.comment);

@@ -122,7 +122,7 @@ export function commentData(o: { first?: string; group?: string; project: string
     bonus: uniq(items.filter((x) => x.type === "bonus" && x.ok).map((x) => low(storyCore(x.texte)))).slice(0, MAX.bonus),
     improve: uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => actionOf(x.texte))).slice(0, MAX.improve),
     notions, remarks, oralMissed,
-    positive: /\b(tu|ton|ta|tes|toi)\b/i.test(String(R.positive || "")) ? "" : clean(R.positive, 300).replace(/([^.!?])$/, "$1.").replace(/^\.$/, ""),
+    positive: /(?<![\p{L}\p{N}])(tu|ton|ta|tes|toi)(?![\p{L}\p{N}])/iu.test(String(R.positive || "")) ? "" : clean(R.positive, 300).replace(/([^.!?])$/, "$1.").replace(/^\.$/, ""),
   };
 }
 
@@ -209,7 +209,8 @@ export function aiCommentPrompt(d: CommentData): string {
     d.level === "faible" || d.level === "critique" ? "TON : bienveillant mais ferme, l’apprenant doit reprendre ces points." : "",
   ].filter(Boolean).join("\n\n");
 }
-const TU = /\b(tu|ton|ta|tes|toi|t['’](?:as|es|en|y))\b/i;
+// « tu » as a word: not the end of « incomplètes » (\b only knows a-z: « è » would cut the word)
+const TU = /(?<![\p{L}\p{N}])(tu|ton|ta|tes|toi|t['’](?:as|es|en|y))(?![\p{L}\p{N}])/iu;
 const MARKUP = /\*\*|(^|\n)\s*#|`|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
 const line = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim().replace(/^[–—•*-]\s*/, "");
 /** The AI's answer, checked (form, sources, length) and assembled; null when it doesn't follow the rules. */

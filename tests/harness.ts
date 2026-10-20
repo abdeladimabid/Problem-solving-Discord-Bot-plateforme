@@ -379,6 +379,7 @@ export const ai = {
   prompts: [] as string[],
   users: [] as string[],
   chTech: false,
+  memberBad: 0,      // a squad member's comment: the next N answers break the rules (« tu »), until asked again
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
@@ -463,6 +464,26 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      // a squad member's own comment: the sections from the decisions given (only those), « vous »
+      if (sys.includes("commentaire personnel d’un membre d’un squad")) {
+        if (ai.memberBad > 0) {
+          ai.memberBad--;
+          return { response: JSON.stringify({ evaluation: "Tu as de bonnes bases.", bilan_equipe: "Ton équipe a bien travaillé.", contribution: "Tu as fait des commits.", bonus: "", notions: [], conclusion: "Bonne suite." }) };
+        }
+        // a list of the prompt: "TITLE (…) :\n- a\n- b\n\n" (the section ends at a blank line)
+        const listOf = (title: string) => (user.split("\n\n").find((part) => part.startsWith(title)) || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+        const notions = listOf("NOTIONS À REVOIR"), team = listOf("BONUS RÉALISÉS PAR L’ÉQUIPE"), mine = listOf("DONT CEUX QUE SES COMMITS MONTRENT");
+        const quiz = /ÉVALUATION DU BRIEF \(quiz/.test(user), wrong = /CE QUI EST FAUX OU MANQUE[^\n]*:\n<<</.test(user);
+        const none = /SA CONTRIBUTION : 0 commits/.test(user);
+        return { response: JSON.stringify({
+          evaluation: quiz ? "Vos réponses à l’évaluation montrent une bonne compréhension de Flexbox et de l’alignement des éléments dans un conteneur. Vous savez écrire les sélecteurs et les propriétés de base sans difficulté. En revanche, vos explications sur les media queries et sur la stratégie mobile-first restent incomplètes, et certaines valeurs demandées manquent dans le code." : "",
+          bilan_equipe: "Votre équipe a livré un site cohérent : la structure des pages et la navigation sont en place, et la mise en page s’adapte correctement aux différents écrans.",
+          contribution: none ? "Le dépôt de l’équipe ne montre aucun commit de votre part pendant ce brief : votre contribution au code n’est donc pas visible dans le projet, ce qui ne permet pas d’apprécier votre travail personnel sur cette réalisation commune."
+            : "Vous avez pris une part active au projet, avec des commits réguliers et des pull requests relues par l’équipe. Vous avez notamment construit le menu de navigation et les styles du site.",
+          bonus: team.length ? `${mine.length ? "Vous avez également travaillé le bonus suivant" : "Votre équipe a également travaillé le bonus suivant"} : ${team[0]}. Cette initiative montre une capacité à aller au-delà des attentes.` : "",
+          notions: [...(wrong ? ["les media queries et la stratégie mobile-first"] : []), ...notions].slice(0, 6),
+          conclusion: "Je reste disponible pour toute question et vous souhaite une bonne continuation pour le prochain brief." }) };
+      }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const improve = ((user.match(/POINTS DU BRIEF NON VALIDÉS[^\n]*:\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- "));
         const notes = /REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n<<</.test(user) || /NOTIONS DES QUESTIONS ORALES NON RÉUSSIES :\n- /.test(user);

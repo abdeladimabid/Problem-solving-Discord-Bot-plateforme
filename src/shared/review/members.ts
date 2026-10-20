@@ -37,7 +37,9 @@ export function memberLevel(rec: any, m: any, ms: any = {}, states?: any): strin
   const codes = Object.keys(co);
   if (codes.length) parts.push([0.3, codes.filter((c) => co[c]).length / codes.length]);
   if (main.length) parts.push([0.15, main.filter((i) => st.ex[i]).length / main.length]);
-  if (ms && typeof ms.quiz === "number") parts.push([0.15, Math.max(0, Math.min(100, ms.quiz)) / 100]);
+  // their quiz: the % you typed, else their score in the quiz of the brief (the linked assessment, graded)
+  const quiz = ms && typeof ms.quiz === "number" ? ms.quiz : quizOf(rec, String(m.gid));
+  if (quiz != null) parts.push([0.15, Math.max(0, Math.min(100, quiz)) / 100]);
   const mes = ({ valide: 1, partiel: 0.5, non_valide: 0 } as Record<string, number>)[(ms && ms.mes && ms.mes.r) || ""];
   if (mes !== undefined) parts.push([0.15, mes]);
   const or = st.oral || [];
@@ -46,6 +48,12 @@ export function memberLevel(rec: any, m: any, ms: any = {}, states?: any): strin
   // no commit in the squad's repo: never better than Faible, whatever the squad did
   if (!m.commits && rank(lv) < rank("faible")) lv = "faible";
   return lv;
+}
+
+/** A member's score in the quiz of the brief (the linked assessments, graded: their average), else null. */
+export function quizOf(rec: any, gid: string): number | null {
+  const s = ((rec && rec.assess) || []).map((a: any) => a?.per?.[gid]?.score).filter((v: unknown) => typeof v === "number") as number[];
+  return s.length ? Math.round(s.reduce((a, b) => a + b, 0) / s.length) : null;
 }
 
 /** Every member's level: the teacher's (lvl), the proposal (prop) and the AI's reason, for the debrief page. */
