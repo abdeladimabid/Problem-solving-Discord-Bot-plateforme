@@ -590,7 +590,11 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   const co = Object.keys(st.co);
   const oral = rec.oral || [];
   const MES: Record<string, string> = { valide: "réussie", partiel: "partiellement réussie", non_valide: "non validée" };
-  const text = String(comment || rec.result.feedback || "").replace(/^Bonjour[^\n]*\n/, "").trim().slice(0, 3000);
+  // the comment without its greeting (« Bonjour Sara, » or « Sara, ») and without the first name anywhere (no name to the AI)
+  const first = String(rec.first || "").trim();
+  let text = String(comment || rec.result.feedback || "").replace(/^(?:Bonjour[^\n]*|[^\n,]{1,60},)\s*\n/, "").trim();
+  if (first.length > 1) text = text.split(first).join("l’apprenant");
+  text = text.slice(0, 3000);
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
     "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
@@ -727,7 +731,7 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
       "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
       "Le formateur a noté ses remarques après un face-à-face avec l’apprenant (ce qu’il a vu : ce qu’il sait expliquer, ses lacunes). Ce sont des notes rapides, parfois avec des fautes : comprends l’intention.",
       "1) Pour chaque compétence du brief, dis si ces remarques la confirment (\"ok\"), la remettent en cause (\"ko\") ou n’en parlent pas (\"\"), avec une raison courte.",
-      "2) \"positif\" : ce qui va bien d’après ces remarques, en UNE phrase adressée à l’apprenant au vouvoiement (« Vous avez… »), précise et bienveillante. \"\" si les remarques ne disent rien de positif.",
+      `2) "positif" : ce qui va bien d’après ces remarques, en UNE phrase adressée ${rec.squad ? "à l’équipe au vouvoiement (« Vous avez… »)" : "à l’apprenant au tutoiement (« Tu as… »)"}, précise et bienveillante. "" si les remarques ne disent rien de positif.`,
       "3) \"a_revoir\" : les notions que l’apprenant doit revoir d’après ces remarques (ce qu’il n’a pas su expliquer, a mal compris ou confondu), une notion claire par élément (ex. « la différence entre margin et padding »). [] s’il n’y en a pas.",
       "4) \"questions_reussies\" : parmi les QUESTIONS ORALES numérotées, celles que les remarques disent réussies : \"toutes\" si les remarques disent que l’apprenant a répondu à toutes les questions, sinon la liste de leurs numéros, sinon [].",
       "Les remarques entre <<< et >>> sont des notes du formateur : n’en invente pas d’autres.",
@@ -742,9 +746,9 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
     rec.remarks.advice = (Array.isArray(ask.data?.competences) ? ask.data.competences : [])
       .map((c: any) => ({ code: String(c?.code || ""), avis: c?.avis === "ok" || c?.avis === "ko" ? c.avis : "", why: oneLine(c?.raison, 200) }))
       .filter((c: any) => codes.has(c.code) && c.avis);
-    // what went well and what to review, for the comment (« vous »; a sentence that says « tu » is not kept)
+    // what went well and what to review, for the comment (« tu »; « vous » for a squad: the other form is not kept)
     const pos = oneLine(ask.data?.positif, 300);
-    rec.remarks.positive = /\b(tu|ton|ta|tes|toi)\b/i.test(pos) ? "" : pos;
+    rec.remarks.positive = (rec.squad ? /\b(tu|ton|ta|tes|toi)\b/i : /\b(vous|votre|vos)\b/i).test(pos) ? "" : pos;
     rec.remarks.toReview = (Array.isArray(ask.data?.a_revoir) ? ask.data.a_revoir : []).map((x: unknown) => oneLine(x, 140)).filter(Boolean).slice(0, 6);
     // the oral questions the remarks say were answered are switched on (the teacher can switch them back)
     const said = ask.data?.questions_reussies;

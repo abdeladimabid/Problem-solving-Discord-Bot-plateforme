@@ -464,12 +464,14 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       if (sys.includes("rédiger le commentaire de débriefing")) {
-        const improve = ((user.match(/POINTS DU BRIEF NON VALIDÉS[^\n]*:\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- "));
-        const notes = /REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n<<</.test(user) || /NOTIONS DES QUESTIONS ORALES NON RÉUSSIES :\n- /.test(user);
-        return { response: JSON.stringify({ points_forts: "Votre projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site. Vous avez également validé les compétences visées par ce brief, ce qui constitue une base solide pour la suite de la formation.",
-          bonus: /BONUS RÉALISÉS :\n- /.test(user) ? "Vous avez également travaillé les bonus suivants : un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes." : "",
-          amelioration: improve.map((l) => "Compléter ce point du brief : " + l.slice(2).replace(/\.$/, "")), aller_plus_loin: improve.length ? "" : "Pour aller plus loin, approfondissez les notions de ce projet et soignez la lisibilité de votre code.",
-          notions: notes ? ["la différence entre margin et padding"] : [], conclusion: "Je reste disponible pour toute question et vous souhaite une bonne continuation pour le prochain brief." }) };
+        const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+        const notions = ((user.match(/NOTIONS À REVOIR :\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+        const p = ["Ton projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site."];
+        if (/BONUS RÉALISÉS : oui/.test(user)) p[0] += " Tu as aussi réalisé des bonus, ce qui est une très bonne initiative.";
+        if (missing.length) p.push(`Il manque encore ${missing.join(", ")} : c’est à terminer pour que ton rendu soit complet.`);
+        if (notions.length) p.push(`Pendant l’échange, ${notions.join(", ")} n’étaient pas encore clairs pour toi. Ce sont des notions importantes à bien comprendre pour la suite.`);
+        p.push("Continue sur cette lancée, {prénom}, et consolide ces points pour progresser encore.");
+        return { response: JSON.stringify({ commentaire: p.join("\n\n") }) };
       }
       if (sys.includes("You help a programming teacher prepare a class")) return { response: JSON.stringify({ topic: "running totals with prefix sums", why: "They practise prefix sums on a real input." }) };
       if (sys.includes("game master of a class boss battle")) return { response: JSON.stringify({ name: "Lord Segfault", topic: "running totals with prefix sums", setting: "A cursed vault under the Atlas.", why: "They practise prefix sums on a real input.",
@@ -578,7 +580,7 @@ function fakeAI() {
         // "ils ont répondu à toutes les questions" (even misspelled): all the oral questions answered, something positive
         const all = /r[ée]pon\w*\s+(sur|à|a)\s+tou\w*\s+les\s+questions/i.test(user);
         return { response: JSON.stringify({ competences: [{ code: "C3", avis: all ? "ok" : "ko", raison: all ? "Explique bien son code." : "Ne sait pas expliquer margin et padding." }, { code: "C99", avis: "ok", raison: "?" }],
-          positif: all ? "Vous avez répondu correctement à toutes les questions de l’échange." : "", a_revoir: /margin/.test(user) ? ["la différence entre margin et padding"] : [], questions_reussies: all ? "toutes" : [] }) };
+          positif: all ? "Tu as répondu correctement à toutes les questions de l’échange." : "", a_revoir: /margin/.test(user) ? ["la différence entre margin et padding"] : [], questions_reussies: all ? "toutes" : [] }) };
       }
       if (sys.includes("questions orales de la soutenance")) return { response: JSON.stringify({ questions: [
         { q: "À quoi sert la balise <!DOCTYPE html> ?", a: "Elle indique au navigateur que la page est en HTML5.", notion: "doctype HTML5" },

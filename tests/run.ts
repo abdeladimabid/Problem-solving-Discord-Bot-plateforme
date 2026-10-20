@@ -2773,7 +2773,7 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   const r0 = await api("GET", `/api/briefs/${id}/review?g=${G}&who=${who}`);
   check(r0.status === 200 && r0.data.states.ck.responsive === false && r0.data.states.ex[1] === false && r0.data.states.co.C3 === true && r0.data.states.co.T1 === false, "states start from the checks and the AI");
   const st = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: true } } });
-  check(st.status === 200 && st.data.states.co.T1 === true && /^Bonjour Alice/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
+  check(st.status === 200 && st.data.states.co.T1 === true && /^Alice,\n\n/.test(st.data.review.result.feedback), "teacher switch saved, comment rewritten from the switches");
   const ch = await api("POST", `/api/briefs/${id}/review/challenge`, { g: G, who });
   check(ch.status === 200 && ch.data.review.challenge.titre === "Ajouter une carte" && ch.data.review.challenge.criteres.length === 3 && ch.data.review.challenge.observer.length === 3
     && ch.data.review.challenge.regarder && ch.data.review.challenge.fichiers.length === 1 && ch.data.review.challenge.by === "ai", "mise en situation: a task on their project (what to do, files, 3 criteria, a hint for the teacher)");
@@ -2859,7 +2859,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(rm.data.review.result.feedback.includes("Notions à revoir\nÀ la suite de notre échange, je vous invite à revoir les notions suivantes :\n– la différence entre margin et padding"), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/n’étai(?:t|ent) pas encore claires? : [^\n]*la différence entre margin et padding/.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -2868,7 +2868,8 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  check(fb.toLowerCase().includes(`– ${o2.data.review.oral[2].notion.toLowerCase()}`) && fb.includes("Notions à revoir") && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => fb.toLowerCase().includes(`– ${x.notion.toLowerCase()}`)) && /\nCordialement,$/.test(fb) && !/\btu\b/.test(fb), "the comment: the oral question not answered is a notion to review, in « vous »");
+  const notP = fb.split("\n\n").find((x: string) => /pas encore claires?/.test(x)) || "";
+  check(notP.toLowerCase().includes(o2.data.review.oral[2].notion.toLowerCase()) && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => notP.toLowerCase().includes(x.notion.toLowerCase())) && !/Cordialement|Notions à revoir/.test(fb) && !/\b(vous|votre|vos)\b/i.test(fb), "the comment: the oral question not answered is a notion to review, in « tu »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
   const l2 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "bon" });
@@ -3610,13 +3611,13 @@ section("brief steps: found in the brief, dated in working days, proposed from t
     result: { resume: "Bien.", commits: [], feedback: "", exigences: [{ type: "story", texte: "Page d’accueil", statut: "fait", preuve: "index.html", check: "pages" }], competences: [{ code: "C3", avis: "validable", raison: "ok" }] }, challenge: null };
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", sid, G, who, JSON.stringify(rec), clock.now());
   const fb = (await api("POST", `/api/briefs/${sid}/review/states`, { g: G, who, states: {} })).data.review.result.feedback;
-  check(/^Bonjour Carol,/.test(fb) && !/Partie 2|en retard|83 %|dernière étape/.test(fb), "the steps of the brief stay on the page for the teacher: not in the comment");
+  check(/^Carol,\n\n/.test(fb) && !/Partie 2|en retard|83 %|dernière étape/.test(fb), "the steps of the brief stay on the page for the teacher: not in the comment");
   const rv = await api("GET", `/api/briefs/${sid}/review?g=${G}&who=${who}`);
   check(rv.data.steps.length === 3 && rv.data.stepRecs[2].note === "Les pages sont arrivées en retard.", "the debrief page gets the steps and the results");
   env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
 }
 
-section("the debrief comment: professional, « vous », only from the teacher's decisions (requirements, bonus, competencies, one-to-one, oral)");
+section("the debrief comment: the teacher's way (« tu », paragraphs, an honest verdict), only from the teacher's decisions");
 {
   const C = await import("../src/shared/review/comment.ts");
   const ex = [
@@ -3639,64 +3640,66 @@ section("the debrief comment: professional, « vous », only from the teacher's 
   };
   const d = C.commentData({ first: "Sara", project: rec.brief, rec });
   const fb = C.commentText(d);
-  check(fb.startsWith("Bonjour Sara,\n\nVoici le bilan du débriefing de votre projet « Hammam Al Andalous ».\n\nPoints forts\n") && /\n\nCordialement,$/.test(fb), "the opening (first name, the project) and the closing");
-  check(!/\b(tu|ton|ta|tes|toi)\b/i.test(fb) && !/\*\*|#|!/.test(fb) && /\bvous\b/i.test(fb), "« vous », plain text, no markdown, no exclamation mark");
-  check(fb.includes("Bonus\nVous avez également travaillé le bonus suivant : activer un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes.") && !/animation/.test(fb), "Bonus: only the bonus done, valued");
-  const imp = fb.slice(fb.indexOf("Axes d'amélioration"), fb.indexOf("Notions à revoir"));
-  check(imp.includes("– Permettre à l’utilisateur de voir une page contact avec un formulaire.") && imp.includes("– Rendre le site adaptatif aux points de rupture 768 px et 1024 px.") && imp.includes("– Documenter la planification du projet dans le README."),
-    "what to improve: the requirements not validated, as actions");
-  check(!/indenté|commit|branche|page en cours|menu sur toutes/i.test(imp), "…never the performance criteria nor the other automatic checks");
-  const not = fb.slice(fb.indexOf("Notions à revoir"));
-  check(not.includes("À la suite de notre échange, je vous invite à revoir les notions suivantes :\n– la différence entre margin et padding ;\n– le rôle de la balise <main>.") && !/flexbox|attribut alt/i.test(not),
+  const paras = fb.split("\n\n");
+  check(paras[0] === "Sara," && !/Bonjour|Cordialement|Points forts|Axes d|Notions à revoir|Bonus\n/.test(fb), "the teacher's way: the first name, then paragraphs (no titles, no « Bonjour », no « Cordialement »)");
+  check(!/\b(vous|votre|vos)\b/i.test(fb) && /\btu\b/.test(fb) && !/\*\*|#|!|(^|\n)\s*[–-] /.test(fb), "« tu », plain text, no markdown, no bullet list, no exclamation mark");
+  check(/Tu as aussi réalisé un bonus, ce qui est une très bonne initiative\./.test(fb) && !/mode sombre|animation/.test(fb), "the bonus: said, not listed");
+  const miss = paras.find((x) => /il manque encore|Il te reste/.test(x)) || "";
+  check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il te reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(fb),
+    "what is missing: in a sentence, never « Compléter le point du brief »");
+  check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
+  const not = paras.find((x) => /pas encore claires?/.test(x)) || "";
+  check(not.includes("la différence entre margin et padding") && not.includes("le rôle de la balise <main>") && !/flexbox|attribut alt/i.test(not) && /Prends le temps de les revoir/.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
-  check(fb.includes("compétence suivante : « réaliser des interfaces utilisateur statiques web ou web mobile »") && !/C3|C4|niveau|%/.test(fb), "strengths: the validated requirements in themes, the competencies validated by name (no codes, no score)");
-  // the other automatic checks never change it
-  // (the menu check is bound to a requirement: that one is the requirement's switch, so it stays)
+  check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
   const flipped = { ...rec, checks: rec.checks.map((c: any) => (c.id === "nav" ? c : { ...c, ok: !c.ok })), final: { ...rec.final, ck: { commits: true, branches: true, active: true } } };
   check(C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: flipped })) === fb, "the other automatic checks don't feed the comment");
-  check(C.wordCount(fb) >= 120 && C.wordCount(fb) <= 250, `between 120 and 250 words (${C.wordCount(fb)})`);
-  check(C.actionOf("Page des soins avec les prix") === "Compléter le point du brief « Page des soins avec les prix »." && C.actionOf("Utiliser Flexbox pour la mise en page") === "Utiliser Flexbox pour la mise en page."
-    && !C.themesOf(["Site en ligne sur GitHub Pages"]).some((t: string) => /Git$/.test(t)), "a grid line becomes something to complete; GitHub Pages is the deployment, not Git");
-  // nothing to improve, no bonus, no one-to-one: those sections go
-  const good: any = { ...rec, result: { exigences: ex.filter((e) => e.statut === "fait" && e.type !== "bonus"), competences: [{ code: "C3", avis: "validable" }] }, oral: [], remarks: null, final: {} };
+  check(C.missingOf("Page des soins avec les prix")!.text === "le point « Page des soins avec les prix »" && C.missingOf("Un fichier de planification")!.text === "un fichier de planification" && C.missingOf("Utiliser Flexbox pour la mise en page")!.kind === "todo"
+    && !C.themesOf(["Site en ligne sur GitHub Pages"]).some((t: string) => /Git$/.test(t)), "a grid line, a thing, something to do; GitHub Pages is the deployment, not Git");
+  // the verdict follows the teacher's level
+  const lvl = (l: string) => C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: { ...rec, level: { lvl: l } } }));
+  check(/^Sara,\n\nExcellent travail\./.test(lvl("excellent")) && /globalement bien réalisé/.test(lvl("bon")) && /correct dans l’ensemble/.test(lvl("moyen")) && /encore fragile/.test(lvl("faible")) && /loin de ce qui est attendu/.test(lvl("critique"))
+    && !/bon travail|excellent/i.test(lvl("faible")) && !/excellent/i.test(lvl("moyen")) && /Sara, il faut/.test(lvl("faible")), "the verdict and the closing follow the teacher's level (never « bon travail » for a weak one)");
+  // everything validated, nothing said in the one-to-one: a short comment, nothing made up
+  const good: any = { ...rec, result: { exigences: ex.filter((e) => e.statut === "fait" && e.type !== "bonus"), competences: [{ code: "C3", avis: "validable" }] }, oral: [], remarks: null, final: {}, level: { lvl: "excellent" } };
   const fg = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: good }));
-  check(!fg.includes("Bonus") && !fg.includes("Notions à revoir") && fg.includes("Axes d'amélioration\nL'ensemble des points du brief est validé. Pour aller plus loin") && fg.includes("Félicitations pour ce travail de qualité"),
-    "everything validated: how to go further; no bonus, no notions sections");
-  // a squad: everyone, « vous »; a member's own competencies and note
-  check(/^Bonjour Les Pixels,\n/.test(C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final)), "a squad's comment: to everyone");
+  check(/^Sara,\n\nExcellent travail\. Tu as réalisé l’ensemble des fonctionnalités demandées/.test(fg) && !/bonus|manque|revoir|claire/i.test(fg) && /Continue comme ça\.$/.test(fg) && C.wordCount(fg) < 60,
+    `everything validated: short, nothing made up (${C.wordCount(fg)} words)`);
+  // a squad: everyone, « vous »; a member's own note
+  const sqc = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
+  check(/^Les Pixels,\n\n/.test(sqc) && /\bvous\b/i.test(sqc) && !/\btu\b/.test(sqc), "a squad's comment: to everyone, « vous »");
   const mc = C.memberComment({ name: "omar_benali" }, rec, { co: { C3: false, C4: true }, note: "Confond flex et grid." });
-  check(mc.startsWith("Bonjour Omar,") && mc.includes("– la différence entre flex et grid ;") && !mc.includes("margin et padding") && mc.includes("« développer la partie dynamique"), "a squad member: their own note and competencies");
-  // the AI only phrases the same sections; its answer is checked
+  check(mc.startsWith("Omar,") && mc.includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
+  // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
-  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("activer un mode sombre") && !/commits|branches/i.test(pr), "the AI gets the decisions (no name, no automatic checks)");
-  const j = { points_forts: "Votre site est bien structuré et la navigation entre les pages est cohérente sur l’ensemble du projet. La mise en page avec Flexbox est maîtrisée, ce qui donne un rendu propre et lisible. Vous avez également validé la réalisation d’interfaces statiques, une base solide pour la suite de la formation.",
-    bonus: "Vous avez également travaillé les bonus suivants : un mode sombre. Cette initiative montre votre capacité à aller au-delà des attentes.", amelioration: ["Ajouter la page contact avec son formulaire.", "Rendre le site adaptatif aux points de rupture demandés (768 px et 1024 px).", "Documenter la planification du projet dans le README."],
-    aller_plus_loin: "", notions: ["la différence entre margin et padding", "le rôle de la balise <main> dans une page"], conclusion: "Je reste disponible pour toute question. Bonne continuation pour le prochain brief." };
-  const at = C.aiCommentText(d, j);
-  check(!!at && at.startsWith("Bonjour Sara,\n\nVoici le bilan") && at.includes("Points forts\nVotre site est bien structuré") && at.includes("– le rôle de la balise <main> dans une page.") && /Cordialement,$/.test(at!), "the AI's phrasing, assembled in the same sections");
-  check(C.aiCommentText(d, { ...j, points_forts: "Tu as bien travaillé la structure de ton site." }) === null && C.aiCommentText(d, { ...j, amelioration: [...j.amelioration, "Ajouter des tests.", "Utiliser Git.", "Autre."] }) === null
-    && C.aiCommentText(d, { ...j, bonus: "" }) === null && C.aiCommentText({ ...d, remarks: "", oralMissed: [], notions: [] }, j) === null && C.aiCommentText(d, { ...j, points_forts: "**Bravo** !" }) === null,
-    "an AI answer that says « tu », adds points, drops the bonus, invents notions or uses markdown is refused (the template is used)");
-  // ✨ through the API: the AI phrases it; kept when a switch changes; ↻ Rebuild writes it from the switches again
+  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("BONUS RÉALISÉS : oui (1)") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée. Tu as aussi réalisé un bonus, ce qui est une bonne initiative.\n\nIl manque encore la page contact avec son formulaire, l’adaptation aux écrans de 768 px et 1024 px et la planification dans le README.\n\nPendant l’échange, la différence entre margin et padding n’était pas claire pour toi, tout comme le rôle de la balise <main>. Ce sont des bases importantes pour structurer une page.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  const lvD = { ...d, level: "moyen" };
+  const at = C.aiCommentText(lvD, { commentaire: body });
+  check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
+  check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: "Points forts\n\n" + body }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
+    && C.aiCommentText({ ...lvD, bonus: [] }, { commentaire: body }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
+    "an AI comment that says « vous », has titles or bullets, invents a bonus, praises above the level, uses markdown or greets is refused (the template is used)");
+  // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
   const bid = mk.data.brief.id, who = `u:${U.carol.id}`;
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify({ ...rec, at: Date.now(), result: { ...rec.result, feedback: "" } }), clock.now());
   const w = await api("POST", `/api/briefs/${bid}/review/commentai`, { g: G, who, states: {} });
   const wf = w.data.review?.result?.feedback || "";
-  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Bonjour Sara,") && wf.includes("Points forts\nVotre projet est bien structuré") && wf.includes("Bonus\n") && !!w.data.review.edited, `✨ the AI phrases the comment (${w.data.by} ${w.data.msg || ""})`);
+  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Sara,\n\nTon projet est bien structuré") && wf.includes("des bonus") && wf.includes("Continue sur cette lancée, Sara,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
   check(!ai.users[ai.users.length - 1].includes("Sara") && !/commits|branches/i.test(ai.users[ai.users.length - 1]), "…without the name, nor the automatic checks");
   const k = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { co: { C4: true }, keepComment: true, comment: wf } });
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
-  check(rb.data.review.result.feedback.startsWith("Bonjour Sara,\n\nVoici le bilan") && rb.data.review.result.feedback.includes("Points forts\nVotre travail est solide") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
+  check(rb.data.review.result.feedback.startsWith("Sara,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
   const one = await api("POST", `/api/briefs/${bid}/review/remarks`, { g: G, who, text: "il sont reponder sur tous les questions", ai: true });
   const of = one.data.review?.result?.feedback || "";
-  check(one.status === 200 && JSON.stringify(one.data.states.oral) === "[true,true]" && one.data.review.remarks.oralSet === 1 && ai.users[ai.users.length - 1].includes("QUESTIONS ORALES :\n1. À quoi sert alt ?"),
+  check(one.status === 200 && JSON.stringify(one.data.states.oral) === "[true,true]" && one.data.review.remarks.oralSet === 1 && ai.users[ai.users.length - 1].includes("QUESTIONS ORALES :\n1. À quoi sert alt ?") && ai.prompts[ai.prompts.length - 1].includes("au tutoiement"),
     "one-to-one: the oral questions it says were answered are switched on");
-  check(of.includes("Lors de notre échange, vous avez répondu correctement à toutes les questions de l’échange.") && !of.includes("Notions à revoir") && !/\btu\b/.test(of) && !/\btu\b/.test(one.data.review.remarks.forStudent),
-    "…what went well goes in the strengths (« vous »), nothing left to review");
+  check(of.includes("Lors de notre échange, tu as répondu correctement à toutes les questions de l’échange.") && !/pas encore claires?/.test(of) && !/\b(vous|votre)\b/i.test(of),
+    "…what went well goes in the comment (« tu »), nothing left to review");
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
   run1("DELETE FROM briefs WHERE id = ?", bid);
 }
