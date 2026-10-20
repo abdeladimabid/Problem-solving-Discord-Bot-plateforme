@@ -833,26 +833,31 @@ const W_LV_NAME = Object.fromEntries(W_LV);
   document.head.append(st);
 })();
 
-// The level proposed from the switches on the screen: brief 40 %, competencies 30 %, oral questions and mise en situation 15 % each
+// The level proposed from the switches on the screen (same rules as the server's debriefLevel): the assessment 50 %,
+// the exchange 30 % (oral questions and mise en situation), the brief's requirements 20 %; never more than one level
+// above the assessment
 function wPropLevel() {
   const ex = DB.R.review?.result?.exigences || [];
   const s = currentStates();
   const exOn = (i) => (typeof s.ex[i] === "boolean" ? s.ex[i] : !!(DB.R.states?.ex || [])[i]);
   const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
+  const LV = ["excellent", "bon", "moyen", "faible", "critique"];
+  const toLv = (sc) => (sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique");
   const parts = [];
-  if (main.length) parts.push([0.4, main.filter(exOn).length / main.length]);
-  const co = Object.values(s.co);
-  if (co.length) parts.push([0.3, co.filter(Boolean).length / co.length]);
-  const or = s.oral || DB.R.states?.oral || [];
-  if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
-  if (m !== undefined) parts.push([0.15, m]);
-  // the assessment linked to the brief (same weights as the server's debriefLevel)
   const as = (DB.R.review?.assess || []).filter((a) => a.score != null);
-  if (as.length) parts.push([0.3, as.reduce((x, a) => x + a.score, 0) / as.length / 100]);
+  const asAvg = as.length ? as.reduce((x, a) => x + a.score, 0) / as.length / 100 : null;
+  if (asAvg != null) parts.push([0.5, asAvg]);
+  const talk = [];
+  const or = s.oral || DB.R.states?.oral || [];
+  if (or.length) talk.push(or.filter(Boolean).length / or.length);
+  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
+  if (m !== undefined) talk.push(m);
+  if (talk.length) parts.push([0.3, talk.reduce((x, v) => x + v, 0) / talk.length]);
+  if (main.length) parts.push([0.2, main.filter(exOn).length / main.length]);
   if (!parts.length) return "";
-  const sc = parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0);
-  return sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique";
+  let lv = toLv(parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0));
+  if (asAvg != null) { const cap = LV[Math.max(0, LV.indexOf(toLv(asAvg)) - 1)]; if (LV.indexOf(lv) < LV.indexOf(cap)) lv = cap; }
+  return lv;
 }
 
 // Called at the end of the debrief page: fills its "Oral questions" and "Level" panels

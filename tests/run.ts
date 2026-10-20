@@ -3388,7 +3388,17 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
       assess: [{ id: 1, title: "A", score: 20, done: 1, of: 1, comps: { C3: { ok: true }, C4: { ok: false } } }] };
     const s2 = reviewStates(r2);
     check(s2.co.C3 === true && s2.co.C4 === false && s2.co.C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
-    check(debriefLevel(r2, s2) === "faible" && debriefLevel({ ...r2, assess: [] }, s2) === "moyen", "the proposed level counts the assessment's score");
+    check(debriefLevel(r2, s2) === "critique" && debriefLevel({ ...r2, assess: [] }, s2) === "", "the proposed level counts the assessment's score (the competencies don't count in it)");
+    // a strong project and every competency switched on can't hide a failed assessment: one level above it, at most
+    const ex4 = Array.from({ length: 10 }, (_, i) => ({ type: "story", texte: "Point " + i, statut: i < 8 ? "fait" : "absent" }));
+    const r4: any = { result: { exigences: ex4, competences: [{ code: "C1", avis: "validable" }, { code: "C2", avis: "validable" }, { code: "C3", avis: "validable" }, { code: "C4", avis: "validable" }] }, assess: [{ id: 1, title: "A", score: 16, done: 1, of: 1, comps: {} }] };
+    const s4 = reviewStates(r4);
+    const at4 = (score: number, mes?: string, oral?: boolean[]) => debriefLevel({ ...r4, assess: [{ ...r4.assess[0], score }], oral: (oral || []).map(() => ({ q: "?" })) }, { ...s4, mes: { r: mes || "" }, oral: oral || [] });
+    // assessment 50 %, the exchange (oral questions + mise en situation) 30 %, the brief's requirements 20 %
+    check(debriefLevel({ ...r4, assess: [] }, s4) === "bon" && at4(16) === "critique" && at4(40) === "faible" && at4(95) === "excellent" && at4(70, "valide", [true, true]) === "bon" && at4(70, "non_valide", [false, false]) === "faible",
+      "the weights: assessment 50 %, oral questions and mise en situation 30 %, the brief's requirements 20 %");
+    check(at4(16, "valide", [true, true, true]) === "faible" && at4(40, "valide", [true, true]) === "moyen",
+      "an assessment at 16 % (critique): the proposal is Faible at best, even with a perfect exchange; at 40 % (faible): Moyen at best");
     const r3 = { checks: [{ id: "responsive", label: "Responsive", ok: false }], result: { exigences: [{ type: "critere", texte: "Responsive", statut: "absent", check: "responsive", bound: true }], competences: [] } };
     check(reviewStates(r3).ex[0] === false && reviewStates({ ...r3, final: { ex: [true] } }).ex[0] === true && reviewStates({ ...r3, final: { ck: { responsive: true } } }).ex[0] === true,
       "a requirement proved by a check starts as the check says, and the teacher's switch wins");

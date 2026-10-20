@@ -5,7 +5,7 @@
 //     the squad's requirements and oral questions (shared work)
 //   • memberLevelOf is what everything downstream reads (Progress, the student page, the comment, sprints): the teacher's
 //     choice, else the proposal; a record from before (no member data) falls back to the squad's level
-import { DEBRIEF_LEVELS, reviewStates } from "./engine.ts";
+import { DEBRIEF_LEVELS, capByAssess, reviewStates } from "./engine.ts";
 
 const toLevel = (sc: number) => (sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique");
 const rank = (l: string) => DEBRIEF_LEVELS.indexOf(l);   // 0 = excellent … 4 = critique
@@ -45,6 +45,8 @@ export function memberLevel(rec: any, m: any, ms: any = {}, states?: any): strin
   let lv = toLevel(parts.reduce((a, p) => a + p[0] * p[1], 0) / parts.reduce((a, p) => a + p[0], 0));
   // no commit in the squad's repo: never better than Faible, whatever the squad did
   if (!m.commits && rank(lv) < rank("faible")) lv = "faible";
+  // their assessment: never more than one level above it
+  if (ms && typeof ms.quiz === "number") lv = capByAssess({ assess: [{ score: ms.quiz }] }, lv);
   return lv;
 }
 

@@ -201,25 +201,39 @@ export function assessVerdicts(rec) {
 export const scoreLevel = (pct) => (pct >= 90 ? 'excellent' : pct >= 75 ? 'bon' : pct >= 55 ? 'moyen' : pct >= 35 ? 'faible' : 'critique');
 export const LEVEL_FR = { excellent: 'Excellent', bon: 'Bon', moyen: 'Moyen', faible: 'Faible', critique: 'Critique' };
 export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'];
-// The level proposed after the debrief, from the switches: brief (40 %), competencies (30 %), the assessment linked to
-// the brief (30 %), oral questions and mise en situation (15 % each), only the parts that were evaluated. The teacher
-// chooses the level, and can change it.
+// The level proposed after the debrief, from the switches: the assessment linked to the brief (50 %), the exchange
+// (30 %: the oral questions and the mise en situation; the one-to-one counts through the oral questions it switches on)
+// and the brief's requirements (20 %), only the parts that were evaluated. Never more than one level above the
+// assessment. The teacher chooses the level, and can change it.
 export function debriefLevel(rec, st) {
   const ex = ((rec && rec.result) || {}).exigences || [];
   const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'critere' && ex[i].type !== 'oral');
   const parts = [];
-  if (main.length) parts.push([0.4, main.filter((i) => st.ex[i]).length / main.length]);
-  const co = Object.values(st.co || {});
-  if (co.length) parts.push([0.3, co.filter(Boolean).length / co.length]);
-  const or = st.oral || [];
-  if (or.length) parts.push([0.15, or.filter(Boolean).length / or.length]);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
-  if (m !== undefined) parts.push([0.15, m]);
   const as = ((rec && rec.assess) || []).filter((a) => a.score != null);
-  if (as.length) parts.push([0.3, as.reduce((t, a) => t + a.score, 0) / as.length / 100]);
+  if (as.length) parts.push([0.5, as.reduce((t, a) => t + a.score, 0) / as.length / 100]);
+  const talk = [];
+  const or = st.oral || [];
+  if (or.length) talk.push(or.filter(Boolean).length / or.length);
+  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
+  if (m !== undefined) talk.push(m);
+  if (talk.length) parts.push([0.3, talk.reduce((t, x) => t + x, 0) / talk.length]);
+  if (main.length) parts.push([0.2, main.filter((i) => st.ex[i]).length / main.length]);
   if (!parts.length) return '';
   const sc = parts.reduce((a, p) => a + p[0] * p[1], 0) / parts.reduce((a, p) => a + p[0], 0);
-  return sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique';
+  return capByAssess(rec, sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique');
+}
+/** The best level the assessment allows: one step above its own (critique → faible at most, faible → moyen…), since
+ *  the assessment, done in class without help, is the surest proof of what the learner masters. '' without one. */
+export function assessCap(rec) {
+  const as = ((rec && rec.assess) || []).filter((a) => a.score != null);
+  if (!as.length) return '';
+  const i = DEBRIEF_LEVELS.indexOf(scoreLevel(as.reduce((t, a) => t + a.score, 0) / as.length));
+  return DEBRIEF_LEVELS[Math.max(0, i - 1)];
+}
+/** A level brought down to what the assessment allows. */
+export function capByAssess(rec, lvl) {
+  const cap = assessCap(rec);
+  return cap && DEBRIEF_LEVELS.indexOf(lvl) < DEBRIEF_LEVELS.indexOf(cap) ? cap : lvl;
 }
 // The teacher's result for a step of the brief (see steps.ts)
 export const STEP_RESULTS = ['a_temps', 'en_retard', 'non_fait'];

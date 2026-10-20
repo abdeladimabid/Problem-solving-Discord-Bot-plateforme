@@ -16,7 +16,7 @@ import type { Program } from "../program.ts";
 import { programOf } from "../program.ts";
 import {
   CHECK_IDS, CH_LEVEL, CH_NEEDS_JS, CH_RESULTS, CH_TOO_BIG, chOutsideBrief, GRID_TYPES, JS_BRIEF, ORAL, challengePool, conceptsOf, checkLabel, checkList,
-  DEBRIEF_LEVELS, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
+  DEBRIEF_LEVELS, capByAssess, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
 import { githubGet, githubText, installationToken, repoFiles, repoSnapshot, squadContribution } from "./gh.ts";
@@ -599,6 +599,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
     "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
     "Base-toi sur l’évaluation faite en classe (la preuve la plus sûre de ce que l’apprenant maîtrise), les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
+    "Le niveau ne peut jamais dépasser d’un cran celui de l’évaluation : évaluation critique → au mieux faible ; faible → au mieux moyen ; moyen → au mieux bon.",
     'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
   ].join("\n");
   const user = [
@@ -614,9 +615,10 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   const ask = await askReview(env, system, user, 1);
   const ai = ask.ok && ask.data ? String(ask.data.niveau || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : "";
   const fromAi = DEBRIEF_LEVELS.includes(ai);
-  const lvl = fromAi ? ai : calc;
+  const lvl = fromAi ? capByAssess(rec, ai) : calc;
   if (!lvl) throw new DebriefError("Switch the points first.");
-  rec.level = { ...(rec.level || {}), prop: calc, lvl, why: fromAi ? oneLine(ask.data.pourquoi, 200) : "Calculé à partir des validations.", by: fromAi ? "ai" : "calc", at: Date.now() };
+  const capped = fromAi && lvl !== ai ? ` (limité à « ${lvl} » par l’évaluation)` : "";
+  rec.level = { ...(rec.level || {}), prop: calc, lvl, why: fromAi ? oneLine(ask.data.pourquoi, 200) + capped : "Calculé à partir des validations.", by: fromAi ? "ai" : "calc", at: Date.now() };
   await putReview(env, g, briefId, who, rec);
   await levelCols(env, briefId, who, rec);
 }
