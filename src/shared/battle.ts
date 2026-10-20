@@ -1,8 +1,10 @@
 // ⚔️ Squad battle: two teams, one chess clock each (2 minutes by default). A question shows on the
 // class TV; the team answering out loud. The teacher judges from their phone: correct → the clock stops
 // and it's the other team's turn; pass → −8 s and a new question, still their turn. A clock at 0 loses.
-// The TV and the judge's phone both read the state from D1 (polling); every clock is computed from
-// timestamps, so the screens stay in sync whatever the network.
+// The server owns the game: the question on screen (by id), whose turn, both clocks and a version that only goes up.
+// The TV and the judge's phone only show what the server returns (polling D1); every judge tap names the version and
+// the question it was made on, so a late tap, a double tap or a retry never moves the game twice. A question is never
+// asked twice in a battle (every round); when the pool runs out, the built-in bank fills in, else the game ends.
 import type { Env, GuildRow } from "./types.ts";
 import { addPoints, aiBudgetOk, aiBudgetUse, all, now, one, run } from "./db.ts";
 import { chat, extractJson } from "./ai.ts";
@@ -10,6 +12,10 @@ import { COLORS, send } from "./discord.ts";
 import { arenaChannel } from "./arena.ts";
 
 export class BattleError extends Error {}
+/** The tap was made on another state than the server's (late, double tap, another judge): nothing done. */
+export class BattleStale extends BattleError {}
+/** The same tap again (a retry of a tap already applied): nothing done, the phone gets the state. */
+export class BattleDuplicate extends BattleError {}
 
 // ------------------------------------------------------------------ types
 export type QKind = "output" | "missing" | "acronym" | "quick" | "truefalse" | "bug" | "mcq" | "complete";
@@ -26,18 +32,24 @@ export const QKINDS: Record<QKind, { en: string; fr: string; emoji: string }> = 
 export interface BQuestion { id: string; kind: QKind; topic: string; prompt: string; code?: string; options?: string[]; answer: string; explain?: string }
 export interface BTeam { name: string; emoji: string; color: string; members: string[] }
 export interface BSettings { seconds: number; penalty: number; topics: string[]; kinds: QKind[]; level: "easy" | "medium"; reward: number; announce: boolean; lang: "fr" | "en" }
-export interface BEvent { k: "start" | "correct" | "pass" | "wrong" | "skip" | "pause" | "resume" | "over" | "reset"; team: 0 | 1; at: number; ms?: number; answer?: string; seq: number }
+export interface BEvent { k: "start" | "correct" | "pass" | "wrong" | "skip" | "pause" | "resume" | "over" | "reset"; team: 0 | 1; at: number; ms?: number; answer?: string; seq: number; why?: "out" }
 export interface BState {
   phase: "lobby" | "countdown" | "playing" | "paused" | "over";
   starter: 0 | 1; turn: 0 | 1;
   left: [number, number];          // ms left on each clock (the running one: at turnAt)
   turnAt: number | null;           // ms epoch when the running clock last started
   goAt: number | null;             // end of the 3-2-1 countdown
-  order: number[]; qi: number; shown: number;
+  queue: string[];                 // the questions' ids in the order they come (shuffled once, stored)
+  used: string[];                  // ids already asked in this battle, every round: never asked again
+  qid: string | null;              // the question on screen
+  shown: number;                   // its number in this round ("Question 7")
   streak: [number, number]; best: [number, number];
   stats: { ok: [number, number]; pass: [number, number]; wrong: [number, number]; fastest: [number | null, number | null] };
-  winner: 0 | 1 | null; ev: BEvent | null; seq: number; rewarded?: boolean; round: number;
-  log: { team: 0 | 1; q: number; r: "ok" | "pass" | "skip"; ms: number }[];
+  winner: 0 | 1 | null; ev: BEvent | null;
+  seq: number;                     // the version: +1 at every change, never goes down
+  aid?: string | null;             // the last judge tap applied (its retry changes nothing)
+  rewarded?: boolean; round: number;
+  log: { team: 0 | 1; q: string; r: "ok" | "pass" | "skip"; ms: number }[];
 }
 export interface BattleRow { id: number; guild_id: string; title: string; teams: string; settings: string; questions: string; state: string; tv_token: string; judge_token: string; judge_key: string | null; judge_pin: string; judge_seen: number | null; status: string; created_at: number; updated_at: number; finished_at: number | null }
 
@@ -49,14 +61,29 @@ export function shuffle<T>(a: T[], rnd = Math.random): T[] {
 }
 
 // ------------------------------------------------------------------ the game (pure: state + action + time → state)
-export function newState(nQuestions: number, starter: 0 | 1 = 0, seconds = 120, round = 1): BState {
+function freshState(queue: string[], used: string[], starter: 0 | 1, seconds: number, round: number): BState {
   return {
     phase: "lobby", starter, turn: starter, left: [seconds * 1000, seconds * 1000], turnAt: null, goAt: null,
-    order: shuffle(Array.from({ length: nQuestions }, (_, i) => i)), qi: 0, shown: 0,
+    queue, used, qid: null, shown: 0,
     streak: [0, 0], best: [0, 0], stats: { ok: [0, 0], pass: [0, 0], wrong: [0, 0], fastest: [null, null] },
-    winner: null, ev: null, seq: 1, round, log: [],
+    winner: null, ev: null, seq: 1, aid: null, round, log: [],
   };
 }
+/** A game in the lobby: the questions shuffled once (the order is stored), the ones already asked stay asked. */
+export function newState(ids: string[], starter: 0 | 1 = 0, seconds = 120, round = 1, used: string[] = [], rnd = Math.random): BState {
+  return freshState(shuffle(ids, rnd), used.filter((id) => ids.includes(id)), starter, seconds, round);
+}
+/** The next question: the first one of the stored order not asked yet in this battle (then the ones added since). */
+export function pickNext(s: Pick<BState, "queue" | "used">, ids: string[]): string | null {
+  const have = new Set(ids), done = new Set(s.used);
+  for (const id of s.queue) if (have.has(id) && !done.has(id)) return id;
+  for (const id of ids) if (!done.has(id)) return id;
+  return null;
+}
+/** The questions not asked yet in this battle (the one on screen counts as asked). */
+export const unasked = (s: Pick<BState, "used">, ids: string[]) => { const done = new Set(s.used); return ids.filter((id) => !done.has(id)); };
+/** What a screen shows, in one string: two different screens never have the same one. */
+export const stateTag = (s: Pick<BState, "seq" | "qid" | "turn" | "phase">) => `${s.seq}.${s.qid ?? ""}.${s.turn}.${s.phase}`;
 /** Time left on a team's clock right now. */
 export function timeLeft(s: BState, team: 0 | 1, at: number): number {
   if (s.phase === "playing" && s.turn === team && s.turnAt != null) return Math.max(0, s.left[team] - (at - s.turnAt));
@@ -67,15 +94,29 @@ function event(s: BState, k: BEvent["k"], team: 0 | 1, at: number, extra: Partia
   s.seq++;
   s.ev = { k, team, at, seq: s.seq, ...extra };
 }
-function nextQuestion(s: BState) {
-  s.qi = (s.qi + 1) % Math.max(1, s.order.length);
-  s.shown++;
+function showQuestion(s: BState, id: string) {
+  s.qid = id; s.shown++;
+  if (!s.used.includes(id)) s.used.push(id);
+  if (!s.queue.includes(id)) s.queue.push(id);
+}
+/** The game ends now: the team with more time left wins (the same time: the one with more right answers). */
+function endNow(s: BState, at: number, extra: Partial<BEvent> = {}) {
+  if (s.phase === "playing" && s.turnAt != null) s.left[s.turn] = Math.max(0, s.left[s.turn] - (at - s.turnAt));
+  s.turnAt = null; s.goAt = null; s.phase = "over";
+  s.winner = s.left[0] === s.left[1] ? (s.stats.ok[0] >= s.stats.ok[1] ? 0 : 1) : s.left[0] > s.left[1] ? 0 : 1;
+  event(s, "over", s.winner, at, extra);
+}
+/** A new question, never one already asked in this battle; none left: the game ends (why: "out"). */
+function nextQuestion(s: BState, ids: string[], at: number, answer?: string) {
+  const id = pickNext(s, ids);
+  if (id == null) { endNow(s, at, { why: "out", answer }); return; }
+  showQuestion(s, id);
 }
 /** Things that happen by themselves: the countdown ends, a clock reaches 0. Returns true if the state changed. */
 export function settle(s: BState, at: number): boolean {
   let changed = false;
   if (s.phase === "countdown" && s.goAt != null && at >= s.goAt) {
-    s.phase = "playing"; s.turnAt = s.goAt; s.goAt = null; s.shown = Math.max(1, s.shown); s.seq++; changed = true;
+    s.phase = "playing"; s.turnAt = s.goAt; s.goAt = null; s.seq++; changed = true;
   }
   if (s.phase === "playing" && s.turnAt != null && s.left[s.turn] - (at - s.turnAt) <= 0) {
     const loser = s.turn;
@@ -86,32 +127,53 @@ export function settle(s: BState, at: number): boolean {
   }
   return changed;
 }
-export type BAction = { a: "starter"; team: 0 | 1 } | { a: "start" } | { a: "correct" } | { a: "pass" } | { a: "wrong" } | { a: "skip" } | { a: "pause" } | { a: "resume" } | { a: "stop" } | { a: "rematch" };
-/** The judge's buttons. Throws a BattleError when the action doesn't fit the moment (a double tap, a late tap…). */
-export function act(s: BState, x: BAction, at: number, o: { penaltyMs: number; seconds: number; answerOf: (qIndex: number) => string }): BState {
+type BKind = "starter" | "start" | "correct" | "pass" | "wrong" | "skip" | "pause" | "resume" | "stop" | "rematch";
+/**
+ * A judge's tap. `version` is the state's seq the phone showed, `qid` the question it showed (for the buttons that
+ * judge a question), `aid` an id the phone gives each tap (a retry of the same tap is recognised).
+ */
+export type BAction = { a: BKind; team?: 0 | 1; version: number; qid?: string | null; aid?: string | null };
+export const QUESTION_ACTIONS: readonly BKind[] = ["correct", "pass", "wrong", "skip"];
+/** The actions that show a new question (the pool may need filling up first). */
+export const NEW_QUESTION_ACTIONS: readonly BKind[] = ["start", "correct", "pass", "skip"];
+/**
+ * The judge's buttons (pure: never changes `s0`, returns the new state). Throws a BattleStale when the tap was made on
+ * another version or another question than the server's, a BattleDuplicate for a tap already applied, a BattleError
+ * when the action doesn't fit the moment.
+ */
+export function act(s0: BState, x: BAction, at: number, o: { penaltyMs: number; seconds: number; ids: string[]; answerOf: (id: string) => string }): BState {
+  if (x.aid && s0.aid === x.aid) throw new BattleDuplicate("Already done.");
+  const s = structuredClone(s0);
   settle(s, at);
-  const cur = () => s.order[s.qi];
+  if (x.version !== s.seq) throw new BattleStale("The screen changed: check the question before judging.");
+  if (x.qid != null && QUESTION_ACTIONS.includes(x.a) && x.qid !== s.qid) throw new BattleStale("The screen changed: check the question before judging.");
+  s.aid = x.aid ?? null;
+  const cur = s.qid ?? "";
   const elapsed = () => (s.turnAt == null ? 0 : at - s.turnAt);
   switch (x.a) {
     case "starter":
       if (s.phase !== "lobby") throw new BattleError("The game has started.");
-      s.starter = x.team; s.turn = x.team; s.seq++;
+      s.starter = x.team === 1 ? 1 : 0; s.turn = s.starter; s.seq++;
       return s;
-    case "start":
+    case "start": {
       if (s.phase !== "lobby") throw new BattleError("The game has started.");
-      s.phase = "countdown"; s.turn = s.starter; s.goAt = at + COUNTDOWN_MS;
+      const id = pickNext(s, o.ids);
+      if (id == null) throw new BattleError("Every question of this battle has been asked: add new ones in the dashboard (✨ 10 more).");
+      s.phase = "countdown"; s.turn = s.starter; s.goAt = at + COUNTDOWN_MS; s.shown = 0;
+      showQuestion(s, id);
       event(s, "start", s.starter, at);
       return s;
+    }
     case "correct": {
       if (s.phase !== "playing") throw new BattleError(s.phase === "over" ? "The game is over." : "The clock isn't running.");
       const t = s.turn, ms = elapsed();
       s.left[t] = Math.max(0, s.left[t] - ms);
       s.stats.ok[t]++; s.streak[t]++; s.best[t] = Math.max(s.best[t], s.streak[t]);
       if (s.stats.fastest[t] == null || ms < (s.stats.fastest[t] as number)) s.stats.fastest[t] = ms;
-      s.log.push({ team: t, q: cur(), r: "ok", ms });
-      event(s, "correct", t, at, { ms, answer: o.answerOf(cur()) });
+      s.log.push({ team: t, q: cur, r: "ok", ms });
+      event(s, "correct", t, at, { ms, answer: o.answerOf(cur) });
       s.turn = other(t); s.turnAt = at;
-      nextQuestion(s);
+      nextQuestion(s, o.ids, at, o.answerOf(cur));
       return s;
     }
     case "pass": {
@@ -119,11 +181,11 @@ export function act(s: BState, x: BAction, at: number, o: { penaltyMs: number; s
       const t = s.turn, ms = elapsed();
       s.left[t] = Math.max(0, s.left[t] - ms - o.penaltyMs);
       s.stats.pass[t]++; s.streak[t] = 0;
-      s.log.push({ team: t, q: cur(), r: "pass", ms });
-      event(s, "pass", t, at, { ms, answer: o.answerOf(cur()) });
+      s.log.push({ team: t, q: cur, r: "pass", ms });
+      event(s, "pass", t, at, { ms, answer: o.answerOf(cur) });
       if (s.left[t] <= 0) { s.phase = "over"; s.turnAt = null; s.winner = other(t); return s; }
       s.turnAt = at;
-      nextQuestion(s);
+      nextQuestion(s, o.ids, at, o.answerOf(cur));
       return s;
     }
     case "wrong":
@@ -133,9 +195,9 @@ export function act(s: BState, x: BAction, at: number, o: { penaltyMs: number; s
       return s;
     case "skip":   // a broken or unclear question: another one, no penalty, the clock keeps running
       if (s.phase !== "playing" && s.phase !== "paused") throw new BattleError("The game isn't running.");
-      s.log.push({ team: s.turn, q: cur(), r: "skip", ms: elapsed() });
-      event(s, "skip", s.turn, at, { answer: o.answerOf(cur()) });
-      nextQuestion(s);
+      s.log.push({ team: s.turn, q: cur, r: "skip", ms: elapsed() });
+      event(s, "skip", s.turn, at, { answer: o.answerOf(cur) });
+      nextQuestion(s, o.ids, at, o.answerOf(cur));
       return s;
     case "pause":
       if (s.phase !== "playing") throw new BattleError("The clock isn't running.");
@@ -147,21 +209,33 @@ export function act(s: BState, x: BAction, at: number, o: { penaltyMs: number; s
       s.phase = "playing"; s.turnAt = at;
       event(s, "resume", s.turn, at);
       return s;
-    case "stop": {   // end now: the team with more time left wins
+    case "stop":     // end now: the team with more time left wins
       if (s.phase === "over" || s.phase === "lobby") throw new BattleError("Nothing to stop.");
-      if (s.phase === "playing") { s.left[s.turn] = Math.max(0, s.left[s.turn] - elapsed()); }
-      s.turnAt = null; s.goAt = null; s.phase = "over";
-      s.winner = s.left[0] === s.left[1] ? (s.stats.ok[0] >= s.stats.ok[1] ? 0 : 1) : s.left[0] > s.left[1] ? 0 : 1;
-      event(s, "over", s.winner, at);
+      endNow(s, at);
       return s;
-    }
-    case "rematch": {
-      const n = newState(s.order.length, other(s.starter), o.seconds, s.round + 1);
-      n.seq = s.seq + 1;
+    case "rematch": {   // the other team starts; the questions asked stay asked
+      if (s.phase !== "over") throw new BattleError("The game isn't over.");
+      const n = freshState(s.queue, s.used, other(s.starter), o.seconds, s.round + 1);
+      n.seq = s.seq + 1; n.aid = s.aid;
       n.ev = { k: "reset", team: n.starter, at, seq: n.seq };
       return n;
     }
   }
+  throw new BattleError("Unknown action.");
+}
+/** A state saved before questions had ids (an index order): the same game, with ids. Deterministic. */
+export function upgradeState(st: any, questions: BQuestion[]): BState {
+  if (Array.isArray(st?.queue)) return st as BState;
+  const ids = questions.map((q) => q.id);
+  const order: number[] = Array.isArray(st?.order) ? st.order : [];
+  const onScreen = ["countdown", "playing", "paused"].includes(st?.phase) ? ids[order[st.qi ?? 0]] ?? null : null;
+  const log = (Array.isArray(st?.log) ? st.log : []).map((l: any) => ({ ...l, q: typeof l.q === "number" ? ids[l.q] ?? String(l.q) : String(l.q) }));
+  const { order: _o, qi: _q, ...rest } = st ?? {};
+  return {
+    ...rest, log, qid: onScreen, aid: null,
+    queue: [...new Set([...order.map((i) => ids[i]).filter(Boolean), ...ids])],
+    used: [...new Set([...log.map((l: any) => l.q).filter((id: string) => ids.includes(id)), ...(onScreen ? [onScreen] : [])])],
+  } as BState;
 }
 
 // ------------------------------------------------------------------ questions
@@ -237,8 +311,9 @@ export const BANK_TOPICS = [...new Set(BANK.map((q) => q.topic))];
 const norm = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9#+]/g, "");
 const topicMatch = (topic: string, wanted: string[]) => !wanted.length || wanted.some((w) => { const a = norm(w), b = norm(topic); return a === b || (a.length > 2 && (a.includes(b) || b.includes(a))) || (b === "javascript" && a === "js"); });
 export function bankQuestions(topics: string[], kinds: QKind[], lang: "fr" | "en"): BQuestion[] {
-  return BANK.filter((q) => topicMatch(q.topic, topics) && (!kinds.length || kinds.includes(q.kind)))
-    .map((q, i) => ({ id: "b" + i + norm(q.p[1]).slice(0, 10), kind: q.kind, topic: q.topic, prompt: q.p[lang === "en" ? 1 : 0], code: q.code, options: q.options, answer: q.answer }));
+  // the id is the same whatever the topics and the language (its place in the bank): never the same one twice
+  return BANK.map((q, i) => ({ q, i })).filter(({ q }) => topicMatch(q.topic, topics) && (!kinds.length || kinds.includes(q.kind)))
+    .map(({ q, i }) => ({ id: "b" + i + norm(q.p[1]).slice(0, 10), kind: q.kind, topic: q.topic, prompt: q.p[lang === "en" ? 1 : 0], code: q.code, options: q.options, answer: q.answer }));
 }
 
 const s = (v: unknown, n: number) => String(v ?? "").trim().slice(0, n);
@@ -272,6 +347,25 @@ export function questionKeys(q: Pick<BQuestion, "prompt" | "code" | "answer" | "
 export function dedupeQuestions(list: BQuestion[], already: BQuestion[] = []): BQuestion[] {
   const seen = new Set(already.flatMap(questionKeys));
   return list.filter((q) => { const k = questionKeys(q); if (k.some((x) => seen.has(x))) return false; k.forEach((x) => seen.add(x)); return true; });
+}
+/** Every question of a battle has its own id (the screens and the judge's taps name the question by it). Deterministic. */
+export function uniqueIds(list: BQuestion[]): BQuestion[] {
+  const seen = new Set<string>();
+  return list.map((q, i) => {
+    const base = String(q.id || "q" + i);
+    let id = base;
+    for (let k = 2; seen.has(id); k++) id = `${base}~${k}`;
+    seen.add(id);
+    return id === q.id ? q : { ...q, id };
+  });
+}
+/** When every question has been asked: built-in ones on the battle's topics, never asked in it, none like the others. */
+export function bankTopUp(settings: Pick<BSettings, "topics" | "kinds" | "lang">, questions: BQuestion[], used: string[], rnd = Math.random): BQuestion[] {
+  // the same built-in question in the other language has the same id: skipped too
+  const have = new Set([...questions.map((q) => q.id.replace(/~\d+$/, "")), ...used]);
+  const fresh = dedupeQuestions(shuffle(bankQuestions(settings.topics, settings.kinds, settings.lang).filter((q) => !have.has(q.id)), rnd), questions).slice(0, 20);
+  const all = uniqueIds([...questions, ...fresh]);
+  return all.slice(questions.length).filter((q) => !used.includes(q.id));
 }
 export async function generateQuestions(env: Env, o: { topics: string[]; kinds: QKind[]; count: number; level: string; lang: "fr" | "en"; avoid?: BQuestion[] }): Promise<{ questions: BQuestion[]; ai: boolean }> {
   const count = Math.max(6, Math.min(60, o.count || 30));
@@ -316,17 +410,18 @@ export function cleanSettings(v: any, lang: string): BSettings {
     level: v?.level === "medium" ? "medium" : "easy", reward: Math.max(0, Math.min(200, Number(v?.reward) || 0)), announce: v?.announce !== false, lang: (v?.lang || lang) === "en" ? "en" : "fr",
   };
 }
-export const parseRow = (r: BattleRow) => ({
-  ...r, teams: JSON.parse(r.teams) as [BTeam, BTeam], settings: JSON.parse(r.settings) as BSettings, questions: JSON.parse(r.questions) as BQuestion[], state: JSON.parse(r.state) as BState,
-});
+export const parseRow = (r: BattleRow) => {
+  const questions = uniqueIds(JSON.parse(r.questions) as BQuestion[]);
+  return { ...r, teams: JSON.parse(r.teams) as [BTeam, BTeam], settings: JSON.parse(r.settings) as BSettings, questions, state: upgradeState(JSON.parse(r.state), questions) };
+};
 export type Battle = ReturnType<typeof parseRow>;
 
 export async function createBattle(env: Env, g: GuildRow, b: any): Promise<number> {
   const settings = cleanSettings(b.settings ?? b, g.lang);
   const teams = cleanTeams(b.teams);
-  const qs = dedupeQuestions((Array.isArray(b.questions) ? b.questions : []).map(cleanQuestion).filter(Boolean) as BQuestion[]);
+  const qs = uniqueIds(dedupeQuestions((Array.isArray(b.questions) ? b.questions : []).map(cleanQuestion).filter(Boolean) as BQuestion[]));
   if (qs.length < 4) throw new BattleError("At least 4 questions are needed.");
-  const st = newState(qs.length, 0, settings.seconds);
+  const st = newState(qs.map((q) => q.id), 0, settings.seconds);
   const t = now();
   const r = await one<{ id: number }>(env, `INSERT INTO battles (guild_id, title, teams, settings, questions, state, tv_token, judge_token, judge_pin, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?) RETURNING id`, g.id, s(b.title, 80) || `${teams[0].name} vs ${teams[1].name}`, JSON.stringify(teams), JSON.stringify(settings), JSON.stringify(qs), JSON.stringify(st), token(), token(), pin(), t, t);
@@ -343,35 +438,48 @@ export async function updateBattle(env: Env, g: GuildRow, id: number, b: any) {
   const live = ["countdown", "playing", "paused"].includes(x.state.phase);
   const teams = b.teams ? cleanTeams(b.teams) : x.teams;
   const settings = b.settings ? cleanSettings({ ...x.settings, ...b.settings }, g.lang) : x.settings;
-  let questions = x.questions, state = x.state;
+  let questions = x.questions;
   if (b.questions) {
     if (live) throw new BattleError("The game is running: change the questions after it.");
-    questions = dedupeQuestions((b.questions as any[]).map(cleanQuestion).filter(Boolean) as BQuestion[]);
+    questions = uniqueIds(dedupeQuestions((b.questions as any[]).map(cleanQuestion).filter(Boolean) as BQuestion[]));
     if (questions.length < 4) throw new BattleError("At least 4 questions are needed.");
   }
-  if (!live && (b.questions || b.settings)) { state = newState(questions.length, state.starter, settings.seconds, state.round); state.seq = x.state.seq + 1; }
-  await run(env, "UPDATE battles SET title = ?, teams = ?, settings = ?, questions = ?, state = ?, updated_at = ? WHERE id = ?",
-    s(b.title ?? x.title, 80) || x.title, JSON.stringify(teams), JSON.stringify(settings), JSON.stringify(questions), JSON.stringify(state), now(), id);
+  const title = s(b.title ?? x.title, 80) || x.title;
+  if (!live && (b.questions || b.settings)) {
+    // a new game in the lobby; the questions already asked in this battle stay asked. Only over the state we read:
+    // a game started meanwhile is never reset under the class's eyes
+    const ids = questions.map((q) => q.id);
+    const state = newState(ids, x.state.starter, settings.seconds, x.state.round, x.state.used);
+    state.seq = x.state.seq + 1;
+    const r = await run(env, "UPDATE battles SET title = ?, teams = ?, settings = ?, questions = ?, state = ?, updated_at = ? WHERE id = ? AND json_extract(state, '$.seq') = ?",
+      title, JSON.stringify(teams), JSON.stringify(settings), JSON.stringify(questions), JSON.stringify(state), now(), id, x.state.seq);
+    if (Number(r?.meta?.changes ?? 1) === 0) throw new BattleError("The game changed meanwhile: reload the page and try again.");
+  } else {
+    // names, colours, players, penalty…: the game itself (the state) is never written here
+    await run(env, "UPDATE battles SET title = ?, teams = ?, settings = ?, updated_at = ? WHERE id = ?", title, JSON.stringify(teams), JSON.stringify(settings), now(), id);
+  }
   return getBattle(env, id, g.id);
 }
 /**
- * Saves the state only if nobody saved another one since we read it (compare-and-set on its seq). The TV, the judge's
- * phone and the dashboard all read and write the same row: without this, a request that read the state a moment
- * before the judge's tap could write the old question back (the TV and the judge then show different questions).
- * Returns false when the row changed meanwhile (nothing written: read it again).
+ * Saves the state only if nobody saved another one since we read it (compare-and-set on its seq, the version). The TV,
+ * the judge's phone and the dashboard all read and write the same row: without this, a request that read the state a
+ * moment before the judge's tap could write the old question back (the TV and the judge then show different questions).
+ * The questions (filled up from the bank) are saved in the same statement. Returns false when the row changed
+ * meanwhile (nothing written: read it again).
  */
-async function saveState(env: Env, b: Battle, st: BState, readSeq: number): Promise<boolean> {
-  const r = await run(env, "UPDATE battles SET state = ?, status = ?, updated_at = ?, finished_at = ? WHERE id = ? AND json_extract(state, '$.seq') = ?",
-    JSON.stringify(st), st.phase === "over" ? "done" : st.phase === "lobby" ? "ready" : "live", now(), st.phase === "over" ? now() : null, b.id, readSeq);
+async function saveState(env: Env, b: Battle, st: BState, readSeq: number, questions: BQuestion[] | null = null): Promise<boolean> {
+  const r = await run(env, "UPDATE battles SET state = ?, questions = COALESCE(?, questions), status = ?, updated_at = ?, finished_at = ? WHERE id = ? AND json_extract(state, '$.seq') = ?",
+    JSON.stringify(st), questions ? JSON.stringify(questions) : null, st.phase === "over" ? "done" : st.phase === "lobby" ? "ready" : "live", now(), st.phase === "over" ? now() : null, b.id, readSeq);
   const ok = Number(r?.meta?.changes ?? 1) > 0;
-  if (ok) b.state = st;
+  if (ok) { b.state = st; if (questions) b.questions = questions; }
   return ok;
 }
 /** Reads the state, lets the clocks run (countdown end, a clock at 0), saves and rewards when something changed. */
 export async function liveBattle(env: Env, b: Battle, at = Date.now()): Promise<Battle> {
-  const readSeq = b.state.seq;
-  if (settle(b.state, at)) {
-    if (!(await saveState(env, b, b.state, readSeq))) {
+  const st = structuredClone(b.state);
+  const readSeq = st.seq;
+  if (settle(st, at)) {
+    if (!(await saveState(env, b, st, readSeq))) {
       // someone saved first (the judge's tap): use theirs
       const fresh = await getBattle(env, b.id);
       if (fresh) Object.assign(b, fresh);
@@ -381,24 +489,28 @@ export async function liveBattle(env: Env, b: Battle, at = Date.now()): Promise<
   }
   return b;
 }
+/** A judge's tap: applied once, over the state the phone showed, saved only if nobody saved since (else BattleStale). */
 export async function judgeAction(env: Env, b: Battle, x: BAction, at = Date.now()) {
   const before = b.state.phase;
-  // before a game: never twice the same question (battles made before the duplicate check)
-  if (x.a === "start" && b.state.phase === "lobby") {
-    const qs = dedupeQuestions(b.questions);
-    if (qs.length < b.questions.length && qs.length >= 4) {
-      b.questions = qs;
-      b.state.order = shuffle(qs.map((_, i) => i)); b.state.qi = 0;
-      await run(env, "UPDATE battles SET questions = ? WHERE id = ?", JSON.stringify(qs), b.id);
-    }
-  }
   const readSeq = b.state.seq;
-  const st = act(structuredClone(b.state), x, at, { penaltyMs: b.settings.penalty * 1000, seconds: b.settings.seconds, answerOf: (i) => b.questions[i]?.answer ?? "" });
-  if (!(await saveState(env, b, st, readSeq))) {
+  let questions = b.questions, changed = false;
+  // before a game: never twice the same question (battles made before the duplicate check)
+  if (x.a === "start" && before === "lobby") {
+    const qs = dedupeQuestions(questions);
+    if (qs.length < questions.length && qs.length >= 4) { questions = qs; changed = true; }
+  }
+  // every question has been asked: built-in ones fill in (saved with the state, in the same statement)
+  if (NEW_QUESTION_ACTIONS.includes(x.a) && x.version === readSeq && !unasked(b.state, questions.map((q) => q.id)).length) {
+    const more = bankTopUp(b.settings, questions, b.state.used);
+    if (more.length) { questions = [...questions, ...more]; changed = true; }
+  }
+  const byId = new Map(questions.map((q) => [q.id, q]));
+  const st = act(b.state, x, at, { penaltyMs: b.settings.penalty * 1000, seconds: b.settings.seconds, ids: questions.map((q) => q.id), answerOf: (id) => byId.get(id)?.answer ?? "" });
+  if (!(await saveState(env, b, st, readSeq, changed ? questions : null))) {
     // the state changed between reading it and saving (another tap, a clock at 0): nothing done, the judge sees the new one
     const fresh = await getBattle(env, b.id);
     if (fresh) Object.assign(b, fresh);
-    throw new BattleError("Already done (the screen changed).");
+    throw new BattleStale("Already done (the screen changed).");
   }
   if (st.phase === "over" && before !== "over") await finish(env, b);
   return b;
@@ -437,18 +549,22 @@ export function judgeUrl(env: Env, b: { id: number; judge_token: string }) { ret
 export function tvUrl(env: Env, b: { id: number; tv_token: string }) { return `${String(env.PUBLIC_URL || "").replace(/\/$/, "")}/battle/tv/${b.id}.${b.tv_token}`; }
 
 // ------------------------------------------------------------------ what each screen sees
-/** The TV: never the answer of the question on screen (only the one just answered or passed). */
+/**
+ * What a screen shows, all from the server: the question on screen (by id), whose turn, the clocks at `now` (server
+ * time, the screens count from it), the version. The TV never gets the answer of the question on screen (only the one
+ * just answered or passed).
+ */
 export function tvView(b: Battle, at = Date.now(), judge = false) {
   const st = b.state;
-  const q = b.questions[st.order[st.qi]];
+  const q = st.qid ? b.questions.find((x) => x.id === st.qid) : undefined;
   const showQ = st.phase === "playing" || st.phase === "paused" || (judge && st.phase !== "over");
   return {
-    id: b.id, title: b.title, seq: st.seq, now: at, phase: st.phase, round: st.round,
+    id: b.id, title: b.title, version: st.seq, seq: st.seq, v: stateTag(st), qid: showQ && q ? q.id : null, now: at, phase: st.phase, round: st.round,
     teams: b.teams.map((t) => ({ name: t.name, emoji: t.emoji, color: t.color, size: t.members.length })),
     left: [timeLeft(st, 0, at), timeLeft(st, 1, at)], running: st.phase === "playing" ? st.turn : null, turn: st.turn, starter: st.starter, goAt: st.goAt,
-    q: showQ && q ? { kind: q.kind, label: QKINDS[q.kind][b.settings.lang], emoji: QKINDS[q.kind].emoji, topic: q.topic, prompt: q.prompt, code: q.code ?? null, options: q.options ?? null, n: st.shown, ...(judge ? { answer: q.answer, explain: q.explain ?? null } : {}) } : null,
+    q: showQ && q ? { id: q.id, kind: q.kind, label: QKINDS[q.kind][b.settings.lang], emoji: QKINDS[q.kind].emoji, topic: q.topic, prompt: q.prompt, code: q.code ?? null, options: q.options ?? null, n: st.shown, ...(judge ? { answer: q.answer, explain: q.explain ?? null } : {}) } : null,
     ev: st.ev, streak: st.streak, stats: st.stats, best: st.best, winner: st.winner, settings: { seconds: b.settings.seconds, penalty: b.settings.penalty, lang: b.settings.lang, reward: b.settings.reward },
-    judge: !!b.judge_seen && Date.now() / 1000 - b.judge_seen < 15, total: b.questions.length,
+    judge: !!b.judge_seen && Date.now() / 1000 - b.judge_seen < 15, total: b.questions.length, unasked: unasked(st, b.questions.map((x) => x.id)).length,
   };
 }
 export async function judgeSeen(env: Env, b: Battle) {
