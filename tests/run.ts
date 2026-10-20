@@ -2297,37 +2297,75 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
 {
   const B = await import("../src/shared/battle.ts");
   const { qrMatrix } = await import("../src/shared/qr.ts");
-  // the game alone (pure): clocks, turns, passes, the end
-  const ans = (i: number) => "answer " + i;
-  const o = { penaltyMs: 8000, seconds: 120, answerOf: ans };
-  let st = B.newState(10, 0, 120);
+  // the game alone (pure: state + tap + time → a new state): clocks, turns, questions by id, the version
+  const ids = Array.from({ length: 8 }, (_, i) => "q" + i);
+  const ans = (id: string) => "answer " + id;
+  const o = { penaltyMs: 8000, seconds: 120, ids, answerOf: ans };
+  // what the phone sends: the version and the question it shows
+  const tap = (s: any, a: string, at: number, extra: any = {}) => B.act(s, { a, version: s.seq, qid: s.qid, ...extra } as any, at, o);
+  const fails = (f: () => unknown, cls: any = B.BattleError) => { try { f(); return false; } catch (e) { return e instanceof cls; } };
   const t0 = 1_000_000;
-  B.act(st, { a: "starter", team: 1 }, t0, o);
-  B.act(st, { a: "start" }, t0, o);
-  check(st.phase === "countdown" && st.turn === 1, "start: a 3-2-1 countdown, the chosen team first");
+  let st = B.newState(ids, 0, 120);
+  const lobby0 = st;
+  st = tap(st, "starter", t0, { team: 1 });
+  check(lobby0.starter === 0 && lobby0.seq === 1 && st.starter === 1 && st.seq === 2, "a tap gives a new state (the old one untouched) and a new version");
+  st = tap(st, "start", t0);
+  check(st.phase === "countdown" && st.turn === 1 && ids.includes(st.qid!) && st.shown === 1 && st.used.join() === st.qid, "start: a 3-2-1 countdown, the chosen team first, the first question picked by the server");
   B.settle(st, t0 + 4000);
   check(st.phase === "playing" && B.timeLeft(st, 1, t0 + 3600 + 10000) === 110000 && B.timeLeft(st, 0, t0 + 20000) === 120000, "only the team on turn loses time");
-  const q1 = st.order[st.qi];
-  B.act(st, { a: "correct" }, t0 + 3600 + 10000, o);
-  check(st.turn === 0 && st.left[1] === 110000 && st.stats.ok[1] === 1 && st.ev?.k === "correct" && st.ev.answer === ans(q1) && st.order[st.qi] !== q1, "correct: their clock stops, the other team's turn, a new question, the answer revealed");
-  B.act(st, { a: "pass" }, t0 + 3600 + 15000, o);
-  check(st.turn === 0 && st.left[0] === 120000 - 5000 - 8000 && st.stats.pass[0] === 1, "pass: −8 s, a new question, still their turn");
-  B.act(st, { a: "wrong" }, t0 + 3600 + 16000, o);
-  check(st.ev?.k === "wrong" && st.turn === 0, "wrong: the clock keeps running (a buzz on the TV)");
-  let threw = false;
-  try { B.act(st, { a: "start" }, t0 + 3600 + 17000, o); } catch { threw = true; }
-  check(threw, "a late tap is refused");
-  B.act(st, { a: "pause" }, t0 + 3600 + 20000, o);
-  check(st.phase === "paused" && B.timeLeft(st, 0, t0 + 999999) === 120000 - 5000 - 8000 - 5000, "pause freezes the clock");
-  B.act(st, { a: "resume" }, t0 + 500000, o);
+  const q1 = st.qid!;
+  st = tap(st, "correct", t0 + 3600 + 10000);
+  check(st.turn === 0 && st.left[1] === 110000 && st.stats.ok[1] === 1 && st.ev?.k === "correct" && st.ev.answer === ans(q1) && st.qid !== q1 && st.shown === 2, "correct: their clock stops, the other team's turn with a NEW question, the answer revealed");
+  const q2 = st.qid!;
+  st = tap(st, "wrong", t0 + 3600 + 12000);
+  check(st.ev?.k === "wrong" && st.turn === 0 && st.qid === q2 && st.stats.wrong[0] === 1 && st.turnAt === t0 + 3600 + 10000, "wrong: the same question, the same team, the clock keeps running");
+  st = tap(st, "pass", t0 + 3600 + 15000);
+  check(st.turn === 0 && st.left[0] === 120000 - 5000 - 8000 && st.stats.pass[0] === 1 && st.qid !== q2 && st.ev?.answer === ans(q2), "pass: −8 s, a new question, still their turn (the old answer revealed)");
+  // stale taps: nothing moves
+  const v = st.seq, onScreen = st.qid;
+  check(fails(() => B.act(st, { a: "correct", version: v - 1, qid: onScreen }, t0 + 3600 + 16000, o), B.BattleStale), "a tap made on an older version is refused");
+  check(fails(() => B.act(st, { a: "correct", version: v, qid: q2 }, t0 + 3600 + 16000, o), B.BattleStale), "a tap made on another question than the one on screen is refused");
+  check(fails(() => B.act(st, { a: "rematch", version: v - 1 }, t0 + 3600 + 16000, o), B.BattleStale) && fails(() => B.act(st, { a: "rematch", version: v }, t0 + 3600 + 16000, o)), "a late Rematch never resets a running game");
+  check(st.seq === v && st.qid === onScreen && st.stats.ok[0] === 0, "…and nothing changed");
+  // a double tap / a retry: applied once
+  const once = tap(st, "correct", t0 + 3600 + 16000, { aid: "tap-1" });
+  check(fails(() => B.act(once, { a: "correct", version: v, qid: onScreen, aid: "tap-1" }, t0 + 3600 + 16100, o), B.BattleDuplicate), "the same tap sent again (a retry) is recognised: nothing done");
+  check(fails(() => B.act(once, { a: "correct", version: v, qid: onScreen, aid: "tap-2" }, t0 + 3600 + 16100, o), B.BattleStale), "a second tap on the same screen (a double tap) is stale: nothing done");
+  st = once;
+  check(st.stats.ok[0] === 1 && st.turn === 1 && st.qid !== onScreen, "…so the right answer counts once and the turn passes once");
+  const beforeSkip = st.qid, leftSkip = st.left[1];
+  st = tap(st, "skip", t0 + 3600 + 17000);
+  check(st.qid !== beforeSkip && st.turn === 1 && st.left[1] === leftSkip && st.turnAt === t0 + 3600 + 16000, "skip: another question, no penalty, the clock keeps running");
+  check(fails(() => tap(st, "start", t0 + 3600 + 17500)), "a tap that doesn't fit the moment is refused");
+  st = tap(st, "pause", t0 + 3600 + 20000);
+  check(st.phase === "paused" && B.timeLeft(st, 1, t0 + 999999) === 110000 - 4000, "pause freezes the clock");
+  st = tap(st, "resume", t0 + 500000);
   B.settle(st, t0 + 500000 + 120000);
-  check(st.phase === "over" && st.winner === 1 && st.left[0] === 0, "a clock at 0: the other team wins");
-  const re = B.act(st, { a: "rematch" }, t0 + 700000, o);
-  check(re.phase === "lobby" && re.starter === 0 && re.round === 2 && re.left[0] === 120000, "rematch: the other team starts");
-  st = B.newState(6, 0, 30);
-  B.act(st, { a: "start" }, 0, o); B.settle(st, 3600);
-  B.act(st, { a: "pass" }, 3600 + 25000, o);
+  check(st.phase === "over" && st.winner === 0 && st.left[1] === 0, "a clock at 0: the other team wins");
+  const asked1 = st.used.slice();
+  const re = tap(st, "rematch", t0 + 700000);
+  check(re.phase === "lobby" && re.starter === 0 && re.round === 2 && re.left[0] === 120000 && re.seq > st.seq && re.used.join() === asked1.join(), "rematch: the other team starts, the questions asked stay asked");
+  // never a question twice in a battle; when they're all asked, the game ends (the team with more time wins)
+  let r2 = tap(re, "start", t0 + 800000);
+  B.settle(r2, t0 + 810000);
+  const seen2 = [r2.qid!];
+  for (let i = 0; i < 20 && r2.phase === "playing"; i++) { r2 = tap(r2, i % 2 ? "pass" : "correct", t0 + 810000 + i * 1000); if (r2.phase === "playing") seen2.push(r2.qid!); }
+  check(!seen2.some((id) => asked1.includes(id)) && new Set(seen2).size === seen2.length && seen2.length === ids.length - asked1.length, "round 2 only asks the questions not asked yet, each once");
+  check(r2.phase === "over" && r2.ev?.k === "over" && r2.ev.why === "out" && r2.winner === (r2.left[0] >= r2.left[1] ? 0 : 1) && new Set(r2.used).size === ids.length, "every question asked: the game ends, the team with more time left wins (a clear message on the screens)");
+  const r3 = tap(r2, "rematch", t0 + 900000);
+  check(fails(() => tap(r3, "start", t0 + 900000)), "no question left for another round: the start is refused (add questions first)");
+  const r4 = B.act(r3, { a: "start", version: r3.seq }, t0 + 900000, { ...o, ids: [...ids, "new1"] });
+  check(r4.qid === "new1", "…and a question added since is asked");
+  check(B.pickNext({ queue: ["a", "b", "c"], used: ["a"] }, ["a", "b", "c"]) === "b" && B.pickNext({ queue: ["a", "b"], used: ["a"] }, ["a", "c"]) === "c" && B.pickNext({ queue: ["a"], used: ["a"] }, ["a"]) === null, "the next question: the stored order, never one asked, the removed ones skipped");
+  st = B.newState(ids.slice(0, 6), 0, 30);
+  st = tap(st, "start", 0); B.settle(st, 3600);
+  st = tap(st, "pass", 3600 + 25000);
   check(st.phase === "over" && st.winner === 1, "a pass that empties the clock ends the game");
+  // a game saved before questions had ids (an index order): the same question on screen, the asked ones stay asked
+  const legacy = B.upgradeState({ phase: "playing", starter: 0, turn: 1, left: [1, 1], turnAt: 0, goAt: null, order: [2, 0, 1], qi: 1, shown: 2, log: [{ team: 0, q: 2, r: "ok", ms: 1 }], seq: 7, round: 1 }, [{ id: "a" }, { id: "b" }, { id: "c" }] as any);
+  check(legacy.qid === "a" && legacy.used.join() === "c,a" && legacy.queue.join() === "c,a,b" && legacy.seq === 7 && legacy.log[0].q === "c" && B.pickNext(legacy, ["a", "b", "c"]) === "b", "a game saved before the fix goes on: same question, same version, nothing asked twice");
+  check(B.uniqueIds([{ id: "x" }, { id: "x" }, { id: "" }] as any).map((q) => q.id).join() === "x,x~2,q2", "every question has its own id");
+  check(B.bankTopUp({ topics: ["HTML"], kinds: [], lang: "en" }, B.bankQuestions(["HTML"], [], "fr"), []).length === 0 && B.bankTopUp({ topics: ["HTML"], kinds: [], lang: "fr" }, B.bankQuestions(["HTML"], [], "fr").slice(0, 6), []).length === 2, "the bank fills in only questions the battle doesn't have (not even in the other language)");
   check([29, 33, 37].includes(qrMatrix("https://bot.example.workers.dev/battle/judge/1." + "a".repeat(24)).length), "QR code for the judge link (small enough to scan from the room)");
   const dq = B.dedupeQuestions([
     { id: "1", kind: "acronym", topic: "HTML", prompt: "Que signifie HTML ?", answer: "HyperText Markup Language" },
@@ -2372,7 +2410,12 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
   check((await jreq("/claim", K2, { key: K2 })).status === 403 && (await jreq("/state", K2)).status === 403, "another phone can't judge…");
   check((await jreq("/claim", K2, { key: K2, pin: "0000" === cr.data.pin ? "1111" : "0000" })).status === 403, "…not with a wrong PIN");
   check((await jreq("/claim", K2, { key: K2, pin: cr.data.pin })).status === 200 && (await jreq("/state", K1)).status === 403, "…but with the PIN (and the old phone stops)");
-  const act = async (a: string, extra: any = {}) => { const r = await jreq("/act", K2, { a, ...extra }); return { status: r.status, d: await r.json() as any }; };
+  // like the phone: every tap names the version and the question it shows (read just before, unless the test gives them)
+  const act = async (a: string, extra: any = {}) => {
+    const cur = "version" in extra || "seq" in extra ? null : await (await jreq("/state", K2)).json() as any;
+    const r = await jreq("/act", K2, { a, ...(cur ? { version: cur.version, qid: cur.q?.id ?? null } : {}), ...extra });
+    return { status: r.status, d: await r.json() as any };
+  };
   const tvState = async () => await (await bot.fetch(new Request(cr.data.tv + "/state"), env, makeCtx())).json() as any;
   check((await tvState()).judge, "the TV knows the judge is there (the QR code goes away)");
   await act("starter", { team: 1 });
@@ -2383,13 +2426,16 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
   const tv1 = await tvState();
   check(js.phase === "playing" && js.q.answer && tv1.q && !tv1.q.answer && tv1.q.prompt === js.q.prompt && tv1.running === 1, "playing: the judge sees the answer, the TV doesn't");
   clock.advance(5);
-  check((await act("correct", { seq: js.seq, q: js.q.n + 1 })).status === 409, "judging another question than the one on screen is refused");
-  const waitP = bot.fetch(new Request(cr.data.tv + "/state?seq=" + js.seq + "&wait=1"), env, makeCtx());
-  const c1 = await act("correct", { seq: js.seq, q: js.q.n });
+  check((await act("correct", { version: js.version, qid: "not-this-one" })).status === 409, "judging another question than the one on screen is refused");
+  check((await jreq("/act", K2, { a: "correct" })).status === 409 && (await act("correct", { version: null })).status === 409, "a tap that doesn't say which screen it was made on is refused");
+  const waitP = bot.fetch(new Request(cr.data.tv + "/state?seq=" + js.version + "&wait=1"), env, makeCtx());
+  const c1 = await act("correct", { version: js.version, qid: js.q.id, aid: "tap-c1" });
   const waited = await (await waitP).json() as any;
-  check(!waited.same && waited.seq === c1.d.seq && waited.q.n === c1.d.q.n, "the TV waits for the judge's tap (long poll) and gets the new question at once");
+  check(!waited.same && waited.version === c1.d.version && waited.q.id === c1.d.q.id && waited.q.id !== js.q.id && waited.turn === c1.d.turn, "the TV waits for the judge's tap (long poll) and gets the new question at once, the same as the phone");
   check(c1.status === 200 && c1.d.turn === 0 && c1.d.stats.ok[1] === 1 && c1.d.left[1] <= 56000 && c1.d.left[1] >= 54000 && c1.d.ev.answer === js.q.answer, "correct: clock stopped, turn passes, answer revealed on the TV");
   check((await act("correct", { seq: js.seq })).status === 409, "a double tap doesn't count twice");
+  const retry = await act("correct", { version: js.version, qid: js.q.id, aid: "tap-c1" });
+  check(retry.status === 200 && retry.d.dup && retry.d.version === c1.d.version && retry.d.stats.ok[1] === 1, "the same tap sent again (the network retried it): nothing done, the phone gets the state");
   const p1 = await act("pass", { seq: c1.d.seq });
   check(p1.d.turn === 0 && p1.d.left[0] <= 52000 && p1.d.stats.pass[0] === 1, "pass: −8 s and still their turn");
   clock.advance(70);
@@ -2407,7 +2453,7 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
     const stale = (await B.getBattle(env, bid))!;
     await act("starter", { team: 1 });
     let refused = false;
-    try { await B.judgeAction(env, stale, { a: "start" }); } catch (e) { refused = e instanceof B.BattleError; }
+    try { await B.judgeAction(env, stale, { a: "start", version: stale.state.seq }); } catch (e) { refused = e instanceof B.BattleStale; }
     const now1 = (await B.getBattle(env, bid))!;
     check(refused && now1.state.starter === 1 && now1.state.phase === "lobby", "a write based on an old read is refused (compare-and-set): the TV and the judge keep the same state");
     const t1 = await tvState();
@@ -2424,6 +2470,65 @@ section("⚔️ squad battle: two clocks, questions on the TV, the teacher judge
   check(lst2.data.items.some((b: any) => b.id === bid), "battles listed");
   await api("DELETE", `/api/battles/${bid}?g=${G}`);
   check((await bot.fetch(new Request(cr.data.tv + "/state"), env, makeCtx())).status === 404, "a deleted battle's links stop");
+  {
+    // a whole battle as in class: the TV and the judge's phone read the state between every tap and always show the
+    // same thing (version, question, team, clocks); double taps count once; no question twice; the questions run out
+    // (French questions in an English class: the built-in ones that fill in are in English, never the same ones again)
+    const html = B.bankQuestions(["HTML"], [], "fr");
+    const mk = await api("POST", `/api/battles?g=${G}`, { teams: [{ name: "Atlas" }, { name: "Orion" }], questions: html.slice(0, 6), settings: { seconds: 120, penalty: 8, topics: ["HTML"], reward: 0, announce: false } });
+    const id2 = mk.data.id, K3 = "j".repeat(32);
+    const J = (path: string, body?: any) => bot.fetch(new Request(mk.data.judge + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-judge-key": K3 }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx());
+    const jsn = async (r: Promise<Response>) => { const x = await r; return { status: x.status, d: await x.json() as any }; };
+    await J("/claim", { key: K3 });
+    const phone = async () => (await jsn(J("/state"))).d;
+    const tv = async (qs = "") => (await jsn(bot.fetch(new Request(mk.data.tv + "/state" + qs), env, makeCtx()))).d;
+    // what a screen draws; a running clock is compared by the moment it reaches 0 (both count from the server's time)
+    const screen = (x: any) => JSON.stringify([x.version, x.phase, x.turn, x.qid, x.q?.id ?? null, x.q?.n ?? null, x.q?.prompt ?? null, x.q?.code ?? null, x.q?.options ?? null,
+      x.left.map((l: number, i: number) => (x.running === i ? l + x.now : l)), x.stats, x.winner]);
+    let mismatches = 0, steps = 0, doubles = 0, doublesOk = 0;
+    const agree = async () => {
+      const t = await tv(), ph = await phone();
+      steps++;
+      if (screen(t) !== screen(ph)) { mismatches++; console.log("   TV   ", screen(t), "\n   phone", screen(ph)); }
+      return ph;
+    };
+    let p = await agree();
+    await jsn(J("/act", { a: "start", version: p.version }));
+    clock.advance(4);
+    p = await agree();
+    const asked = [p.q.id];
+    const script = ["correct", "wrong", "pass", "pause", "resume", "skip", "correct", "correct", "wrong", "pass"];
+    for (let i = 0; i < 40 && p.phase !== "over"; i++) {
+      const a = script[i % script.length];
+      if (a === "correct") {
+        // a quick double tap: two taps made on the same screen, at the same time
+        const [x, y] = await Promise.all([jsn(J("/act", { a, version: p.version, qid: p.q.id, aid: `d${i}a` })), jsn(J("/act", { a, version: p.version, qid: p.q.id, aid: `d${i}b` }))]);
+        doubles++;
+        if ([x.status, y.status].sort().join() === "200,409") doublesOk++;
+      } else await jsn(J("/act", { a, version: p.version, qid: p.q?.id ?? null }));
+      clock.advance(1);
+      const before = p;
+      p = await agree();
+      if ((p.phase === "playing" || p.phase === "paused") && p.q.id !== before.q.id) asked.push(p.q.id);
+      if (i === 5) {
+        // in the middle: the TV is reloaded, the dashboard saves the teams, an old tap arrives late
+        const fresh = await tv();
+        const up = await api("PUT", `/api/battles/${id2}?g=${G}`, { teams: [{ name: "Atlas 2" }, { name: "Orion" }], settings: { penalty: 5 } });
+        const late = await jsn(J("/act", { a: "correct", version: before.version, qid: before.q.id }));
+        const after = await phone();
+        check(screen(fresh) === screen(p) && up.status === 200 && after.version === p.version && after.qid === p.qid && late.status === 409 && late.d.stale && late.d.version === p.version,
+          "mid-game: a reloaded TV shows the phone's question; a dashboard save and a late tap change nothing");
+        check((await tv(`?seq=${p.version}&v=${encodeURIComponent(p.v)}`)).same === true, "the TV's quick check: nothing new, nothing redrawn");
+      }
+    }
+    const b2 = (await B.getBattle(env, id2))!;
+    check(mismatches === 0 && steps >= 12, `the TV and the phone showed the same thing after every tap (${steps} checks)`);
+    check(doubles >= 3 && doublesOk === doubles, "every double tap counted once (one OK, one refused)");
+    check(new Set(asked).size === asked.length && asked.length === 8, "no question asked twice in the battle");
+    check(b2.questions.length === 8 && html.every((h) => b2.questions.some((x) => x.id === h.id)) && b2.questions.slice(6).every((x) => /^[A-Z]/.test(x.prompt) && !/^(Que|Quel)/.test(x.prompt)), "the 6 questions ran out: the built-in ones on the topic filled in (in the class's language), each once");
+    check(p.phase === "over" && p.ev.why === "out" && (await tv()).ev.why === "out", "then none left: the game ends on both screens, with the reason");
+    await api("DELETE", `/api/battles/${id2}?g=${G}`);
+  }
 }
 
 section("🧩 squads by sprint (Teams & squads), loaded by briefs and squad battles");

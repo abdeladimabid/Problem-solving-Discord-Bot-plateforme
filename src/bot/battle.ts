@@ -6,8 +6,10 @@
 //   POST /battle/judge/<id>.<token>/claim     this phone becomes the judge (the first one, or with the PIN)
 //   GET  /battle/judge/<id>.<token>/state     state with the answer
 //   POST /battle/judge/<id>.<token>/act       correct / pass / wrong / skip / pause / resume / stop / start / starter / rematch
+//                                             with the version and the question id the phone showed (a stale tap: 409)
+// The server owns the game; both pages only draw what it returns, and never an older version than the one they show.
 import type { Env } from "../shared/types.ts";
-import { BattleError, getBattle, judgeAction, judgeSeen, judgeUrl, liveBattle, tvView } from "../shared/battle.ts";
+import { BattleDuplicate, BattleError, BattleStale, getBattle, judgeAction, judgeSeen, judgeUrl, liveBattle, stateTag, timeLeft, tvView } from "../shared/battle.ts";
 import type { BAction, Battle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { one, run } from "../shared/db.ts";
@@ -27,29 +29,28 @@ export async function handleBattle(request: Request, env: Env, who: "tv" | "judg
     if (!action) return html(TV(b));
     if (action === "state") {
       const since = Number(url.searchParams.get("seq") || 0);
-      // what the TV shows: the same seq is not enough (two writers could have made two different states with the same
-      // seq): the question number, whose turn and the phase must be the same too, else the TV gets the whole state
-      const fp = (st: { seq: number; shown: number; turn: number; phase: string }) => `${st.seq}.${st.shown}.${st.turn}.${st.phase}`;
+      // what the TV shows (version, question id, whose turn, phase): anything else and it gets the whole state
       const seen = String(url.searchParams.get("v") || "");
       let cur = b;
-      // long poll: wait (up to ~5 s) for something to change, so the TV shows a judge's tap at once; it only reads a few
-      // fields while waiting (never writes), then reads the whole battle once
-      if (since && url.searchParams.get("wait") === "1" && ["playing", "paused", "lobby"].includes(cur.state.phase) && (!seen || seen === fp(cur.state))) {
+      // long poll: wait (up to ~5 s) for a new version, so the TV shows a judge's tap at once; it only reads the version
+      // while waiting (never writes; every writer raises it), then reads the whole battle once
+      if (since && url.searchParams.get("wait") === "1" && ["playing", "paused", "lobby"].includes(cur.state.phase) && (!seen || seen === stateTag(cur.state))) {
         for (let i = 0; i < 20; i++) {
           await new Promise((r) => setTimeout(r, 250));
-          const x = await one<{ v: string | null }>(env, "SELECT json_extract(state, '$.seq') || '.' || json_extract(state, '$.shown') || '.' || json_extract(state, '$.turn') || '.' || json_extract(state, '$.phase') AS v FROM battles WHERE id = ?", id);
+          const x = await one<{ seq: number | null }>(env, "SELECT json_extract(state, '$.seq') AS seq FROM battles WHERE id = ?", id);
           if (!x) return json({ error: "This battle doesn't exist anymore." }, 404);
-          if (x.v !== fp(cur.state)) break;
+          if (Number(x.seq) !== cur.state.seq) break;
           if (cur.state.phase === "lobby" && i >= 8) break;   // the lobby also shows when the judge connects
+          if (cur.state.phase === "playing" && timeLeft(cur.state, cur.state.turn, Date.now()) <= 0) break;   // a clock at 0: the end, now
         }
         const x = await getBattle(env, id);
         if (!x) return json({ error: "This battle doesn't exist anymore." }, 404);
         cur = await liveBattle(env, x);
       }
       const v = tvView(cur);
-      // nothing new: a tiny answer (the clocks are computed on the screen)
-      if (since && since === v.seq && seen === fp(cur.state) && v.phase !== "countdown") return json({ seq: v.seq, v: seen, same: true, judge: v.judge, left: v.left, running: v.running, phase: v.phase });
-      return json({ ...v, v: fp(cur.state) });
+      // nothing new: a tiny answer (the clocks are computed on the screen, from the server's time)
+      if (since && since === v.version && seen === v.v && v.phase !== "countdown") return json({ version: v.version, seq: v.seq, v: v.v, same: true, judge: v.judge, left: v.left, now: v.now, running: v.running, phase: v.phase });
+      return json(v);
     }
     if (action === "qr.svg") return new Response(qrSvg(judgeUrl(env, b), { dark: "#0b1020" }), { headers: { "content-type": "image/svg+xml", "cache-control": "no-store" } });
     return json({ error: "unknown" }, 404);
@@ -75,11 +76,16 @@ export async function handleBattle(request: Request, env: Env, who: "tv" | "judg
     let body: any = {};
     try { body = await request.json(); } catch { body = {}; }
     if (!ACTIONS.includes(body.a)) return json({ error: "unknown action" }, 400);
-    const stale = (body.seq != null && Number(body.seq) !== b.state.seq) || (body.q != null && ["correct", "pass", "skip"].includes(body.a) && Number(body.q) !== b.state.shown);
-    if (stale && !["pause", "resume", "stop", "rematch"].includes(body.a)) return json({ error: "Already done (the screen changed).", stale: true, ...tvView(b, Date.now(), true) }, 409);
+    // every tap names the version it was made on ("seq": a page opened before this change); none: it's stale
+    const version = Number(body.version ?? body.seq);
+    if (!Number.isFinite(version)) return json({ error: "The screen changed: check the question before judging.", stale: true, ...tvView(b, Date.now(), true) }, 409);
+    const x: BAction = { a: body.a, team: body.team === 1 ? 1 : 0, version, qid: typeof body.qid === "string" ? body.qid : null, aid: typeof body.aid === "string" ? body.aid.slice(0, 40) : null };
     try {
-      await judgeAction(env, b as Battle, { a: body.a, team: body.team === 1 ? 1 : 0 } as BAction);
+      await judgeAction(env, b as Battle, x);
     } catch (e) {
+      // the same tap again (a retry): done already, the phone just gets the state
+      if (e instanceof BattleDuplicate) return json({ dup: true, ...tvView(b, Date.now(), true) });
+      if (e instanceof BattleStale) return json({ error: e.message, stale: true, ...tvView(b, Date.now(), true) }, 409);
       if (e instanceof BattleError) return json({ error: e.message, ...tvView(b, Date.now(), true) }, 409);
       throw e;
     }
@@ -189,8 +195,10 @@ pre.code .kw{color:#c084fc}pre.code .str{color:#86efac}pre.code .num{color:#fbbf
 .paused{font-size:6vw;font-weight:900}
 canvas#fx{position:fixed;inset:0;z-index:25;pointer-events:none}
 .qn{font-variant-numeric:tabular-nums}
+.sync{display:inline-block;width:.55vw;height:.55vw;min-width:7px;min-height:7px;border-radius:50%;background:var(--good);margin-left:.7vw;vertical-align:middle;opacity:.55;transition:background .3s}
+.sync.off{background:var(--warn);opacity:1;animation:beat 1s infinite}
 </style></head><body><div class="grid-bg"></div>
-<div class="top"><div class="logo">⚔️ <b>Squad battle</b></div><div id="title">${esc(b.title)}</div><div><span id="round"></span> · <span class="qn" id="qn"></span></div></div>
+<div class="top"><div class="logo">⚔️ <b>Squad battle</b></div><div id="title">${esc(b.title)}</div><div><span id="round"></span> · <span class="qn" id="qn"></span><span class="sync" id="sync"></span></div></div>
 <div class="stage">
   <section class="team" id="t0" style="--c:var(--a)"><div class="fire" id="f0"></div><div class="emo" id="e0"></div><div class="name" id="n0"></div>
     <div class="ring"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="44"/><circle class="fg" id="r0" cx="50" cy="50" r="44" stroke-dasharray="276.46" stroke-dashoffset="0"/></svg><div class="clock" id="c0"></div></div>
@@ -209,12 +217,16 @@ canvas#fx{position:fixed;inset:0;z-index:25;pointer-events:none}
 <div class="corner"><button class="btn" id="snd">🔇 Sound</button><button class="btn" id="fs">⛶ Full screen</button></div>
 <script>
 const FR = ${JSON.stringify(b.settings.lang !== "en")};
-const T = FR ? { turn: "À vous !", scan: "Scanne pour être l'arbitre", scanHint: "Le formateur scanne ce code avec son téléphone : il voit la réponse et juge chaque réponse.", ready: "Arbitre connecté ✓", wait: "En attente du lancement…", correct: "CORRECT !", pass: "PASSE", wrong: "NON !", skip: "Autre question", answer: "Réponse", prev: "Réponse précédente", wins: "gagne !", left: "temps restant", ok: "Bonnes réponses", passes: "Passes", streak: "Meilleure série", fastest: "Réponse la plus rapide", round: "Manche", q: "Question", go: "GO !", sound: "Son", tap: "Clique pour activer le son 🔊" }
-  : { turn: "Your turn!", scan: "Scan to judge", scanHint: "The teacher scans this code with their phone: they see the answer and judge each answer.", ready: "Judge connected ✓", wait: "Waiting for the start…", correct: "CORRECT!", pass: "PASS", wrong: "NO!", skip: "New question", answer: "Answer", prev: "Previous answer", wins: "wins!", left: "time left", ok: "Correct answers", passes: "Passes", streak: "Best streak", fastest: "Fastest answer", round: "Round", q: "Question", go: "GO!", sound: "Sound", tap: "Click to turn the sound on 🔊" };
+const T = FR ? { turn: "À vous !", scan: "Scanne pour être l'arbitre", scanHint: "Le formateur scanne ce code avec son téléphone : il voit la réponse et juge chaque réponse.", ready: "Arbitre connecté ✓", wait: "En attente du lancement…", correct: "CORRECT !", pass: "PASSE", wrong: "NON !", skip: "Autre question", answer: "Réponse", prev: "Réponse précédente", wins: "gagne !", left: "temps restant", ok: "Bonnes réponses", passes: "Passes", streak: "Meilleure série", fastest: "Réponse la plus rapide", round: "Manche", q: "Question", go: "GO !", sound: "Son", tap: "Clique pour activer le son 🔊", out: "Plus de questions : l'équipe avec le plus de temps gagne." }
+  : { turn: "Your turn!", scan: "Scan to judge", scanHint: "The teacher scans this code with their phone: they see the answer and judge each answer.", ready: "Judge connected ✓", wait: "Waiting for the start…", correct: "CORRECT!", pass: "PASS", wrong: "NO!", skip: "New question", answer: "Answer", prev: "Previous answer", wins: "wins!", left: "time left", ok: "Correct answers", passes: "Passes", streak: "Best streak", fastest: "Fastest answer", round: "Round", q: "Question", go: "GO!", sound: "Sound", tap: "Click to turn the sound on 🔊", out: "No more questions: the team with more time left wins." };
 const BASE = location.pathname.replace(/\\/$/, "");
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
-let S = null, base = { at: performance.now() }, lastEv = 0, lastQ = "", lastPhase = "", lastTick = -1, lastFull = 0;
+let S = null, lastEv = 0, lastQ = "", lastPhase = "", lastTick = -1, lastFull = 0, lastOk = 0;
+// the server's time here (the clocks count from it, like the judge's phone): from the quickest answer seen
+let skew = 0, bestRtt = Infinity;
+const srvNow = () => Date.now() + skew;
+const sample = (t0, d) => { const t1 = Date.now(), rtt = t1 - t0; if (d && d.now && rtt <= bestRtt + 20) { bestRtt = Math.min(bestRtt, rtt); skew = d.now + rtt / 2 - t1; } };
 
 // ---------------------------------------------------------------- sound (made in the browser, no files)
 let AC = null, soundOn = false;
@@ -262,8 +274,9 @@ const fmt = (ms) => { ms = Math.max(0, ms); const s = Math.ceil(ms / 1000); if (
 const hl = ${codeHighlight.toString()};
 function card(q) {
   const el = $("#card");
-  if (!q) { el.innerHTML = ""; return; }
-  const key = q.n + "|" + q.prompt;
+  if (!q) { el.innerHTML = ""; lastQ = ""; return; }
+  // the question is the server's (by id): the card changes exactly when the judge's phone changes
+  const key = q.id + "|" + q.n;
   if (key === lastQ) return;
   lastQ = key;
   el.style.setProperty("--c", S.turn === 0 ? "var(--a)" : "var(--b)");
@@ -309,7 +322,7 @@ function lobby() {
   if (S.phase !== "lobby") { L.hidden = true; return; }
   L.hidden = false;
   L.innerHTML = '<div><div class="vs"><div class="t"><div class="e">' + esc(S.teams[0].emoji) + '</div><div class="n" style="color:var(--a)">' + esc(S.teams[0].name) + '</div></div><div class="x">VS</div><div class="t"><div class="e">' + esc(S.teams[1].emoji) + '</div><div class="n" style="color:var(--b)">' + esc(S.teams[1].name) + "</div></div></div>" +
-    '<div class="lobby-row">' + (S.judge ? '<div class="hint"><span class="ok">' + T.ready + "</span><br>" + T.wait + "<br><br>⏱️ " + Math.round(S.settings.seconds / 60 * 10) / 10 + " min · ⏭️ −" + S.settings.penalty + " s · " + S.total + " questions</div>"
+    '<div class="lobby-row">' + (S.judge ? '<div class="hint"><span class="ok">' + T.ready + "</span><br>" + T.wait + "<br><br>⏱️ " + Math.round(S.settings.seconds / 60 * 10) / 10 + " min · ⏭️ −" + S.settings.penalty + " s · " + (S.unasked ?? S.total) + " questions</div>"
       : '<div class="qr"><img src="' + BASE + '/qr.svg" alt="QR"></div><div class="hint"><b>📱 ' + T.scan + "</b><br>" + T.scanHint + "</div>") + "</div>" +
     (AC ? "" : '<p class="hint" style="text-align:center;max-width:none;margin-top:4vh">' + T.tap + "</p>") + "</div>";
 }
@@ -321,6 +334,7 @@ function win() {
   const w = S.teams[S.winner], s = S.stats;
   const f = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + " s");
   W.innerHTML = '<div><div class="trophy">🏆</div><h1 style="color:' + w.color + '">' + esc(w.emoji + " " + w.name) + " " + T.wins + '</h1><div class="sub">' + T.left + " : <b>" + fmt(S.left[S.winner]).replace(/<[^>]+>/g, "") + "</b></div>" +
+    (S.ev && S.ev.why === "out" ? '<div class="sub">' + T.out + "</div>" : "") +
     '<div class="wstats"><div></div><div class="h" style="color:var(--a)">' + esc(S.teams[0].name) + '</div><div class="h" style="color:var(--b)">' + esc(S.teams[1].name) + "</div>" +
     [[T.ok, s.ok[0], s.ok[1]], [T.passes, s.pass[0], s.pass[1]], [T.streak, "🔥 " + S.best[0], "🔥 " + S.best[1]], [T.fastest, f(s.fastest[0]), f(s.fastest[1])]].map((r) => '<div class="l">' + r[0] + "</div><div>" + r[1] + "</div><div>" + r[2] + "</div>").join("") + "</div></div>";
   SFX.win();
@@ -330,7 +344,8 @@ function win() {
 }
 function draw() {
   if (!S) { requestAnimationFrame(draw); return; }
-  const el = performance.now() - base.at;
+  const el = Math.max(0, srvNow() - S.now);
+  $("#sync").classList.toggle("off", Date.now() - lastOk > 4000);
   for (const t of [0, 1]) {
     const run = S.running === t;
     const ms = Math.max(0, S.left[t] - (run ? el : 0));
@@ -358,8 +373,10 @@ function render() {
   if (S.phase !== "over") $("#win").hidden = true;
 }
 function show(d) {
+  // never an older state than the one on screen (the server's version only goes up)
+  if (S && d.version != null && S.version != null && d.version < S.version) return;
   const prev = S;
-  S = d; base.at = performance.now();
+  S = d;
   // an animation or a sound that fails never keeps the screen on an old question
   try {
     if (d.ev && d.ev.seq !== lastEv) { if (prev) onEvent(d.ev); lastEv = d.ev.seq; }
@@ -376,12 +393,14 @@ async function poll() {
     const live = S && ["playing", "paused", "lobby"].includes(S.phase);
     // every 15 s the whole state again, whatever happens: the screen can never stay on an old question
     const full = !S || Date.now() - lastFull > 15000;
-    const r = await fetch(BASE + "/state" + (S && !full ? "?seq=" + S.seq + "&v=" + encodeURIComponent(S.v || "") + (live ? "&wait=1" : "") : ""), { cache: "no-store", signal: ctl.signal });
+    const t0 = Date.now();
+    const r = await fetch(BASE + "/state" + (S && !full ? "?seq=" + S.version + "&v=" + encodeURIComponent(S.v || "") + (live ? "&wait=1" : "") : ""), { cache: "no-store", signal: ctl.signal });
     clearTimeout(kill);
     if (r.status === 404) { document.body.innerHTML = '<div class="screen"><div class="paused">⚔️</div></div>'; return; }
     const d = await r.json();
+    sample(t0, d); lastOk = Date.now();
     if (full && !d.same) lastFull = Date.now();
-    if (d.same && S) { S.left = d.left; S.running = d.running; S.phase = d.phase; base.at = performance.now(); if (d.judge !== S.judge) { S.judge = d.judge; lobby(); } wait = 0; }
+    if (d.same && S) { S.left = d.left; S.now = d.now; S.running = d.running; S.phase = d.phase; if (d.judge !== S.judge) { S.judge = d.judge; lobby(); } wait = 0; }
     else if (!d.same) { show(d); wait = 0; }
   } catch { wait = 800; }
   setTimeout(poll, S && S.phase === "over" ? 1500 : S && S.phase === "countdown" ? 250 : wait);
@@ -435,16 +454,18 @@ input{font:inherit;font-size:28px;letter-spacing:.3em;text-align:center;width:10
 #main .row{gap:18px}
 #main .small{gap:12px;margin-top:14px;padding-top:20px;border-top:1px dashed var(--line)}
 #main .small button{padding:14px 10px}
+.sync{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-left:8px;vertical-align:middle;opacity:.7}
+.sync.off{background:#f59e0b;opacity:1}
 </style></head><body>
-<div><h1>⚖️ ${esc(b.title)}</h1><div class="muted" id="sub"></div></div>
+<div><h1>⚖️ ${esc(b.title)}<span class="sync" id="sync"></span></h1><div class="muted" id="sub"></div></div>
 <div class="clocks"><div class="ck" id="k0" style="--c:var(--a)"><div class="n" id="kn0"></div><div class="t" id="kt0"></div><div class="s" id="ks0"></div></div>
   <div class="ck" id="k1" style="--c:var(--b)"><div class="n" id="kn1"></div><div class="t" id="kt1"></div><div class="s" id="ks1"></div></div></div>
 <div id="main"></div>
 <div class="msg" id="msg"></div>
 <script>
 const FR = ${JSON.stringify(b.settings.lang !== "en")};
-const T = FR ? { start: "▶ Lancer la partie", who: "Qui commence ?", correct: "✓ Bonne réponse", wrong: "✗ Faux", pass: "⏭ Passe", pause: "⏸ Pause", resume: "▶ Reprendre", skip: "↻ Autre question", stop: "■ Terminer", rematch: "🔁 Revanche", answer: "Réponse", turnOf: "Au tour de", wins: "gagne !", pin: "Un autre téléphone est l'arbitre. Entre le code PIN affiché dans le tableau de bord :", pinBtn: "Devenir l'arbitre", countdown: "3… 2… 1…", sure: "Terminer la partie maintenant ?", loading: "Connexion…", changed: "L'écran a changé : vérifie la question avant de juger.", tv: "Affiche la partie sur la TV, puis lance-la ici." }
-  : { start: "▶ Start the game", who: "Who starts?", correct: "✓ Correct", wrong: "✗ Wrong", pass: "⏭ Pass", pause: "⏸ Pause", resume: "▶ Resume", skip: "↻ Other question", stop: "■ End", rematch: "🔁 Rematch", answer: "Answer", turnOf: "Turn of", wins: "wins!", pin: "Another phone is the judge. Enter the PIN shown in the dashboard:", pinBtn: "Become the judge", countdown: "3… 2… 1…", sure: "End the game now?", loading: "Connecting…", changed: "The screen changed: check the question before judging.", tv: "Show the game on the TV, then start it here." };
+const T = FR ? { start: "▶ Lancer la partie", who: "Qui commence ?", correct: "✓ Bonne réponse", wrong: "✗ Faux", pass: "⏭ Passe", pause: "⏸ Pause", resume: "▶ Reprendre", skip: "↻ Autre question", stop: "■ Terminer", rematch: "🔁 Revanche", answer: "Réponse", turnOf: "Au tour de", wins: "gagne !", pin: "Un autre téléphone est l'arbitre. Entre le code PIN affiché dans le tableau de bord :", pinBtn: "Devenir l'arbitre", countdown: "3… 2… 1…", sure: "Terminer la partie maintenant ?", loading: "Connexion…", changed: "L'écran a changé : vérifie la question avant de juger.", tv: "Affiche la partie sur la TV, puis lance-la ici.", q: "Question", out: "Plus de questions : l'équipe avec le plus de temps gagne." }
+  : { start: "▶ Start the game", who: "Who starts?", correct: "✓ Correct", wrong: "✗ Wrong", pass: "⏭ Pass", pause: "⏸ Pause", resume: "▶ Resume", skip: "↻ Other question", stop: "■ End", rematch: "🔁 Rematch", answer: "Answer", turnOf: "Turn of", wins: "wins!", pin: "Another phone is the judge. Enter the PIN shown in the dashboard:", pinBtn: "Become the judge", countdown: "3… 2… 1…", sure: "End the game now?", loading: "Connecting…", changed: "The screen changed: check the question before judging.", tv: "Show the game on the TV, then start it here.", q: "Question", out: "No more questions: the team with more time left wins." };
 const BASE = location.pathname.replace(/\\/$/, "");
 const ID = BASE.split("/").pop().split(".")[0];
 const $ = (s) => document.querySelector(s);
@@ -452,9 +473,14 @@ const esc = (s) => String(s ?? "").replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">"
 let KEY = null;
 try { KEY = localStorage.getItem("battle-judge-" + ID); } catch {}
 if (!KEY) { KEY = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, "0")).join(""); try { localStorage.setItem("battle-judge-" + ID, KEY); } catch {} }
-let S = null, base = performance.now(), busy = false, view = "", shown = null, lastKey = "";
+let S = null, busy = false, view = "", lastKey = "", lastOk = 0;
+// the server's time here (the clocks count from it, like the TV): from the quickest answer seen
+let skew = 0, bestRtt = Infinity;
+const srvNow = () => Date.now() + skew;
+const sample = (t0, d) => { const t1 = Date.now(), rtt = t1 - t0; if (d && d.now && rtt <= bestRtt + 20) { bestRtt = Math.min(bestRtt, rtt); skew = d.now + rtt / 2 - t1; } };
 const H = { "content-type": "application/json", "x-judge-key": KEY };
 const buzz = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch {} };
+const hex = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((x) => x.toString(16).padStart(2, "0")).join("");
 async function claim(pin) {
   const r = await fetch(BASE + "/claim", { method: "POST", headers: H, body: JSON.stringify({ key: KEY, pin }) });
   return r.ok ? null : (await r.json()).error;
@@ -465,34 +491,48 @@ function pinScreen(err) {
   $("#msg").textContent = err || "";
   $("#pinb").onclick = async () => { const e = await claim($("#pin").value.trim()); if (e) pinScreen(e); else { view = ""; poll(); } };
 }
-/** A newer state from the server (never an older one: answers can arrive out of order). The buttons always belong to the question on screen. */
-let epoch = 0;   // +1 at each tap: a poll that started before a tap can't undo what the tap shows
-function apply(d, fromPoll = null) {
-  if (!d || !d.seq) return;
-  // a poll that started after the last tap is the truth (even an "older" seq: the server is right, not this phone);
-  // an answer to a tap or an older poll only counts if it is newer
-  if (S && d.seq < S.seq && !(fromPoll !== null && fromPoll === epoch)) return;
-  S = d; base = performance.now();
-  const key = d.seq + "|" + d.phase + "|" + (d.q ? d.q.n + d.q.prompt : "");
-  if (key !== lastKey) { lastKey = key; shown = d; render(); }
+/**
+ * The server's state, drawn as is. Never an older one than the one on screen: the server's version only goes up, and
+ * answers can arrive out of order (a poll that read the game just before a tap). The buttons always belong to the
+ * question on screen, and every tap names it (its version and its id).
+ */
+function apply(d) {
+  if (!d || d.version == null) return;
+  if (S && d.version < S.version) return;
+  S = d;
+  const key = d.version + "|" + d.phase + "|" + (d.q ? d.q.id : "");
+  if (key !== lastKey) { lastKey = key; render(); }
 }
+const setButtons = (on) => document.querySelectorAll("button").forEach((x) => (x.disabled = !on));
 async function act(a, extra = {}) {
-  if (busy) return;
-  busy = true; epoch++; document.querySelectorAll("button").forEach((x) => (x.disabled = true));
+  if (busy || !S) return;
+  busy = true; setButtons(false);
   buzz(a === "correct" ? [30, 40, 30] : 40);
-  try {
-    const r = await fetch(BASE + "/act", { method: "POST", headers: H, body: JSON.stringify({ a, seq: shown ? shown.seq : null, q: shown && shown.q ? shown.q.n : null, ...extra }) });
-    const d = await r.json();
-    $("#msg").textContent = r.ok ? "" : (d.stale ? T.changed : d.error || "");
-    busy = false;
-    apply(d);
-  } catch { $("#msg").textContent = "Network…"; busy = false; }
-  document.querySelectorAll("button").forEach((x) => (x.disabled = false));
+  // the same id if the network fails and it's sent again: the server applies it once
+  const body = JSON.stringify({ a, version: S.version, qid: S.q ? S.q.id : null, aid: hex(8), ...extra });
+  for (let i = 0; i < 2; i++) {
+    try {
+      const t0 = Date.now();
+      const r = await fetch(BASE + "/act", { method: "POST", headers: H, body, cache: "no-store" });
+      const d = await r.json();
+      sample(t0, d); lastOk = Date.now();
+      $("#msg").textContent = r.ok ? "" : (d.stale ? T.changed : d.error || "");
+      busy = false;
+      apply(d);
+      break;
+    } catch {
+      $("#msg").textContent = "Network…";
+      if (i === 0) await new Promise((r) => setTimeout(r, 700));
+    }
+  }
+  busy = false;
+  setButtons(true);
 }
 const fmt = (ms) => { ms = Math.max(0, ms); if (ms < 10000) return (ms / 1000).toFixed(1); const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 function clocks() {
   if (!S) return;
-  const el = performance.now() - base;
+  const el = Math.max(0, srvNow() - S.now);
+  $("#sync").classList.toggle("off", Date.now() - lastOk > 3500);
   for (const t of [0, 1]) {
     const ms = Math.max(0, S.left[t] - (S.running === t ? el : 0));
     $("#kt" + t).textContent = fmt(ms);
@@ -514,11 +554,12 @@ function render() {
     m.innerHTML = '<div class="card center"><div class="win">⏳</div><p class="p">' + T.countdown + "</p></div>";
   } else if (S.phase === "over") {
     const w = S.teams[S.winner ?? 0];
-    m.innerHTML = '<div class="card center"><div class="win">🏆</div><p class="p" style="color:' + w.color + '">' + esc(w.emoji + " " + w.name) + " " + T.wins + '</p><button class="big start" id="rm">' + T.rematch + "</button></div>";
+    m.innerHTML = '<div class="card center"><div class="win">🏆</div><p class="p" style="color:' + w.color + '">' + esc(w.emoji + " " + w.name) + " " + T.wins + "</p>" +
+      (S.ev && S.ev.why === "out" ? '<p class="muted">' + T.out + "</p>" : "") + '<button class="big start" id="rm">' + T.rematch + "</button></div>";
     $("#rm").onclick = () => act("rematch");
   } else {
     const q = S.q || {};
-    m.innerHTML = '<div class="card"><div class="k">' + (q.emoji || "") + " " + esc(q.label) + " · " + esc(q.topic) + " · #" + (q.n || "") + '</div><div class="p">' + esc(q.prompt) + "</div>" +
+    m.innerHTML = '<div class="card"><div class="k">' + (q.emoji || "") + " " + esc(q.label) + " · " + esc(q.topic) + " · " + T.q + " " + (q.n || "") + '</div><div class="p">' + esc(q.prompt) + "</div>" +
       (q.code ? "<pre>" + esc(q.code) + "</pre>" : "") + (q.options ? '<div class="opts">' + q.options.map((o, i) => "<div><b>" + "ABCD"[i] + "</b> · " + esc(o) + "</div>").join("") + "</div>" : "") +
       '<div class="ans"><small>' + T.answer + "</small><b>" + esc(q.answer) + "</b>" + (q.explain ? "<small>" + esc(q.explain) + "</small>" : "") + "</div></div>" +
       (S.phase === "paused" ? '<button class="big ok" id="res">' + T.resume + "</button>"
@@ -531,12 +572,15 @@ function render() {
 }
 async function poll() {
   if (view === "pin") return;
-  try {
-    const at = epoch;
-    const r = await fetch(BASE + "/state", { headers: H, cache: "no-store" });
-    if (r.status === 403) { const e = await claim(); if (e) { pinScreen(); return; } }
-    else if (r.ok && !busy) apply(await r.json(), at);
-  } catch {}
+  // not while a tap is on its way: its answer brings the new state
+  if (!busy) {
+    try {
+      const t0 = Date.now();
+      const r = await fetch(BASE + "/state", { headers: H, cache: "no-store" });
+      if (r.status === 403) { const e = await claim(); if (e) { pinScreen(); return; } }
+      else if (r.ok) { const d = await r.json(); sample(t0, d); lastOk = Date.now(); if (!busy) apply(d); }
+    } catch {}
+  }
   setTimeout(poll, S && S.phase === "countdown" ? 400 : 1000);
 }
 $("#main").innerHTML = '<div class="card center">' + T.loading + "</div>";
