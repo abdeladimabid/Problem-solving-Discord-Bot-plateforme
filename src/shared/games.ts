@@ -319,6 +319,7 @@ export async function pleaRoyale(env: Env, gm: Game, p: Player) {
 }
 
 /** Something the TV shows changed (a player joined…): a new seq so the screens reload. */
+export async function bumpGame(env: Env, gm: Game) { await bump(env, gm); }
 async function bump(env: Env, gm: Game) {
   await run(env, "UPDATE games SET state = json_set(state, '$.seq', json_extract(state, '$.seq') + 1), updated_at = ? WHERE id = ?", now(), gm.id);
   gm.state.seq++;
@@ -638,14 +639,17 @@ export async function saveRelayCode(env: Env, gm: Game, p: Player, turn: number,
   if (!(turn === cur.turn && cur.writer === p.pid) && !prev) throw new GameError("It's not your turn.");
   await updateTeam(env, gm.id, p.squad, (x) => (x.turnSaved > turn ? null : { ...x, code: String(code ?? "").slice(0, 20000), savedAt: at, savedBy: p.pid, turnSaved: turn }));
 }
-export async function noiseRelay(env: Env, gm: Game, p: Player, at = Date.now()) {
+/** A strike for the squad: someone talked ("voice"), or kept their microphone muted ("muted": they could talk unheard). */
+export async function noiseRelay(env: Env, gm: Game, p: Player, at = Date.now(), why: "voice" | "muted" = "voice") {
   if (gm.kind !== "relay" || gm.state.phase !== "playing" || !gm.settings.noise) return { strikes: 0, out: false, ignored: true };
   const d = await updateTeam(env, gm.id, p.squad, (x) => {
     if (x.out) return null;
-    const lastAt = (x.noise || {})[p.pid] || 0;
-    if (at - lastAt < 5000) return null;    // one strike per voice burst
+    const k = why === "muted" ? "m:" + p.pid : p.pid;
+    const lastAt = (x.noise || {})[k] || 0;
+    if (at - lastAt < (why === "muted" ? 15000 : 5000)) return null;    // one strike per voice burst (per silent stretch)
+    if (at - (x.strikeAt || 0) < 3000) return null;                      // the squad's phones react to a strike: not a second one
     const strikes = (x.strikes || 0) + 1;
-    return { ...x, strikes, out: strikes >= gm.settings.strikes, noise: { ...(x.noise || {}), [p.pid]: at }, lastNoise: { pid: p.pid, name: p.name, at } };
+    return { ...x, strikes, strikeAt: at, out: strikes >= gm.settings.strikes, noise: { ...(x.noise || {}), [k]: at }, lastNoise: { pid: p.pid, name: p.name, at, why } };
   });
   if (d) await bump(env, gm);
   return d ? { strikes: d.strikes, out: d.out } : { strikes: 0, out: false, ignored: true };
@@ -787,8 +791,9 @@ export async function playerView(env: Env, gm: Game, p: Player, at = Date.now())
   const L = relayLang(gm);
   return { ...base, task: { title: task.title, text: task.text, fn: task.fn, examples: task.tests.slice(0, 2), shown: task.tests.slice(0, 2).map((t) => ({ call: `${task.fn}(${t.args.map((a) => literal(a, L)).join(", ")})`, expect: literal(t.expect, L) })) },
     codeLang: L, langName: RELAY_LANGS[L], endAt: st.endAt,
-    turn: cur?.turn ?? 0, writer: cur?.writer ?? null, writerName: players.find((x) => x.pid === cur?.writer)?.name ?? null, turnEnd: cur?.end ?? null, turnStart: cur?.start ?? null,
+    turn: cur?.turn ?? 0, round: cur?.round ?? 1, rounds: gm.settings.rounds, writer: cur?.writer ?? null, writerName: players.find((x) => x.pid === cur?.writer)?.name ?? null, turnEnd: cur?.end ?? null, turnStart: cur?.start ?? null,
     nextAt: nextTurn != null && cur ? (st.startAt ?? at) + nextTurn * cur.turnMs : null, order: (d?.order || []).map((pid: string) => players.find((x) => x.pid === pid)?.name ?? "?"),
+    mates: (d?.order || []).map((pid: string) => { const m = players.find((x) => x.pid === pid); return { name: m?.name ?? "?", mic: m?.mic ?? null, me: pid === p.pid, writer: pid === cur?.writer }; }), lastNoise: d?.lastNoise ?? null,
     writing, code: writing || st.phase === "testing" || st.phase === "over" ? d?.code ?? relayStarter(gm) : null, starter: relayStarter(gm),
     strikes: d?.strikes || 0, strikesMax: gm.settings.strikes, out: !!d?.out, noise: gm.settings.noise, sensitivity: gm.settings.sensitivity,
     result: st.results ? st.results[String(p.squad)] ?? null : null, rank: st.ranking ? st.ranking.indexOf(p.squad) + 1 : null };

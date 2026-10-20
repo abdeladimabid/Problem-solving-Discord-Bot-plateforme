@@ -4618,6 +4618,15 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   clock.advance(6);
   const n3 = await ry.play("noise", keyOf(tB.order[1]), {});
   check(n2.data.strikes === 1 && n3.data.strikes === 2 && n3.data.out && (await ry.play("code", keyOf(tB.order[1]), { turn: 1, code: "x" })).status === 409, "2 strikes: the squad is out");
+  // a muted microphone (the keyboard's mute key): the TV sees it, and the squad gets a strike
+  await ry.play("mic", keyOf(tA.order[1]), { state: "muted" });
+  const tvm = await ry.tv("state");
+  const mutedV = await ry.play("noise", keyOf(tA.order[1]), { why: "muted" });
+  const againM = await ry.play("noise", keyOf(tA.order[0]), {});
+  const avM = await ry.play("state", keyOf(tA.order[0]));
+  check(tvm.data.players.find((p: any) => p.pid === tA.order[1]).mic === 2 && mutedV.data.strikes === 1 && againM.data.ignored
+    && avM.data.lastNoise.why === "muted" && avM.data.mates.length === 2 && avM.data.mates.find((m: any) => !m.me).mic === 2 && avM.data.rounds === 1, "a muted mic: shown on the TV, a strike (and not a second one right after), the squad sees who");
+  await ry.tv("act", { a: "pardon", squad: tA.squad });
   clock.advance(60);
   const test = await ry.tv("state");
   check(test.data.phase === "testing" && test.data.teams.find((t: any) => t.squad === tA.squad).code.includes("return s"), "time's up: the tests (the TV gets the codes)");

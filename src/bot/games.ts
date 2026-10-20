@@ -8,7 +8,7 @@
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { COUNTDOWN_MS, GameError, NEXT_MS, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, NEXT_MS, bumpGame, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -83,9 +83,13 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
       case "hint": return json(await hintSql(env, gm, p));
       case "accuse": return json(await accuseSql(env, gm, p, String(b.name || "").slice(0, 80)));
       case "code": await saveRelayCode(env, gm, p, Number(b.turn), String(b.code ?? "")); return json({ ok: true, at: Date.now() });
-      case "noise": return json(await noiseRelay(env, gm, p));
+      case "noise": return json(await noiseRelay(env, gm, p, Date.now(), b.why === "muted" ? "muted" : "voice"));
       case "try": return json(await tryRelay(env, gm, p, String(b.code ?? "")));
-      case "mic": await run(env, "UPDATE game_players SET mic = ? WHERE game_id = ? AND pid = ?", b.on ? 1 : 0, gm.id, p.pid); return json({ ok: true });
+      case "mic": {
+        const v = b.state === "muted" ? 2 : b.on ? 1 : 0;
+        if (p.mic !== v) { await run(env, "UPDATE game_players SET mic = ? WHERE game_id = ? AND pid = ?", v, gm.id, p.pid); if (gm.kind === "relay") await bumpGame(env, gm); }
+        return json({ ok: true });
+      }
     }
     return json({ error: "unknown" }, 404);
   } catch (e) {
@@ -172,14 +176,32 @@ h1.big{font-size:3.6vw;margin:0 0 1vh}h2{font-size:1.8vw;margin:0 0 1vh}
 .clock{font-size:2vw;font-weight:900;font-variant-numeric:tabular-nums}
 /* relay */
 .rgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(26vw,1fr));gap:1.4vw;align-content:start}
+#app:has(.rgrid){grid-template-rows:auto 1fr;gap:2vh;align-content:start}
+.rtask{padding:2.4vh 2vw;align-self:end}.rtt{font-size:1.8vw;font-weight:900;display:flex;gap:1vw;align-items:center}.rtt .chip{font-size:1vw}
+.rtask p{font-size:1.5vw;line-height:1.5;color:#dbe4fb;margin:1vh 0}.rrules{font-size:1.1vw;color:var(--soft);font-weight:700}
+.rcard{padding:2.2vh 1.6vw}
 .rcard{border-radius:22px;padding:1.6vh 1.2vw;background:var(--card);border:3px solid var(--c);position:relative}
 .rcard.out{opacity:.45;filter:grayscale(1)}
 .rcard h3{margin:0 0 1vh;font-size:1.6vw}.writer{font-size:2vw;font-weight:900}
-.tbar{height:1.2vh;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden;margin:1vh 0}.tbar i{display:block;height:100%;background:var(--c)}
+.tbar{height:1.2vh;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden;margin:1vh 0}.tbar i{display:block;height:100%;background:linear-gradient(90deg,var(--c),#fff);transition:width .25s linear}
 .order{display:flex;flex-wrap:wrap;gap:.4vw}.order span{font-size:.95vw;padding:.3vh .6vw;border-radius:999px;background:rgba(255,255,255,.08)}.order span.on{background:var(--c);color:#fff}
 .strikes{position:absolute;top:1.2vh;right:1vw;font-size:1.2vw;font-weight:900;border:0;border-radius:999px;padding:.5vh .9vw;background:rgba(255,255,255,.08);color:var(--soft)}
 .strikes.hot{background:rgba(239,68,68,.3);color:#fff}
-.rcard.noise{animation:shake .5s}
+.rcard.noise{animation:shake .5s 2;box-shadow:0 0 0 4px #ef4444,0 0 50px rgba(239,68,68,.6)}
+.rcard{overflow:hidden;background:linear-gradient(180deg,color-mix(in srgb,var(--c) 16%,transparent),rgba(255,255,255,.03))}
+.rhead{display:flex;justify-content:space-between;align-items:center;gap:1vw}
+.spips{display:flex;gap:.4vw;border:0;background:none;padding:0}.spips i{width:1.7vw;height:1.7vw;border-radius:.5vw;border:2px solid rgba(239,68,68,.5);display:grid;place-items:center;font-style:normal;font-size:.9vw;font-weight:900;color:#fff}
+.spips i.on{background:linear-gradient(135deg,#ef4444,#b91c1c);border-color:#fca5a5;box-shadow:0 0 1vw rgba(239,68,68,.7)}
+.wrow{display:flex;gap:1vw;align-items:center;margin:.6vh 0}
+.wav{width:4vw;height:4vw;border-radius:50%;display:grid;place-items:center;font-weight:900;font-size:1.4vw;background:var(--c);box-shadow:0 0 0 .4vw color-mix(in srgb,var(--c) 30%,transparent),0 0 2vw var(--c);animation:bob 2s ease-in-out infinite}
+.typing{display:inline-flex;gap:.25vw;vertical-align:middle;margin-left:.4vw}.typing i{width:.5vw;height:.5vw;border-radius:50%;background:var(--soft);animation:pulse 1s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+.order{align-items:center;margin-top:1vh}.order em{color:var(--soft);font-style:normal}
+.moff{color:#fca5a5;margin-right:.2vw}
+.stamp{position:absolute;inset:0;z-index:3;display:grid;place-items:center;align-content:center;gap:.6vh;background:rgba(69,10,10,.82);animation:koin .3s}
+.stamp b{font-size:2.4vw;font-weight:900;letter-spacing:.08em;padding:.6vh 1.4vw;border:.35vw solid #ef4444;border-radius:1vw;color:#fecaca;transform:rotate(-8deg);animation:stampp .5s cubic-bezier(.2,1.6,.4,1)}
+.stamp span{font-size:1.2vw;font-weight:800}.stamp.ko{background:rgba(0,0,0,.88)}
+@keyframes koin{0%{background:#fff}}
+@keyframes stampp{0%{transform:scale(2.6) rotate(-8deg);opacity:0}100%{transform:scale(1) rotate(-8deg);opacity:1}}
 .res{display:grid;gap:1.2vh}.resrow{display:grid;grid-template-columns:16vw 1fr 8vw;gap:1vw;align-items:center;font-size:1.4vw;font-weight:800}
 .pbar{height:2.4vh;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden}.pbar i{display:block;height:100%;background:var(--good)}
 .fullcode{max-height:34vh;font-size:1.1vw}
@@ -493,12 +515,15 @@ function relayView() {
   }
   return '<div class="rgrid">' + S.teams.map((t) => {
     const s = sq(t.squad); const w = S.players.find((p) => p.pid === t.writer);
-    const nameOf = (pid) => (S.players.find((p) => p.pid === pid) || { name: "?" }).name;
+    const pl = (pid) => S.players.find((p) => p.pid === pid) || { name: "?" };
     const pct = Math.max(0, Math.min(100, 100 * (nowMs() - t.turnStart) / (t.turnEnd - t.turnStart)));
-    return '<div class="rcard' + (t.out ? " out" : "") + (noiseSeen[t.squad] ? " noise" : "") + '" style="--c:' + s.color + '">' + (S.noise ? '<button class="strikes' + (t.strikes ? " hot" : "") + '" data-pardon="' + t.squad + '" title="' + T("Cliquer pour annuler un avertissement", "Click to cancel a strike") + '">🗣️ ' + t.strikes + "/" + S.strikesMax + "</button>" : "") + "<h3>" + e(s.emoji + " " + s.name) + "</h3>" +
-      (t.out ? '<div class="writer">🔇 ' + T("Éliminés (bruit)", "Out (noise)") + "</div>" : '<div class="muted">' + T("Écrit maintenant", "Writing now") + '</div><div class="writer">✍️ ' + e(w ? w.name : "…") + '</div><div class="tbar"><i data-bar="' + t.squad + '" style="width:' + pct + '%"></i></div><div class="muted" style="font-size:1vw">' + T("Tour ", "Turn ") + (t.turn + 1) + " · " + T("manche ", "round ") + t.round + "/" + S.rounds + " · " + t.lines + T(" lignes", " lines") + "</div>") +
-      '<div class="order" style="margin-top:1vh">' + t.order.map((pid) => "<span" + (pid === t.writer ? ' class="on"' : "") + ">" + (((S.players.find((p) => p.pid === pid) || {}).mic === 0) ? "🔇" : "") + e(nameOf(pid)) + "</span>").join("") + "</div></div>";
-  }).join("") + "</div>";
+    const pp = []; for (let i = 0; i < S.strikesMax; i++) pp.push('<i class="' + (i < t.strikes ? "on" : "") + '">' + (i < t.strikes ? "✖" : "") + "</i>");
+    const ln = t.lastNoise, hit = noiseSeen[t.squad];
+    const stamp = hit ? '<div class="stamp' + (t.out ? " ko" : "") + '"><b>' + (t.out ? "🔇 " + T("ÉLIMINÉS", "OUT") : "✖ " + T("AVERTISSEMENT", "STRIKE") + " " + t.strikes + "/" + S.strikesMax) + "</b>" + (ln ? "<span>" + e(ln.name) + (ln.why === "muted" ? T(" : micro coupé", ": mic muted") : T(" a parlé", " talked")) + "</span>" : "") + "</div>" : "";
+    return '<div class="rcard' + (t.out ? " out" : "") + (hit ? " noise" : "") + '" style="--c:' + s.color + '">' + stamp + '<div class="rhead"><h3>' + e(s.emoji + " " + s.name) + "</h3>" + (S.noise ? '<button class="spips" data-pardon="' + t.squad + '" title="' + T("Cliquer pour annuler un avertissement", "Click to cancel a strike") + '">' + pp.join("") + "</button>" : "") + "</div>" +
+      (t.out ? '<div class="writer">🔇 ' + T("Éliminés (bruit)", "Out (noise)") + "</div>" : '<div class="wrow"><span class="wav">' + e(initials(w ? w.name : "?")) + '</span><div><div class="muted" style="font-size:.95vw">' + T("Au clavier", "At the keyboard") + '</div><div class="writer">' + e(w ? w.name : "…") + ' <span class="typing"><i></i><i></i><i></i></span></div></div></div><div class="tbar"><i data-bar="' + t.squad + '" style="width:' + pct + '%"></i></div><div class="muted" style="font-size:1vw">' + T("Tour ", "Turn ") + (t.turn + 1) + " · " + T("manche ", "round ") + t.round + "/" + S.rounds + " · " + t.lines + T(" lignes", " lines") + "</div>") +
+      '<div class="order">' + t.order.map((pid, i) => { const p = pl(pid); return (i ? '<em>›</em>' : "") + "<span" + (pid === t.writer ? ' class="on"' : "") + ">" + (S.noise && p.mic !== 1 ? '<b class="moff" title="' + (p.mic === 2 ? T("micro coupé", "mic muted") : T("micro pas activé", "mic not on")) + '">🔇</b>' : "") + e(p.name) + "</span>"; }).join("") + "</div></div>";
+  }).join("") + '</div><div class="rtask glass"><div class="rtt">🎯 ' + e(S.task.title) + ' <span class="chip">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="rrules">🤫 ' + T("Silence total", "Total silence") + (S.noise ? " · ✖ " + S.strikesMax + T(" avertissements = éliminés", " strikes = out") : "") + " · 🧪 " + S.task.tests + T(" tests à la fin", " tests at the end") + "</div></div>";
 }
 async function runAll() {
   tested = true;
@@ -534,7 +559,7 @@ function controls() {
 function render() {
   $("#kind").textContent = S.kind === "royale" ? "Battle Royale" : S.kind === "sql" ? T("Détective SQL", "SQL Detective") : T("Relais de code", "Code Relay");
   pre = S.kind === "royale" && S.phase === "question" && nowMs() < S.qAt;
-  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive])) + "." + (S.banned || []).length;
+  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive, p.mic])) + "." + (S.banned || []).length;
   // sounds and animations on what just happened
   if (S.kind === "royale" && (S.step !== shownStep || S.phase !== shownPhase)) {
     if (S.phase === "question" && !pre) beep(660, .15);
@@ -545,7 +570,7 @@ function render() {
     if (S.phase === "over") { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .25), i * 140)); confetti(); }
     shownStep = S.step; shownPhase = S.phase;
   }
-  if (S.kind === "relay" && S.teams) for (const t of S.teams) { if (t.lastNoise && noiseSeen["n" + t.squad] !== t.lastNoise.at) { const first = noiseSeen["n" + t.squad] === undefined; noiseSeen["n" + t.squad] = t.lastNoise.at; if (!first) { noiseSeen[t.squad] = 1; beep(150, .5, "sawtooth"); toast("🗣️ " + sq(t.squad).name + " : " + t.lastNoise.name + T(" a parlé !", " talked!")); setTimeout(() => { noiseSeen[t.squad] = 0; }, 800); } } }
+  if (S.kind === "relay" && S.teams) for (const t of S.teams) { const at = t.lastNoise ? t.lastNoise.at : 0; if (noiseSeen["n" + t.squad] !== at) { const first = noiseSeen["n" + t.squad] === undefined; noiseSeen["n" + t.squad] = at; if (!first) { noiseSeen[t.squad] = 1; lastKey = ""; setTimeout(() => { noiseSeen[t.squad] = 0; lastKey = ""; render(); }, 2600); } } }
   if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : relayView(); controls(); if (panel || manage) drawPanel(); }
 }
 document.addEventListener("click", (ev) => {
@@ -589,6 +614,121 @@ poll();
 </script></body></html>`;
 
 // =================================================================== a student's screen
+const RELAY_CSS = `/* ---- 🏃 relay */
+#app{transition:none;will-change:transform}
+#vig{position:fixed;inset:0;pointer-events:none;z-index:40;opacity:0;background:radial-gradient(ellipse at center,transparent 45%,rgba(239,68,68,.55) 80%,rgba(127,29,29,.9));box-shadow:inset 0 0 120px rgba(239,68,68,.8)}
+#shh{position:fixed;left:50%;top:50%;z-index:41;pointer-events:none;font-size:46px;font-weight:900;letter-spacing:.06em;color:#fff;text-shadow:0 0 30px #ef4444,3px 0 #ef4444,-3px 0 #06b6d4;opacity:0;transition:opacity .15s;white-space:nowrap}
+#shh.on{opacity:1}
+.small{font-size:13px}
+.hud{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px}
+.hc{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));border:1px solid var(--line);border-radius:16px;padding:9px 14px;display:flex;flex-direction:column;gap:4px;min-height:62px;justify-content:center}
+.hl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--soft);font-weight:800}
+.hc b{font-size:22px;font-variant-numeric:tabular-nums}
+.pips{display:inline-flex;gap:6px}.pips i{width:22px;height:22px;border-radius:7px;border:2px solid rgba(239,68,68,.45);display:grid;place-items:center;font-style:normal;font-size:12px;font-weight:900;color:#fff}
+.pips i.on{background:linear-gradient(135deg,#ef4444,#b91c1c);border-color:#fca5a5;box-shadow:0 0 12px rgba(239,68,68,.7)}
+.pips i.new{animation:pipin .7s cubic-bezier(.2,1.8,.4,1)}
+@keyframes pipin{0%{transform:scale(3) rotate(-30deg);opacity:0}100%{transform:none;opacity:1}}
+.micp{display:inline-flex;align-items:center;gap:8px;border:0;border-radius:999px;padding:5px 12px;font-weight:800;font-size:13px;color:#fff;width:fit-content}
+.micp.ok{background:rgba(34,197,94,.16);border:1px solid rgba(34,197,94,.45)}
+.micp.bad{background:rgba(239,68,68,.25);border:1px solid rgba(239,68,68,.6);animation:pulse 1.2s infinite}
+.vu{display:inline-block;width:70px;height:8px;border-radius:9px;background:rgba(255,255,255,.12);overflow:hidden;vertical-align:middle}
+.vu.big{display:block;width:100%;height:14px;margin:8px 0 4px}
+.vu i{display:block;height:100%;width:3%;border-radius:9px;background:linear-gradient(90deg,#22c55e,#84cc16);transition:width .08s}
+.vu i.hot{background:linear-gradient(90deg,#f59e0b,#ef4444)}
+.mwarn{position:sticky;top:52px;z-index:6;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;padding:10px 14px;margin-bottom:10px;border-radius:14px;background:linear-gradient(90deg,rgba(239,68,68,.35),rgba(245,158,11,.3));border:1px solid rgba(239,68,68,.7);font-weight:800;animation:pulse 1.4s infinite}
+.mwarn .btn{padding:6px 14px}
+.rhero{text-align:center;padding:22px 18px;background:radial-gradient(120% 90% at 50% 0%,rgba(139,92,246,.28),rgba(255,255,255,.03))}
+.rhero h2{font-size:26px;margin:8px 0 14px}
+.lane{position:relative;height:64px;margin:0 auto;max-width:460px;border-bottom:3px dashed rgba(255,255,255,.18);overflow:hidden}
+.runner{position:absolute;bottom:2px;font-size:46px;animation:runx 3.2s linear infinite}
+@keyframes runx{0%{left:-60px}100%{left:100%}}
+.rules{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:16px}
+.rules div{display:flex;gap:8px;align-items:center;padding:8px 14px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid var(--line);font-weight:700;font-size:14px}
+.rules i{font-style:normal}
+.mtest{display:flex;gap:16px;align-items:center;text-align:left;padding:14px 16px;border-radius:18px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.45);max-width:560px;margin:0 auto}
+.mtest.ok{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.45)}
+.mtest p{margin:4px 0 8px}
+.mic-ic{width:64px;height:64px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:30px;background:rgba(255,255,255,.08)}
+.mic-ic.pulse{animation:pulseb 1.4s infinite}
+.tcard .th{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.tcard p{margin:8px 0;line-height:1.55}
+.lang{font-size:12px;font-weight:800;padding:4px 10px;border-radius:999px;background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.5);color:#fde68a}
+.ex{display:flex;flex-wrap:wrap;gap:6px}.ex code{font:600 13px "JetBrains Mono",Consolas,monospace;padding:5px 10px;border-radius:10px;background:#0b1224;border:1px solid var(--line)}.ex code i{color:#a78bfa;font-style:normal}
+.tcard.compact{padding:12px 16px}.tcard.compact p{font-size:14px;margin:6px 0}
+.wait{text-align:center;padding:22px 18px}
+.shh-ic{font-size:64px;animation:bob 2.6s ease-in-out infinite}
+.wwho h2{font-size:30px;margin:2px 0 10px}
+.wnext{font-size:16px;margin:12px 0 6px;color:var(--soft)}.wnext b{font-size:30px;color:#fff;font-variant-numeric:tabular-nums;display:block;margin-top:2px}
+.tbar{height:10px;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden;margin:6px 0 12px}.tbar i{display:block;height:100%;width:0;border-radius:9px;background:linear-gradient(90deg,#22c55e,#06b6d4);transition:width .25s linear}
+.tbar i.mid{background:linear-gradient(90deg,#f59e0b,#f97316)}.tbar i.end{background:linear-gradient(90deg,#ef4444,#f43f5e);animation:pulse .6s infinite}
+.track{position:relative;display:flex;justify-content:space-around;gap:6px;margin:22px 0 4px;padding:0 6px}
+.track .tl{position:absolute;left:10%;right:10%;top:27px;height:4px;border-radius:4px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.22) 0 12px,transparent 12px 22px)}
+.node{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:70px}
+.node .av{position:relative;width:56px;height:56px;border-radius:50%;display:grid;place-items:center;font-weight:900;background:#151c33;border:3px solid rgba(255,255,255,.18)}
+.node.me .av{border-color:#a78bfa}
+.node.w .av{background:linear-gradient(135deg,#8b5cf6,#06b6d4);border-color:#fff;box-shadow:0 0 0 6px rgba(139,92,246,.25),0 0 26px rgba(6,182,212,.6);animation:pop .5s}
+.node .run{position:absolute;top:-18px;right:-12px;font-size:24px;animation:bob 1s ease-in-out infinite}
+.node .mst{position:absolute;bottom:-6px;right:-8px;font-size:14px;background:#7f1d1d;border-radius:50%;width:24px;height:24px;display:grid;place-items:center;border:2px solid #ef4444}
+.node .nm{font-size:13px;font-weight:700;max-width:96px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .ix{font-size:11px;color:var(--soft)}
+.wtop{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:4px}
+.wtop h2{font-size:26px;margin:0;background:linear-gradient(90deg,#c4b5fd,#67e8f9);-webkit-background-clip:text;background-clip:text;color:transparent}
+.wtop p{margin:4px 0 0}
+.tbox{display:flex;flex-direction:column;align-items:flex-end}.tbox b{font-size:40px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1}
+.tbox b.end{color:#f87171;animation:pulse .6s infinite}
+.ide{border-radius:18px;overflow:hidden;border:1px solid rgba(139,92,246,.35);background:#0a0f1f;box-shadow:0 18px 50px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.03);margin-bottom:12px;transition:box-shadow .2s,border-color .2s}
+.ide.loud{border-color:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.5),0 0 40px rgba(239,68,68,.45)}
+.tabs{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 12px 0 0;background:#0f1630;border-bottom:1px solid var(--line);font-size:13px}
+.tab{display:inline-flex;gap:8px;align-items:center;padding:10px 16px;background:#0a0f1f;border-right:1px solid var(--line);font:700 13px "JetBrains Mono",Consolas,monospace;border-top:2px solid #8b5cf6}
+.ld{width:9px;height:9px;border-radius:50%;background:#f59e0b;box-shadow:0 0 8px #f59e0b}
+.ed{position:relative;display:flex;min-height:360px}
+.gut{margin:0;padding:12px 10px 12px 14px;min-width:46px;text-align:right;color:#4b5a82;font:600 15px/1.5 "JetBrains Mono","Fira Code",Consolas,monospace;background:#0a0f1f;border-right:1px solid rgba(255,255,255,.06);overflow:hidden;user-select:none;max-height:520px}
+.ed textarea.js{flex:1;border:0;border-radius:0;background:transparent;min-height:360px;max-height:520px;resize:none;white-space:pre;overflow:auto;outline:none;padding:12px 14px;color:#e2e8f0;caret-color:#a78bfa}
+.ed textarea.js:read-only{opacity:.5}
+.gate{position:absolute;inset:0;display:none;flex-direction:column;gap:6px;align-items:center;justify-content:center;text-align:center;background:rgba(7,11,24,.88);backdrop-filter:blur(3px);z-index:2;padding:20px}
+.gate.on{display:flex}.gate div{font-size:54px;animation:pulseb 1.4s infinite;border-radius:50%}.gate b{font-size:20px}
+.shout{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;padding:14px 20px;border-radius:14px;background:rgba(127,29,29,.92);border:2px solid #ef4444;font-weight:900;font-size:18px;z-index:3;white-space:nowrap}
+.ide.loud .shout{display:block}
+.ifoot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line);background:#0f1630}
+.ide #tout{padding:0 12px 12px}
+.ide pre.fin{border:0;border-radius:0;max-height:420px}
+.bigc{text-align:center;padding:26px 18px}
+.bigc h2{font-size:28px}
+.bigc.won{border-color:rgba(245,158,11,.6);background:radial-gradient(120% 90% at 50% 0%,rgba(245,158,11,.25),rgba(255,255,255,.03))}
+.trophy,.flask{font-size:84px;display:inline-block;animation:bob 2.4s ease-in-out infinite}
+.flask{animation:wob 1.2s ease-in-out infinite}@keyframes wob{25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}
+.score{display:flex;gap:18px;align-items:center;justify-content:center;margin-top:10px;font-weight:700;color:var(--soft)}
+.pring{--p:0;width:96px;height:96px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(#22c55e calc(var(--p)*1%),rgba(255,255,255,.1) 0)}
+.pring span{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;background:#0b1224;color:#fff;font-size:22px;font-weight:900}
+.rank{font-size:34px;color:#fde68a}
+.outc{border-color:rgba(239,68,68,.5);background:radial-gradient(120% 90% at 50% 0%,rgba(239,68,68,.22),rgba(255,255,255,.03));filter:saturate(.7)}
+.outc .pips{margin:8px 0}
+/* the big moments */
+.fx{position:fixed;inset:0;z-index:60;display:grid;place-items:center;align-content:center;gap:8px;text-align:center;padding:20px;transition:opacity .45s}
+.fx.bye{opacity:0}
+.fx p{margin:4px 0 0;font-size:17px;color:#fee2e2;font-weight:700}
+.strk{background:radial-gradient(circle,rgba(239,68,68,.55),rgba(69,10,10,.96) 70%);animation:flashr .5s,shake .45s 2}
+@keyframes flashr{0%{background:#fff}}
+.strk .sx{font-size:150px;line-height:1;font-weight:900;color:#fff;text-shadow:0 0 40px #ef4444;animation:stampp .55s cubic-bezier(.2,1.6,.4,1)}
+.strk .sl{font-size:34px;font-weight:900;letter-spacing:.14em;color:#fecaca;animation:rise .4s .15s both}
+.strk .sc{font-size:62px;font-weight:900;line-height:1;animation:pop .5s .25s both}
+.strk .pips{margin:6px auto}.strk .pips i{width:34px;height:34px;font-size:18px}
+.strk .last{color:#fde68a;animation:pulse .7s infinite}
+.kout{background:#000;animation:koin .3s}
+@keyframes koin{0%{background:#fff}}
+.kout .ko{font-size:120px;animation:stampp .6s cubic-bezier(.2,1.6,.4,1),dsk 1.6s .6s ease-in-out infinite}
+.kout .kt{position:relative;font-size:56px;font-weight:900;letter-spacing:.12em;color:#fff;animation:glitch .35s steps(2) infinite}
+.kout .kt::before,.kout .kt::after{content:attr(data-t);position:absolute;inset:0}
+.kout .kt::before{color:#ef4444;transform:translate(4px,0);mix-blend-mode:screen;clip-path:inset(0 0 55% 0)}
+.kout .kt::after{color:#06b6d4;transform:translate(-4px,0);mix-blend-mode:screen;clip-path:inset(45% 0 0 0)}
+@keyframes glitch{50%{transform:translate(2px,-1px) skewX(-6deg)}}
+.crack{position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 48.6%,rgba(255,255,255,.55) 49.6%,transparent 50.4%),linear-gradient(35deg,transparent 47.8%,rgba(255,255,255,.4) 48.4%,transparent 49%),linear-gradient(160deg,transparent 52%,rgba(255,255,255,.35) 52.5%,transparent 53%);animation:koin .2s}
+.baton{background:radial-gradient(circle,rgba(139,92,246,.75),rgba(7,11,24,.96) 70%)}
+.baton .br{font-size:110px;animation:dash .9s cubic-bezier(.2,.9,.3,1)}
+@keyframes dash{0%{transform:translateX(-70vw) scale(.6)}100%{transform:none}}
+.baton .bt{font-size:58px;font-weight:900;letter-spacing:.06em;background:linear-gradient(90deg,#c4b5fd,#67e8f9);-webkit-background-clip:text;background-clip:text;color:transparent;animation:pop .5s .2s both}
+@media(max-width:600px){.hc b{font-size:18px}.tbox b{font-size:30px}.strk .sx{font-size:110px}.kout .kt{font-size:38px}.baton .bt{font-size:40px}#shh{font-size:30px}}
+`;
 const PLAY = (gm: Game) => `<!doctype html><html lang="${gm.settings.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="robots" content="noindex">
 <title>${esc(gm.title)}</title><style>${CSS}
 html{background:radial-gradient(1100px 650px at 10% 0%,rgba(139,92,246,.22),transparent 60%),radial-gradient(1100px 650px at 100% 100%,rgba(6,182,212,.16),transparent 60%),var(--bg);background-attachment:fixed}
@@ -667,8 +807,10 @@ canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
 .pdead{position:fixed;inset:0;z-index:29;display:grid;place-items:center;align-content:center;gap:8px;text-align:center;background:radial-gradient(circle,rgba(127,29,29,.9),#000 75%);animation:shake .45s 2}
 .pdead .s{font-size:120px;animation:stampp .5s cubic-bezier(.2,1.6,.4,1)}.pdead h1{margin:0;font-size:38px;letter-spacing:.08em;color:#fecaca}
 @keyframes stampp{0%{transform:scale(2.6);opacity:0}100%{transform:scale(1);opacity:1}}
+${gm.kind === "relay" ? RELAY_CSS : ""}
 </style></head><body>
 <header><b>${esc(gm.title)}</b><span class="me" id="me"></span></header>
+${gm.kind === "relay" ? `<div id="vig"></div><div id="shh">🤫 ${gm.settings.lang === "en" ? "SHH!" : "CHUT !"}</div>` : ""}
 <div id="app"><div class="card center muted">…</div></div>
 ${gm.kind === "sql" ? `<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>` : ""}
 <script>
@@ -852,26 +994,112 @@ function resultHtml() {
   return '<p class="muted" style="margin:4px 0">' + lastRows.values.length + T(" ligne(s)", " row(s)") + "</p><table><tr>" + lastRows.columns.map((c) => "<th>" + e(c) + "</th>").join("") + "</tr>" + lastRows.values.slice(0, 100).map((r) => "<tr>" + r.map((v) => "<td>" + e(v) + "</td>").join("") + "</tr>").join("") + "</table>";
 }
 // ---------------------------------------------------------------- 🏃 relay
-let mic = null, level = 0, base = null, hist = [], loud = 0, lastNoise = 0, saving = false, myTurn = -1, edited = false, saveT = 0, testOut = "";
+// the microphone: the voice band only, a noise floor learned from the room, a "voice bucket" that fills while someone talks
+let mic = null, micDenied = false, level = -100, hist = [], bucket = 0, heat = 0, lastNoise = 0, quietUntil = 0, saving = false, myTurn = -1, edited = false, saveT = 0, testOut = "";
+let silentSince = 0, mutedState = false, offSince = 0, seenStrikes = null, seenOut = null, fxBusy = false, histN = 0;
+const SENS = { low: { margin: 15, min: -50, limit: 11 }, medium: { margin: 10, min: -57, limit: 7 }, high: { margin: 6, min: -64, limit: 4 } };
+const EXT = { javascript: "js", python: "py", php: "php" };
 async function micStart() {
-  if (mic || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return;
+  if (mic || window.__micBusy || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return;
+  window.__micBusy = 1;
   try {
     const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    const ac = new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === "suspended") ac.resume().catch(() => {}); const src = ac.createMediaStreamSource(st); const an = ac.createAnalyser(); an.fftSize = 1024; src.connect(an);
-    const buf = new Float32Array(an.fftSize); mic = { ac, an, buf };
+    const ac = new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === "suspended") ac.resume().catch(() => {});
+    const src = ac.createMediaStreamSource(st);
+    const hp = ac.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 250;
+    const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2200;
+    const an = ac.createAnalyser(); an.fftSize = 2048;
+    const raw = ac.createAnalyser(); raw.fftSize = 2048;
+    src.connect(hp); hp.connect(lp); lp.connect(an); src.connect(raw);
+    const track = st.getAudioTracks()[0];
+    mic = { ac, an, raw, buf: new Float32Array(an.fftSize), rbuf: new Float32Array(raw.fftSize), track };
+    micDenied = false;
+    if (track) { track.onmute = () => setMuted(true); track.onunmute = () => { silentSince = 0; setMuted(false); }; track.onended = () => setMuted(true); }
     call("mic", { on: true }).catch(() => {});
-    setInterval(() => {
-      an.getFloatTimeDomainData(buf); let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      level = 20 * Math.log10(Math.sqrt(sum / buf.length) + 1e-9);   // dBFS: -100 silence … 0 very loud
-      hist.push(level); if (hist.length > 100) hist.shift();
-      const sorted = hist.slice().sort((a, b) => a - b); base = sorted[Math.floor(sorted.length * .2)];
-      const margin = { low: 26, medium: 20, high: 14 }[(S && S.sensitivity) || "medium"];
-      const over = level > Math.max(base + margin, -50);
-      loud = over ? loud + 1 : 0;
-      const m = $("#lvl"); if (m) { m.style.width = Math.max(0, Math.min(100, (level + 80) * 1.4)) + "%"; m.style.background = over ? "var(--bad)" : "var(--good)"; }
-      if (loud >= 5 && S && S.phase === "playing" && S.noise && Date.now() - lastNoise > 5000) { lastNoise = Date.now(); loud = 0; call("noise", {}).then(() => poke()).catch(() => {}); }
-    }, 100);
-  } catch (x) { call("mic", { on: false }).catch(() => {}); alert(T("Le micro est refusé : ton professeur le verra sur la TV.", "The microphone is blocked: your teacher will see it on the TV.")); }
+    setInterval(listen, 50);
+  } catch (x) { micDenied = true; call("mic", { on: false }).catch(() => {}); }
+  window.__micBusy = 0;
+  micRefresh();
+}
+// the mic changed: the editor is never redrawn under the writer's fingers, so only the banner and the pill are
+function micRefresh() {
+  if (!S) return;
+  if (!(S && S.writing && $("#code"))) { lastKey = ""; draw(); return; }
+  const w = $(".mwarn"), html = mwarnHtml();
+  if (w) { if (html) w.outerHTML = html; else w.remove(); } else if (html) $("#app").insertAdjacentHTML("afterbegin", html);
+  const mp = $(".hud .micp"); if (mp) mp.outerHTML = micPill();
+  wire();
+}
+document.addEventListener("pointerdown", () => { if (mic && mic.ac.state === "suspended") mic.ac.resume().catch(() => {}); });
+// the browser already allowed the microphone: it starts by itself
+try { if (KIND === "relay" && navigator.permissions) navigator.permissions.query({ name: "microphone" }).then((p) => { if (p.state === "granted") micStart(); }).catch(() => {}); } catch (x) {}
+function setMuted(v) {
+  if (mutedState === v) return;
+  mutedState = v; call("mic", v ? { state: "muted" } : { on: true }).catch(() => {});
+  micRefresh();
+}
+const micOk = () => !!mic && !mutedState;
+function listen() {
+  const m = mic, cfg = SENS[(S && S.sensitivity) || "medium"] || SENS.medium;
+  m.an.getFloatTimeDomainData(m.buf); m.raw.getFloatTimeDomainData(m.rbuf);
+  let sum = 0, peak = 0;
+  for (let i = 0; i < m.buf.length; i++) sum += m.buf[i] * m.buf[i];
+  for (let i = 0; i < m.rbuf.length; i++) { const a = Math.abs(m.rbuf[i]); if (a > peak) peak = a; }
+  level = 20 * Math.log10(Math.sqrt(sum / m.buf.length) + 1e-9);
+  // a muted microphone (the mute key, the system settings, unplugged) sends pure digital silence
+  const dead = peak < 1e-6 || (m.track && (m.track.muted || m.track.readyState === "ended" || !m.track.enabled));
+  if (dead) { if (!silentSince) silentSince = Date.now(); if (Date.now() - silentSince > 2000) setMuted(true); }
+  else { silentSince = 0; if (mutedState) setMuted(false); }
+  // the room's noise: a low percentile of the last 8 s (a voice barely moves it)
+  const sorted = hist.slice().sort((a, b) => a - b);
+  const floor = sorted.length > 10 ? sorted[Math.floor(sorted.length * .3)] : -75;
+  const thr = Math.max(Math.min(floor, -36) + cfg.margin, cfg.min);
+  const over = !dead && level > thr && Date.now() > quietUntil;
+  if (!dead && (!over || ++histN % 12 === 0)) { hist.push(level); if (hist.length > 160) hist.shift(); }
+  bucket = over ? Math.min(cfg.limit * 1.6, bucket + 1 + Math.min(1, (level - thr) / 12)) : Math.max(0, bucket - .7);
+  // the louder and the longer, the more the screen shakes
+  const target = over ? Math.min(1, .3 + (level - thr) / 22 + .45 * bucket / cfg.limit) : Math.min(.45, .45 * bucket / cfg.limit);
+  heat += (target - heat) * (target > heat ? .55 : .14);
+  const v = $("#vu"); if (v) { v.style.width = Math.max(3, Math.min(100, (level + 75) * 1.6)) + "%"; v.className = over ? "hot" : ""; }
+  const lt = $("#ltest"); if (lt) lt.textContent = over ? T("🔴 Je t'entends !", "🔴 I can hear you!") : T("🟢 Silence", "🟢 Quiet");
+  const playing = S && S.phase === "playing" && S.noise && !S.out;
+  if (playing && bucket >= cfg.limit && Date.now() - lastNoise > 4000) { lastNoise = Date.now(); bucket = 0; call("noise", { why: "voice" }).then(poke).catch(() => {}); }
+  const ta = $("#code");
+  if (ta) { const lock = playing && heat > .38; if (ta.readOnly !== lock) { ta.readOnly = lock; ta.closest(".ide").classList.toggle("loud", lock); } }
+}
+// the screen shakes while the mic hears a voice (writing becomes impossible), a red glow grows at the edges
+(function shakeLoop() {
+  const live = S && KIND === "relay" && (S.phase === "playing" || S.phase === "lobby") && !S.out;
+  const h = live ? heat * (S.phase === "lobby" ? .6 : 1) : 0, amp = h * 16;
+  const t = amp > .4 ? "translate(" + ((Math.random() * 2 - 1) * amp).toFixed(1) + "px," + ((Math.random() * 2 - 1) * amp).toFixed(1) + "px) rotate(" + ((Math.random() * 2 - 1) * amp * .09).toFixed(2) + "deg)" : "";
+  const a = $("#app"); if (a && a.style.transform !== t) a.style.transform = t;
+  const vg = $("#vig"); if (vg) vg.style.opacity = Math.min(1, h * 1.3).toFixed(2);
+  const sh = $("#shh"); if (sh) { const on = h > .32; sh.classList.toggle("on", on); if (on) sh.style.transform = "translate(-50%,-50%) scale(" + (1 + h * .5).toFixed(2) + ") rotate(" + ((Math.random() * 2 - 1) * h * 6).toFixed(1) + "deg)"; }
+  requestAnimationFrame(shakeLoop);
+})();
+function pips(n, max, fresh) { let s = ""; for (let i = 0; i < max; i++) s += '<i class="' + (i < n ? "on" : "") + (fresh && i === n - 1 ? " new" : "") + '">' + (i < n ? "✖" : "") + "</i>"; return '<span class="pips">' + s + "</span>"; }
+function fx(cls, html, ms, then) {
+  const d = document.createElement("div"); d.className = "fx " + cls; d.innerHTML = html; document.body.append(d);
+  fxBusy = true; setTimeout(() => { d.classList.add("bye"); setTimeout(() => { d.remove(); fxBusy = false; if (then) then(); }, 450); }, ms);
+}
+function relayEffects() {
+  if (seenStrikes === null || S.phase === "lobby") { seenStrikes = S.strikes; seenOut = S.out; return; }
+  if (S.strikes > seenStrikes) {
+    quietUntil = Date.now() + 2500; bucket = 0;
+    const ln = S.lastNoise || {}, who = ln.name ? (ln.why === "muted" ? T("Le micro de ", "") + e(ln.name) + T(" était coupé", "'s mic was muted") : e(ln.name) + T(" a parlé", " talked")) : "";
+    const out = S.out && !seenOut;
+    fx("strk", '<div class="sx">✖</div><div class="sl">' + T("AVERTISSEMENT", "STRIKE") + '</div><div class="sc">' + S.strikes + " / " + S.strikesMax + "</div>" + pips(S.strikes, S.strikesMax, true) + (who ? '<p>🗣️ ' + who + "</p>" : "") + (!out && S.strikesMax - S.strikes === 1 ? '<p class="last">⚠️ ' + T("Encore un et votre squad est éliminé !", "One more and your squad is out!") + "</p>" : ""), 2300, out ? outFx : null);
+    if (navigator.vibrate) navigator.vibrate([220, 90, 220]);
+  } else if (S.out && !seenOut) outFx();
+  seenStrikes = S.strikes; seenOut = S.out;
+}
+function outFx() {
+  fx("kout", '<div class="crack"></div><div class="ko">🔇</div><div class="kt" data-t="' + T("ÉLIMINÉS", "KNOCKED OUT") + '">' + T("ÉLIMINÉS", "KNOCKED OUT") + "</div><p>" + T("Trop de bruit : votre squad quitte le relais.", "Too much noise: your squad leaves the relay.") + "</p>", 3600);
+  if (navigator.vibrate) navigator.vibrate([400, 120, 400, 120, 700]);
+}
+function turnFx() {
+  fx("baton", '<div class="br">🏃</div><div class="bt">' + T("À TOI !", "YOUR TURN!") + '</div><p>' + T("Le relais est à toi : continue le code, sans un mot.", "You have the baton: carry on the code, not a word.") + "</p>", 1300);
+  if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
 }
 async function save() {
   const ta = $("#code"); if (!ta || saving || myTurn < 0) return;
@@ -886,20 +1114,50 @@ async function tryIt() {
   testOut = r.error ? '<div class="msg no">' + e(r.error) + "</div>" : r.out.map((x, i) => '<div class="msg ' + (x.ok ? "ok" : "no") + '">' + (x.ok ? "✅ " : "❌ ") + e(S.task.shown[i].call) + " → " + e(x.got) + (x.ok ? "" : T(" (attendu ", " (expected ") + e(S.task.shown[i].expect) + ")") + "</div>").join("");
   if (o) o.innerHTML = testOut;
 }
+function gutter() { const ta = $("#code"), g = $("#gut"); if (!ta || !g) return; const n = ta.value.split("\\n").length; if (g.dataset.n !== String(n)) { g.dataset.n = n; let s = ""; for (let i = 1; i <= n; i++) s += i + "\\n"; g.textContent = s; } g.scrollTop = ta.scrollTop; }
+const initials = (n) => String(n || "?").trim().split(/\\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+function micPill() {
+  if (!S.noise) return "";
+  if (micOk()) return '<span class="micp ok">🎤 <span class="vu"><i id="vu"></i></span></span>';
+  return '<button class="micp bad" id="micb">' + (mutedState ? "🔇 " + T("Micro coupé", "Mic muted") : "🎤 " + T("Activer le micro", "Turn on the mic")) + "</button>";
+}
+function hud() {
+  return '<div class="hud"><div class="hc"><span class="hl">⏱ ' + T("Relais", "Relay") + '</span><b id="tot">' + (S.endAt ? mmss(S.endAt - nowMs()) : "") + "</b></div>" +
+    (S.noise ? '<div class="hc"><span class="hl">' + T("Avertissements", "Strikes") + "</span>" + pips(S.strikes, S.strikesMax) + "</div>" : "") +
+    '<div class="hc"><span class="hl">' + T("Manche", "Round") + "</span><b>" + (S.round || 1) + "/" + (S.rounds || 1) + "</b></div>" +
+    (S.noise ? '<div class="hc"><span class="hl">' + T("Micro", "Mic") + "</span>" + micPill() + "</div>" : "") + "</div>";
+}
+function track() {
+  const ms = S.mates || [];
+  return '<div class="track"><div class="tl"></div>' + ms.map((m, i) => '<div class="node' + (m.writer ? " w" : "") + (m.me ? " me" : "") + '"><div class="av">' + e(initials(m.name)) + (m.writer ? '<span class="run">🏃</span>' : "") + (S.noise && m.mic !== 1 ? '<span class="mst" title="' + T("micro coupé", "mic off") + '">🔇</span>' : "") + '</div><span class="nm">' + (m.me ? T("Toi", "You") : e(m.name)) + '</span><span class="ix">' + (i + 1) + "</span></div>").join("") + "</div>";
+}
+function taskCard(compact) {
+  return '<div class="card tcard' + (compact ? " compact" : "") + '"><div class="th"><b>🎯 ' + e(S.task.title) + '</b><span class="lang">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="ex">' + S.task.shown.map((x) => "<code>" + e(x.call) + " <i>→</i> " + e(x.expect) + "</code>").join("") + "</div></div>";
+}
+function mwarnHtml() {
+  return S.noise && S.phase === "playing" && !S.out && !micOk() ? '<div class="mwarn">' + (mutedState ? "🔇 " + T("Ton micro est coupé !", "Your mic is muted!") : micDenied ? "🚫 " + T("Le micro est refusé par le navigateur", "The browser blocked the mic") : "🎤 " + T("Ton micro n'est pas activé", "Your mic isn't on")) + ' <span id="mwc"></span>' + (mutedState || micDenied ? "" : ' <button class="btn" id="micb">🎤 ' + T("Activer", "Turn on") + "</button>") + "</div>" : "";
+}
 function relayView() {
-  const meter = mic ? '<div style="display:flex;gap:10px;align-items:center;margin-top:8px"><span>🎤</span><div class="meter" style="flex:1"><i id="lvl"></i></div></div>' : S.noise ? '<p><button class="btn primary" id="micb">🎤 ' + T("Activer mon micro", "Turn on my mic") + "</button></p>" : "";
-  const task = '<div class="card"><b>🏃 ' + e(S.task.title) + '</b> <span class="chip" style="font-size:12px">' + e(S.langName || "JavaScript") + '</span><p>' + e(S.task.text) + '</p><p class="muted" style="font-size:14px">' + T("Exemples : ", "Examples: ") + S.task.shown.map((x) => "<code>" + e(x.call + " → " + x.expect) + "</code>").join(" · ") + "</p></div>";
-  if (S.phase === "lobby") return '<div class="card center"><div class="big">🏃</div><h2>' + T("Tu es inscrit !", "You're in!") + '</h2><p class="muted">' + T("Les squads et l'ordre de passage sont tirés au départ. Interdit de parler pendant le relais : ton micro écoute.", "The squads and the order are drawn at the start. No talking during the relay: your mic is listening.") + "</p>" + meter + "</div>" + task;
-  if (S.phase === "testing") return '<div class="card center"><div class="big">🧪</div><h2>' + T("Les tests tournent sur la TV…", "The tests are running on the TV…") + "</h2></div>";
-  if (S.phase === "over") return '<div class="card center"><div class="big">' + (S.winSquad === S.me.squad ? "🏆" : "🏁") + "</div><h2>" + (S.winSquad === S.me.squad ? T("Votre squad gagne !", "Your squad wins!") : T("Fin du relais", "Relay over")) + "</h2>" + (S.result ? "<p>" + S.result.passed + "/" + S.result.total + T(" tests réussis", " tests passed") + (S.rank ? " · " + T("rang ", "rank ") + S.rank : "") + "</p>" : "") + '</div><div class="card"><b>' + T("Votre code final", "Your final code") + '</b><pre class="code" style="margin-top:8px">' + e(S.code || "") + "</pre></div>";
-  if (S.out) return '<div class="card center"><div class="big">🔇</div><h2>' + T("Votre squad est éliminé", "Your squad is out") + '</h2><p class="muted">' + T("Trop de bruit pendant le relais.", "Too much noise during the relay.") + "</p></div>";
-  const strikes = S.noise ? '<p class="center' + (S.strikes ? "" : " muted") + '">🗣️ ' + S.strikes + "/" + S.strikesMax + T(" avertissement" + (S.strikes > 1 ? "s" : "") + " pour votre squad", " strike" + (S.strikes > 1 ? "s" : "") + " for your squad") + "</p>" : "";
-  const order = '<div class="mates">' + S.order.map((n) => '<span class="chip"' + (n === S.writerName ? ' style="background:var(--acc)"' : "") + ">" + e(n) + "</span>").join("") + "</div>";
-  if (S.writing) {
-    return '<div class="card" style="border-color:var(--good)"><div style="display:flex;justify-content:space-between;align-items:center"><h2>✍️ ' + T("C'est à toi !", "Your turn!") + '</h2><span class="timer" id="tm"></span></div><p class="muted" style="margin:0">' + T("Lis le code de ton équipe, continue-le. Pas un mot !", "Read your team's code, carry on. Not a word!") + "</p></div>" + task +
-      '<div class="card"><textarea class="js" id="code" spellcheck="false"></textarea><div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="btn" id="try">▶ ' + T("Tester les exemples", "Try the examples") + '</button><span class="muted" id="saved"></span></div><div id="tout">' + testOut + "</div>" + meter + "</div>" + strikes;
+  const mwarn = mwarnHtml();
+  if (S.phase === "lobby") {
+    const m = !S.noise ? "" : micOk() ? '<div class="mtest ok"><div class="mic-ic">🎤</div><div style="flex:1"><b>' + T("Micro prêt", "Mic ready") + ' ✓</b><div class="vu big"><i id="vu"></i></div><span class="muted" id="ltest"></span><p class="muted small">' + T("Essaie : parle un peu et regarde l'écran trembler. Pendant le relais, chaque voix entendue = un avertissement pour ton squad.", "Try it: say something and watch the screen shake. During the relay, every voice heard = a strike for your squad.") + "</p></div></div>"
+      : '<div class="mtest"><div class="mic-ic pulse">🎤</div><div style="flex:1"><b>' + (mutedState ? T("Ton micro est coupé", "Your mic is muted") : micDenied ? T("Micro refusé", "Mic blocked") : T("Active ton micro", "Turn on your mic")) + '</b><p class="muted small">' + (micDenied ? T("Autorise le micro (🔒 à gauche de l'adresse) puis recharge la page. Sans micro, tu ne peux pas écrire.", "Allow the mic (🔒 left of the address) then reload. Without a mic, you can't write.") : mutedState ? T("Réactive-le (touche micro du clavier ou réglages) : un micro coupé pendant le relais = un avertissement.", "Unmute it (the mic key or the settings): a muted mic during the relay = a strike.") : T("Obligatoire : sans micro, tu ne pourras pas écrire ton tour.", "Required: without the mic, you won't be able to write your turn.")) + "</p>" + (mutedState || micDenied ? "" : '<button class="btn primary" id="micb">🎤 ' + T("Activer mon micro", "Turn on my mic") + "</button>") + "</div></div>";
+    return '<div class="card rhero"><div class="lane"><span class="runner">🏃</span></div><h2>' + T("Tu es dans le relais !", "You're in the relay!") + '</h2><div class="rules"><div><i>🤫</i>' + T("Interdit de parler", "No talking") + "</div><div><i>✍️</i>" + T("Chacun écrit à son tour", "Each one writes in turn") + "</div><div><i>✖</i>" + (S.strikesMax || 3) + T(" avertissements = éliminés", " strikes = out") + "</div></div>" + m + "</div>" + taskCard();
   }
-  return '<div class="card center"><div class="big">🤫</div><h2>' + e(S.writerName || "…") + T(" écrit…", " is writing…") + '</h2><p class="muted">' + (S.nextAt ? T("Ton tour dans ", "Your turn in ") + '<b id="nx"></b>' : T("Tu as fini tes tours.", "Your turns are done.")) + "</p>" + order + meter + "</div>" + strikes + task;
+  if (S.phase === "testing") return '<div class="card bigc"><div class="flask">🧪</div><h2>' + T("Les tests tournent sur la TV…", "The tests are running on the TV…") + '</h2><p class="muted">' + T("Regarde l'écran : on saura bientôt qui gagne.", "Watch the screen: the winner is coming.") + "</p></div>";
+  if (S.phase === "over") {
+    const win = S.winSquad === S.me.squad, r = S.result, pct = r && r.total ? Math.round(100 * r.passed / r.total) : 0;
+    if (win && !window.__conf) { window.__conf = 1; setTimeout(confetti, 300); }
+    return '<div class="card bigc ' + (win ? "won" : "") + '"><div class="trophy">' + (win ? "🏆" : S.out ? "🔇" : "🏁") + "</div><h2>" + (win ? T("Votre squad gagne !", "Your squad wins!") : T("Fin du relais", "Relay over")) + "</h2>" +
+      (r ? '<div class="score"><div class="pring" style="--p:' + pct + '"><span>' + r.passed + "/" + r.total + "</span></div><div>" + T("tests réussis", "tests passed") + (S.rank ? '<br><b class="rank">#' + S.rank + "</b>" : "") + "</div></div>" : "") + "</div>" +
+      '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(S.task.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted">' + T("votre code final", "your final code") + '</span></div><pre class="code fin">' + e(S.code || "") + "</pre></div>";
+  }
+  if (S.out) return '<div class="card bigc outc"><div class="trophy">🔇</div><h2>' + T("Votre squad est éliminé", "Your squad is out") + "</h2>" + pips(S.strikes, S.strikesMax) + '<p class="muted">' + T("Trop de bruit pendant le relais. Restez silencieux : les autres squads continuent.", "Too much noise during the relay. Stay quiet: the other squads carry on.") + "</p></div>";
+  if (S.writing) {
+    return mwarn + hud() + '<div class="wtop"><div><h2>✍️ ' + T("C'est à toi !", "Your turn!") + '</h2><p class="muted">' + T("Lis le code de ton équipe et continue-le. Pas un mot !", "Read your team's code and carry on. Not a word!") + '</p></div><div class="tbox"><span class="hl">' + T("ton tour", "your turn") + '</span><b id="tm"></b></div></div><div class="tbar"><i id="wbar"></i></div>' + taskCard(true) +
+      '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(S.task.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted" id="saved"></span></div><div class="ed"><pre class="gut" id="gut">1</pre><textarea class="js" id="code" spellcheck="false" wrap="off" autocomplete="off"></textarea><div class="gate" id="gate"><div>🎤</div><b>' + T("Active ton micro pour écrire", "Turn your mic on to write") + '</b><span class="muted">' + T("Le relais se joue en silence, micro ouvert.", "The relay is played in silence, mic on.") + '</span></div><div class="shout">🤫 ' + T("CHUT ! Tu ne peux pas écrire en parlant", "SHH! You can't write while talking") + '</div></div><div class="ifoot"><button class="btn" id="try">▶ ' + T("Tester les exemples", "Try the examples") + '</button><span class="muted small">Tab = ' + T("indentation", "indent") + '</span></div><div id="tout">' + testOut + "</div></div>";
+  }
+  return mwarn + hud() + '<div class="card wait"><div class="shh-ic">🤫</div><div class="wwho"><span class="muted">' + T("Au clavier", "At the keyboard") + "</span><h2>" + e(S.writerName || "…") + "</h2></div>" + '<div class="tbar"><i id="wbar"></i></div><div class="wnext">' + (S.nextAt ? T("Ton tour dans", "Your turn in") + ' <b id="nx"></b>' : "✅ " + T("Tes tours sont finis : reste silencieux jusqu'au bout !", "Your turns are done: stay silent to the end!")) + "</div>" + track() + "</div>" + taskCard();
 }
 // ---------------------------------------------------------------- frame
 function draw() {
@@ -914,11 +1172,13 @@ function render() {
   if (KIND === "relay" && S.writing && S.turn !== myTurn) {
     // my turn: the code as my squad left it (two turns in a row: I keep what I was typing)
     const mine = myTurn !== -1 && $("#code") ? $("#code").value : null;
-    myTurn = S.turn; testOut = ""; lastKey = ""; draw(); const ta = $("#code"); if (ta) { ta.value = mine != null ? mine : S.code || S.starter || ""; ta.focus(); } return;
+    const fresh = myTurn === -1;
+    myTurn = S.turn; testOut = ""; lastKey = ""; seenStrikes = S.strikes; seenOut = S.out; draw(); const ta = $("#code"); if (ta) { ta.value = mine != null ? mine : S.code || S.starter || ""; gutter(); ta.focus(); } if (fresh) turnFx(); return;
   }
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
   if (KIND === "royale") royaleEffects();
-  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "");
+  if (KIND === "relay") { relayEffects(); const hp = document.querySelector(".hud .pips"); if (hp && S.noise) hp.outerHTML = pips(S.strikes, S.strikesMax); }
+  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "");
   if (key === lastKey) return;
   lastKey = key;
   if (KIND === "relay" && S.writing && $("#code")) return;   // never redraw the editor under the writer's fingers
@@ -933,12 +1193,13 @@ function wire() {
   document.querySelectorAll("[data-ins]").forEach((c) => c.onclick = () => { const t = $("#sql"); if (t) { const p = t.selectionStart; t.value = t.value.slice(0, p) + c.dataset.ins + t.value.slice(t.selectionEnd); t.focus(); } });
   if ($("#hint")) $("#hint").onclick = hint;
   if ($("#accb")) $("#accb").onclick = accuse;
-  if ($("#micb")) $("#micb").onclick = () => micStart().then(() => { lastKey = ""; draw(); });
+  document.querySelectorAll("#micb").forEach((b) => b.onclick = () => micStart());
   if ($("#try")) $("#try").onclick = tryIt;
   const ta = $("#code");
   if (ta) {
-    ta.oninput = () => { edited = true; };
-    ta.onkeydown = (ev) => { if (ev.key === "Tab") { ev.preventDefault(); const sp = S.codeLang === "python" || S.codeLang === "php" ? "    " : "  "; const p = ta.selectionStart; ta.value = ta.value.slice(0, p) + sp + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = p + sp.length; edited = true; } };
+    ta.oninput = () => { edited = true; gutter(); };
+    ta.onscroll = gutter;
+    ta.onkeydown = (ev) => { if (ev.key === "Tab") { ev.preventDefault(); const sp = S.codeLang === "python" || S.codeLang === "php" ? "    " : "  "; const p = ta.selectionStart; ta.value = ta.value.slice(0, p) + sp + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = p + sp.length; edited = true; gutter(); } };
   }
 }
 setInterval(() => {
@@ -958,8 +1219,21 @@ setInterval(() => {
     }
   }
   if (KIND === "relay" && S.phase === "playing") {
-    const t = $("#tm"); if (t && S.turnEnd) t.textContent = mmss(S.turnEnd - nowMs());
+    const left = S.turnEnd - nowMs(), frac = S.turnEnd && S.turnStart ? Math.max(0, Math.min(1, (nowMs() - S.turnStart) / (S.turnEnd - S.turnStart))) : 0;
+    const t = $("#tm"); if (t && S.turnEnd) { t.textContent = mmss(left); t.classList.toggle("end", left < 10000); }
+    const wb = $("#wbar"); if (wb) { wb.style.width = (100 * frac).toFixed(1) + "%"; wb.className = left < 10000 ? "end" : frac > .6 ? "mid" : ""; }
+    const tot = $("#tot"); if (tot && S.endAt) tot.textContent = mmss(S.endAt - nowMs());
     const nx = $("#nx"); if (nx && S.nextAt) nx.textContent = mmss(S.nextAt - nowMs());
+    // a microphone that is off or muted: the editor is locked, and after 20 s the squad gets a strike
+    if (S.noise && !S.out) {
+      if (!micOk()) {
+        if (!offSince) offSince = Date.now();
+        const lft = 20000 - (Date.now() - offSince);
+        document.querySelectorAll("#mwc").forEach((c) => c.textContent = lft > 0 ? T("· avertissement dans ", "· strike in ") + Math.ceil(lft / 1000) + " s" : "");
+        if (lft <= 0 && Date.now() - lastNoise > 15000) { lastNoise = Date.now(); offSince = Date.now(); call("noise", { why: "muted" }).then(poke).catch(() => {}); }
+      } else offSince = 0;
+      const g = $("#gate"), ta = $("#code"); if (g) { const on = !micOk(); g.classList.toggle("on", on); if (ta && ta.disabled !== on) ta.disabled = on; }
+    }
     // the writer: save every 3 s, and right before the turn ends (the next one gets the code)
     if (S.writing && $("#code")) { if ((edited && Date.now() - saveT > 3000) || (S.turnEnd - nowMs() < 900 && !window.__last)) { saveT = Date.now(); if (S.turnEnd - nowMs() < 900) window.__last = 1; save(); } }
     if (!S.writing) window.__last = 0;
