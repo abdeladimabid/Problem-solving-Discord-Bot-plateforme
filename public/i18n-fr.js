@@ -1117,6 +1117,7 @@ window.CB_FR = {
 "New SQL Detective": "Nouveau SQL Detective",
 "New assessment": "Nouvelle évaluation",
 "New assessment with AI": "Nouvelle évaluation avec l’IA",
+"(%, always 100 in total)": "(%, toujours 100 au total)",
 "New battle": "Nouvelle bataille",
 "New boss battle": "Nouveau combat de boss",
 "New bounty": "Nouvelle prime",

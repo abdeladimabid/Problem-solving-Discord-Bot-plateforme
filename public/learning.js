@@ -1495,7 +1495,7 @@ async function generateQuestionsDialog(onDone, preset = null) {
 
       <div><label for="gq-lang">Language</label><select id="gq-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
     </div>
-    <label>Mix <span class="muted">(%)</span></label>
+    <label>Mix <span class="muted">(%, always 100 in total)</span></label>
     <div class="field-row"><div><label class="small">Write code</label><input type="number" id="gq-mc" value="50" min="0" max="100"></div>
       <div><label class="small">Explain</label><input type="number" id="gq-me" value="20" min="0" max="100"></div>
       <div><label class="small">Multiple choice</label><input type="number" id="gq-mm" value="30" min="0" max="100"></div></div>
@@ -1514,6 +1514,28 @@ async function generateQuestionsDialog(onDone, preset = null) {
     } }]);
   dlg.classList.add("wide");
   wireTags(dlg);
+  // from a brief: the level it asks (the highest level of its technical competencies); the teacher can still change it
+  const briefLevel = (id) => {
+    const b = br.items.find((x) => String(x.id) === String(id));
+    const lv = String(b?.competencies || "").split(/[,\s]+/).map((c) => c.toUpperCase().match(/^(CT|C|T)(\d+)N(\d)$/)).filter(Boolean);
+    const pick = (lv.some((m) => m[1] === "C") ? lv.filter((m) => m[1] === "C") : lv).map((m) => Number(m[3]));
+    return pick.length ? Math.max(1, Math.min(3, Math.max(...pick))) : null;
+  };
+  const setLevel = () => { const l = briefLevel($("#gq-b", dlg).value); if (l) $("#gq-l", dlg).value = String(l); };
+  $("#gq-b", dlg).addEventListener("change", setLevel);
+  setLevel();
+  // the mix always adds up to 100: a value changed (at most 100) leaves the rest to the other two, in their proportion
+  const mix = ["#gq-mc", "#gq-me", "#gq-mm"].map((sel) => $(sel, dlg));
+  mix.forEach((inp, i) => inp.addEventListener("input", () => {
+    if (inp.value === "") return;
+    const v = Math.max(0, Math.min(100, Math.round(Number(inp.value) || 0)));
+    if (String(v) !== inp.value) inp.value = String(v);
+    const others = mix.filter((_, k) => k !== i), cur = others.map((o) => Math.max(0, Number(o.value) || 0));
+    const rest = 100 - v, sum = cur[0] + cur[1];
+    const first = sum ? Math.round((rest * cur[0]) / sum) : Math.round(rest / 2);
+    others[0].value = String(first);
+    others[1].value = String(rest - first);
+  }));
 }
 
 let AS = null;
