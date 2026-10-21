@@ -382,6 +382,7 @@ export const ai = {
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
+  maxTokens: [] as number[],   // the answer length each call allowed
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -456,6 +457,7 @@ function fakeAI() {
   return {
     async run(_model: string, input: any) {
       ai.calls++;
+      ai.maxTokens.push(Number(input.max_tokens) || 0);
       const sys: string = input.messages[0].content;
       const user: string = input.messages[1]?.content ?? "";
       ai.prompts.push(sys);

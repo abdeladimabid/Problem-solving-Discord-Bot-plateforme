@@ -729,7 +729,9 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
     o.comps?.length ? `Compétences à évaluer : ${o.comps.join(", ")}` : "", o.skills?.length ? `Notions à vérifier en priorité : ${o.skills.join(", ")}` : "",
     `Écris EXACTEMENT ${n} questions : ${want.code} "code", ${want.explain} "explain", ${want.mcq} "mcq", sur ${techs.join(", ")}.`,
   ].filter(Boolean).join("\n");
-  const ask = await askReview(env, system, user, 4);
+  // room for every question asked (statement, code, expected answer, choices…: about 600 tokens each): with the
+  // default 2 500 the answer was cut in the middle from about 4 questions, and none could be read
+  const ask = await askReview(env, system, user, 4, { maxTokens: Math.min(8000, Math.max(2500, 800 + n * 600)) });
   if (!ask.ok) throw new AssessError(ask.msg);
   const allowed = new Set(techs.map(langOfTech));
   const first = langOfTech(techs[0] ?? o.codeLang);

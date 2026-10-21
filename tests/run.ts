@@ -3285,6 +3285,9 @@ section("programme from an Excel workbook (ClassBot template or YouCode planning
 
 section("assessments: several competencies per question, why each grade, invitations taken back");
 {
+  ai.maxTokens.length = 0;
+  await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 10, techs: ["HTML", "CSS"] });
+  check(ai.maxTokens.at(-1)! >= 6800, `10 questions: the AI's answer has room for all of them, not cut at 2 500 tokens (${ai.maxTokens.at(-1)})`);
   const two = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"] });
   const tq = two.data.questions;
   check(two.status === 200 && !tq.some((q: any) => /tailwind/i.test(q.prompt)) && tq.length === 4, "questions on several technologies at once, nothing outside them (no Tailwind in an HTML/CSS test)");
