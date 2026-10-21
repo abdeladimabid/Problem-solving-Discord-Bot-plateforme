@@ -958,7 +958,7 @@ function assessPanelHtml(assess) {
       const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
       const lv = x.score != null ? SC_LVL(x.score) : "";
       const who = String(DB?.who || "").startsWith("u:") ? DB.who.slice(2) : "";
-      return `<div class="db-row"><span class="db-i">📝</span><div><a href="#/assessment/${x.id}${who ? `~${who}` : ""}" title="${who ? "Open their paper: answers, grades and comments" : "Open the assessment"}"><b>${esc(x.title)}</b></a>
+      return `<div class="db-row"><span class="db-i">📝</span><div><a href="#/assessment/${x.id}${who ? `~${who}` : ""}"${who ? ` data-paper="${x.id}~${who}"` : ""} title="${who ? "Open their paper: answers, grades and comments" : "Open the assessment"}"><b>${esc(x.title)}</b></a>
         ${x.score != null ? ` <b style="color:${masteryInk(x.score)}">${x.score}%</b> <span class="lvl"><i class="pg-dot pgc-${lv}"></i>${SC_LVL_NAME[lv]}</span>${x.of > 1 ? ` <span class="small muted">${x.done}/${x.of} graded</span>` : ""}`
           : ` <span class="lvl warn">${x.of ? "Not graded yet" : "Not taken"}</span>`}
         ${ok.length || ko.length ? `<div style="margin-top:6px">${ok.map(([k]) => `<span class="lvl good">✓ ${esc(k)}</span>`).join(" ")} ${ko.map(([k, v]) => `<span class="lvl bad" title="${esc(v.note || "")}">✗ ${esc(k)}</span>`).join(" ")}</div>` : ""}
@@ -1551,6 +1551,8 @@ async function viewAssessment(arg, keepTab = null) {
   else if (who) toast(paper ? `${paper.name || "This student"} hasn't handed it in yet` : "This student wasn't invited to this assessment", true);
 }
 function renderAssessment() {
+  // a paper opened from a debrief: the page under it stays the debrief (it's refreshed when the paper closes)
+  if (AS.inline) { AS.changed = true; return; }
   const { A } = AS, a = A.assessment;
   const locked = A.takers.filter((t) => t.status === "locked" && !t.resume_ok).length;
   view.innerHTML = `
@@ -1913,6 +1915,29 @@ async function gradeOne(t, reopen = true) {
   renderAssessment();
   if (reopen && nt) paperDialog(nt);
 }
+/** From a debrief: the student's paper opens over the debrief (no trip to Assessments); a grade changed there
+ *  refreshes the debrief (score, level) when the paper closes. */
+async function paperInline(id, who) {
+  const A = await api(`/assessments/${id}`);
+  const paper = A.takers.find((t) => String(t.discord_id) === String(who));
+  if (!paper || !["submitted", "graded"].includes(paper.status)) return toast(paper ? `${paper.name || "This student"} hasn't handed it in yet` : "This student wasn't invited to this assessment", true);
+  AS = { briefs: [], A, tab: "results", dirty: false, inline: location.hash, changed: false };
+  paperDialog(paper);
+  const watch = () => setTimeout(() => {
+    if (dlg.open) { dlg.addEventListener("close", watch, { once: true }); return; }   // another dialog of the paper (a grade)
+    const back = AS && AS.inline === location.hash && AS.changed;
+    AS = null;
+    if (back) route();
+  }, 60);
+  dlg.addEventListener("close", watch, { once: true });
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest("[data-paper]");
+  if (!a || !location.hash.startsWith("#/debrief") || e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+  e.preventDefault();
+  const [id, who] = a.dataset.paper.split("~");
+  paperInline(id, who).catch((x) => toast(x.message, true));
+});
 function paperDialog(t) {
   const qs = AS.A.assessment.questions;
   const stops = t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length, pastes = t.events.filter((e) => e[1] === "paste").length;
