@@ -383,7 +383,7 @@ export const ai = {
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -621,6 +621,9 @@ function fakeAI() {
         return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
+          { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },
+          { type: "explain", prompt: "Explique le rôle de la balise main.", expected: "le contenu principal", points: 2, comps: ["C9N1"] }] }) };
         if (ai.gen === "array") return { response: JSON.stringify([
           { type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "dehors / dedans", points: 2 },
           { type: "mcq", prompt: "Quelle unité dépend de la taille de police racine ?", choices: ["px", "rem", "%", "vw"], answer: [1], points: 1 }]) };

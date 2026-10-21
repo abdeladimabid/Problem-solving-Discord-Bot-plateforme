@@ -707,7 +707,7 @@ export function starterGivesAnswer(starter: string, expected: string) {
   return both / b.size >= 0.6;
 }
 
-export async function generateQuestions(env: Env, o: { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[] }) {
+export async function generateQuestions(env: Env, o: { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[]; referential?: { code: string; name: string }[]; scope?: string[] }) {
   const techs = (o.techs?.length ? o.techs : [o.codeLang]).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
   const n = Math.max(1, Math.min(30, Math.round(o.count) || 10));
   // more than 10: in batches of 10 asked together (one long answer gets cut), put together without the same question twice;
@@ -727,6 +727,13 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
   const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);
   const k = { code: Math.round((n * o.mix.code) / total), explain: Math.round((n * o.mix.explain) / total) };
   const want = { ...k, mcq: Math.max(0, n - k.code - k.explain) };
+  // the competencies a question may check: the brief's when one is chosen (with its level), else the whole referential
+  const names = new Map((o.referential ?? []).map((c) => [String(c.code).toUpperCase().replace(/^CT/, "T"), c.name]));
+  const scope = (o.scope ?? []).map((c) => parseComp(c)).filter((c): c is { code: string; level: number | null } => !!c);
+  const compList = (scope.length ? scope.map((c) => ({ code: c.code, level: c.level })) : [...names.keys()].map((code) => ({ code, level: null })))
+    .map((c) => `- ${c.code.startsWith("T") ? "C" + c.code : c.code}${c.level ? "N" + c.level : ""} : ${names.get(c.code) ?? ""}`.replace(/ : $/, ""));
+  const allowedComps = new Set(scope.length ? scope.map((c) => c.code) : [...names.keys()]);
+  const scopeLevel = new Map(scope.map((c) => [c.code, c.level]));
   const system = [
     o.lang === "fr" ? "Tu écris des questions d’évaluation pour des apprenants développeurs web (formation intensive). En français." : "You write assessment questions for web development students. In English.",
     "Types : \"code\" (écrire un petit morceau de code, 5 à 15 lignes, qui se corrige en lisant), \"explain\" (expliquer un concept ou un choix en quelques phrases), \"mcq\" (QCM, 4 choix, une ou plusieurs bonnes réponses, distracteurs plausibles).",
@@ -736,6 +743,7 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
     `TECHNOLOGIES ÉVALUÉES, ET RIEN D’AUTRE : ${techs.join(", ")}. Chaque question, chaque code, chaque choix de QCM n’utilise que ces technologies : aucun autre langage, aucun framework ou bibliothèque qui n’est pas dans cette liste (pas de Tailwind, Bootstrap, jQuery, React… s’ils n’y sont pas). Répartis les questions entre ces technologies${techs.length > 1 ? ", et fais-en quelques-unes qui les combinent (ex. HTML + CSS ensemble, PHP + SQL)" : ""}.`,
     `"lang" d’une question "code" : le langage dans lequel l’apprenant écrit, parmi : ${[...new Set(techs.map(langOfTech))].join(", ")}.`,
     `Chaque question a "skills" (0 à 2 parmi : ${SKILL_KEYS.join(", ")}) et "comps" : la ou les compétences qu’elle évalue, avec leur niveau (ex. ["C3N1"] ou ["C4N1", "CT4N1"]).`,
+    compList.length ? `"comps" : UNIQUEMENT parmi ces compétences, choisies d’après ce que la question fait FAIRE à l’apprenant (le sens de la compétence, jamais l’ordre de la liste) :\n${compList.join("\n")}` : "",
     'Réponds UNIQUEMENT avec ce JSON : {"questions":[{"type":"code|explain|mcq","prompt":"…","code":"code à lire (facultatif)","lang":"javascript","starter":"code de départ (facultatif)","choices":["…"],"answer":[0],"expected":"…","points":2,"skills":["dom"],"comps":["C4N1"]}]}',
   ].join("\n");
   const user = [
@@ -767,6 +775,12 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
       comps: (Array.isArray(q?.comps) && q.comps.length) || q?.comp ? q.comps : (o.comps ?? []).map((c) => String(c).trim().split(/[\s(]/)[0]), skills: Array.isArray(q?.skills) && q.skills.length ? q.skills : o.skills ?? [] }, i);
     // a starter that already holds the answer is removed
     if (c?.starter && starterGivesAnswer(c.starter, c.expected ?? "")) c.starter = "";
+    // only the competencies of the list (an invented code is dropped), at the brief's level when it gives one
+    if (c && allowedComps.size && c.comps?.length) {
+      const kept = c.comps.filter((x) => allowedComps.has(x.code)).map((x) => ({ code: x.code, level: scopeLevel.get(x.code) ?? x.level }));
+      if (kept.length) { c.comps = kept; c.comp = kept[0].code; c.level = kept[0].level; }
+      else { delete c.comps; delete c.comp; delete c.level; }
+    }
     return c;
   }).filter((q: Question | null) => {
     if (!q) { incomplete++; return false; }

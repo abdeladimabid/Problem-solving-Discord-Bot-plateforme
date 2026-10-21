@@ -558,7 +558,8 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const g = await guild();
     const p = await programOf(env, g);
     let context = String(body.context || "");
-    if (body.brief_id) { const b = await getBrief(env, g, Number(body.brief_id)); if (b) context = simplonText(b.data, p).slice(0, 3000); }
+    let scope: string[] = [];
+    if (body.brief_id) { const b = await getBrief(env, g, Number(body.brief_id)); if (b) { context = simplonText(b.data, p).slice(0, 3000); scope = (b.data.competencies ?? []).map(String); } }
     // questions on what a student still has to consolidate (their weak skills, competencies not validated)
     let comps: string[] = Array.isArray(body.comps) ? body.comps.map(String) : [];
     let skills: string[] = Array.isArray(body.skills) ? body.skills.map(String) : [];
@@ -571,7 +572,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     }
     const mix = { code: Number(body.mix?.code ?? 50), explain: Number(body.mix?.explain ?? 20), mcq: Number(body.mix?.mcq ?? 30) };
     const qs = await generateQuestions(env, { topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
-      codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context });
+      codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope });
     return ok({ questions: qs });
   }
   if (path === "/assessments/import" && method === "POST") {

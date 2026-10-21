@@ -3298,6 +3298,16 @@ section("assessments: several competencies per question, why each grade, invitat
   ai.gen = "allOutside";
   const none = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 3, techs: ["HTML", "CSS"] });
   check(none.status === 400 && /wrote 3 question\(s\), none usable: 1 incomplete · 2 using a technology not selected \(Tailwind CSS\): add it to the technologies/.test(none.data.error), `nothing usable: the message says why (${none.data.error})`);
+  // competencies: the AI gets the class's list with their names; an invented code is dropped; from a brief, only its own, at its level
+  ai.gen = "comps";
+  const cp = await api("POST", "/api/assessments/generate", { g: G, topic: "HTML", count: 2, techs: ["HTML", "CSS"] });
+  check(/C3 : Réaliser des interfaces utilisateur statiques/.test(ai.prompts.at(-1)!) && /jamais l’ordre de la liste/.test(ai.prompts.at(-1)!), "the AI chooses competencies from the class's list, by their meaning");
+  check(cp.status === 200 && cp.data.questions[0].comps.map((c: any) => c.code).join() === "C1,C3" && !cp.data.questions[1].comps, `a code outside the list (C9) is dropped (${JSON.stringify(cp.data.questions?.map((q: any) => q.comps))})`);
+  const sb = await api("POST", "/api/briefs", { g: G, data: { title: "Brief compétences", context: "Une page.", competencies: ["C3N2"] } });
+  const cb = await api("POST", "/api/assessments/generate", { g: G, topic: "HTML", count: 2, techs: ["HTML", "CSS"], brief_id: sb.data.brief.id });
+  check(/- C3N2 : Réaliser/.test(ai.prompts.at(-1)!) && !/- C1 /.test(ai.prompts.at(-1)!), "from a brief: only its competencies are offered");
+  check(cb.status === 200 && JSON.stringify(cb.data.questions[0].comps) === JSON.stringify([{ code: "C3", level: 2 }]), `…and only those are kept, at the brief's level (${JSON.stringify(cb.data.questions?.[0]?.comps)})`);
+  run1("DELETE FROM briefs WHERE id = ?", sb.data.brief.id);
   ai.gen = "array";
   const calls0 = ai.calls;
   const twenty = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 20, techs: ["HTML", "CSS"] });
