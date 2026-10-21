@@ -382,6 +382,8 @@ export const ai = {
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
+  maxTokens: [] as number[],   // the answer length each call allowed
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -456,6 +458,7 @@ function fakeAI() {
   return {
     async run(_model: string, input: any) {
       ai.calls++;
+      ai.maxTokens.push(Number(input.max_tokens) || 0);
       const sys: string = input.messages[0].content;
       const user: string = input.messages[1]?.content ?? "";
       ai.prompts.push(sys);
@@ -618,6 +621,18 @@ function fakeAI() {
         return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
+          { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },
+          { type: "explain", prompt: "Explique le rôle de la balise main.", expected: "le contenu principal", points: 2, comps: ["C9N1"] }] }) };
+        if (ai.gen === "array") return { response: JSON.stringify([
+          { type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "dehors / dedans", points: 2 },
+          { type: "mcq", prompt: "Quelle unité dépend de la taille de police racine ?", choices: ["px", "rem", "%", "vw"], answer: [1], points: 1 }]) };
+        if (ai.gen === "wrongOption") return { response: JSON.stringify({ questions: [
+          { type: "mcq", prompt: "Comment centrer des éléments sur l’axe principal en CSS ?", choices: ["justify-content: center", "la classe Bootstrap text-center", "float: center", "align: middle"], answer: [0], points: 1 }] }) };
+        if (ai.gen === "allOutside") return { response: JSON.stringify({ questions: [
+          { type: "mcq", prompt: "Quelle classe Tailwind centre le texte ?", choices: ["text-center", "center", "mx-auto", "align"], answer: [0], points: 1 },
+          { type: "explain", prompt: "Explique les breakpoints de Tailwind.", expected: "sm md lg", points: 2 },
+          { type: "mcq", prompt: "Sans bonne réponse", choices: ["a", "b"], answer: [9], points: 1 }] }) };
         return { response: JSON.stringify({ questions: [
           { type: "mcq", prompt: "Quelle propriété aligne sur l’axe principal ?", choices: ["align-items", "justify-content", "gap", "order"], answer: [1], points: 1, skills: ["css"], comp: "C3N1" },
           { type: "code", prompt: "Écris une media query pour les écrans < 768px.", lang: "css", expected: "@media (max-width: 767px) {}", points: 2, skills: ["css"], comp: "C3N1" },

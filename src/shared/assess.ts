@@ -707,12 +707,33 @@ export function starterGivesAnswer(starter: string, expected: string) {
   return both / b.size >= 0.6;
 }
 
-export async function generateQuestions(env: Env, o: { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[] }) {
+export async function generateQuestions(env: Env, o: { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[]; referential?: { code: string; name: string }[]; scope?: string[] }) {
   const techs = (o.techs?.length ? o.techs : [o.codeLang]).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
   const n = Math.max(1, Math.min(30, Math.round(o.count) || 10));
+  // more than 10: in batches of 10 asked together (one long answer gets cut), put together without the same question twice;
+  // a batch that fails doesn't lose the others
+  if (n > 10) {
+    const parts: number[] = [];
+    for (let left = n; left > 0; left -= 10) parts.push(Math.min(10, left));
+    const res = await Promise.allSettled(parts.map((count) => generateQuestions(env, { ...o, count })));
+    const seen = new Set<string>();
+    const all = res.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).filter((q) => {
+      const k = q.prompt.toLowerCase().replace(/\s+/g, " ").trim();
+      return !seen.has(k) && !!seen.add(k);
+    });
+    if (!all.length) throw (res.find((r) => r.status === "rejected") as PromiseRejectedResult).reason;
+    return all;
+  }
   const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);
   const k = { code: Math.round((n * o.mix.code) / total), explain: Math.round((n * o.mix.explain) / total) };
   const want = { ...k, mcq: Math.max(0, n - k.code - k.explain) };
+  // the competencies a question may check: the brief's when one is chosen (with its level), else the whole referential
+  const names = new Map((o.referential ?? []).map((c) => [String(c.code).toUpperCase().replace(/^CT/, "T"), c.name]));
+  const scope = (o.scope ?? []).map((c) => parseComp(c)).filter((c): c is { code: string; level: number | null } => !!c);
+  const compList = (scope.length ? scope.map((c) => ({ code: c.code, level: c.level })) : [...names.keys()].map((code) => ({ code, level: null })))
+    .map((c) => `- ${c.code.startsWith("T") ? "C" + c.code : c.code}${c.level ? "N" + c.level : ""} : ${names.get(c.code) ?? ""}`.replace(/ : $/, ""));
+  const allowedComps = new Set(scope.length ? scope.map((c) => c.code) : [...names.keys()]);
+  const scopeLevel = new Map(scope.map((c) => [c.code, c.level]));
   const system = [
     o.lang === "fr" ? "Tu écris des questions d’évaluation pour des apprenants développeurs web (formation intensive). En français." : "You write assessment questions for web development students. In English.",
     "Types : \"code\" (écrire un petit morceau de code, 5 à 15 lignes, qui se corrige en lisant), \"explain\" (expliquer un concept ou un choix en quelques phrases), \"mcq\" (QCM, 4 choix, une ou plusieurs bonnes réponses, distracteurs plausibles).",
@@ -722,6 +743,7 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
     `TECHNOLOGIES ÉVALUÉES, ET RIEN D’AUTRE : ${techs.join(", ")}. Chaque question, chaque code, chaque choix de QCM n’utilise que ces technologies : aucun autre langage, aucun framework ou bibliothèque qui n’est pas dans cette liste (pas de Tailwind, Bootstrap, jQuery, React… s’ils n’y sont pas). Répartis les questions entre ces technologies${techs.length > 1 ? ", et fais-en quelques-unes qui les combinent (ex. HTML + CSS ensemble, PHP + SQL)" : ""}.`,
     `"lang" d’une question "code" : le langage dans lequel l’apprenant écrit, parmi : ${[...new Set(techs.map(langOfTech))].join(", ")}.`,
     `Chaque question a "skills" (0 à 2 parmi : ${SKILL_KEYS.join(", ")}) et "comps" : la ou les compétences qu’elle évalue, avec leur niveau (ex. ["C3N1"] ou ["C4N1", "CT4N1"]).`,
+    compList.length ? `"comps" : UNIQUEMENT parmi ces compétences, choisies d’après ce que la question fait FAIRE à l’apprenant (le sens de la compétence, jamais l’ordre de la liste) :\n${compList.join("\n")}` : "",
     'Réponds UNIQUEMENT avec ce JSON : {"questions":[{"type":"code|explain|mcq","prompt":"…","code":"code à lire (facultatif)","lang":"javascript","starter":"code de départ (facultatif)","choices":["…"],"answer":[0],"expected":"…","points":2,"skills":["dom"],"comps":["C4N1"]}]}',
   ].join("\n");
   const user = [
@@ -729,25 +751,53 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
     o.comps?.length ? `Compétences à évaluer : ${o.comps.join(", ")}` : "", o.skills?.length ? `Notions à vérifier en priorité : ${o.skills.join(", ")}` : "",
     `Écris EXACTEMENT ${n} questions : ${want.code} "code", ${want.explain} "explain", ${want.mcq} "mcq", sur ${techs.join(", ")}.`,
   ].filter(Boolean).join("\n");
-  const ask = await askReview(env, system, user, 4);
+  // room for every question asked (statement, code, expected answer, choices…: about 600 tokens each): with the
+  // default 2 500 the answer was cut in the middle from about 4 questions, and none could be read
+  // the answer may be the object asked, or a bare list of questions (some models do that)
+  const read = (text: string) => {
+    const t = String(text || "").replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, "").trim();
+    if (t.startsWith("[")) { try { return JSON.parse(t); } catch { /* not a whole list: look for the object */ } }
+    return extractJson(text);
+  };
+  const ask = await askReview(env, system, user, 4, { maxTokens: Math.min(8000, Math.max(2500, 800 + n * 600)), read });
   if (!ask.ok) throw new AssessError(ask.msg);
   const allowed = new Set(techs.map(langOfTech));
   const first = langOfTech(techs[0] ?? o.codeLang);
-  const qs = (Array.isArray(ask.data?.questions) ? ask.data.questions : []).map((q: any, i: number) => {
+  // the list of questions, however the AI wrapped it ({"questions": […]}, a bare list, or under another name)
+  const d = ask.data;
+  const raw: any[] = Array.isArray(d) ? d : Array.isArray(d?.questions) ? d.questions : (Object.values(d ?? {}).find((v) => Array.isArray(v) && v.some((x) => x && typeof x === "object")) as any[]) ?? [];
+  let incomplete = 0;
+  const outside = new Map<string, number>();
+  const qs = raw.map((q: any, i: number) => {
     const lang = langOfTech(String(q?.lang || ""));
     // the competencies and skills the teacher picked fill in what the AI left empty
     const c = cleanQuestion({ ...q, lang: allowed.has(lang) ? lang : first,
       comps: (Array.isArray(q?.comps) && q.comps.length) || q?.comp ? q.comps : (o.comps ?? []).map((c) => String(c).trim().split(/[\s(]/)[0]), skills: Array.isArray(q?.skills) && q.skills.length ? q.skills : o.skills ?? [] }, i);
     // a starter that already holds the answer is removed
     if (c?.starter && starterGivesAnswer(c.starter, c.expected ?? "")) c.starter = "";
+    // only the competencies of the list (an invented code is dropped), at the brief's level when it gives one
+    if (c && allowedComps.size && c.comps?.length) {
+      const kept = c.comps.filter((x) => allowedComps.has(x.code)).map((x) => ({ code: x.code, level: scopeLevel.get(x.code) ?? x.level }));
+      if (kept.length) { c.comps = kept; c.comp = kept[0].code; c.level = kept[0].level; }
+      else { delete c.comps; delete c.comp; delete c.level; }
+    }
     return c;
   }).filter((q: Question | null) => {
-    if (!q) return false;
-    // nothing outside the technologies picked (e.g. Tailwind in an HTML/CSS test)
-    const text = [q.prompt, q.code, q.starter, q.expected, ...(q.choices ?? [])].join("\n");
-    return !o.techs?.length || !techOutside(text, techs).length;
+    if (!q) { incomplete++; return false; }
+    if (!o.techs?.length) return true;
+    // nothing outside the technologies picked (e.g. Tailwind in an HTML/CSS test); a wrong option of a multiple-choice
+    // question may name one ("B. use Bootstrap"): that's no harm, only the right answers count
+    const right = q.type === "mcq" ? (q.choices ?? []).filter((_, k) => (q.answer ?? []).includes(k)) : [];
+    const out = techOutside([q.prompt, q.code, q.starter, q.expected, ...right].join("\n"), techs);
+    for (const t of out) outside.set(t, (outside.get(t) || 0) + 1);
+    return !out.length;
   }) as Question[];
-  if (!qs.length) throw new AssessError("The AI didn't write usable questions. Try again.");
+  if (!qs.length) {
+    // say why, so the teacher knows what to change
+    if (!raw.length) throw new AssessError("The AI's answer had no questions (it may have been cut short): ask for fewer questions and try again.");
+    const why = [incomplete ? `${incomplete} incomplete` : "", outside.size ? `${raw.length - incomplete} using a technology not selected (${[...outside.keys()].join(", ")}): add it to the technologies or take it out of the topic` : ""].filter(Boolean).join(" · ");
+    throw new AssessError(`The AI wrote ${raw.length} question(s), none usable: ${why || "try again"}.`);
+  }
   return qs;
 }
 
