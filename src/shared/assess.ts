@@ -710,6 +710,20 @@ export function starterGivesAnswer(starter: string, expected: string) {
 export async function generateQuestions(env: Env, o: { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[] }) {
   const techs = (o.techs?.length ? o.techs : [o.codeLang]).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
   const n = Math.max(1, Math.min(30, Math.round(o.count) || 10));
+  // more than 10: in batches of 10 asked together (one long answer gets cut), put together without the same question twice;
+  // a batch that fails doesn't lose the others
+  if (n > 10) {
+    const parts: number[] = [];
+    for (let left = n; left > 0; left -= 10) parts.push(Math.min(10, left));
+    const res = await Promise.allSettled(parts.map((count) => generateQuestions(env, { ...o, count })));
+    const seen = new Set<string>();
+    const all = res.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).filter((q) => {
+      const k = q.prompt.toLowerCase().replace(/\s+/g, " ").trim();
+      return !seen.has(k) && !!seen.add(k);
+    });
+    if (!all.length) throw (res.find((r) => r.status === "rejected") as PromiseRejectedResult).reason;
+    return all;
+  }
   const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);
   const k = { code: Math.round((n * o.mix.code) / total), explain: Math.round((n * o.mix.explain) / total) };
   const want = { ...k, mcq: Math.max(0, n - k.code - k.explain) };

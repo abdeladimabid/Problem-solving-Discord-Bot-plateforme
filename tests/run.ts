@@ -3298,6 +3298,10 @@ section("assessments: several competencies per question, why each grade, invitat
   ai.gen = "allOutside";
   const none = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 3, techs: ["HTML", "CSS"] });
   check(none.status === 400 && /wrote 3 question\(s\), none usable: 1 incomplete · 2 using a technology not selected \(Tailwind CSS\): add it to the technologies/.test(none.data.error), `nothing usable: the message says why (${none.data.error})`);
+  ai.gen = "array";
+  const calls0 = ai.calls;
+  const twenty = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 20, techs: ["HTML", "CSS"] });
+  check(twenty.status === 200 && ai.calls - calls0 === 2 && twenty.data.questions.length === 2, `20 questions: asked in 2 batches of 10, put together without the same question twice (${ai.calls - calls0} calls, ${twenty.data.questions?.length})`);
   ai.gen = "";
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);   // these 3 tries don't eat the class's AI budget for the next tests
   const two = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"] });
