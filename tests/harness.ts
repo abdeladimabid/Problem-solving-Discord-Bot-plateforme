@@ -383,6 +383,7 @@ export const ai = {
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],   // the answer length each call allowed
+  gen: "" as "" | "array" | "wrongOption" | "allOutside",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -620,6 +621,15 @@ function fakeAI() {
         return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        if (ai.gen === "array") return { response: JSON.stringify([
+          { type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "dehors / dedans", points: 2 },
+          { type: "mcq", prompt: "Quelle unité dépend de la taille de police racine ?", choices: ["px", "rem", "%", "vw"], answer: [1], points: 1 }]) };
+        if (ai.gen === "wrongOption") return { response: JSON.stringify({ questions: [
+          { type: "mcq", prompt: "Comment centrer des éléments sur l’axe principal en CSS ?", choices: ["justify-content: center", "la classe Bootstrap text-center", "float: center", "align: middle"], answer: [0], points: 1 }] }) };
+        if (ai.gen === "allOutside") return { response: JSON.stringify({ questions: [
+          { type: "mcq", prompt: "Quelle classe Tailwind centre le texte ?", choices: ["text-center", "center", "mx-auto", "align"], answer: [0], points: 1 },
+          { type: "explain", prompt: "Explique les breakpoints de Tailwind.", expected: "sm md lg", points: 2 },
+          { type: "mcq", prompt: "Sans bonne réponse", choices: ["a", "b"], answer: [9], points: 1 }] }) };
         return { response: JSON.stringify({ questions: [
           { type: "mcq", prompt: "Quelle propriété aligne sur l’axe principal ?", choices: ["align-items", "justify-content", "gap", "order"], answer: [1], points: 1, skills: ["css"], comp: "C3N1" },
           { type: "code", prompt: "Écris une media query pour les écrans < 768px.", lang: "css", expected: "@media (max-width: 767px) {}", points: 2, skills: ["css"], comp: "C3N1" },

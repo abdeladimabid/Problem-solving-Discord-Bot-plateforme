@@ -731,11 +731,22 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
   ].filter(Boolean).join("\n");
   // room for every question asked (statement, code, expected answer, choices…: about 600 tokens each): with the
   // default 2 500 the answer was cut in the middle from about 4 questions, and none could be read
-  const ask = await askReview(env, system, user, 4, { maxTokens: Math.min(8000, Math.max(2500, 800 + n * 600)) });
+  // the answer may be the object asked, or a bare list of questions (some models do that)
+  const read = (text: string) => {
+    const t = String(text || "").replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, "").trim();
+    if (t.startsWith("[")) { try { return JSON.parse(t); } catch { /* not a whole list: look for the object */ } }
+    return extractJson(text);
+  };
+  const ask = await askReview(env, system, user, 4, { maxTokens: Math.min(8000, Math.max(2500, 800 + n * 600)), read });
   if (!ask.ok) throw new AssessError(ask.msg);
   const allowed = new Set(techs.map(langOfTech));
   const first = langOfTech(techs[0] ?? o.codeLang);
-  const qs = (Array.isArray(ask.data?.questions) ? ask.data.questions : []).map((q: any, i: number) => {
+  // the list of questions, however the AI wrapped it ({"questions": […]}, a bare list, or under another name)
+  const d = ask.data;
+  const raw: any[] = Array.isArray(d) ? d : Array.isArray(d?.questions) ? d.questions : (Object.values(d ?? {}).find((v) => Array.isArray(v) && v.some((x) => x && typeof x === "object")) as any[]) ?? [];
+  let incomplete = 0;
+  const outside = new Map<string, number>();
+  const qs = raw.map((q: any, i: number) => {
     const lang = langOfTech(String(q?.lang || ""));
     // the competencies and skills the teacher picked fill in what the AI left empty
     const c = cleanQuestion({ ...q, lang: allowed.has(lang) ? lang : first,
@@ -744,12 +755,21 @@ export async function generateQuestions(env: Env, o: { topic: string; count: num
     if (c?.starter && starterGivesAnswer(c.starter, c.expected ?? "")) c.starter = "";
     return c;
   }).filter((q: Question | null) => {
-    if (!q) return false;
-    // nothing outside the technologies picked (e.g. Tailwind in an HTML/CSS test)
-    const text = [q.prompt, q.code, q.starter, q.expected, ...(q.choices ?? [])].join("\n");
-    return !o.techs?.length || !techOutside(text, techs).length;
+    if (!q) { incomplete++; return false; }
+    if (!o.techs?.length) return true;
+    // nothing outside the technologies picked (e.g. Tailwind in an HTML/CSS test); a wrong option of a multiple-choice
+    // question may name one ("B. use Bootstrap"): that's no harm, only the right answers count
+    const right = q.type === "mcq" ? (q.choices ?? []).filter((_, k) => (q.answer ?? []).includes(k)) : [];
+    const out = techOutside([q.prompt, q.code, q.starter, q.expected, ...right].join("\n"), techs);
+    for (const t of out) outside.set(t, (outside.get(t) || 0) + 1);
+    return !out.length;
   }) as Question[];
-  if (!qs.length) throw new AssessError("The AI didn't write usable questions. Try again.");
+  if (!qs.length) {
+    // say why, so the teacher knows what to change
+    if (!raw.length) throw new AssessError("The AI's answer had no questions (it may have been cut short): ask for fewer questions and try again.");
+    const why = [incomplete ? `${incomplete} incomplete` : "", outside.size ? `${raw.length - incomplete} using a technology not selected (${[...outside.keys()].join(", ")}): add it to the technologies or take it out of the topic` : ""].filter(Boolean).join(" · ");
+    throw new AssessError(`The AI wrote ${raw.length} question(s), none usable: ${why || "try again"}.`);
+  }
   return qs;
 }
 

@@ -3288,6 +3288,18 @@ section("assessments: several competencies per question, why each grade, invitat
   ai.maxTokens.length = 0;
   await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 10, techs: ["HTML", "CSS"] });
   check(ai.maxTokens.at(-1)! >= 6800, `10 questions: the AI's answer has room for all of them, not cut at 2 500 tokens (${ai.maxTokens.at(-1)})`);
+  // however the AI wraps its list, the questions are read; a technology named only in a wrong option doesn't remove one
+  ai.gen = "array";
+  const bare = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 2, techs: ["HTML", "CSS"] });
+  check(bare.status === 200 && bare.data.questions.length === 2, `the AI's questions as a bare list are read (${bare.status} ${bare.data.error ?? bare.data.questions?.length})`);
+  ai.gen = "wrongOption";
+  const opt = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 1, techs: ["HTML", "CSS"] });
+  check(opt.status === 200 && opt.data.questions.length === 1, `Bootstrap only in a wrong option of a multiple-choice question: the question is kept (${opt.data.error ?? ""})`);
+  ai.gen = "allOutside";
+  const none = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 3, techs: ["HTML", "CSS"] });
+  check(none.status === 400 && /wrote 3 question\(s\), none usable: 1 incomplete · 2 using a technology not selected \(Tailwind CSS\): add it to the technologies/.test(none.data.error), `nothing usable: the message says why (${none.data.error})`);
+  ai.gen = "";
+  run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);   // these 3 tries don't eat the class's AI budget for the next tests
   const two = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"] });
   const tq = two.data.questions;
   check(two.status === 200 && !tq.some((q: any) => /tailwind/i.test(q.prompt)) && tq.length === 4, "questions on several technologies at once, nothing outside them (no Tailwind in an HTML/CSS test)");
