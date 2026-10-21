@@ -4851,6 +4851,22 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   clock.advance(6);
   const n3 = await ry.play("noise", keyOf(tB.order[1]), {});
   check(n2.data.strikes === 1 && n3.data.strikes === 2 && n3.data.out && (await ry.play("code", keyOf(tB.order[1]), { turn: 1, code: "x" })).status === 409, "2 strikes: the squad is out");
+  // anti-cheat: leaving full screen stops the student (no saving) until the teacher lets them back in; copy-paste: the TV is told
+  {
+    const wA = ys.data.teams[0].order[1];
+    const c1 = await ry.play("cheat", keyOf(wA), { what: "fullscreen" });
+    const c2 = await ry.play("cheat", keyOf(wA), { what: "paste" });
+    const c3 = await ry.play("cheat", keyOf(wA), { what: "paste" });
+    const tvc = await ry.tv("state");
+    const tA0 = tvc.data.teams.find((t: any) => t.squad === tA.squad);
+    const pv = await ry.play("state", keyOf(wA));
+    check(c1.data.locked && tA0.locks[wA] === "fullscreen" && tA0.alerts.filter((a: any) => a.what === "paste").length === 1 && pv.data.locked === "fullscreen" && pv.data.writing === false && pv.data.lockScreen === true && pv.data.noPaste === true,
+      "anti-cheat: leaving full screen stops the student (shown on the TV), a paste attempt is told once per burst");
+    void c2;
+    const back = await ry.tv("act", { a: "letin", pid: wA });
+    const pv2 = await ry.play("state", keyOf(wA));
+    check(!back.data.teams.find((t: any) => t.squad === tA.squad).locks[wA] && pv2.data.locked === null && back.data.teams.find((t: any) => t.squad === tA.squad).alerts.some((a: any) => a.what === "back" && a.pid === wA), "…the teacher lets them back in from the TV");
+  }
   // a muted microphone (the keyboard's mute key): the TV sees it, and the squad gets a strike
   await ry.play("mic", keyOf(tA.order[1]), { state: "muted" });
   const tvm = await ry.tv("state");
@@ -4867,9 +4883,26 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(codes.data.fn === "somme" && codes.data.tests.length === 6 && codes.data.codes[tB.squad] === null, "the TV runs every squad's code (not the one that is out)");
   const res = await ry.tv("act", { a: "results", results: { [tA.squad]: { passed: 6, total: 6, details: [] }, [tB.squad]: { passed: 0, total: 6, error: "out" } } });
   const winners = res.data.players.filter((p: any) => p.squad === tA.squad).map((p: any) => p.pid);
-  check(res.data.phase === "over" && res.data.winSquad === tA.squad && res.data.ranking[0] === tA.squad && winners.every((pid: string) => q1("SELECT COUNT(*) AS n FROM ledger WHERE discord_id = ? AND reason = 'game' AND ref = ?", pid, String(Y.data.id)).n === 1), "the most tests passed wins; its players get their points");
+  check(res.data.phase === "over" && res.data.winSquad === tA.squad && res.data.ranking[0] === tA.squad && !res.data.aiJudge && winners.every((pid: string) => q1("SELECT COUNT(*) AS n FROM ledger WHERE discord_id = ? AND reason = 'game' AND ref = ?", pid, String(Y.data.id)).n === 1), "the most tests passed wins; its players get their points");
   const mine = await ry.play("state", keyOf(w0));
   check(mine.data.result.passed === 6 && mine.data.rank === 1 && mine.data.code.includes("return s"), "each student sees their squad's result and final code");
+  {
+    // nobody passed a test (time ran out): the AI reads the codes, the closest squad wins; the tests always come first
+    const Y2 = await api("POST", `/api/games?g=${G}`, { kind: "relay", mode: "random", taskIndex: page.data.tasks.findIndex((t: any) => t.fn === "somme"), settings: { size: 2, total: 120, rounds: 1, noise: false } });
+    const r2 = game(Y2.data);
+    for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id], [4, "104"]] as [number, string][]) await r2.join(k, pid);
+    const s2 = await r2.tv("act", { a: "start" });
+    const kOf = (pid: string) => dev([U.alice.id, U.bob.id, U.carol.id, "104"].indexOf(pid) + 1);
+    const [sa, sb] = s2.data.teams;
+    await r2.play("code", kOf(sa.order[0]), { turn: 0, code: "function somme(t) {\n  // rien\n  return 0\n}" });
+    await r2.play("code", kOf(sb.order[0]), { turn: 0, code: "function somme(t) {\n  // presque\n  let s = 0; for (const x of t) s + x;\n  return s;\n}" });
+    clock.advance(130);
+    await r2.tv("state");
+    const fin = await r2.tv("act", { a: "results", results: { [sa.squad]: { passed: 0, total: 6 }, [sb.squad]: { passed: 0, total: 6 } } });
+    const sv = await r2.play("state", kOf(sb.order[0]));
+    check(fin.data.phase === "over" && fin.data.winSquad === sb.squad && fin.data.ranking[0] === sb.squad && /presque juste/.test(fin.data.aiJudge?.why?.[sb.squad] || "") && /presque juste/.test(sv.data.aiWhy || "") && sv.data.rank === 1,
+      "no squad passed a test: the AI ranks the codes, the closest one wins (and each squad sees why)");
+  }
   // the relay's test runner (the same code runs in the TV's Web Worker)
   const workerSrc = scriptOf(await (await bot.fetch(new Request(Y.data.tv), env, makeCtx())).text()).match(/new Blob\(\[("(?:[^"\\]|\\.)*")\]/);
   let runOk = false;

@@ -157,7 +157,9 @@ function gameDialog(d, kind, pre = {}) {
       <label class="check"><input type="checkbox" id="gm-noise" checked> 🎤 No talking: the microphones listen</label>
       <div class="field-row" id="gm-noiseopts"><div><label for="gm-sens">Sensitivity</label><select id="gm-sens"><option value="low">Low (only loud talking)</option><option value="medium" selected>Medium</option><option value="high">High (even whispers)</option></select></div>
         <div><label for="gm-str">Out after</label><select id="gm-str">${[1, 2, 3, 5].map((n) => `<option value="${n}" ${n === 3 ? "selected" : ""}>${n} strike${n > 1 ? "s" : ""}</option>`).join("")}</select></div></div>
-      <p class="small muted" style="margin-top:0">Each student's device listens; a voice near it gives the squad a strike. On the TV, click a squad's strikes to cancel a false one.</p>` : ""}
+      <p class="small muted" style="margin-top:0">Each student's device listens; a voice near it gives the squad a strike. On the TV, click a squad's strikes to cancel a false one.</p>
+      <label class="check"><input type="checkbox" id="gm-lock" checked> 🖥️ Full screen: leaving it, the tab or the window stops the student until you let them back in (from the TV)</label>
+      <label class="check"><input type="checkbox" id="gm-nopaste" checked> 🚫 No copy-paste (blocked, and the TV shows who tried)</label>` : ""}
     <div class="field-row"><div><label for="gm-rw">Winners get</label><select id="gm-rw">${[0, 10, 20, 30, 50].map((s) => `<option value="${s}" ${s === 20 ? "selected" : ""}>${s ? s + " pts each" : "no points"}</option>`).join("")}</select></div>
       <div><label for="gm-lang">Language of the game</label><select id="gm-lang"><option value="fr" ${d.lang !== "en" ? "selected" : ""}>Français</option><option value="en" ${d.lang === "en" ? "selected" : ""}>English</option></select></div></div>
     <label class="check"><input type="checkbox" id="gm-ann" checked> Post the winners in #arena</label>
@@ -195,7 +197,7 @@ function gameDialog(d, kind, pre = {}) {
       else { if (!picked) throw new Error(src === "ai" ? "Generate a case first" : "Check your case first"); body.case = picked; }
     }
     if (kind === "relay") {
-      Object.assign(settings, { codeLang: $("#gm-cl2").value, total: Number($("#gm-tot").value), rounds: Number($("#gm-rounds").value), noise: $("#gm-noise").checked, sensitivity: $("#gm-sens").value, strikes: Number($("#gm-str").value) });
+      Object.assign(settings, { codeLang: $("#gm-cl2").value, total: Number($("#gm-tot").value), rounds: Number($("#gm-rounds").value), noise: $("#gm-noise").checked, sensitivity: $("#gm-sens").value, strikes: Number($("#gm-str").value), lockScreen: $("#gm-lock").checked, noPaste: $("#gm-nopaste").checked });
       const src = pane("tsrc");
       if (src === "built") body.taskIndex = Number($("#gm-task").value);
       else if (src === "mine") body.task = d.myTasks[Number($("#gm-mt").value)];

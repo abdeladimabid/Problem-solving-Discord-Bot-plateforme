@@ -3230,5 +3230,7 @@ window.CB_FR = {
 "Right now": "Tout de suite",
 "All-time pts": "Pts (toutes saisons)",
 "Every season added up": "Toutes les saisons additionnées",
-"Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).": "Ses compétences, ses acquis, ses points et ses pièces quittent le dossier de l’apprenant jusqu’à ce que tu le finalises à nouveau : la finalisation les redonne (une seule fois)."
+"Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).": "Ses compétences, ses acquis, ses points et ses pièces quittent le dossier de l’apprenant jusqu’à ce que tu le finalises à nouveau : la finalisation les redonne (une seule fois).",
+"Full screen: leaving it, the tab or the window stops the student until you let them back in (from the TV)": "Plein écran : le quitter, changer d’onglet ou de fenêtre arrête l’apprenant jusqu’à ce que tu le laisses revenir (depuis la TV)",
+"No copy-paste (blocked, and the TV shows who tried)": "Pas de copier-coller (bloqué, et la TV montre qui a essayé)"
 };

@@ -8,7 +8,7 @@
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { COUNTDOWN_MS, GameError, NEXT_MS, bumpGame, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, NEXT_MS, bumpGame, cheatRelay, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -18,7 +18,7 @@ const html = (body: string) => new Response(body, { headers: { "content-type": "
 const esc = (s: string) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]!));
 const GONE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Class game</title>
 <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#0b1020;color:#e7edf8;font:18px system-ui,sans-serif;text-align:center"><div><div style="font-size:64px">🎮</div><p>This game doesn't exist anymore.<br>Ask your teacher for the new link.</p></div></body>`;
-const HOST_ACTIONS = ["start", "reveal", "next", "hold", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
+const HOST_ACTIONS = ["letin", "start", "reveal", "next", "hold", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
 
 async function body(request: Request): Promise<any> { try { return await request.json(); } catch { return {}; } }
 
@@ -83,6 +83,7 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
       case "hint": return json(await hintSql(env, gm, p));
       case "accuse": return json(await accuseSql(env, gm, p, String(b.name || "").slice(0, 80)));
       case "code": await saveRelayCode(env, gm, p, Number(b.turn), String(b.code ?? "")); return json({ ok: true, at: Date.now() });
+      case "cheat": return json(await cheatRelay(env, gm, p, String(b.what || "")));
       case "noise": return json(await noiseRelay(env, gm, p, Date.now(), b.why === "muted" ? "muted" : "voice"));
       case "try": return json(await tryRelay(env, gm, p, String(b.code ?? "")));
       case "mic": {
@@ -202,9 +203,20 @@ h1.big{font-size:3.6vw;margin:0 0 1vh}h2{font-size:1.8vw;margin:0 0 1vh}
 .stamp span{font-size:1.2vw;font-weight:800}.stamp.ko{background:rgba(0,0,0,.88)}
 @keyframes koin{0%{background:#fff}}
 @keyframes stampp{0%{transform:scale(2.6) rotate(-8deg);opacity:0}100%{transform:scale(1) rotate(-8deg);opacity:1}}
-.res{display:grid;gap:1.2vh}.resrow{display:grid;grid-template-columns:16vw 1fr 8vw;gap:1vw;align-items:center;font-size:1.4vw;font-weight:800}
+.res{display:grid;gap:1.2vh}.aij{font-size:1.3vw;color:#c4b5fd;margin:0 0 2vh}.aiw{font-size:1.05vw;color:var(--soft);margin:-.6vh 0 .6vh 1.4vw}.resrow{display:grid;grid-template-columns:16vw 1fr 8vw;gap:1vw;align-items:center;font-size:1.4vw;font-weight:800}
 .pbar{height:2.4vh;border-radius:9px;background:rgba(255,255,255,.1);overflow:hidden}.pbar i{display:block;height:100%;background:var(--good)}
 .fullcode{max-height:34vh;font-size:1.1vw}
+#app:has(.rgrid){grid-template-rows:auto 1fr auto}
+#alerts{align-self:center;justify-self:center;max-width:80vw}
+.alk{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:.8vh 1.4vw;background:rgba(17,24,39,.92);border:1px solid rgba(245,158,11,.55);border-radius:18px;padding:1.2vh 1vw;box-shadow:0 1.5vh 4vh rgba(0,0,0,.5);backdrop-filter:blur(8px);animation:pop .4s}
+.alk-h{font-size:.95vw;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:#fcd34d}
+.alk-r{display:grid;grid-template-columns:auto 1fr auto;gap:.7vw;align-items:center;padding:.6vh .5vw .6vh .6vw;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid var(--line)}.alk-av{width:2.4vw;height:2.4vw;border-radius:50%;display:grid;place-items:center;font-weight:900;font-size:.85vw;background:var(--c)}
+.alk-r b{display:block;font-size:1vw}.alk-r span{font-size:.85vw;color:var(--soft)}.alk-r .btn{font-size:.85vw;padding:.7vh .9vw;background:linear-gradient(90deg,#f59e0b,#ef4444)}
+.alk-more{font-size:.85vw;color:var(--soft);text-align:right;margin-top:.4vh}
+#alts{position:fixed;top:8vh;right:2vw;z-index:20;display:grid;gap:.8vh;justify-items:end}
+.alt{display:flex;gap:.6vw;align-items:center;padding:1vh 1.2vw;border-radius:999px;background:rgba(17,24,39,.92);border:1px solid rgba(239,68,68,.6);border-left:.5vw solid var(--c);font-size:1.05vw;box-shadow:0 1vh 3vh rgba(0,0,0,.45);animation:altin .45s cubic-bezier(.2,1.4,.4,1);transition:opacity .5s,transform .5s}
+.alt.ok{border-color:rgba(34,197,94,.6)}.alt i{font-style:normal;color:var(--soft);font-size:.9vw}.alt.bye{opacity:0;transform:translateX(3vw)}
+@keyframes altin{from{opacity:0;transform:translateX(6vw)}}
 .toast{position:fixed;top:8vh;left:50%;transform:translateX(-50%);background:#111827;border:1px solid var(--line);padding:1.2vh 1.6vw;border-radius:14px;font-weight:700;z-index:50;font-size:1.1vw}
 
 /* ---- look: moving light, glass cards */
@@ -316,7 +328,7 @@ canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
 </style></head><body>
 <div class="grid-bg"></div><div class="prog" id="prog" style="width:0"></div>
 <div class="top"><div>🎮 <b id="kind"></b></div><div id="ttl">${esc(gm.title)}</div><div id="info"></div></div>
-<div id="app"></div><div id="ov"></div>
+<div id="app"></div><div id="ov"></div><div id="alts"></div>
 <div class="bar" id="bar"></div>
 <script>
 "use strict";
@@ -501,6 +513,35 @@ function sqlView() {
   return '<div class="race"><div><h2>🕵️ ' + e(S.case.title) + "</h2>" + rows + '</div><div class="feed"><h2>📰 ' + T("Le fil", "Live") + "</h2>" + (S.feed || []).slice().reverse().map((f) => { const s = sq(f.squad); return '<div><b style="color:' + s.color + '">' + e(s.emoji + " " + s.name) + "</b> " + (f.text.startsWith("🎯") ? T("a démasqué le coupable ! 🎯", "found the culprit! 🎯") : f.text.startsWith("❌") ? T("s'est trompé de coupable ❌", "accused the wrong person ❌") : T("a trouvé : ", "found: ") + e(f.text)) + "</div>"; }).join("") + "</div></div>";
 }
 // ---------------------------------------------------------------- 🏃 relay
+// anti-cheat on the TV: who is stopped (left full screen, the tab, the window) with "Let back in"; a copy or paste
+// attempt shows a moment, then goes; never more than three at once, so the screen stays clear
+let alertSeen = null;
+const CHEAT = { fullscreen: ["🚪", T("a quitté le plein écran", "left full screen")], hidden: ["🚪", T("a changé d'onglet", "switched tab")], blur: ["🚪", T("a changé de fenêtre", "switched window")],
+  copy: ["📋", T("a essayé de copier", "tried to copy")], cut: ["📋", T("a essayé de couper", "tried to cut")], paste: ["📋", T("a essayé de coller", "tried to paste")], drop: ["📋", T("a essayé de glisser du texte", "tried to drop text")],
+  back: ["✅", T("est de retour", "is back")] };
+function relayAlerts() {
+  const box = $("#alerts");
+  if (!box) return;   // the slot between the squads and the challenge (Code Relay, while playing)
+  if (S.kind !== "relay" || S.phase !== "playing") { box.innerHTML = ""; return; }
+  const nameOf = (pid) => (S.players.find((p) => p.pid === pid) || { name: "?" }).name;
+  const locks = [];
+  for (const t of S.teams || []) for (const [pid, why] of Object.entries(t.locks || {})) locks.push({ pid, why, squad: t.squad });
+  const html = locks.length ? '<div class="alk"><div class="alk-h">🔒 ' + T("Session arrêtée", "Stopped") + " · " + locks.length + "</div>" + locks.slice(0, 3).map((l) => { const s = sq(l.squad), c = CHEAT[l.why] || CHEAT.fullscreen;
+    return '<div class="alk-r" style="--c:' + s.color + '"><span class="alk-av">' + e(initials(nameOf(l.pid))) + '</span><div><b>' + e(nameOf(l.pid)) + "</b><span>" + c[0] + " " + e(c[1]) + '</span></div><button class="btn" data-letin="' + e(l.pid) + '">' + T("Laisser revenir", "Let back in") + "</button></div>"; }).join("") + (locks.length > 3 ? '<div class="alk-more">+' + (locks.length - 3) + "</div>" : "") + "</div>" : "";
+  if (box.dataset.h !== html) { box.dataset.h = html; box.innerHTML = html; }
+  // the moments: copy / paste attempts, and who is back
+  const all = [];
+  for (const t of S.teams || []) for (const a of t.alerts || []) all.push({ ...a, squad: t.squad });
+  const fresh = alertSeen === null ? [] : all.filter((a) => !alertSeen.has(a.pid + a.what + a.at) && (CHEAT[a.what] && (a.what === "back" || /copy|cut|paste|drop/.test(a.what))));
+  alertSeen = new Set(all.map((a) => a.pid + a.what + a.at));
+  for (const a of fresh.slice(-3)) {
+    const c = CHEAT[a.what], s = sq(a.squad), d = document.createElement("div");
+    d.className = "alt" + (a.what === "back" ? " ok" : ""); d.style.setProperty("--c", s.color);
+    d.innerHTML = "<span>" + c[0] + "</span><b>" + e(a.name || nameOf(a.pid)) + "</b> " + e(c[1]) + ' <i>' + e(s.emoji + " " + s.name) + "</i>";
+    const st = $("#alts"); st.append(d); while (st.children.length > 3) st.firstChild.remove();
+    setTimeout(() => { d.classList.add("bye"); setTimeout(() => d.remove(), 500); }, 6000);
+  }
+}
 let tested = false, noiseSeen = {};
 function relayView() {
   $("#info").innerHTML = S.phase === "playing" ? '<span class="clock" id="clk"></span>' : "";
@@ -509,8 +550,9 @@ function relayView() {
   if (S.phase === "over") {
     const w = S.winSquad != null ? sq(S.winSquad) : null;
     const rk = S.ranking || [];
-    return '<div><h1 class="big">' + (w ? "🏆 " + e(w.emoji + " " + w.name) : T("Fin du relais", "Relay over")) + '</h1><div class="res">' + rk.map((i, k) => { const t = S.teams.find((x) => x.squad === i); const r = S.results && S.results[i] || { passed: 0, total: S.task.tests }; const s = sq(i);
-      return '<div class="resrow"><span style="color:' + s.color + '">' + (k + 1) + ". " + e(s.emoji + " " + s.name) + '</span><div class="pbar"><i style="width:' + (r.total ? Math.round(100 * r.passed / r.total) : 0) + '%"></i></div><span>' + (t.out ? "🔇 " + T("éliminé", "out") : r.passed + "/" + r.total + " ✓") + "</span></div>"; }).join("") + "</div>" +
+    const aj = S.aiJudge;
+    return '<div><h1 class="big">' + (w ? "🏆 " + e(w.emoji + " " + w.name) : T("Fin du relais", "Relay over")) + "</h1>" + (aj ? '<p class="aij">🤖 ' + T("Aucun squad n'a réussi de test : l'IA a départagé, le code le plus proche de la solution gagne.", "No squad passed a test: the AI decided, the code closest to a solution wins.") + "</p>" : "") + '<div class="res">' + rk.map((i, k) => { const t = S.teams.find((x) => x.squad === i); const r = S.results && S.results[i] || { passed: 0, total: S.task.tests }; const s = sq(i);
+      return '<div class="resrow"><span style="color:' + s.color + '">' + (k + 1) + ". " + e(s.emoji + " " + s.name) + '</span><div class="pbar"><i style="width:' + (r.total ? Math.round(100 * r.passed / r.total) : 0) + '%"></i></div><span>' + (t.out ? "🔇 " + T("éliminé", "out") : r.passed + "/" + r.total + " ✓") + "</span></div>" + (aj && aj.why[i] ? '<div class="aiw">🤖 ' + e(aj.why[i]) + "</div>" : ""); }).join("") + "</div>" +
       (w ? '<h2 style="margin-top:2vh">' + T("Le code gagnant", "The winning code") + '</h2><pre class="code fullcode">' + e((S.teams.find((x) => x.squad === S.winSquad) || {}).code || "") + "</pre>" : "") + "</div>";
   }
   return '<div class="rgrid">' + S.teams.map((t) => {
@@ -522,8 +564,8 @@ function relayView() {
     const stamp = hit ? '<div class="stamp' + (t.out ? " ko" : "") + '"><b>' + (t.out ? "🔇 " + T("ÉLIMINÉS", "OUT") : "✖ " + T("AVERTISSEMENT", "STRIKE") + " " + t.strikes + "/" + S.strikesMax) + "</b>" + (ln ? "<span>" + e(ln.name) + (ln.why === "muted" ? T(" : micro coupé", ": mic muted") : T(" a parlé", " talked")) + "</span>" : "") + "</div>" : "";
     return '<div class="rcard' + (t.out ? " out" : "") + (hit ? " noise" : "") + '" style="--c:' + s.color + '">' + stamp + '<div class="rhead"><h3>' + e(s.emoji + " " + s.name) + "</h3>" + (S.noise ? '<button class="spips" data-pardon="' + t.squad + '" title="' + T("Cliquer pour annuler un avertissement", "Click to cancel a strike") + '">' + pp.join("") + "</button>" : "") + "</div>" +
       (t.out ? '<div class="writer">🔇 ' + T("Éliminés (bruit)", "Out (noise)") + "</div>" : '<div class="wrow"><span class="wav">' + e(initials(w ? w.name : "?")) + '</span><div><div class="muted" style="font-size:.95vw">' + T("Au clavier", "At the keyboard") + '</div><div class="writer">' + e(w ? w.name : "…") + ' <span class="typing"><i></i><i></i><i></i></span></div></div></div><div class="tbar"><i data-bar="' + t.squad + '" style="width:' + pct + '%"></i></div><div class="muted" style="font-size:1vw">' + T("Tour ", "Turn ") + (t.turn + 1) + " · " + T("manche ", "round ") + t.round + "/" + S.rounds + " · " + t.lines + T(" lignes", " lines") + "</div>") +
-      '<div class="order">' + t.order.map((pid, i) => { const p = pl(pid); return (i ? '<em>›</em>' : "") + "<span" + (pid === t.writer ? ' class="on"' : "") + ">" + (S.noise && p.mic !== 1 ? '<b class="moff" title="' + (p.mic === 2 ? T("micro coupé", "mic muted") : T("micro pas activé", "mic not on")) + '">🔇</b>' : "") + e(p.name) + "</span>"; }).join("") + "</div></div>";
-  }).join("") + '</div><div class="rtask glass"><div class="rtt">🎯 ' + e(S.task.title) + ' <span class="chip">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="rrules">🤫 ' + T("Silence total", "Total silence") + (S.noise ? " · ✖ " + S.strikesMax + T(" avertissements = éliminés", " strikes = out") : "") + " · 🧪 " + S.task.tests + T(" tests à la fin", " tests at the end") + "</div></div>";
+      '<div class="order">' + t.order.map((pid, i) => { const p = pl(pid); return (i ? '<em>›</em>' : "") + "<span" + (pid === t.writer ? ' class="on"' : "") + ">" + ((t.locks || {})[pid] ? '<b class="moff" title="' + T("session arrêtée", "stopped") + '">🔒</b>' : "") + (S.noise && p.mic !== 1 ? '<b class="moff" title="' + (p.mic === 2 ? T("micro coupé", "mic muted") : T("micro pas activé", "mic not on")) + '">🔇</b>' : "") + e(p.name) + "</span>"; }).join("") + "</div></div>";
+  }).join("") + '</div><div id="alerts"></div><div class="rtask glass"><div class="rtt">🎯 ' + e(S.task.title) + ' <span class="chip">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="rrules">🤫 ' + T("Silence total", "Total silence") + (S.noise ? " · ✖ " + S.strikesMax + T(" avertissements = éliminés", " strikes = out") : "") + " · 🧪 " + S.task.tests + T(" tests à la fin", " tests at the end") + "</div></div>";
 }
 async function runAll() {
   tested = true;
@@ -559,7 +601,7 @@ function controls() {
 function render() {
   $("#kind").textContent = S.kind === "royale" ? "Battle Royale" : S.kind === "sql" ? T("Détective SQL", "SQL Detective") : T("Relais de code", "Code Relay");
   pre = S.kind === "royale" && S.phase === "question" && nowMs() < S.qAt;
-  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive, p.mic])) + "." + (S.banned || []).length;
+  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step, t.locks]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive, p.mic])) + "." + (S.banned || []).length;
   // sounds and animations on what just happened
   if (S.kind === "royale" && (S.step !== shownStep || S.phase !== shownPhase)) {
     if (S.phase === "question" && !pre) beep(660, .15);
@@ -572,6 +614,7 @@ function render() {
   }
   if (S.kind === "relay" && S.teams) for (const t of S.teams) { const at = t.lastNoise ? t.lastNoise.at : 0; if (noiseSeen["n" + t.squad] !== at) { const first = noiseSeen["n" + t.squad] === undefined; noiseSeen["n" + t.squad] = at; if (!first) { noiseSeen[t.squad] = 1; lastKey = ""; setTimeout(() => { noiseSeen[t.squad] = 0; lastKey = ""; render(); }, 2600); } } }
   if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : relayView(); controls(); if (panel || manage) drawPanel(); }
+  relayAlerts();
 }
 document.addEventListener("click", (ev) => {
   const a = ev.target.closest("[data-act]"); if (a) { if (a.dataset.act === "reset" && !confirm(T("Rejouer avec les mêmes joueurs ?", "Play again with the same players?"))) return; act(a.dataset.act).then(() => { if (a.dataset.act === "announce") toast(T("Bouton 🎮 publié dans Discord", "🎮 button posted in Discord")); }); return; }
@@ -581,6 +624,7 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("[data-panel]")) { panel = true; manage = ""; drawPanel(); return; }
   if (ev.target.matches("[data-close]")) { panel = false; manage = ""; drawPanel(); return; }
   const p = ev.target.closest("[data-pardon]"); if (p) { act("pardon", { squad: Number(p.dataset.pardon) }); return; }
+  const li = ev.target.closest("[data-letin]"); if (li) { li.disabled = true; act("letin", { pid: li.dataset.letin }); return; }
   if (ev.target.closest("#rerun")) { tested = false; runAll(); return; }
   if (ev.target.closest("#fs")) { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
 });
@@ -727,6 +771,9 @@ const RELAY_CSS = `/* ---- 🏃 relay */
 .baton .br{font-size:110px;animation:dash .9s cubic-bezier(.2,.9,.3,1)}
 @keyframes dash{0%{transform:translateX(-70vw) scale(.6)}100%{transform:none}}
 .baton .bt{font-size:58px;font-weight:900;letter-spacing:.06em;background:linear-gradient(90deg,#c4b5fd,#67e8f9);-webkit-background-clip:text;background-clip:text;color:transparent;animation:pop .5s .2s both}
+.lockc{border-color:rgba(245,158,11,.6);background:radial-gradient(120% 90% at 50% 0%,rgba(245,158,11,.22),rgba(255,255,255,.03))}
+.fsc{background:radial-gradient(120% 90% at 50% 0%,rgba(139,92,246,.25),rgba(255,255,255,.03))}.btn.big{font-size:18px;padding:15px 26px;margin-top:6px}
+.ptoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:70;padding:12px 18px;border-radius:14px;background:#7f1d1d;border:1px solid #ef4444;font-weight:800;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:rise .3s}
 @media(max-width:600px){.hc b{font-size:18px}.tbox b{font-size:30px}.strk .sx{font-size:110px}.kout .kt{font-size:38px}.baton .bt{font-size:40px}#shh{font-size:30px}}
 `;
 const PLAY = (gm: Game) => `<!doctype html><html lang="${gm.settings.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="robots" content="noindex">
@@ -1137,21 +1184,53 @@ function taskCard(compact) {
 function mwarnHtml() {
   return S.noise && S.phase === "playing" && !S.out && !micOk() ? '<div class="mwarn">' + (mutedState ? "🔇 " + T("Ton micro est coupé !", "Your mic is muted!") : micDenied ? "🚫 " + T("Le micro est refusé par le navigateur", "The browser blocked the mic") : "🎤 " + T("Ton micro n'est pas activé", "Your mic isn't on")) + ' <span id="mwc"></span>' + (mutedState || micDenied ? "" : ' <button class="btn" id="micb">🎤 ' + T("Activer", "Turn on") + "</button>") + "</div>" : "";
 }
+// anti-cheat (like the assessments): the relay is played in full screen; leaving it, the tab or the window stops the
+// student until the teacher lets them back in; copy, cut and paste are blocked; the TV is told each time
+const FS_OK = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+let fsArmed = false, fsGrace = 0;
+const needFs = () => !!S && KIND === "relay" && S.lockScreen && FS_OK && S.phase === "playing" && !S.out;
+function goFs() { document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {}); }
+function cheat(what) { if (!S || KIND !== "relay" || S.phase !== "playing" || S.out) return; call("cheat", { what }).then(poke).catch(() => {}); }
+function ptoast(t) { const d = document.createElement("div"); d.className = "ptoast"; d.textContent = t; document.body.append(d); setTimeout(() => d.remove(), 2600); }
+document.addEventListener("fullscreenchange", () => {
+  if (document.fullscreenElement) { fsArmed = true; fsGrace = Date.now() + 1500; }
+  else if (fsArmed) { fsArmed = false; if (needFs() && !S.locked) cheat("fullscreen"); }
+  if (!S || KIND !== "relay") return;
+  const go = () => { lastKey = ""; draw(); };
+  if ($("#code") && !document.fullscreenElement && needFs()) save().finally(go); else if (!$("#code")) go();
+});
+document.addEventListener("visibilitychange", () => { if (document.hidden && fsArmed && needFs() && !S.locked) cheat("hidden"); });
+window.addEventListener("blur", () => { if (fsArmed && needFs() && !S.locked && Date.now() > fsGrace) cheat("blur"); });
+for (const ev of ["copy", "cut", "paste", "drop"]) document.addEventListener(ev, (e) => {
+  if (!S || KIND !== "relay" || !S.noPaste || S.phase !== "playing") return;
+  e.preventDefault(); cheat(ev);
+  ptoast("🚫 " + T("Copier-coller interdit pendant le relais : ton formateur est prévenu.", "No copy-paste during the relay: your teacher is told."));
+}, true);
+document.addEventListener("contextmenu", (e) => { if (S && KIND === "relay" && S.noPaste && S.phase === "playing") e.preventDefault(); }, true);
+const LOCKWHY = { fullscreen: T("Tu as quitté le plein écran.", "You left full screen."), hidden: T("Tu as changé d'onglet ou réduit la fenêtre.", "You switched tab or minimized the window."), blur: T("Tu as changé de fenêtre.", "You switched window.") };
+function lockView() {
+  return '<div class="card bigc lockc"><div class="trophy">⏸️</div><h2>' + T("Session arrêtée", "Session stopped") + '</h2><p><b>' + e(LOCKWHY[S.locked] || LOCKWHY.fullscreen) + '</b></p><p class="muted">' + T("Demande à ton formateur de te laisser revenir : il voit ton nom sur la TV. Cette page se met à jour toute seule.", "Ask your teacher to let you back in: they see your name on the TV. This page updates by itself.") + "</p></div>";
+}
+function fsGate() {
+  return '<div class="card bigc fsc"><div class="trophy">🖥️</div><h2>' + T("Le relais se joue en plein écran", "The relay is played in full screen") + '</h2><p class="muted">' + T("Quitter le plein écran, changer d'onglet ou de fenêtre arrête ta session jusqu'à ce que ton formateur te laisse revenir.", "Leaving full screen, switching tab or window stops your session until your teacher lets you back in.") + (S.noPaste ? " " + T("Copier-coller interdit.", "No copy-paste.") : "") + '</p><button class="btn primary big" id="fsgo">🖥️ ' + T("Passer en plein écran", "Go full screen") + "</button></div>";
+}
 function relayView() {
   const mwarn = mwarnHtml();
   if (S.phase === "lobby") {
     const m = !S.noise ? "" : micOk() ? '<div class="mtest ok"><div class="mic-ic">🎤</div><div style="flex:1"><b>' + T("Micro prêt", "Mic ready") + ' ✓</b><div class="vu big"><i id="vu"></i></div><span class="muted" id="ltest"></span><p class="muted small">' + T("Essaie : parle un peu et regarde l'écran trembler. Pendant le relais, chaque voix entendue = un avertissement pour ton squad.", "Try it: say something and watch the screen shake. During the relay, every voice heard = a strike for your squad.") + "</p></div></div>"
       : '<div class="mtest"><div class="mic-ic pulse">🎤</div><div style="flex:1"><b>' + (mutedState ? T("Ton micro est coupé", "Your mic is muted") : micDenied ? T("Micro refusé", "Mic blocked") : T("Active ton micro", "Turn on your mic")) + '</b><p class="muted small">' + (micDenied ? T("Autorise le micro (🔒 à gauche de l'adresse) puis recharge la page. Sans micro, tu ne peux pas écrire.", "Allow the mic (🔒 left of the address) then reload. Without a mic, you can't write.") : mutedState ? T("Réactive-le (touche micro du clavier ou réglages) : un micro coupé pendant le relais = un avertissement.", "Unmute it (the mic key or the settings): a muted mic during the relay = a strike.") : T("Obligatoire : sans micro, tu ne pourras pas écrire ton tour.", "Required: without the mic, you won't be able to write your turn.")) + "</p>" + (mutedState || micDenied ? "" : '<button class="btn primary" id="micb">🎤 ' + T("Activer mon micro", "Turn on my mic") + "</button>") + "</div></div>";
-    return '<div class="card rhero"><div class="lane"><span class="runner">🏃</span></div><h2>' + T("Tu es dans le relais !", "You're in the relay!") + '</h2><div class="rules"><div><i>🤫</i>' + T("Interdit de parler", "No talking") + "</div><div><i>✍️</i>" + T("Chacun écrit à son tour", "Each one writes in turn") + "</div><div><i>✖</i>" + (S.strikesMax || 3) + T(" avertissements = éliminés", " strikes = out") + "</div></div>" + m + "</div>" + taskCard();
+    return '<div class="card rhero"><div class="lane"><span class="runner">🏃</span></div><h2>' + T("Tu es dans le relais !", "You're in the relay!") + '</h2><div class="rules"><div><i>🤫</i>' + T("Interdit de parler", "No talking") + "</div><div><i>✍️</i>" + T("Chacun écrit à son tour", "Each one writes in turn") + "</div><div><i>✖</i>" + (S.strikesMax || 3) + T(" avertissements = éliminés", " strikes = out") + "</div>" + (S.lockScreen && FS_OK ? "<div><i>🖥️</i>" + T("En plein écran", "In full screen") + "</div>" : "") + (S.noPaste ? "<div><i>🚫</i>" + T("Pas de copier-coller", "No copy-paste") + "</div>" : "") + "</div>" + m + (S.lockScreen && FS_OK && !document.fullscreenElement ? '<p style="margin:14px 0 0"><button class="btn" id="fsgo">🖥️ ' + T("Passer en plein écran maintenant", "Go full screen now") + "</button></p>" : "") + "</div>" + taskCard();
   }
   if (S.phase === "testing") return '<div class="card bigc"><div class="flask">🧪</div><h2>' + T("Les tests tournent sur la TV…", "The tests are running on the TV…") + '</h2><p class="muted">' + T("Regarde l'écran : on saura bientôt qui gagne.", "Watch the screen: the winner is coming.") + "</p></div>";
   if (S.phase === "over") {
     const win = S.winSquad === S.me.squad, r = S.result, pct = r && r.total ? Math.round(100 * r.passed / r.total) : 0;
     if (win && !window.__conf) { window.__conf = 1; setTimeout(confetti, 300); }
     return '<div class="card bigc ' + (win ? "won" : "") + '"><div class="trophy">' + (win ? "🏆" : S.out ? "🔇" : "🏁") + "</div><h2>" + (win ? T("Votre squad gagne !", "Your squad wins!") : T("Fin du relais", "Relay over")) + "</h2>" +
-      (r ? '<div class="score"><div class="pring" style="--p:' + pct + '"><span>' + r.passed + "/" + r.total + "</span></div><div>" + T("tests réussis", "tests passed") + (S.rank ? '<br><b class="rank">#' + S.rank + "</b>" : "") + "</div></div>" : "") + "</div>" +
+      (r ? '<div class="score"><div class="pring" style="--p:' + pct + '"><span>' + r.passed + "/" + r.total + "</span></div><div>" + T("tests réussis", "tests passed") + (S.rank ? '<br><b class="rank">#' + S.rank + "</b>" : "") + "</div></div>" : "") + (S.aiWhy ? '<p class="muted" style="margin-top:12px">🤖 ' + T("Aucun squad n'a réussi de test, l'IA a départagé : ", "No squad passed a test, the AI decided: ") + e(S.aiWhy) + "</p>" : "") + "</div>" +
       '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(S.task.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted">' + T("votre code final", "your final code") + '</span></div><pre class="code fin">' + e(S.code || "") + "</pre></div>";
   }
+  if (S.phase === "playing" && !S.out && S.locked) return lockView();
+  if (needFs() && !document.fullscreenElement) return fsGate();
   if (S.out) return '<div class="card bigc outc"><div class="trophy">🔇</div><h2>' + T("Votre squad est éliminé", "Your squad is out") + "</h2>" + pips(S.strikes, S.strikesMax) + '<p class="muted">' + T("Trop de bruit pendant le relais. Restez silencieux : les autres squads continuent.", "Too much noise during the relay. Stay quiet: the other squads carry on.") + "</p></div>";
   if (S.writing) {
     return mwarn + hud() + '<div class="wtop"><div><h2>✍️ ' + T("C'est à toi !", "Your turn!") + '</h2><p class="muted">' + T("Lis le code de ton équipe et continue-le. Pas un mot !", "Read your team's code and carry on. Not a word!") + '</p></div><div class="tbox"><span class="hl">' + T("ton tour", "your turn") + '</span><b id="tm"></b></div></div><div class="tbar"><i id="wbar"></i></div>' + taskCard(true) +
@@ -1166,6 +1245,8 @@ function draw() {
   $("#app").innerHTML = k();
   if (KIND === "royale" && S.phase === "reveal" && S.nextAt) $("#app").insertAdjacentHTML("afterbegin", '<div class="nxq" id="nxq"></div>');
   if (keep != null && $("#sql")) $("#sql").value = keep;
+  // the editor drawn again (back in full screen): the code as the squad left it
+  if (KIND === "relay" && S.writing) { const ta = $("#code"); if (ta && !ta.value) { ta.value = S.code || S.starter || ""; gutter(); } }
   wire();
 }
 function render() {
@@ -1178,7 +1259,7 @@ function render() {
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
   if (KIND === "royale") royaleEffects();
   if (KIND === "relay") { relayEffects(); const hp = document.querySelector(".hud .pips"); if (hp && S.noise) hp.outerHTML = pips(S.strikes, S.strikesMax); }
-  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "");
+  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "") + "." + (S.locked || "") + "." + (document.fullscreenElement ? 1 : 0);
   if (key === lastKey) return;
   lastKey = key;
   if (KIND === "relay" && S.writing && $("#code")) return;   // never redraw the editor under the writer's fingers
@@ -1192,6 +1273,7 @@ function wire() {
   if ($("#sql")) $("#sql").onkeydown = (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") { ev.preventDefault(); runSql(); } };
   document.querySelectorAll("[data-ins]").forEach((c) => c.onclick = () => { const t = $("#sql"); if (t) { const p = t.selectionStart; t.value = t.value.slice(0, p) + c.dataset.ins + t.value.slice(t.selectionEnd); t.focus(); } });
   if ($("#hint")) $("#hint").onclick = hint;
+  if ($("#fsgo")) $("#fsgo").onclick = goFs;
   if ($("#accb")) $("#accb").onclick = accuse;
   document.querySelectorAll("#micb").forEach((b) => b.onclick = () => micStart());
   if ($("#try")) $("#try").onclick = tryIt;

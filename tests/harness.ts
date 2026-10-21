@@ -468,6 +468,13 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      if (sys.includes("jury d'un relais de code")) {
+        // the fake jury: the team whose code has "presque" is the closest
+        const teams = [...user.matchAll(/ÉQUIPE ([A-Z]) :\n<<<\n([\s\S]*?)\n>>>/g)].map((m) => ({ l: m[1], c: m[2] }));
+        teams.sort((a, b) => Number(b.c.includes("presque")) - Number(a.c.includes("presque")));
+        ai.users.push(user);
+        return { response: JSON.stringify({ classement: teams.map((t) => ({ equipe: t.l, pourquoi: t.c.includes("presque") ? "La boucle est presque juste." : "Le code ne fait encore rien d'utile." })) }) };
+      }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
         const notions = ((user.match(/NOTIONS À REVOIR :\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
