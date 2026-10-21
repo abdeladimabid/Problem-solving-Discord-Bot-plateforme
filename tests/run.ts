@@ -2846,12 +2846,24 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore === pts && wl.status === 200, "finalizing again doesn't give points twice");
   const ro = await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
   check(ro.data.status === "draft" && !q1("SELECT COUNT(*) AS n FROM competency_results WHERE discord_id = ? AND source = 'brief' AND ref = ?", U.alice.id, id).n, "reopen takes the competencies back");
-  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore + pts && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…and the skill evidence; the points stay until it's finalized again");
+  const coinsOf = () => q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).coins;
+  check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n === ptsBefore && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE source = ?", `brief:${id}`).n, "…the skill evidence and the points: reopened, the debrief's points are taken back");
   // reopen, change something, save, finalize again: the points once (and the history shows one entry)
   await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: false } } });
   await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
   const ledgerB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id));
   check(ledgerB.reduce((s: number, r: any) => s + r.amount, 0) === pts && ledgerB.length === 1, "reopen, change, finalize again: the points once, one line in the history");
+  // reopened and finalized again (and again), even after analyzing again: always the points once
+  const c0 = coinsOf();
+  await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  const cOpen = coinsOf();
+  const rec0 = JSON.parse(q1("SELECT record FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).record);
+  delete rec0.awarded;   // a record written again (like "Analyze again" did) forgets what it gave
+  run1("UPDATE brief_reviews SET record = ? WHERE brief_id = ? AND who = ?", JSON.stringify(rec0), id, who);
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
+  await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
+  const sumB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id)).reduce((s: number, r: any) => s + r.amount, 0);
+  check(sumB === pts && cOpen <= c0 && coinsOf() === c0, `reopen takes the points and coins back, finalize gives them once (${sumB}/${pts} pts, coins ${c0} → ${cOpen} → ${coinsOf()})`);
   const cls = await api("GET", `/api/competencies?g=${G}`);
   check(cls.data.cells.some((c: any) => c.discord_id === U.alice.id && c.code === "C3" && c.best === 1), "class competency matrix");
   const sb = det.data.learning.briefs.find((b: any) => b.review?.status === "final");
@@ -3780,12 +3792,17 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify({ ...rec, at: Date.now(), result: { ...rec.result, feedback: "" } }), clock.now());
   const w = await api("POST", `/api/briefs/${bid}/review/commentai`, { g: G, who, states: {} });
   const wf = w.data.review?.result?.feedback || "";
-  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Sara,\n\nTon projet est bien structuré") && wf.includes("des bonus") && wf.includes("Continue sur cette lancée, Sara,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
+  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Carol,\n\nTon projet est bien structuré") && wf.includes("des bonus") && wf.includes("Continue sur cette lancée, Carol,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
   check(!ai.users[ai.users.length - 1].includes("Sara") && !/commits|branches/i.test(ai.users[ai.users.length - 1]), "…without the name, nor the automatic checks");
+  // the comment greets the student by the name the teacher gave them (Students page), not the one from the analysis
+  run1("UPDATE players SET name = 'Karima Benali', name_lock = 1 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  const rn = (await api("GET", `/api/briefs/${bid}/review?g=${G}&who=${encodeURIComponent(who)}`)).data.review.result.feedback;
+  check(rn.startsWith("Karima,\n\n") && rn.includes("Continue sur cette lancée, Karima,") && !rn.includes("Carol"), "renamed by the teacher: the comment follows (even a comment already written)");
+  run1("UPDATE players SET name = 'Carol', name_lock = 0 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
   const k = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { co: { C4: true }, keepComment: true, comment: wf } });
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
-  check(rb.data.review.result.feedback.startsWith("Sara,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
+  check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
   const one = await api("POST", `/api/briefs/${bid}/review/remarks`, { g: G, who, text: "il sont reponder sur tous les questions", ai: true });

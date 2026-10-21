@@ -3229,5 +3229,6 @@ window.CB_FR = {
 "Season points restart from zero for everyone. History is kept. The final leaderboard of {s} is posted in #arena and its champion gets a badge.": "Les points de saison repartent de zéro pour tout le monde. L’historique est conservé. Le classement final de {s} est publié dans #arena et son champion reçoit un badge.",
 "Right now": "Tout de suite",
 "All-time pts": "Pts (toutes saisons)",
-"Every season added up": "Toutes les saisons additionnées"
+"Every season added up": "Toutes les saisons additionnées",
+"Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).": "Ses compétences, ses acquis, ses points et ses pièces quittent le dossier de l’apprenant jusqu’à ce que tu le finalises à nouveau : la finalisation les redonne (une seule fois)."
 };

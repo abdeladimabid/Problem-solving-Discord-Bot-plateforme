@@ -141,7 +141,29 @@ export async function getReview(env: Env, briefId: number, who: string): Promise
   let rec: any = {};
   try { rec = JSON.parse(r.record || "{}"); } catch { rec = {}; }
   rec.assess = await briefAssessments(env, briefId, who, rec);
+  await currentNames(env, r.guild_id, who, rec);
   return { ...r, rec };
+}
+
+/**
+ * The names the teacher gave the students (Students page), never a Discord name kept from the analysis: the comment
+ * greets the student by the first name of their current name (a comment already written follows the new name).
+ */
+async function currentNames(env: Env, gid: string, who: string, rec: any) {
+  if (who.startsWith("u:")) {
+    const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", gid, who.slice(2)).catch(() => null);
+    const first = p?.name ? firstNameOf(p.name, "") : "";
+    if (!first || first === rec.first) return;
+    const old = String(rec.first || "").trim();
+    if (old.length > 1 && rec.result && typeof rec.result.feedback === "string")
+      rec.result.feedback = rec.result.feedback.replace(new RegExp(`(^|[^\\p{L}])${old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}])`, "gu"), `$1${first}`);
+    rec.first = first;
+  } else if (rec.squad?.members?.length) {
+    const ids = rec.squad.members.map((m: any) => String(m.gid));
+    const rows = await all<{ discord_id: string; name: string | null }>(env, `SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, gid, ...ids).catch(() => []);
+    const nm = new Map(rows.filter((x) => x.name).map((x) => [x.discord_id, x.name!]));
+    for (const m of rec.squad.members) if (nm.has(String(m.gid))) m.name = nm.get(String(m.gid));
+  }
 }
 
 /**
@@ -444,6 +466,8 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     backlog: snap.backlog || undefined, skills, result,
     // what the teacher already decided stays (a challenge, notes); switches start again from the new evidence
     challenge: prev?.rec?.challenge ?? null,
+    // what a finalize already gave (points, coins): analyzing again never gives it twice
+    ...(prev?.rec?.awarded ? { awarded: prev.rec.awarded } : {}),
   };
   if (squad) {
     rec.squad = { id: squad.id, name: squad.name, sm: squad.sm, members: members.map((m) => ({ gid: m.discord_id, login: m.github_login, name: m.name })) };

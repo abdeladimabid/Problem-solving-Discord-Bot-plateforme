@@ -1343,7 +1343,7 @@ function wireDebrief() {
     DB.B = await api(`/briefs/${bid}`);
     renderDebrief();
   });
-  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies and skills leave the record until you finalize it again. The points and coins stay: finalizing again only adds or removes the difference.", "Reopen", async () => {
+  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).", "Reopen", async () => {
     const R = await api(`/briefs/${bid}/review/reopen`, { method: "POST", body: { who } });
     DB.R = { ...DB.R, ...R }; DB.B = await api(`/briefs/${bid}`); renderDebrief();
   });

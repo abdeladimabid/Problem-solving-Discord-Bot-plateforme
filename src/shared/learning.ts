@@ -92,7 +92,9 @@ export async function finalizeReview(env: Env, g: GuildRow, brief: { id: number;
     // 4. points and coins: validated competencies (+ bonus done); a new finalize only adds or removes the difference
     const okComps = Object.values(comps).filter(Boolean).length;
     const pts = okComps * rw.comp + bonusDone * rw.bonus, coins = okComps * rw.coins;
-    const prev = rec.awarded[uid] ?? { pts: 0, coins: 0 };
+    // what this debrief already gave: the points from the history itself (never twice), the coins from the record
+    const given = await one<{ s: number }>(env, "SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'brief' AND ref = ?", g.id, uid, String(brief.id));
+    const prev = { pts: given?.s ?? 0, coins: rec.awarded[uid]?.coins ?? 0 };
     if (pts !== prev.pts) await addPoints(env, g, { discordId: uid, amount: pts - prev.pts, reason: "brief", ref: brief.id, note: brief.title.slice(0, 80) });
     if (coins !== prev.coins) await run(env, "UPDATE players SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND discord_id = ?", coins - prev.coins, g.id, uid);
     rec.awarded[uid] = { pts, coins };
@@ -124,10 +126,9 @@ async function sendResult(env: Env, g: GuildRow, brief: { id: number; title: str
   return n;
 }
 
-/** Back to draft to change something. The competencies and skill evidence leave the record until it's finalized
- *  again; the points and coins stay, and finalizing again only adds or removes the difference (one line in the
- *  history, never the same points twice). `takeBack` (the debrief is deleted): the points and coins go too. */
-export async function reopenReview(env: Env, g: GuildRow, briefId: number, who: string, takeBack = false) {
+/** Back to draft to change something: the competencies, skill evidence, points and coins the debrief gave leave the
+ *  student's record; finalizing again gives them back (as they are then). Never the same points twice. */
+export async function reopenReview(env: Env, g: GuildRow, briefId: number, who: string, takeBack = true) {
   const r = await getReview(env, briefId, who);
   if (!r) return;
   const students: string[] = who.startsWith("s:") ? (r.rec.squad?.members ?? []).map((m: any) => String(m.gid)) : [who.slice(2)];
