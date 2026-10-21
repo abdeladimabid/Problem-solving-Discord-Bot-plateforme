@@ -326,6 +326,7 @@ done(rows);
 `;
 
 let wandboxNode = "nodejs-20.17.0";
+let wandboxPhp = LANGS.php.wandbox ?? "php-8.3.12";
 
 async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 60000): Promise<any> {
   const base = (env.WANDBOX_URL || "https://wandbox.org").replace(/\/$/, "");
@@ -371,10 +372,25 @@ export async function runHarness(env: Env, lang: CodeLang, src: string, tests: {
       { file: info.file, code },
     ],
   });
-  let j = await wandbox(env, body());
-  if (/compiler.*not found|unknown compiler/i.test(JSON.stringify(j).slice(0, 300)) && !j.program_output) {
+  // Wandbox retires its Node.js versions: on an error, the current name is looked up and the run tried again;
+  // a timeout or a server error (it's busy) is tried once more after a short pause
+  const call = async () => {
+    try {
+      const r = await wandbox(env, body());
+      if (!(/compiler.*not found|unknown compiler/i.test(JSON.stringify(r).slice(0, 300)) && !r.program_output)) return r;
+    } catch (e) {
+      if (!(e instanceof RunnerUnavailable) || !/HTTP [45]\d\d/.test(e.message)) throw e;
+    }
     const n = await wandboxCompiler(env, "nodejs-");
-    if (n && n !== wandboxNode) { wandboxNode = n; j = await wandbox(env, body()); }
+    if (n && n !== wandboxNode) { wandboxNode = n; return wandbox(env, body()); }
+    return wandbox(env, body());
+  };
+  let j: any;
+  try { j = await call(); }
+  catch (e) {
+    if (!(e instanceof RunnerUnavailable) || !/timeout|HTTP 5\d\d|unexpected answer/.test(e.message)) throw e;
+    await new Promise((r) => setTimeout(r, 1500));
+    j = await call();
   }
   const out = String(j.program_output ?? "");
   const line = out.split("\n").reverse().find((l) => l.startsWith(mark));
@@ -450,7 +466,19 @@ async function judgeCompiled(env: Env, code: string, lang: CodeLang, tests: Test
 export async function runOnce(env: Env, lang: CodeLang, code: string, stdin = ""): Promise<{ ok: boolean; out: string; err: string }> {
   if (lang === "javascript" || lang === "php") {
     const php = lang === "php" && !/^\s*<\?php/.test(code) ? "<?php\n" + code : code;
-    const j = await wandbox(env, { compiler: LANGS[lang].wandbox, code: php, stdin }, 30000);
+    // the current Node.js / PHP version of Wandbox (a retired one is looked up and the run tried again)
+    const prefix = lang === "javascript" ? "nodejs-" : "php-";
+    let comp = lang === "javascript" ? wandboxNode : wandboxPhp;
+    let j: any;
+    try {
+      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);
+      if (/compiler.*not found|unknown compiler/i.test(JSON.stringify(j).slice(0, 300)) && !j.program_output) throw new RunnerUnavailable("HTTP 400 compiler not found");
+    } catch (e) {
+      if (!(e instanceof RunnerUnavailable) || !/HTTP [45]\d\d|timeout/.test(e.message)) throw e;
+      const n = await wandboxCompiler(env, prefix);
+      if (n) { comp = n; if (lang === "javascript") wandboxNode = n; else wandboxPhp = n; }
+      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);
+    }
     const out = String(j.program_output ?? "");
     const ok = String(j.status) === "0" && !j.signal && !j.compiler_error && out.length < 100000;
     return { ok, out: out.replace(/\s+$/, ""), err: String(j.program_error || j.compiler_error || j.signal || "").slice(-400) };
@@ -474,6 +502,16 @@ export async function runnerHealth(env: Env): Promise<{ ok: boolean; ms: number;
       ok = false;
       parts.push(`${LANGS[lang].label}: ${(e as Error).message}`);
     }
+  }
+  // Wandbox: it checks the challenges the AI writes (and runs the tests of several languages at once)
+  try {
+    const h = await runHarness(env, "javascript", "const l = require('fs').readFileSync(0, 'utf8').trim(); console.log(l.split(' ').map(Number).reduce((a, b) => a + b, 0));", [{ input: "2 3", gen: null }], 2, 50, 10);
+    const good = !h.compile && h.rows[0]?.s === "ok" && h.rows[0].o.trim() === "5";
+    ok &&= good;
+    parts.push(`Wandbox (${wandboxNode}): ${good ? "OK" : h.compile || h.rows[0]?.e || "no output"}`);
+  } catch (e) {
+    ok = false;
+    parts.push(`Wandbox: ${(e as Error).message}`);
   }
   return { ok, ms: Date.now() - t, detail: parts.join(" · ") };
 }

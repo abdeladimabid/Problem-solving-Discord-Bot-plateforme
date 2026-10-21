@@ -68,7 +68,7 @@ export const hr = {
   profiles: {} as Record<string, string>,      // username (lowercase) -> bio
   down: false,
 };
-export const runner = { down: false, wandboxDown: false, calls: 0 };
+export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
@@ -172,7 +172,9 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "wandbox.org") {
     runner.calls++;
     if (runner.down || runner.wandboxDown) return new Response("busy", { status: 503 });
-    if (url.pathname === "/api/list.json") return Response.json([{ name: "nodejs-20.17.0" }, { name: "php-8.3.12" }]);
+    if (url.pathname === "/api/list.json") return Response.json([{ name: "nodejs-20.17.0" }, { name: "nodejs-22.11.0" }, { name: "nodejs-head" }, { name: "php-8.3.12" }].filter((c) => !runner.retired.includes(c.name)));
+    if (runner.retired.includes(String(body?.compiler))) return new Response(`Error: compiler ${body.compiler} not found`, { status: 500 });
+    if (runner.busyOnce > 0) { runner.busyOnce--; return new Response("busy", { status: 503 }); }
     return Response.json(wandboxLocal(body));
   }
   if (url.hostname === "godbolt.org") {

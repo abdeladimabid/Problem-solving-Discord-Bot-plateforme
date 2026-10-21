@@ -335,7 +335,7 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
         tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
       };
     } catch (e) {
-      if (e instanceof RunnerUnavailable) { fail("the code runner is unreachable"); return null; }
+      if (e instanceof RunnerUnavailable) { fail(`the code runner didn't answer (${String(e.message).slice(0, 140)})`); return null; }
       fail(`checking failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
     }
   }

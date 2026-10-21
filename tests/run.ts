@@ -303,6 +303,20 @@ section("write code: real judge, verdicts, AI coach, points");
   check(text(lastPatch()).includes("AI judged"), "AI fallback judge when the runner is unreachable");
   check(q1("SELECT verified FROM attempts WHERE id = ?", aid2).verified === 0, "AI-judged solves are marked unverified");
   runner.down = false;
+  {
+    // Wandbox retired our Node.js version, or is busy for a moment: the run still works
+    const R = await import("../src/shared/runner.ts");
+    const prog = "const l = require('fs').readFileSync(0, 'utf8').trim(); console.log(Number(l) * 2);";
+    runner.retired = ["nodejs-20.17.0"];
+    const h1 = await R.runHarness(env, "javascript", prog, [{ input: "21", gen: null }], 2, 50, 10);
+    const o1 = await R.runOnce(env, "javascript", "console.log(6 * 7)");
+    runner.busyOnce = 1;
+    const h2 = await R.runHarness(env, "javascript", prog, [{ input: "4", gen: null }], 2, 50, 10);
+    const hh = await R.runnerHealth(env);
+    runner.retired = []; runner.busyOnce = 0;
+    check(h1.rows[0]?.o === "42" && o1.out === "42" && h2.rows[0]?.o === "8", "Wandbox retired our Node.js version (the current one is found) or is busy a moment (tried again): the code still runs");
+    check(/Wandbox \(nodejs-22\.11\.0\): OK/.test(hh.detail), `the diagnostics test Wandbox too (${hh.detail})`);
+  }
 }
 
 section("write code: AI-generated problem, proven by running reference vs brute force");
