@@ -1,5 +1,6 @@
 // Runs every minute (Cron Trigger): contests, duel timeouts, assignment
 // reminders, the daily challenge and the Monday recap.
+import { seasonCron } from "../shared/season.ts";
 import type { ChallengeRow, Difficulty, DuelRow, Env, GuildRow } from "../shared/types.ts";
 import { all, getGuild, now, one, run } from "../shared/db.ts";
 import { RULES, dayKey } from "../shared/game.ts";
@@ -57,6 +58,7 @@ export async function runCron(env: Env) {
   await safe("shop", () => expireShop(env));
   await safe("github", () => githubCron(env));
   await safe("assessments", () => assessCron(env));
+  await safe("seasons", () => seasonCron(env));
   if (new Date().getUTCMinutes() % 30 === 0) await safe("league links", () => refreshRemotes(env));
   await safe("league", () => announceLeague(env));
 }

@@ -3,7 +3,7 @@
 // presentations first, no hard subject for a Faible or Critique student), then grades each presenter: the points
 // are only given then. The counts per student keep the presentations fair.
 import type { Env, GuildRow } from "./types.ts";
-import { addPoints, all, now, one, run } from "./db.ts";
+import { all, challengeCoins, getPlayer, now, one, run } from "./db.ts";
 import { COLORS, send, truncate } from "./discord.ts";
 import { t } from "./i18n.ts";
 import { mondayOf } from "./activities.ts";
@@ -29,13 +29,15 @@ export async function signupCfg(env: Env, gid: string): Promise<SignupCfg> {
   const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", `actsign:${gid}`);
   const v = parse(r?.v, {}) || {};
   const pts = (x: unknown, d: number) => (Number.isFinite(Number(x)) ? Math.min(300, Math.max(0, Math.round(Number(x)))) : d);
-  return { channel: typeof v.channel === "string" && /^\d{5,25}$/.test(v.channel) ? v.channel : null, veille: pts(v.veille, 20), live: pts(v.live, 40) };
+  void pts;
+  return { channel: typeof v.channel === "string" && /^\d{5,25}$/.test(v.channel) ? v.channel : null, veille: ACT_COINS.veille, live: ACT_COINS.live };
 }
+/** A veille or a live coding gives coins only (no points: they don't count in the leaderboard), a fixed amount. */
+export const ACT_COINS = { veille: 20, live: 40 } as const;
 export async function saveSignupCfg(env: Env, gid: string, b: Partial<SignupCfg>) {
   const cur = await signupCfg(env, gid);
   const next = { ...cur };
   if (b.channel !== undefined) next.channel = b.channel && /^\d{5,25}$/.test(String(b.channel)) ? String(b.channel) : null;
-  for (const k of ["veille", "live"] as const) if (b[k] !== undefined && Number.isFinite(Number(b[k]))) next[k] = Math.min(300, Math.max(0, Math.round(Number(b[k]))));
   await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", `actsign:${gid}`, JSON.stringify(next), now());
   return next;
 }
@@ -270,14 +272,14 @@ export async function cancelClaim(env: Env, g: GuildRow, id: number) {
   return { ok: true };
 }
 
-/** After the presentation: each presenter gets a share of the points (100% = presented very well). A second
- *  grading only adds the difference. */
+/** After the presentation: each presenter gets a share of the coins (100% = presented very well), never points. A
+ *  second grading only adds the difference. */
 export async function gradeClaim(env: Env, g: GuildRow, id: number, grades: Record<string, unknown>, note: string | null = null) {
   const c = (await one<ClaimRow>(env, "SELECT * FROM activity_claims WHERE id = ? AND guild_id = ?", id, g.id)) ?? fail("This request doesn't exist anymore.");
   if (c.status !== "approved" && c.status !== "done") fail("Approve the presenters first.");
   const a = (await actOf(env, g.id, c.activity_id)) ?? fail("This activity doesn't exist anymore.");
   const cfg = await signupCfg(env, g.id);
-  const full = c.points ?? cfg[c.kind];
+  const full = cfg[c.kind];
   const mem = ids(c.members), old = parse(c.grades, {}) as Record<string, number>;
   const next: Record<string, number> = {};
   for (const m of mem) {
@@ -288,7 +290,7 @@ export async function gradeClaim(env: Env, g: GuildRow, id: number, grades: Reco
   const clean = note ? String(note).trim().slice(0, 500) || null : c.note;
   for (const m of mem) {
     const delta = Math.round((full * next[m]) / 100) - Math.round((full * (old[m] ?? 0)) / 100);
-    if (delta) await addPoints(env, g, { discordId: m, amount: delta, reason: "activity", ref: id, note: `${a.kind === "live" ? "Live coding" : "Veille"} · ${a.title ?? ""}`.slice(0, 120) });
+    if (delta) { await getPlayer(env, g.id, m); await challengeCoins(env, g, m, delta); }
   }
   await run(env, "UPDATE activity_claims SET status = 'done', grades = ?, points = ?, note = ?, done_at = COALESCE(done_at, ?) WHERE id = ?", JSON.stringify(next), full, clean, now(), id);
   const L = g.lang;

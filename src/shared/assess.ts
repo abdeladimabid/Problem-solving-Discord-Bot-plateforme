@@ -10,7 +10,8 @@ import { addPoints, all, now, one, run } from "./db.ts";
 import { dm, linkBtn, row } from "./discord.ts";
 import { signText } from "./integrity.ts";
 import { t } from "./i18n.ts";
-import { askReview } from "./review/debrief.ts";
+import { askReview, refreshAssessLevels } from "./review/debrief.ts";
+import { conceptsOf } from "./review/engine.ts";
 import { extractJson } from "./ai.ts";
 import { parseComp, techOutside } from "./program.ts";
 import { SKILL_KEYS } from "./skills.ts";
@@ -595,6 +596,8 @@ export async function applyResults(env: Env, a: AssessRow, takerId: number) {
     const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", a.guild_id);
     if (g && target !== (prev?.s ?? 0)) await addPoints(env, g, { discordId: tk.discord_id, amount: target - (prev?.s ?? 0), reason: "assessment", ref: a.id, note: a.title.slice(0, 80) });
   }
+  // the debrief of the linked brief: its level follows the new grade
+  await refreshAssessLevels(env, a.brief_id, tk.discord_id).catch(() => 0);
 }
 
 /** Send each graded student their score and the comments (when the teacher is happy with the grades). */
@@ -603,6 +606,7 @@ export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
   const takers = await all<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", a.id);
   const L = g.lang;
   let sent = 0;
+  const released = await releasedOf(env, a.id);
   for (const tk of takers.filter((x) => !needsGrading(x)).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
     const grades = parse<Record<string, Grade>>(tk.grades, {});
     const order = paperFor(qs, tk.seed, st.shuffle);
@@ -612,11 +616,58 @@ export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
     const n = (v: string) => order.filter((p) => grades[p.id]?.verdict === v).length;
     const tally = [n("correct") && `✅ ${n("correct")} ${fr ? "juste(s)" : "right"}`, n("partial") && `🟡 ${n("partial")} ${fr ? "en partie" : "partly right"}`,
       n("wrong") && `❌ ${n("wrong")} ${fr ? "fausse(s)" : "wrong"}`, n("empty") && `⚪ ${n("empty")} ${fr ? "non tentée(s)" : "not attempted"}`].filter(Boolean).join(" · ");
+    // their correction on a page: every question, their answer, the comment, and what to look up for the ones missed
+    const url = st.showResults ? quizUrl(env, await takerToken(env, tk.id, now() + RESULTS_DAYS * 86400)) : "";
     const ok = await dm(env, tk.discord_id, { embeds: [{ title: t(L, "assess.result_title", { title: a.title, score: tk.score ?? 0 }), color: (tk.score ?? 0) >= 60 ? 0x16a34a : 0xd97706,
-      description: [tk.summary ?? "", "", tally, "", ...lines].join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000) }] });
-    if (ok) sent++;
+      description: [tk.summary ?? "", "", tally, "", ...lines].join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000) }],
+      ...(url ? { components: [row(linkBtn(fr ? "Voir ma correction" : "See my correction", url, "📄"))] } : {}) });
+    if (ok) { sent++; released.add(tk.id); }
   }
+  if (st.showResults) await setReleased(env, a.id, [...released]);
   return sent;
+}
+
+// ------------------------------------------------------------------ the student's correction
+const RESULTS_DAYS = 120;
+const relKey = (aid: number) => `assess-out:${aid}`;
+async function releasedOf(env: Env, aid: number): Promise<Set<number>> {
+  const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", relKey(aid)).catch(() => null);
+  return new Set(parse<number[]>(r?.v, []).map(Number));
+}
+async function setReleased(env: Env, aid: number, ids: number[]) {
+  await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", relKey(aid), JSON.stringify(ids), now());
+}
+/** What to type in a search engine for a question missed: its notion (or the start of the question). */
+export function searchFor(q: Question, codeLang: string): string {
+  const c = conceptsOf(`${q.prompt}\n${q.code ?? ""}\n${q.expected ?? ""}`)[0];
+  const tech = q.type === "code" ? String(q.lang || codeLang || "") : "";
+  const base = c ? c.replace(/\s*\(.*\)$/, "") : String(q.prompt).split("\n")[0].replace(/[«»"“”]/g, "").slice(0, 90);
+  return `${base}${tech && !base.toLowerCase().includes(tech.toLowerCase()) ? ` ${tech}` : ""}`.trim();
+}
+/**
+ * The correction a student sees once the teacher sent the results (and the assessment shows them): each question in
+ * their order, their answer, the verdict, the comment, the right choice of a multiple-choice question, and what to look
+ * up for the ones missed. The model answers of the other questions are never shown (the assessment may be reused).
+ */
+export async function resultsView(env: Env, takerId: number) {
+  const x = await loadTaker(env, takerId);
+  if (!x) return null;
+  const { tk, a } = x, st = settingsOf(a);
+  if (tk.status !== "graded" || !st.showResults || !(await releasedOf(env, a.id)).has(tk.id)) return { ready: false, lang: st.lang };
+  const qs = questionsOf(a), byId = new Map(qs.map((q) => [q.id, q]));
+  const grades = parse<Record<string, Grade>>(tk.grades, {}), answers = parse<Record<string, any>>(tk.answers, {});
+  const items = paperFor(qs, tk.seed, st.shuffle).map((p: any) => {
+    const q = byId.get(p.id)!, gr = grades[p.id], ans = answers[p.id];
+    const verdict = gr?.verdict ?? "empty", ok = verdict === "correct";
+    return {
+      n: p.n, type: q.type, prompt: q.prompt, code: q.code ?? "", points: q.points, verdict, score: gr?.score ?? 0, comment: gr?.comment ?? "",
+      answer: q.type === "mcq" ? (Array.isArray(ans) ? ans : []).map((k: number) => q.choices![k]).filter((x: unknown) => x != null) : String(ans ?? ""),
+      choices: q.type === "mcq" ? (p.choices as { k: number; text: string }[]).map((c) => ({ text: c.text, right: q.answer!.includes(c.k), picked: Array.isArray(ans) && ans.includes(c.k) })) : null,
+      marks: (gr?.marks ?? []).slice(0, 12), search: ok ? "" : searchFor(q, st.codeLang),
+    };
+  });
+  const review = [...new Set(items.filter((i) => i.search).map((i) => i.search))];
+  return { ready: true, lang: st.lang, title: a.title, score: tk.score ?? 0, summary: tk.summary ?? "", items, review };
 }
 
 /** Cron: time is up → the paper is handed in as it is. */

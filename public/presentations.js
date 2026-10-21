@@ -1,7 +1,7 @@
 "use strict";
 // Presentations: the veilles and live codings the students present. Share them in Discord, approve the requests
 // (/activity choose, a veille in binôme), assign by hand or at random (fewest presentations first, no hard subject
-// for a Faible or Critique student), then grade each presenter: the points only come then.
+// for a Faible or Critique student), then grade each presenter: the coins only come then.
 /* global $, $$, api, esc, toast, busy, view, openDialog, confirmDialog, dlg, loadDiscord, loadStudents, channelOptions, avatar, fmtAgo, table, refreshPills, routes */
 let presTab = (() => { try { return localStorage.getItem("presTab") || "acts"; } catch { return "acts"; } })();
 let presFilter = "all";
@@ -27,7 +27,7 @@ async function viewPresentations() {
   const behind = P.stats.rows.filter((r) => r.behind);
   const graded = P.history.filter((h) => h.status === "done").length;
   view.innerHTML = `
-    <div class="page-head"><div><h1>Presentations</h1><p class="sub">The <b>veilles</b> (in binôme) and <b>live codings</b> (alone or in pairs) your students present. Share them in Discord, approve who presents what, then grade each presentation: the points only come then.</p></div>
+    <div class="page-head"><div><h1>Presentations</h1><p class="sub">The <b>veilles</b> (in binôme) and <b>live codings</b> (alone or in pairs) your students present. Share them in Discord, approve who presents what, then grade each presentation: the coins (never points) only come then.</p></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="pr-intra" title="The veilles and live codings become activities of the class on the YouCode intranet">🏫 Send to the intranet</button><a class="btn" href="#/activities">📅 Activités</a></div></div>
     <div class="figures cs-figs">
       <div class="figure"><div class="ico">📚</div><div><b>${free.length}</b><span>free activities</span></div></div>
@@ -72,8 +72,6 @@ function prActsPane(P, free) {
       <div class="pr-share-r">
         <label>Week<select id="pr-wk">${fweeks.length ? fweeks.map((w) => `<option value="${w.m}" ${w === sel ? "selected" : ""}>Week of ${prDay(w.m, { day: "numeric", month: "short" })} · ${w.items.length} free${w.shared ? " · shared" : ""}</option>`).join("") : `<option value="">No free activity</option>`}</select></label>
         <label>Channel<select id="pr-ch"><option value="">Choose a channel…</option>${channelOptions(P.cfg.channel)}</select></label>
-        <label>Veille<span class="unit-in"><input type="number" id="pr-pv" min="0" max="300" value="${P.cfg.veille}"><i>pts</i></span></label>
-        <label>Live coding<span class="unit-in"><input type="number" id="pr-pl" min="0" max="300" value="${P.cfg.live}"><i>pts</i></span></label>
         <div class="pr-share-btns"><button class="btn primary" id="pr-share" ${sel ? "" : "disabled"}>📣 Share the week (${sel?.items.length ?? 0})</button><button class="btn" id="pr-rand" ${sel ? "" : "disabled"}>🎲 Assign the week at random</button></div>
       </div>
     </section>
@@ -138,7 +136,7 @@ function prHistPane(P) {
     { label: "When", html: (r) => `<span class="small">${prDay(r.day)}</span>` },
     { label: "Activity", html: (r) => `<span class="pr-kind">${prKind(r.kind)}</span><div>${esc(r.title || "")}</div>` },
     { label: "Presenters", html: (r) => r.members.map((m) => `${esc(m.name)}${r.status === "done" && r.grades ? ` <b>${r.grades[m.id] ?? 0}%</b>` : ""}`).join(" · ") },
-    { label: "Points", num: true, html: (r) => (r.status === "done" ? r.members.map((m) => Math.round((r.points || 0) * (r.grades?.[m.id] ?? 0) / 100)).join(" · ") : "") },
+    { label: "Coins", num: true, html: (r) => (r.status === "done" ? r.members.map((m) => Math.round((r.points || 0) * (r.grades?.[m.id] ?? 0) / 100)).join(" · ") : "") },
     { label: "Status", html: (r) => `<span class="pr-hst h-${r.status}">${r.status === "done" ? "🎤 Presented" : r.status === "denied" ? "Denied" : "Freed"}</span>${r.note ? `<div class="muted small">${esc(r.note)}</div>` : ""}` },
   ], P.history) : `<p class="empty">No presentation yet.</p>`}</section>`;
 }
@@ -162,7 +160,7 @@ function prStuPane(P, free) {
         { label: "Level", html: (r) => (r.level ? `<span class="niv pgc-${esc(r.level)}"><i></i>${esc(r.level[0].toUpperCase() + r.level.slice(1))}</span>` : `<span class="muted">—</span>`) },
         { label: "🔎 Veilles", html: (r) => kindCell(r.veille, r.vDone, r.behindV) },
         { label: "💻 Live codings", html: (r) => kindCell(r.live, r.lDone, r.behindL) },
-        { label: "Points", num: true, html: (r) => (r.points ? `${r.points}` : `<span class="muted">·</span>`) },
+        { label: "Coins", num: true, html: (r) => (r.points ? `${r.points} 🪙` : `<span class="muted">·</span>`) },
         { label: "Last", html: (r) => `<span class="small nowrap">${r.last ? prDay(r.last, { day: "numeric", month: "short" }) : "—"}</span>` },
       ], rows, { empty: "No students yet." })}</div>
       <p class="muted small" style="margin:8px 0 0"><span class="pr-kc late"><b>0</b></span> in red: behind the class on that kind.</p></section>
@@ -181,8 +179,6 @@ function prWire(P, free) {
   const reload = async (msg) => { if (msg) toast(msg); refreshPills(); await viewPresentations(); };
   const cfg = (b) => api("/activities/signups", { method: "PUT", body: b }).then((r) => { P.cfg = r.cfg; toast("Saved"); }).catch((e) => toast(e.message, true));
   $("#pr-ch").onchange = (e) => cfg({ channel: e.target.value || null });
-  $("#pr-pv").onchange = (e) => cfg({ veille: Number(e.target.value) });
-  $("#pr-pl").onchange = (e) => cfg({ live: Number(e.target.value) });
   // share / assign at random: the free activities of the week picked
   const weekFree = () => free.filter((i) => prMonday(i.day) === $("#pr-wk").value);
   $("#pr-wk").onchange = (e) => {
@@ -269,18 +265,18 @@ async function prPick(it, c, P, reload) {
   $("#pk-q", dlg).oninput = (e) => { const q = e.target.value.toLowerCase(); $$(".sg-pick label", dlg).forEach((l) => (l.hidden = !l.dataset.n.includes(q))); };
 }
 
-/** After the presentation: a grade per presenter (a share of the points). */
+/** After the presentation: a grade per presenter (a share of the coins: no points). */
 function prGrade(it, c, P, reload) {
-  const full = c.points ?? P.cfg[it.kind];
+  const full = P.cfg[it.kind];
   openDialog(`Grade · ${it.title || ""}`, `
-    <p class="small muted" style="margin-top:0">${prKind(it.kind)} · up to <b>${full} pts</b> each. The points are given now; changing a grade later only adds or removes the difference.</p>
+    <p class="small muted" style="margin-top:0">${prKind(it.kind)} · up to <b>${full} 🪙</b> each (coins only, no points). The coins are given now; changing a grade later only adds or removes the difference.</p>
     ${c.members.map((m) => `<div class="sg-grade"><b>${avatar(m.name, m.id)} ${esc(m.name)}</b><div class="seg">${PR_GRADES.map(([v, l]) => `<label><input type="radio" name="g-${m.id}" value="${v}" ${(c.grades?.[m.id] ?? 100) === v ? "checked" : ""}><span>${l} · ${Math.round(full * v / 100)}</span></label>`).join("")}</div></div>`).join("")}
     <label for="pg-note">A word for them <span class="muted">(optional, sent by DM)</span></label><input type="text" id="pg-note" style="width:100%" maxlength="300" value="${esc(c.note && c.note !== "taken" ? c.note : "")}">`,
-    [{ label: "Give the points", primary: true, action: async () => {
+    [{ label: "Give the coins", primary: true, action: async () => {
       const grades = Object.fromEntries(c.members.map((m) => [m.id, Number($(`input[name="g-${m.id}"]:checked`, dlg)?.value ?? 0)]));
       await api(`/activities/claims/${c.id}/grade`, { method: "POST", body: { grades, note: $("#pg-note", dlg).value } });
       dlg.close();
-      await reload("Points given: the students got a DM");
+      await reload("Coins given: the students got a DM");
     } }]);
 }
 

@@ -13,7 +13,7 @@ import { masteryFrom } from "../src/shared/skills.ts";
 import { mistakeSkills, skillsInCode } from "../src/shared/codeskills.ts";
 import { runCron } from "../src/bot/cron.ts";
 import { contestConfig } from "../src/shared/contests.ts";
-import { DICTS } from "../src/shared/i18n.ts";
+import { DICTS, t } from "../src/shared/i18n.ts";
 import { finish } from "../src/shared/challenges.ts";
 import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
@@ -789,6 +789,13 @@ section("season, weekly digest, contest via dashboard, stop");
 {
   const s = await slash(U.prof, "teacher", { name: "Spring 2027" }, "season");
   check(text(s).includes("Spring 2027") && text(s).includes("champion"), "new season announced with last champion");
+  {
+    const fin = messagesTo(ARENA).map((m) => text(m)).filter((x) => x.includes("Final Leaderboard")).pop() || "";
+    const champ = q1("SELECT discord_id, badge FROM badges WHERE guild_id = ? AND badge LIKE 'champion:%' ORDER BY created_at DESC", G);
+    check(/🥇 \*\*1st place — Our .+ Champion!\*\*/.test(fin) && /<@\d+>/.test(fin) && fin.includes("The leaderboard resets for Spring 2027"), "the end of the season in #arena: the final leaderboard, the podium mentioned");
+    check(!!champ && fin.includes(`<@${champ.discord_id}>`) && t("en", `badge.${champ.badge}`).startsWith("🏆 ") && t("en", `badge.${champ.badge}`).endsWith(" Champion") && t("fr", `badge.${champ.badge}`).startsWith("🏆 Champion de "),
+      "the champion gets the season's badge");
+  }
   const lb = await slash(U.alice, "leaderboard", { board: "season" });
   check(text(lb).includes("Nothing here yet"), "new season starts from zero");
   // jump to next Monday 10:00 UTC for the digest
@@ -808,6 +815,23 @@ section("season, weekly digest, contest via dashboard, stop");
   check(q1("SELECT status FROM contests WHERE id = ?", created.data.id).status === "finished", "stopped contest finishes with results");
   const settings = await api("GET", `/api/settings?g=${G}`);
   check(settings.data.season === "Spring 2027", "settings reflect the season");
+  // the next season at a set time: the cron starts it (nobody stays up until midnight)
+  check((await api("POST", "/api/season", { g: G, name: "Summer 2027", at: clock.now() - 10 })).status === 400 && (await api("POST", "/api/season", { g: G, name: "Spring 2027", at: clock.now() + 600 })).status === 400, "a date in the past, or the same name: refused");
+  const pl = await api("POST", "/api/season", { g: G, name: "Summer 2027", at: clock.now() + 3600, announce: true });
+  check(pl.status === 200 && pl.data.plan.name === "Summer 2027" && (await api("GET", `/api/season/plan?g=${G}`)).data.plan.at === pl.data.plan.at, "the next season scheduled");
+  await api("DELETE", `/api/season/plan?g=${G}`);
+  check((await api("GET", `/api/season/plan?g=${G}`)).data.plan === null, "…and cancelled");
+  await api("POST", "/api/season", { g: G, name: "Summer 2027", at: clock.now() + 120, announce: true });
+  await runCron(env);
+  check(q1("SELECT season FROM guilds WHERE id = ?", G).season === "Spring 2027", "…not before its time");
+  clock.advance(180);
+  const nArena = messagesTo(ARENA).length;
+  await runCron(env);
+  await runCron(env);
+  const ended = messagesTo(ARENA).slice(nArena).map((m) => text(m)).join("\n");
+  check(q1("SELECT season FROM guilds WHERE id = ?", G).season === "Summer 2027" && (await api("GET", `/api/season/plan?g=${G}`)).data.plan === null
+    && /Spring 2027 (— Final Leaderboard|is over)/.test(ended) && (ended.match(/Spring 2027 (— Final Leaderboard|is over)/g) || []).length === 1, "at its time, the cron starts it once, and #arena gets the end of the old season");
+  await api("POST", "/api/season", { g: G, name: "Spring 2027", announce: false, certificates: false });
   const dinfo = await api("GET", `/api/discord?g=${G}`);
   check(dinfo.data.channels.length === 3 && dinfo.data.roles.length >= 2 && !dinfo.data.roles.some((r: any) => r.name === "@everyone"), "channel & role pickers (text channels only, no @everyone)");
 }
@@ -2958,8 +2982,16 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
   check(row.status === "graded" && grades[mcq.id].verdict === "correct" && grades[code.id].score === 100 && row.score > 60, "graded: multiple choice at once, code and explanation by AI");
   const ovr = await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: row.id, qid: expl.id, verdict: "correct", comment: "Parfait" });
   check(ovr.data.takers.find((t: any) => t.discord_id === U.alice.id).grades[expl.id].teacher === true && q1("SELECT score FROM assessment_takers WHERE id = ?", row.id).score === 100, "teacher changes a grade");
+  check((await quiz(U.alice.id, "results")).data.ready === false, "the correction stays hidden until the teacher sends the results");
   const res = await api("POST", `/api/assessments/${aid}/results`, { g: G });
   check(res.data.sent === 1, "results sent by DM");
+  {
+    const cr = (await quiz(U.alice.id, "results")).data;
+    const lastDm = JSON.stringify(discordCalls.filter((c) => c.method === "POST" && /\/channels\/.*\/messages/.test(c.path)).slice(-1));
+    check(cr.ready === true && cr.items.length === 3 && cr.items.every((i: any) => i.prompt && "answer" in i && i.verdict) && cr.items.find((i: any) => i.type === "mcq").choices.some((c: any) => c.right && c.picked)
+      && !JSON.stringify(cr).includes('"expected"') && /Voir ma correction|See my correction/.test(lastDm) && /\/quiz\//.test(lastDm),
+      "then the student sees their correction (each question, their answer, the right choice, the comment; never the model answers) from a button in the DM");
+  }
   {
     const { notAttempted } = await import("../src/shared/assess.ts");
     check(notAttempted({ type: "code", starter: "function f(a) {\n  // ton code\n}" }, "function f(a){\n// ton code\n}  ") && notAttempted({ type: "explain" }, "  ") && notAttempted({ type: "mcq" }, [])
@@ -3409,6 +3441,17 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
   check(sw.data.states.co.C3 === true, "the teacher's switch still decides");
   await api("POST", `/api/briefs/${bid}/review/level`, { g: G, who, ai: true });
   check(/ÉVALUATION \(en classe, sans aide\) :\n« CSS de base » : 0 % ; non validées : C3/.test(ai.users[ai.users.length - 1]) && !ai.users[ai.users.length - 1].includes("Carol"), "✨ the AI level sees the assessment (no name)");
+  // graded again: the debrief's level follows (the proposal, and the level given when it was the proposal)
+  const lvNow = await api("POST", `/api/briefs/${bid}/review/level`, { g: G, who, level: "critique" });
+  check(lvNow.data.review.level.prop === "critique" && lvNow.data.review.level.lvl === "critique", "the level given: the proposal (assessment at 0 %)");
+  for (const q of mk.data.assessment.questions) await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: tk, qid: q.id, verdict: "correct", score: 100 });
+  const rg = q1("SELECT level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, who);
+  check(rg.plevel === "excellent" && rg.level === "excellent", `the assessment graded again (100 %): the debrief's level follows (${rg.level}/${rg.plevel})`);
+  await api("POST", `/api/briefs/${bid}/review/level`, { g: G, who, level: "moyen" });
+  await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: tk, qid: mk.data.assessment.questions[0].id, verdict: "wrong", score: 0 });
+  const rg2 = q1("SELECT level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, who);
+  check(rg2.level === "moyen" && rg2.plevel !== "excellent", "…a level the teacher chose by hand stays; the proposal still follows");
+  for (const q of mk.data.assessment.questions) await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: tk, qid: q.id, verdict: "wrong", score: 0 });
   check(assessForAi([{ title: "JS", score: 70, comps: { C4: { ok: true }, C5: { ok: false } } }, { title: "Pas noté", score: null, comps: {} }]) === "« JS » : 70 % ; compétences validées : C4 ; non validées : C5"
     && assessForAi([]) === "", "the analysis gets the graded assessments to compare with the project");
   const pa = await api("GET", `/api/progress?g=${G}`);
@@ -4862,19 +4905,23 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id] })).status === 200, "a third person added to the binôme");
   check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id, extra[0].id] })).status === 400, "4 people: refused");
   const pts = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'activity'", id).n;
+  const coins = (id: string) => q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, id)?.coins ?? 0;
+  const c0 = { a: coins(U.alice.id), b: coins(U.bob.id), c: coins(U.carol.id) };
   check(pts(U.alice.id) === 0, "no points before the presentation");
   const gr = await api("POST", `/api/activities/claims/${claim}/grade?g=${G}`, { grades: { [U.alice.id]: 100, [U.bob.id]: 50, [U.carol.id]: 0 }, note: "Clair et bien illustré" });
-  check(gr.status === 200 && pts(U.alice.id) === 20 && pts(U.bob.id) === 10 && pts(U.carol.id) === 0, "graded: points by how well each one presented");
+  check(gr.status === 200 && coins(U.alice.id) - c0.a === 20 && coins(U.bob.id) - c0.b === 10 && coins(U.carol.id) === c0.c && pts(U.alice.id) === 0 && pts(U.bob.id) === 0, "graded: coins by how well each one presented, never points");
   await api("POST", `/api/activities/claims/${claim}/grade?g=${G}`, { grades: { [U.alice.id]: 100, [U.bob.id]: 100, [U.carol.id]: 0 } });
-  check(pts(U.bob.id) === 20 && pts(U.alice.id) === 20, "a new grade only adds the difference");
+  check(coins(U.bob.id) - c0.b === 20 && coins(U.alice.id) - c0.a === 20, "a new grade only adds the difference");
   check((await api("POST", `/api/activities/claims/${claim}/cancel?g=${G}`)).status === 400, "a graded presentation can't be freed");
   // a live coding: alone is fine, 3 is too many; it's worth more
   await slash(extra[2], "activity", { activity: String(l1) }, "choose");
   check(JSON.stringify(lastPatch()).includes("Request sent"), "a live coding can be led alone");
   const lc = q1("SELECT id FROM activity_claims WHERE activity_id = ? AND status = 'pending'", l1).id;
   await api("POST", `/api/activities/claims/${lc}/decide?g=${G}`, { approve: true });
+  const cx = coins(extra[2].id);
   await api("POST", `/api/activities/claims/${lc}/grade?g=${G}`, { grades: { [extra[2].id]: 100 } });
-  check(pts(extra[2].id) === 40, "a live coding gives more points (40)");
+  check(coins(extra[2].id) - cx === 40 && pts(extra[2].id) === 0, "a live coding gives more coins (40), no points");
+  check((await api("PUT", `/api/activities/signups?g=${G}`, { veille: 99, live: 99 })).data.cfg.veille === 20, "the coins of a veille and a live coding are fixed (20 and 40)");
   // the teacher assigns by hand, and frees it
   const asg = await api("POST", `/api/activities/${v2}/assign?g=${G}`, { members: [extra[3].id, extra[1].id] });
   check(asg.status === 200 && discordCalls.some((c) => c.path === `/channels/dm-${extra[3].id}/messages` && JSON.stringify(c.body).includes("gave you")), "teacher assigns a veille to two students (DM)");

@@ -1821,9 +1821,14 @@ async function viewSettings(arg) {
 
     <section class="set-sec" data-sec="season" hidden>
       ${head("Season", `Current season: <b>${esc(g.season)}</b>. Season points restart from zero; all history stays in the dashboard.`)}
+      <p class="small muted" style="margin:-4px 0 12px">When a season ends, #arena gets the final leaderboard, its champion gets a 🏆 badge for that season, and everyone gets their certificate.</p>
+      <div id="s-plan"></div>
       <div class="panel set-card">
-        <label for="s-season" style="margin-top:0">New season name</label><input type="text" id="s-season" style="width:100%;max-width:420px" placeholder="e.g. Spring 2027">
-        <label class="check"><input type="checkbox" id="s-announce" checked> Announce it in #arena</label>
+        <label for="s-season" style="margin-top:0">New season name</label><input type="text" id="s-season" style="width:100%;max-width:420px" placeholder="e.g. Spring 2027" value="${esc(nextSeasonName(g.season))}">
+        <div class="seg" role="group" aria-label="When" style="margin-top:14px"><button type="button" data-swhen="now" aria-pressed="true">Right now</button><button type="button" data-swhen="at" aria-pressed="false">⏰ At a date and time</button></div>
+        <div id="s-at-box" hidden style="margin-top:10px"><label for="s-at" style="margin-top:0">Starts on</label><input type="datetime-local" id="s-at" style="max-width:260px">
+          <p class="small muted" style="margin:6px 0 0">Your computer's time. ClassBot starts it by itself (within a minute): no need to stay up.</p></div>
+        <label class="check"><input type="checkbox" id="s-announce" checked> Post the final leaderboard of ${esc(g.season)} in #arena</label>
       </div>
       <div class="set-foot"><button class="btn primary" id="season">Start new season</button></div>
     </section>
@@ -1923,10 +1928,33 @@ async function viewSettings(arg) {
       <h3>Challenge bank</h3><div class="table-wrap"><table><thead><tr><th></th>${["easy", "medium", "hard"].map((x) => `<th class="num">${DIFF[x]}</th>`).join("")}</tr></thead>
       <tbody>${Object.keys(KIND).map((k) => `<tr><td>${KIND[k]}</td>${["easy", "medium", "hard"].map((x) => `<td class="num">${bank[k]?.[x] ?? 0}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   });
+  // the next season: now, or at a date and time (scheduled)
+  let when = "now";
+  const pad = (n) => String(n).padStart(2, "0");
+  const atLocal = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(0, 0, 0, 0); $("#s-at").value = atLocal(d); $("#s-at").min = atLocal(new Date()); }
+  $$("[data-swhen]").forEach((b) => (b.onclick = () => {
+    when = b.dataset.swhen;
+    $$("[data-swhen]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#s-at-box").hidden = when !== "at";
+    $("#season").textContent = when === "at" ? "⏰ Schedule the new season" : "Start new season";
+  }));
+  const drawPlan = (p) => {
+    $("#s-plan").innerHTML = p ? `<div class="panel set-card" style="border-left:4px solid var(--blue)"><b>⏰ ${esc(p.name)}</b> starts on <b>${esc(new Date(p.at * 1000).toLocaleString(undefined, { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }))}</b>${p.announce ? " · the final leaderboard of " + esc(g.season) + " goes to #arena" : ""}
+      <div style="margin-top:10px"><button class="btn small" id="s-plan-x">Cancel</button></div></div>` : "";
+    if (p) $("#s-plan-x").onclick = async () => { await api("/season/plan", { method: "DELETE" }); toast("Scheduled season cancelled"); drawPlan(null); };
+  };
+  api("/season/plan").then((r) => drawPlan(r.plan)).catch(() => {});
   $("#season").onclick = () => {
     const name = $("#s-season").value.trim();
     if (!name) return toast("Give the new season a name first", true);
-    confirmDialog(`Start "${name}"?`, "Season points restart from zero for everyone. History is kept.", "Start season", async () => {
+    if (when === "at") {
+      const t = new Date($("#s-at").value).getTime();
+      if (!$("#s-at").value || !Number.isFinite(t)) return toast("Pick the date and time", true);
+      return api("/season", { method: "POST", body: { name, at: Math.floor(t / 1000), announce: $("#s-announce").checked } })
+        .then((r) => { drawPlan(r.plan); toast(`${name} is scheduled`); }).catch((e) => toast(e.message, true));
+    }
+    confirmDialog(`Start "${name}"?`, `Season points restart from zero for everyone. History is kept.${$("#s-announce").checked ? ` The final leaderboard of ${g.season} is posted in #arena and its champion gets a badge.` : ""}`, "Start season", async () => {
       await api("/season", { method: "POST", body: { name, announce: $("#s-announce").checked } });
       toast(`${name} has started`);
       viewSettings();
@@ -1934,6 +1962,12 @@ async function viewSettings(arg) {
   };
 }
 
+
+/** "Season 1" → "Season 2" (the name of the next season, to change if needed). */
+function nextSeasonName(cur) {
+  const m = /^(.*?)(\d+)(\D*)$/.exec(String(cur || ""));
+  return m ? `${m[1]}${Number(m[2]) + 1}${m[3]}` : "";
+}
 
 // ---------------------------------------------------- automatic roles
 async function loadAutoRoles(state = null) {

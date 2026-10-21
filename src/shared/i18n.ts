@@ -1367,6 +1367,8 @@ export const DICTS: Record<Lang, Dict> = { en, fr };
 
 export function t(lang: string, key: string, vars: Record<string, string | number> = {}): string {
   const d = DICTS[(lang as Lang)] ?? en;
+  // a season champion's badge ("champion:<season>", see season.ts) is named after its season
+  if (key.startsWith("badge.champion:")) { const s = key.slice("badge.champion:".length); return lang === "fr" ? `🏆 Champion de ${s}` : `🏆 ${s} Champion`; }
   let v = d[key] ?? en[key];
   if (v === undefined) return key;
   if (Array.isArray(v)) v = v[Math.floor(Math.random() * v.length)];

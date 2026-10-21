@@ -1,6 +1,7 @@
 // Discord interactions: slash commands, buttons, select menus, forms and autocomplete.
 // Anything that touches the database more than a couple of times is DEFERRED
 // (Discord gets an answer within 3 seconds, the real work continues after).
+import { startSeason } from "../shared/season.ts";
 import { forClass } from "../shared/aictx.ts";
 import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow, Lang } from "../shared/types.ts";
 import { levelFor, tailoredPick } from "../shared/forme.ts";
@@ -717,15 +718,11 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
     return say(t(L, announce ? "contest.stopping" : "contest.cancelled", { name: f.c.name }), false);
   }
   if (sub === "season") {
-    const old = g.season;
-    const top = (await standings(ix.env, g.id, old, 1))[0];
+    // the end of the old season goes to #arena (final leaderboard), the champion gets the season's badge
     const name = String(o.name).trim().slice(0, 60);
-    await run(ix.env, "UPDATE guilds SET season = ? WHERE id = ?", name, g.id);
-    let msg = t(L, "season.new", { season: name });
-    if (top) msg = t(L, "season.champion", { old, who: top.discord_id ? mention(top.discord_id) : top.name, pts: top.points }) + "\n" + msg;
-    const arena = await arenaChannel(ix.env, g);
-    if (arena && arena !== ix.raw.channel_id) await send(ix.env, arena, { content: msg }).catch(() => {});
-    if (o.certificates !== false) ix.ctx.waitUntil(sendCertificates(ix.env, g, old).catch((e) => console.error("certificates", e)));
+    const r = await startSeason(ix.env, g, name, { announce: true, certificates: o.certificates !== false, wait: (p) => ix.ctx.waitUntil(p) });
+    let msg = t(L, "season.new", { season: r.season });
+    if (r.champion) msg = t(L, "season.champion", { old: r.old, who: r.champion.discord_id ? mention(r.champion.discord_id) : r.champion.name, pts: r.champion.points }) + "\n" + msg;
     return say(msg + "\n" + t(L, "cert.sent_note"), false);
   }
   if (sub === "notify") {

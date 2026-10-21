@@ -1577,7 +1577,7 @@ function assessQuestionsTab(root) {
       </div>
       <label for="aq-brief">Linked brief <span class="muted">(its results count in that brief's debrief: competencies and comment)</span></label>
       <select id="aq-brief" style="max-width:560px"><option value="">— none —</option>${(AS.briefs || []).map((b) => `<option value="${b.id}" ${b.id === a.brief_id ? "selected" : ""}>${esc(b.title)}${b.status === "assigned" ? "" : ` (${esc(b.status)})`}</option>`).join("")}</select>
-      <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results</label>
+      <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results, with a link to their full correction (each question, their answer, what to look up)</label>
     </section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
     <div id="aq-list" class="qe-list"></div>

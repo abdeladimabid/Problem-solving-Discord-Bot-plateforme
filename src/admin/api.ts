@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
@@ -785,15 +786,17 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         scoring, v("name", g.name), g.id);
       return ok(await settings(env, await getGuild(env, g.id)));
     }
+    // a new season: now, or at a time (the cron starts it); the end of the old one is announced in #arena
     if (path === "/season" && method === "POST") {
       const g = await guild();
-      const name = String(body.name ?? "").trim().slice(0, 60);
-      if (!name) throw new HttpError(400, "name required");
-      await run(env, "UPDATE guilds SET season = ? WHERE id = ?", name, g.id);
-      if (body.announce) ctx.waitUntil(arenaChannel(env, g).then((ch) => ch && send(env, ch, { content: t(g.lang, "season.new", { season: name }) })).catch(() => {}));
-      if (body.certificates !== false && name !== g.season) ctx.waitUntil(sendCertificates(env, g, g.season).catch((e) => console.error("certificates", e)));
+      try {
+        if (body.at) return ok({ plan: await planSeason(env, g, body), guild: g });
+        await startSeason(env, g, String(body.name ?? ""), { announce: !!body.announce, certificates: body.certificates !== false, wait: (p) => ctx.waitUntil(p) });
+      } catch (e) { if (e instanceof SeasonError) throw new HttpError(400, e.message); throw e; }
       return ok(await getGuild(env, g.id));
     }
+    if (path === "/season/plan" && method === "GET") return ok({ plan: await seasonPlan(env, (await guild()).id) });
+    if (path === "/season/plan" && method === "DELETE") { await cancelSeasonPlan(env, (await guild()).id); return ok({ plan: null }); }
     // ---------------------------------------------------------- 🎯 track
     if (path === "/track" && method === "GET") { const g = await guild(); return ok({ track: trackOf(g), tracks: TRACKS }); }
     if (path === "/track" && method === "PUT") {

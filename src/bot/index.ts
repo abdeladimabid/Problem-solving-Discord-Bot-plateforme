@@ -62,7 +62,7 @@ export default {
     if (prof && request.method === "GET") return profilePage(env, prof[1]);
     const cert = url.pathname.match(/^\/cert\/([A-Za-z0-9._-]{40,260})$/);
     if (cert && request.method === "GET") return certPage(env, cert[1]);
-    const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate))?$/);
+    const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate|results))?$/);
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
     const bt = url.pathname.match(/^\/battle\/(tv|judge)\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|claim|act))?\/?$/);
     if (bt) return handleBattle(request, env, bt[1] as "tv" | "judge", Number(bt[2]), bt[3], bt[4]);

@@ -6,11 +6,12 @@
 //   POST /quiz/<t>/event    the student left full screen / the tab: the session stops
 //   GET  /quiz/<t>/state    is the session stopped? did the teacher let them back in?
 //   POST /quiz/<t>/submit   hand in
+//   GET  /quiz/<t>/results  their correction, once the teacher sent the results
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
-import { AssessError, leaveEvent, lockState, readTakerToken, saveAnswer, sessionInfo, startSession, submit } from "../shared/assess.ts";
+import { AssessError, leaveEvent, lockState, readTakerToken, resultsView, saveAnswer, sessionInfo, startSession, submit } from "../shared/assess.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
@@ -24,6 +25,7 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
   if (!action && request.method === "GET") return new Response(PAGE(token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" } });
   if (request.method === "GET" && action === "info") return json(await sessionInfo(env, takerId));
   if (request.method === "GET" && action === "state") return json(await lockState(env, takerId));
+  if (request.method === "GET" && action === "results") return json(await resultsView(env, takerId));
   if (request.method !== "POST") return json({ error: "method" }, 405);
   let b: any = {};
   try { b = await request.json(); } catch { b = {}; }
@@ -77,6 +79,16 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
 .trans{margin:-6px 0 14px;padding:10px 14px;border-radius:12px;background:var(--blue50);border-left:4px solid var(--blue);font-size:16px;white-space:pre-wrap}
 .trans[dir=rtl]{border-left:0;border-right:4px solid var(--blue);text-align:right;font-family:"Segoe UI",Tahoma,"Noto Naskh Arabic",sans-serif}
 .ctrans{display:block;font-size:14px;color:var(--soft);margin-top:3px}.ctrans[dir=rtl]{text-align:right}
+.wrap .card{margin-bottom:14px}.res-head{text-align:center}.res-score{font-size:44px;font-weight:800;letter-spacing:-.02em;margin:4px 0}
+.rq{border-left:5px solid var(--line)}.rq.v-correct{border-left-color:var(--good)}.rq.v-partial{border-left-color:var(--warn)}.rq.v-wrong{border-left-color:var(--bad)}.rq.v-empty{border-left-color:var(--faint)}
+.lbl{font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:6px 0 6px}
+.ans{white-space:pre-wrap;background:var(--blue50);border-radius:12px;padding:12px 14px;margin:0 0 14px}
+.fb{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0 0 12px;white-space:pre-wrap}
+.ch{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;padding:10px 13px;margin:0 0 8px}.ch.right{border-color:var(--good);background:#05966914}.ch.picked:not(.right){border-color:var(--bad);background:#dc262612}
+.ch i{font-style:normal;font-size:12px;font-weight:700;margin-left:auto;white-space:nowrap}.ch.right i{color:var(--good)}.ch.picked:not(.right) i{color:var(--bad)}
+.marks{margin:0 0 12px;padding-left:18px;font-size:14px}.marks li{margin:3px 0}
+.srch{display:flex;flex-wrap:wrap;gap:8px}.chipl{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:99px;background:var(--blue50);color:var(--blue);font-weight:650;font-size:14px;text-decoration:none}
+.chipl:hover,.btn.ghost:hover{text-decoration:underline}a.btn{text-decoration:none}
 </style></head><body><div id="app" class="full"><p class="muted">…</p></div>
 <script>
 (() => {
@@ -97,7 +109,10 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       done: "Copie rendue ✅", donesub: "Ton formateur te transmettra les résultats.", closed: "L'évaluation est fermée.", nofs: "Ouvre ce lien sur un ordinateur : l'évaluation se fait en plein écran.",
       timeup: "Temps écoulé : ta copie est rendue.", paste: "Le copier-coller est désactivé pendant l'évaluation.", hello: "Bonjour",
       r5: "Une question à la fois : quand tu passes à la suivante, tu ne peux plus revenir en arrière.", startnofs: "Commencer", contnofs: "Continuer",
-      pass: "Passer →", validate: "Valider et continuer →", nogoback: "Une fois passée, tu ne pourras plus revenir sur cette question.", passed: "Cette question est déjà passée." },
+      pass: "Passer →", validate: "Valider et continuer →", nogoback: "Une fois passée, tu ne pourras plus revenir sur cette question.", passed: "Cette question est déjà passée.",
+      mine: "Ta réponse", noans: "Pas de réponse.", fb: "Correction", right: "bonne réponse", picked: "ton choix", search: "Chercher", toreview: "À revoir",
+      toreviewsub: "Les notions des questions que tu as manquées : cherche-les pour comprendre ce qui t'a manqué.", marks: "Les erreurs dans ton code", line: "ligne",
+      v: { correct: "Juste", partial: "En partie", wrong: "Faux", empty: "Non tentée" }, allgood: "Tout est juste : bravo !" },
     en: { expired: "This link has expired or doesn't exist.", intro: "Assessment", q: "questions", min: "minutes", nolimit: "no time limit",
       r1: "The assessment runs in full screen.", r2: "If you leave full screen, switch tab or window, your session stops. Only your teacher can let you continue.",
       r3: "Your answers are saved as you go.", r4: "Copy-paste is blocked in the answers.", start: "Start in full screen", cont: "Continue in full screen",
@@ -109,7 +124,10 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       done: "Paper handed in ✅", donesub: "Your teacher will send you the results.", closed: "This assessment is closed.", nofs: "Open this link on a computer: the assessment runs in full screen.",
       timeup: "Time is up: your paper is handed in.", paste: "Copy-paste is disabled during the assessment.", hello: "Hello",
       r5: "One question at a time: once you move on to the next one, you can't go back.", startnofs: "Start", contnofs: "Continue",
-      pass: "Skip →", validate: "Answer and continue →", nogoback: "Once you move on, you can't come back to this question.", passed: "This question is already passed." },
+      pass: "Skip →", validate: "Answer and continue →", nogoback: "Once you move on, you can't come back to this question.", passed: "This question is already passed.",
+      mine: "Your answer", noans: "No answer.", fb: "Correction", right: "right answer", picked: "your choice", search: "Search", toreview: "To review",
+      toreviewsub: "The notions of the questions you missed: look them up to understand what was missing.", marks: "The mistakes in your code", line: "line",
+      v: { correct: "Right", partial: "Partly right", wrong: "Wrong", empty: "Not attempted" }, allgood: "Everything is right: well done!" },
   };
   const tr = (k) => T[L][k];
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -146,10 +164,31 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     if (v && v.rules) R = v.rules;
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (v.status === "locked") return lockedScreen(v.reason);
-    if (v.status === "submitted" || v.status === "graded") return screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>");
+    if (v.status === "graded") return get("/results").then((r) => (r && r.ready ? results(r) : screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>"))).catch(() => screen('<h1>' + tr("done") + "</h1>"));
+    if (v.status === "submitted") return screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>");
     if (v.status === "closed") return screen('<div class="big-ico">🔒</div><h1>' + tr("closed") + "</h1>");
     if (v.error === "expired") return screen('<h1>' + tr("expired") + "</h1>");
     intro(v);
+  }
+  // their correction (once the teacher sent the results): every question, their answer, the comment, what to look up
+  function results(r) {
+    if (r.lang === "fr" || r.lang === "en") L = r.lang;
+    const ICON = { correct: "✅", partial: "🟡", wrong: "❌", empty: "⚪" };
+    const g = (q) => "https://www.google.com/search?q=" + encodeURIComponent(q);
+    const answer = (q) => {
+      if (q.type === "mcq") return '<div class="lbl">' + tr("mine") + "</div>" + (q.choices || []).map((c) => '<div class="ch' + (c.right ? " right" : "") + (c.picked ? " picked" : "") + '"><span>' + esc(c.text) + "</span><i>" + (c.picked && c.right ? "✓ " + tr("picked") : c.right ? "✓ " + tr("right") : c.picked ? "✗ " + tr("picked") : "") + "</i></div>").join("");
+      const a = String(q.answer || "").trim();
+      return '<div class="lbl">' + tr("mine") + "</div>" + (!a ? '<p class="muted">' + tr("noans") + "</p>" : q.type === "code" ? "<pre>" + esc(a) + "</pre>" : '<div class="ans">' + esc(a) + "</div>");
+    };
+    const marks = (q) => (q.marks && q.marks.length ? '<div class="lbl">' + tr("marks") + '</div><ul class="marks">' + q.marks.map((m) => "<li>" + (m.line ? tr("line") + " " + m.line + " · " : "") + esc(m.issue || m.text || "") + "</li>").join("") + "</ul>" : "");
+    let h = '<div class="card res-head"><div class="big-ico">📄</div><h1>' + esc(r.title) + '</h1><div class="res-score ' + (r.score >= 60 ? "good" : "warn") + '">' + r.score + " %</div>" + (r.summary ? '<p class="muted">' + esc(r.summary) + "</p>" : "") + "</div>";
+    h += r.review.length ? '<div class="card"><h2>🔎 ' + tr("toreview") + '</h2><p class="muted small" style="margin-top:-6px">' + tr("toreviewsub") + '</p><div class="srch">' + r.review.map((x) => '<a class="chipl" target="_blank" rel="noopener noreferrer" href="' + g(x) + '">🔍 ' + esc(x) + "</a>").join("") + "</div></div>"
+      : '<div class="card center"><p class="good"><b>' + tr("allgood") + "</b></p></div>";
+    h += r.items.map((q) => '<div class="card rq v-' + q.verdict + '"><div class="qhead"><b>' + ICON[q.verdict] + " Question " + q.n + '</b><span class="tag">' + esc(T[L].v[q.verdict] || "") + (q.verdict !== "empty" ? " · " + q.score + " %" : "") + "</span></div>"
+      + '<p class="prompt">' + esc(q.prompt) + "</p>" + (q.code ? "<pre>" + esc(q.code) + "</pre>" : "") + answer(q)
+      + (q.comment ? '<div class="lbl">' + tr("fb") + '</div><div class="fb">' + esc(q.comment) + "</div>" : "") + marks(q)
+      + (q.search ? '<a class="btn ghost" target="_blank" rel="noopener noreferrer" href="' + g(q.search) + '">🔍 ' + tr("search") + " : " + esc(q.search) + "</a>" : "") + "</div>").join("");
+    app.className = "wrap"; app.innerHTML = h;
   }
   function lockedScreen(why) {
     running = false;

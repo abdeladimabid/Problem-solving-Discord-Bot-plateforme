@@ -502,6 +502,32 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
 const levelCols = (env: Env, briefId: number, who: string, rec: any) =>
   run(env, "UPDATE brief_reviews SET level = ?, plevel = ? WHERE brief_id = ? AND who = ?", rec.level?.lvl || null, rec.level?.prop || null, briefId, who);
 
+/**
+ * An assessment linked to a brief was graded again: the debriefs of that student (and their squad's) follow. The
+ * proposed level is computed again; the level given follows it when it was the proposal (or computed), an AI level is
+ * brought down to what the new grade allows; a level the teacher chose by hand stays.
+ */
+export async function refreshAssessLevels(env: Env, briefId: number | null, discordId: string) {
+  if (!briefId) return 0;
+  const rows = await all<{ who: string; record: string; guild_id: string }>(env, "SELECT who, record, guild_id FROM brief_reviews WHERE brief_id = ? AND (who = ? OR who LIKE 's:%')", briefId, `u:${discordId}`).catch(() => []);
+  let n = 0;
+  for (const row of rows) {
+    if (row.who.startsWith("s:") && !row.record.includes(discordId)) continue;
+    const r = await getReview(env, briefId, row.who);
+    if (!r || !r.rec.result) continue;
+    const rec = r.rec, old = rec.level || {};
+    const prop = debriefLevel(rec, reviewStates(rec));
+    let lvl = old.lvl || "", why = old.why || "", by = old.by;
+    if (lvl && (lvl === old.prop || by === "calc")) { lvl = prop; why = "Mis à jour après la nouvelle correction de l’évaluation."; by = "calc"; }
+    else if (lvl && by === "ai") { const c = capByAssess(rec, lvl); if (c !== lvl) { lvl = c; why = `${why} (limité à « ${c} » par l’évaluation)`.trim(); } }
+    if (prop === old.prop && lvl === (old.lvl || "")) continue;
+    rec.level = { ...old, prop, lvl, why, by, at: Date.now() };
+    await run(env, "UPDATE brief_reviews SET record = ?, level = ?, plevel = ?, updated_at = ? WHERE brief_id = ? AND who = ?", JSON.stringify(rec), lvl || null, prop || null, now(), briefId, row.who);
+    n++;
+  }
+  return n;
+}
+
 /** The debrief's level, chosen by the teacher (or none); proposed from the switches; it can be changed at any time. */
 export async function setReviewLevel(env: Env, g: GuildRow, briefId: number, who: string, lvl: string) {
   const r = await getReview(env, briefId, who);
