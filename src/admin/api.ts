@@ -940,29 +940,31 @@ async function discordInfo(env: Env, g: GuildRow) {
 
 // ============================================================== students
 async function students(env: Env, g: GuildRow) {
-  const t0 = now(), d14 = t0 - 14 * 86400, d28 = t0 - 28 * 86400;
+  // the trend: this week's points against last week's (a class only needs two weeks of history)
+  const t0 = now(), d7 = t0 - 7 * 86400, d14 = t0 - 14 * 86400;
   const rows = await all<any>(env,
     `SELECT p.discord_id, p.name, p.hr_display, p.hr_verified, p.coins, p.rating, p.daily_streak, p.last_active, p.created_at,
        COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.season = ?), 0) AS season_pts,
        COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id), 0) AS total_pts,
-       COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.created_at >= ?), 0) AS pts14,
-       COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.created_at >= ? AND l.created_at < ?), 0) AS pts_prev14,
+       COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.created_at >= ?), 0) AS pts7,
+       COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.created_at >= ? AND l.created_at < ?), 0) AS pts_prev7,
+       (SELECT MIN(created_at) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id) AS first_pts,
        (SELECT COUNT(*) FROM attempts a WHERE a.guild_id = p.guild_id AND a.discord_id = p.discord_id AND (a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1))) AS solved,
        (SELECT COUNT(*) FROM attempts a WHERE a.guild_id = p.guild_id AND a.discord_id = p.discord_id AND a.status = 'failed') AS failed,
        (SELECT COUNT(*) FROM assignments s WHERE s.guild_id = p.guild_id AND s.discord_id = p.discord_id AND s.status = 'open') AS open_asg,
        (SELECT COUNT(*) FROM assignments s WHERE s.guild_id = p.guild_id AND s.discord_id = p.discord_id AND s.status = 'missed') AS missed_asg,
        (SELECT t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = p.guild_id AND m.discord_id = p.discord_id) AS team
      FROM players p WHERE p.guild_id = ? ORDER BY season_pts DESC`,
-    g.season, d14, d28, d14, g.id);
+    g.season, d7, d14, d7, g.id);
   return rows.map((r) => {
     const tries = r.solved + r.failed;
     const accuracy = tries ? Math.round((100 * r.solved) / tries) : null;
     const lv = levelInfo(r.total_pts);
     let trend: string;
     if (!r.last_active || r.last_active < t0 - 10 * 86400) trend = "inactive";
-    else if (r.created_at > d14) trend = "new";
-    else if (r.pts14 > r.pts_prev14 * 1.15 + 5) trend = "up";
-    else if (r.pts14 < r.pts_prev14 * 0.85 - 5) trend = "down";
+    else if ((r.first_pts ?? r.created_at) > d7) trend = "new";      // their first points are less than a week old
+    else if (r.pts7 > r.pts_prev7 * 1.15 + 5) trend = "up";
+    else if (r.pts7 < r.pts_prev7 * 0.85 - 5) trend = "down";
     else trend = "flat";
     const reasons: string[] = [];
     if (trend === "inactive") reasons.push("inactive 10+ days");

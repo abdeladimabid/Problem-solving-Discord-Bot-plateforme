@@ -573,6 +573,18 @@ section("dashboard API: overview, students, detail, CSV");
   check(ov.status === 200 && ov.data.students >= 3 && ov.data.activity.length === 30, "overview data");
   const st = await api("GET", `/api/students?g=${G}`);
   check(st.data.length >= 3 && st.data.every((s: any) => "trend" in s && "accuracy" in s), "student list with trend & accuracy");
+  {
+    // the trend: this week's points against last week's, for a class that started 10 days ago
+    const day = 86400, T = clock.now();
+    const mkp = (id: string, pts: [number, number][]) => {
+      run1("INSERT INTO players (guild_id, discord_id, name, coins, created_at, last_active) VALUES (?, ?, ?, 0, ?, ?)", G, id, "Trend " + id, T - 10 * day, T - day);
+      for (const [ago, amount] of pts) run1("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, (SELECT season FROM guilds WHERE id = ?), ?, 'manual', ?)", G, id, G, amount, T - ago * day);
+    };
+    mkp("t-up", [[9, 10], [2, 80]]); mkp("t-down", [[9, 90], [2, 10]]); mkp("t-flat", [[9, 40], [2, 42]]); mkp("t-new", [[3, 50]]);
+    const tr = Object.fromEntries((await api("GET", `/api/students?g=${G}`)).data.filter((x: any) => x.discord_id.startsWith("t-")).map((x: any) => [x.discord_id, x.trend]));
+    check(tr["t-up"] === "up" && tr["t-down"] === "down" && tr["t-flat"] === "flat" && tr["t-new"] === "new", `trend: this week against last week, "new" only for a first week (${JSON.stringify(tr)})`);
+    run1("DELETE FROM ledger WHERE discord_id LIKE 't-%'"); run1("DELETE FROM players WHERE discord_id LIKE 't-%'");
+  }
   const det = await api("GET", `/api/students/${U.bob.id}?g=${G}`);
   check(det.status === 200 && det.data.attempts.some((a: any) => a.status === "failed") && det.data.attempts.some((a: any) => a.status === "solved"), "student detail shows solved and failed challenges");
   check(det.data.weeks.length === 12 && det.data.duelList.length >= 1, "weekly points & duel history");
