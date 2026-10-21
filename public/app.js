@@ -530,6 +530,7 @@ async function viewStudents() {
       { label: "Team", sort: "team", html: (r) => esc(r.team || "—") },
       { label: "XP lvl", sort: "level", num: true, html: (r) => `<span title="Game level, from the points">${r.level}</span>` },
       { label: "Season pts", sort: "season_pts", num: true, html: (r) => `${r.season_pts}` },
+      { label: "All-time pts", sort: "total_pts", num: true, html: (r) => `<span title="Every season added up">${r.total_pts}</span>` },
       { label: "Solved", sort: "solved", num: true, html: (r) => `${r.solved}` },
       { label: "Accuracy", sort: "accuracy", num: true, html: (r) => pct(r.accuracy) },
       { label: "Trend", sort: "trend", html: (r) => trend(r.trend) },

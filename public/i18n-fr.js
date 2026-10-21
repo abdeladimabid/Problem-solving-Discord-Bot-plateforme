@@ -3227,5 +3227,7 @@ window.CB_FR = {
 "{s} is scheduled": "{s} est programmée",
 "Pick the date and time": "Choisis la date et l’heure",
 "Season points restart from zero for everyone. History is kept. The final leaderboard of {s} is posted in #arena and its champion gets a badge.": "Les points de saison repartent de zéro pour tout le monde. L’historique est conservé. Le classement final de {s} est publié dans #arena et son champion reçoit un badge.",
-"Right now": "Tout de suite"
+"Right now": "Tout de suite",
+"All-time pts": "Pts (toutes saisons)",
+"Every season added up": "Toutes les saisons additionnées"
 };
