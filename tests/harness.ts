@@ -505,7 +505,11 @@ function fakeAI() {
         return { response: JSON.stringify({ answer: ai.mode === "lying" ? wrong : right, why: "..." }) };
       }
       if (sys.includes("design programming problems")) {
-        const p = ai.mode === "badwrite" ? { ...WRITE_PROBLEM, brute: "print(0)" }
+        const last: string = input.messages[input.messages.length - 1]?.content ?? "";
+        ai.users.push(last);
+        // "fixable": the first answer's slow solution is wrong; told what went wrong, the AI corrects it
+        const p = ai.mode === "fixable" ? (last.includes("I ran your problem") && last.includes("must agree") ? WRITE_PROBLEM : { ...WRITE_PROBLEM, brute: "print(0)" })
+          : ai.mode === "badwrite" ? { ...WRITE_PROBLEM, brute: "print(0)" }
           // the AI's usual mistakes: "\n" read as a real line break inside a string, a generator that returns a list
           : ai.mode === "brokengens" ? { ...WRITE_PROBLEM, reference: WRITE_PROBLEM.reference.replace("print(best)", "print(best, end='\n')"),
             big_gens: ["n = 200000\nreturn str(n) + '\n' + ' '.join(str(r(-10**9, 10**9)) for _ in range(n)) + '\n'", "n = 150000\nreturn [str(n), ' '.join(str(r(-5, 5)) for _ in range(n))]"] }

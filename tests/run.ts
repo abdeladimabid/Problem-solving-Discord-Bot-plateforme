@@ -344,11 +344,19 @@ section("write code: AI-generated problem, proven by running reference vs brute 
   const A = await import("../src/shared/ai.ts");
   check(A.fixPyNewlines("return str(n) + '\n' + 'x'") === "return str(n) + '\\n' + 'x'" && A.fixPyNewlines("s = 'a\\nb'  # it's\nreturn s") === "s = 'a\\nb'  # it's\nreturn s", "a line break inside a Python string is put back as \\n (nothing else changes)");
   ai.mode = "brokengens";
+  run1("DELETE FROM ai_usage");
   const w = await A.generateWrite(env, { difficulty: "medium", lang: "en", topic: "streaks" });
   check(!!w && w.tests.filter((t: any) => t.gen).length === 2, `the broken generators are repaired: both big tests kept (${A.whyWriteFailed()})`);
   ai.mode = "deadgens";
   const d = await A.generateWrite(env, { difficulty: "medium", lang: "en", topic: "streaks" });
-  check(!d && /big test generators failed/.test(A.whyWriteFailed()) && !/didn't answer|unreachable/.test(A.whyWriteFailed()), `a generator that can't work: another problem is asked, and the reason says so (${A.whyWriteFailed()})`);
+  check(!!d && !d.tests.some((t: any) => t.gen) && /Big generator #1 failed/.test(ai.users.filter((u: string) => u.includes("I ran your problem")).pop() || ""), `a generator that never works: the AI is told the error; at the end the checked problem is kept without the big test (${A.whyWriteFailed()})`);
+  // the AI is shown what went wrong (the input, both outputs) and corrects the same problem
+  ai.mode = "fixable";
+  run1("DELETE FROM ai_usage");
+  const n0 = ai.users.length;
+  const fx = await A.generateWrite(env, { difficulty: "medium", lang: "en", topic: "streaks" });
+  const told = ai.users.slice(n0).find((u: string) => u.includes("I ran your problem")) || "";
+  check(!!fx && fx.tests.some((t: any) => t.gen) && /Small input #1:\n5\n1 -2 3 4 -1/.test(told) && /`brute` printed: 0/.test(told) && /`reference` printed: 7/.test(told), "two solutions that disagree: the AI sees the input and both outputs, corrects the problem, and it's saved");
   ai.mode = "good";
 }
 

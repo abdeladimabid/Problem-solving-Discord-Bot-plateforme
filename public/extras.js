@@ -343,7 +343,7 @@ function bulkGenerateDialog(done = null) {
   const chips = (name, list, on) => `<div class="chips bulk-chips" data-bulk="${name}">${list.map(([v, l]) => `<button type="button" class="chip" data-v="${esc(v)}" aria-pressed="${on.includes(v)}">${esc(l)}</button>`).join("")}</div>`;
   let stop = false, running = false;
   openDialog("✨ Generate challenges in bulk", `
-    <p class="muted small" style="margin-top:0">The AI writes them one after the other and <b>checks each one before it's saved</b> (like a single challenge). Write code takes up to 2 minutes each, the other types about one: keep this window open. You can stop at any time; what's done stays.</p>
+    <p class="muted small" style="margin-top:0">The AI writes them one after the other and <b>checks each one before it's saved</b> (like a single challenge). Write code takes 1 to 4 minutes each (when the AI's problem fails a check, it's shown what went wrong and corrects it), the other types about one: keep this window open. You can stop at any time; what's done stays.</p>
     <label>Skills <span class="muted">(none = any skill of the class)</span></label>
     ${chips("skill", skills.map((d) => [d.key, `${d.emoji} ${d.en}`]), [])}
     <label>Levels</label>${chips("level", Object.entries(DIFF), ["medium"])}

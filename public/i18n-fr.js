@@ -3232,5 +3232,6 @@ window.CB_FR = {
 "Every season added up": "Toutes les saisons additionnées",
 "Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).": "Ses compétences, ses acquis, ses points et ses pièces quittent le dossier de l’apprenant jusqu’à ce que tu le finalises à nouveau : la finalisation les redonne (une seule fois).",
 "Full screen: leaving it, the tab or the window stops the student until you let them back in (from the TV)": "Plein écran : le quitter, changer d’onglet ou de fenêtre arrête l’apprenant jusqu’à ce que tu le laisses revenir (depuis la TV)",
-"No copy-paste (blocked, and the TV shows who tried)": "Pas de copier-coller (bloqué, et la TV montre qui a essayé)"
+"No copy-paste (blocked, and the TV shows who tried)": "Pas de copier-coller (bloqué, et la TV montre qui a essayé)",
+"(like a single challenge). Write code takes 1 to 4 minutes each (when the AI's problem fails a check, it's shown what went wrong and corrects it), the other types about one: keep this window open. You can stop at any time; what's done stays.": "(comme un défi seul). Un « écris le code » prend de 1 à 4 minutes (quand le problème de l’IA échoue à une vérification, on lui montre ce qui ne va pas et elle le corrige), les autres types environ une : garde cette fenêtre ouverte. Tu peux arrêter à tout moment ; ce qui est fait reste."
 };

@@ -306,73 +306,107 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
   writeFail = "";
   const why: string[] = [];
   const fail = (x: string) => { why.push(x); writeFail = [...new Set(why)].join(" · ").slice(0, 300); };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (!(await aiBudgetOk(env, AI_COST.write))) { fail("the class's daily AI budget is used up"); return null; }
+  // The system and the first request; each problem is then checked by running it, and what went wrong goes back to
+  // the AI (the inputs, the errors, the two outputs) so it corrects THIS problem: far more often right than a new one.
+  const system = [
+    "You design programming problems for a class, in the style of HackerRank / Codeforces: a short story, then precise Input, Output and Constraints sections. Students read stdin and write stdout.",
+    `Write the title, statement and hint in ${language}. Use Markdown (**bold** section titles, inline code).`,
+    WRITE_LEVEL[o.difficulty],
+    ...(o.quest ? [
+      "This problem is a BOSS BATTLE the whole class fights together, told like a tabletop role-playing game (Dungeons & Dragons): the statement opens as an epic quest, in the second person plural (the heroes of the class), with vivid stakes. The story must explain naturally what the input describes and what to compute, then the **Input**, **Output** and **Constraints** sections stay exact and plain.",
+      `The quest's setting: ${o.quest}`,
+    ] : []),
+    "The OUTPUT must be short: one or a few numbers / words (at most 200 characters). Never ask to print an array of n values.",
+    "Do NOT include examples in the statement: they are added automatically from the sample tests.",
+    "Provide: `reference` = a correct, efficient Python 3 solution reading ALL of stdin at once (data = sys.stdin.read().split()), robust to extra spaces and line breaks; `brute` = an obviously-correct slow Python 3 solution reading stdin the same way (used to check the reference on small inputs); `samples` = 2 small input strings; `small` = 5 small input strings (n <= 8) covering edge cases; `big_gens` = 2 Python function BODIES that build and RETURN a big input as ONE string (not a list) at the maximum constraints, lines joined with chr(10). In those bodies use only the helper r(lo, hi) (a seeded random integer in [lo, hi], inclusive) and the standard library; no imports of random; never write a backslash-n inside a string literal (use chr(10)).",
+    "Every input string must follow the Input section EXACTLY (same order, same counts). Before answering, run each small input through both solutions in your head: they must print the same thing.",
+    'Reply with ONLY one JSON object: {"title": "max 40 chars", "statement": "...", "hint": "...", "topic": "2-3 words", "reference": "...", "brute": "...", "samples": ["..."], "small": ["..."], "big_gens": ["..."]}',
+  ].join("\n");
+  const user = `Create one ${o.difficulty.toUpperCase()} problem${o.topic ? ` about: ${o.topic}` : ""}. Make it original (not a famous LeetCode title).`;
+  const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  const cut = (x: unknown, n: number) => { const t = String(x ?? ""); return t.length > n ? t.slice(0, n) + "…" : t; };
+  const withNl = (x: string) => (x.endsWith("\n") ? x : x + "\n");
+  let calls = 0;
+  const ask = async (messages: Msg[]) => {
+    if (!(await aiBudgetOk(env, AI_COST.write))) { fail("the class's daily AI budget is used up"); return undefined; }
     await aiBudgetUse(env, AI_COST.write);
-    const system = [
-      "You design programming problems for a class, in the style of HackerRank / Codeforces: a short story, then precise Input, Output and Constraints sections. Students read stdin and write stdout.",
-      `Write the title, statement and hint in ${language}. Use Markdown (**bold** section titles, inline code).`,
-      WRITE_LEVEL[o.difficulty],
-      ...(o.quest ? [
-        "This problem is a BOSS BATTLE the whole class fights together, told like a tabletop role-playing game (Dungeons & Dragons): the statement opens as an epic quest, in the second person plural (the heroes of the class), with vivid stakes. The story must explain naturally what the input describes and what to compute, then the **Input**, **Output** and **Constraints** sections stay exact and plain.",
-        `The quest's setting: ${o.quest}`,
-      ] : []),
-      "The OUTPUT must be short: one or a few numbers / words (at most 200 characters). Never ask to print an array of n values.",
-      "Do NOT include examples in the statement: they are added automatically from the sample tests.",
-      "Provide: `reference` = a correct, efficient Python 3 solution reading stdin; `brute` = an obviously-correct slow Python 3 solution (used to check the reference on small inputs); `samples` = 2 small input strings; `small` = 5 small input strings (n <= 8) covering edge cases; `big_gens` = 2 Python function BODIES that build and RETURN a big input as ONE string (not a list) at the maximum constraints, lines joined with chr(10). In those bodies use only the helper r(lo, hi) (a seeded random integer in [lo, hi], inclusive) and the standard library; no imports of random; never write a backslash-n inside a string literal (use chr(10)).",
-      'Reply with ONLY one JSON object: {"title": "max 40 chars", "statement": "...", "hint": "...", "topic": "2-3 words", "reference": "...", "brute": "...", "samples": ["..."], "small": ["..."], "big_gens": ["..."]}',
-    ].join("\n");
-    const user = `Create one ${o.difficulty.toUpperCase()} problem${o.topic ? ` about: ${o.topic}` : ""}. Make it original (not a famous LeetCode title).`;
-    let j: any;
-    try {
-      // 6-7k is plenty for a problem with its two solutions, and stays under the free keys' per-minute token limits
-      j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: o.quest ? 7000 : 6000, temperature: 0.8, timeoutMs: 150000 });
-    } catch (e) { fail(`the AI didn't answer (${String((e as Error)?.message ?? e).slice(0, 140)})`); continue; }
-    const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+    calls++;
+    try { return await chatJson(env, messages, { maxTokens: o.quest ? 7000 : 6000, temperature: calls === 1 ? 0.8 : 0.3, timeoutMs: 150000 }); }
+    catch (e) { fail(`the AI didn't answer (${String((e as Error)?.message ?? e).slice(0, 140)})`); return null; }
+  };
+  /** Run the problem: the problem ready to save, or what to tell the AI (and whether it's only about speed). */
+  const check = async (j: any): Promise<{ ok: GeneratedWrite } | { fix: string; slowOnly?: GeneratedWrite }> => {
     const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500);
     const reference = s(j?.reference, 6000) && fixPyNewlines(s(j?.reference, 6000)!), brute = s(j?.brute, 6000) && fixPyNewlines(s(j?.brute, 6000)!);
     const samples: string[] = Array.isArray(j?.samples) ? j.samples.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 3) : [];
     const small: string[] = Array.isArray(j?.small) ? j.small.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 6) : [];
     const gens: string[] = Array.isArray(j?.big_gens) ? j.big_gens.filter((x: unknown) => typeof x === "string" && x.includes("return")).slice(0, 2) : [];
-    if (!title || !statement || !reference || !brute || samples.length < 1 || small.length < 3) { fail("the AI's answer was incomplete"); continue; }
-    const withNl = (x: string) => (x.endsWith("\n") ? x : x + "\n");
+    const missing = [!title && "title", !statement && "statement", !reference && "reference", !brute && "brute", samples.length < 1 && "samples (at least 1)", small.length < 3 && "small (at least 3)"].filter(Boolean);
+    if (missing.length) { fail("the AI's answer was incomplete"); return { fix: `Your JSON is missing or has empty: ${missing.join(", ")}.` }; }
     const lits = [...samples, ...small].map(withNl);
     const bigs = gens.map((b, i) => makeGen(b, 1000 + i * 7919 + Math.floor(Math.random() * 100000)));
-    try {
-      const all = [...lits.map((input) => ({ input, gen: null })), ...bigs.map((gen) => ({ input: null, gen }))];
-      const [ref, br] = await Promise.all([
-        runPythonTests(env, reference, all, limit * 2, 2500),
-        runPythonTests(env, brute, lits.map((input) => ({ input, gen: null })), 10, 2500),
-      ]);
-      if (ref.compile || br.compile || ref.rows.length !== all.length) { fail(ref.compile || br.compile ? "its solution didn't compile" : "the runner didn't run every test"); continue; }
-      let ok = true;
-      const keep: number[] = [];
-      for (let i = 0; i < all.length; i++) {
-        const r = ref.rows[i];
-        if (i < lits.length) {
-          if (r.s !== "ok" || !r.o || r.n > 2000) { ok = false; fail("its solution crashed or printed nothing on a small test"); break; }
-          if (br.rows[i]?.s !== "ok" || normOut(br.rows[i].o) !== normOut(r.o)) { ok = false; fail("its two solutions disagreed on a small test"); break; }   // brute must agree
-          keep.push(i);
-        } else if (r.s === "ok" && r.o && r.n <= 2000 && r.t <= limit * 0.4) keep.push(i);  // a big test that fails or is slow is dropped, not the problem
+    const all = [...lits.map((input) => ({ input, gen: null })), ...bigs.map((gen) => ({ input: null, gen }))];
+    const [ref, br] = await Promise.all([
+      runPythonTests(env, reference!, all, limit * 2, 2500),
+      runPythonTests(env, brute!, lits.map((input) => ({ input, gen: null })), 10, 2500),
+    ]);
+    if (ref.compile) { fail("its solution didn't compile"); return { fix: `Your \`reference\` doesn't compile:\n${cut(ref.compile, 600)}` }; }
+    if (br.compile) { fail("its slow solution didn't compile"); return { fix: `Your \`brute\` doesn't compile:\n${cut(br.compile, 600)}` }; }
+    if (ref.rows.length !== all.length) { fail("the runner didn't run every test"); return { fix: "Your reference stopped before the end of the tests (too slow or crashed on a big test): make it efficient for the maximum constraints." }; }
+    const problems: string[] = [];
+    for (let i = 0; i < lits.length; i++) {
+      const r = ref.rows[i], b = br.rows[i];
+      const tag = `Small input #${i + 1}:\n${cut(lits[i], 300)}`;
+      if (r.s !== "ok" || !r.o) problems.push(`${tag}\n→ \`reference\` ${r.s === "tle" ? "was too slow" : r.s === "re" ? `crashed: ${cut(r.e, 300)}` : "printed nothing"}`);
+      else if (r.n > 2000) problems.push(`${tag}\n→ \`reference\` printed more than 2000 characters: the output must be short.`);
+      else if (!b || b.s !== "ok") problems.push(`${tag}\n→ \`brute\` ${b?.s === "tle" ? "was too slow even on a small input" : `crashed: ${cut(b?.e, 300)}`}`);
+      else if (normOut(b.o) !== normOut(r.o)) problems.push(`${tag}\n→ \`reference\` printed: ${cut(r.o, 200)}\n→ \`brute\` printed: ${cut(b.o, 200)}\nThey must agree: decide which one follows the statement and fix the other (or fix this input if it doesn't follow the Input section).`);
+    }
+    if (problems.length) {
+      fail(problems.some((p) => p.includes("must agree")) ? "its two solutions disagreed on a small test" : "its solution crashed or printed nothing on a small test");
+      return { fix: problems.slice(0, 4).join("\n\n") };
+    }
+    // the big tests: kept when the reference is fast enough (Python is slower than the students' language: room is left)
+    const keep = lits.map((_, i) => i);
+    const bigIssues: string[] = [];
+    for (let i = lits.length; i < all.length; i++) {
+      const r = ref.rows[i];
+      if (r.s === "ok" && r.o && r.n <= 2000 && r.t <= limit * 0.6) keep.push(i);
+      else bigIssues.push(r.s === "ge" ? `Big generator #${i - lits.length + 1} failed: ${cut(r.e, 300)}` : r.s === "ok" && r.n > 2000 ? `On big test #${i - lits.length + 1} the reference printed too much.` : `On big test #${i - lits.length + 1} the reference ${r.s === "re" ? `crashed: ${cut(r.e, 300)}` : `took ${r.s === "tle" ? "too long" : r.t + " s"} (it must stay under ${limit * 0.6} s): use a faster algorithm, or lower the maximum constraints in the statement and in big_gens`}.`);
+    }
+    const made: GeneratedWrite = { title: title!, statement: statement!, reference: reference!, timeLimit: limit, hint: s(j?.hint, 400) ?? "", topic: s(j?.topic, 40) ?? "",
+      tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })) };
+    // medium and hard are about speed: at least one big test, else the AI fixes it (or, at the end, it's kept without)
+    if (o.difficulty !== "easy" && keep.length === lits.length) {
+      fail(bigIssues.some((x) => x.includes("generator")) ? "its big test generators failed" : "its solution was too slow on the big tests");
+      return { fix: (bigIssues.length ? bigIssues : ["You gave no big_gens: give 2 generator bodies at the maximum constraints."]).join("\n"), slowOnly: made };
+    }
+    return { ok: made };
+  };
+  // two problems at most, each corrected up to twice
+  let lastSlow: GeneratedWrite | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const messages: Msg[] = [{ role: "system", content: system }, { role: "user", content: user }];
+    let j = await ask(messages);
+    if (j === undefined) return lastSlow ?? null;
+    for (let round = 0; j && round < 3; round++) {
+      let r: Awaited<ReturnType<typeof check>>;
+      try { r = await check(j); }
+      catch (e) {
+        if (e instanceof RunnerUnavailable) { fail(`the code runner didn't answer (${String(e.message).slice(0, 140)})`); return lastSlow ?? null; }
+        fail(`checking failed (${String((e as Error)?.message ?? e).slice(0, 100)})`); break;
       }
-      if (!ok) continue;
-      // medium and hard are about speed: without a single big test, ask for another problem
-      if (bigs.length && o.difficulty !== "easy" && !keep.some((i) => i >= lits.length)) {
-        const ge = ref.rows.slice(lits.length).find((r) => r.s !== "ok");
-        fail(ge?.s === "ge" ? `its big test generators failed (${String(ge.e).replace(/\s+/g, " ").slice(-120)})` : "its solution was too slow on the big tests");
-        continue;
-      }
-      return {
-        title, statement, reference: reference!, timeLimit: limit,
-        hint: s(j?.hint, 400) ?? "", topic: s(j?.topic, 40) ?? "",
-        tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
-      };
-    } catch (e) {
-      if (e instanceof RunnerUnavailable) { fail(`the code runner didn't answer (${String(e.message).slice(0, 140)})`); return null; }
-      fail(`checking failed (${String((e as Error)?.message ?? e).slice(0, 100)})`);
+      if ("ok" in r) return r.ok;
+      if (r.slowOnly) lastSlow = r.slowOnly;
+      if (round === 2) break;
+      messages.push({ role: "assistant", content: JSON.stringify(j).slice(0, 14000) },
+        { role: "user", content: `I ran your problem. It isn't right yet:\n\n${r.fix}\n\nFix THIS problem (keep the same story) and reply with the FULL corrected JSON object, with every key.` });
+      j = await ask(messages);
+      if (j === undefined) return lastSlow ?? null;
     }
   }
-  return null;
+  // the solutions are right but no big test could be kept: better a checked problem without a speed test than none
+  return lastSlow ?? null;
 }
 
 // ----------------------------------------------------------------- feedback
