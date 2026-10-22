@@ -339,6 +339,18 @@ section("write code: AI-generated problem, proven by running reference vs brute 
   check(text(lastPatch()).includes("couldn't create"), "problem rejected when brute force and reference disagree");
   ai.mode = "good";
 }
+{
+  // the AI's generators: a "\n" turned into a real line break inside a string, a list instead of text: repaired, the problem is kept
+  const A = await import("../src/shared/ai.ts");
+  check(A.fixPyNewlines("return str(n) + '\n' + 'x'") === "return str(n) + '\\n' + 'x'" && A.fixPyNewlines("s = 'a\\nb'  # it's\nreturn s") === "s = 'a\\nb'  # it's\nreturn s", "a line break inside a Python string is put back as \\n (nothing else changes)");
+  ai.mode = "brokengens";
+  const w = await A.generateWrite(env, { difficulty: "medium", lang: "en", topic: "streaks" });
+  check(!!w && w.tests.filter((t: any) => t.gen).length === 2, `the broken generators are repaired: both big tests kept (${A.whyWriteFailed()})`);
+  ai.mode = "deadgens";
+  const d = await A.generateWrite(env, { difficulty: "medium", lang: "en", topic: "streaks" });
+  check(!d && /big test generators failed/.test(A.whyWriteFailed()) && !/didn't answer|unreachable/.test(A.whyWriteFailed()), `a generator that can't work: another problem is asked, and the reason says so (${A.whyWriteFailed()})`);
+  ai.mode = "good";
+}
 
 section("practice: reports flag a challenge after two students");
 {

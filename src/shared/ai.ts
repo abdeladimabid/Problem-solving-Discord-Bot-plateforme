@@ -268,7 +268,33 @@ const GEN_HEADER = `def gen():
         return lo + ((_n() << 23) | _n()) % (hi - lo + 1)
 `;
 const indent = (body: string) => body.replace(/\r/g, "").split("\n").map((l) => (l.trim() ? "    " + l : "")).join("\n");
-export const makeGen = (body: string, seed: number) => GEN_HEADER.replace("__SEED__", String(seed)) + indent(body);
+/**
+ * The AI writes "\n" inside its Python strings; read from its JSON, that becomes a real line break in the middle of a
+ * string literal ("unterminated string literal"). A line that ends inside a string is joined to the next one with \n
+ * again. Triple-quoted strings and comments are left as they are.
+ */
+export function fixPyNewlines(code: string): string {
+  const open = (line: string) => {
+    let q: string | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === "\\") { i++; continue; } if (c === q) q = null; }
+      else if (c === "#") return false;
+      else if (c === '"' || c === "'") { if (line.startsWith(c.repeat(3), i)) return false; q = c; }
+    }
+    return q !== null;
+  };
+  const out: string[] = [];
+  let cur: string | null = null, joined = 0;
+  for (const l of code.replace(/\r/g, "").split("\n")) {
+    cur = cur == null ? l : cur + "\\n" + l;
+    if (open(cur) && joined < 6) { joined++; continue; }
+    out.push(cur); cur = null; joined = 0;
+  }
+  if (cur != null) out.push(cur);
+  return out.join("\n");
+}
+export const makeGen = (body: string, seed: number) => GEN_HEADER.replace("__SEED__", String(seed)) + indent(fixPyNewlines(body));
 
 /** Why the last generateWrite gave nothing (shown to the teacher instead of a vague "busy"). */
 let writeFail = "";
@@ -293,7 +319,7 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
       ] : []),
       "The OUTPUT must be short: one or a few numbers / words (at most 200 characters). Never ask to print an array of n values.",
       "Do NOT include examples in the statement: they are added automatically from the sample tests.",
-      "Provide: `reference` = a correct, efficient Python 3 solution reading stdin; `brute` = an obviously-correct slow Python 3 solution (used to check the reference on small inputs); `samples` = 2 small input strings; `small` = 5 small input strings (n <= 8) covering edge cases; `big_gens` = 2 Python function BODIES that build and RETURN a big input string at the maximum constraints. In those bodies use only the helper r(lo, hi) (a seeded random integer in [lo, hi], inclusive) and the standard library; no imports of random.",
+      "Provide: `reference` = a correct, efficient Python 3 solution reading stdin; `brute` = an obviously-correct slow Python 3 solution (used to check the reference on small inputs); `samples` = 2 small input strings; `small` = 5 small input strings (n <= 8) covering edge cases; `big_gens` = 2 Python function BODIES that build and RETURN a big input as ONE string (not a list) at the maximum constraints, lines joined with chr(10). In those bodies use only the helper r(lo, hi) (a seeded random integer in [lo, hi], inclusive) and the standard library; no imports of random; never write a backslash-n inside a string literal (use chr(10)).",
       'Reply with ONLY one JSON object: {"title": "max 40 chars", "statement": "...", "hint": "...", "topic": "2-3 words", "reference": "...", "brute": "...", "samples": ["..."], "small": ["..."], "big_gens": ["..."]}',
     ].join("\n");
     const user = `Create one ${o.difficulty.toUpperCase()} problem${o.topic ? ` about: ${o.topic}` : ""}. Make it original (not a famous LeetCode title).`;
@@ -303,7 +329,8 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
       j = await chatJson(env, [{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: o.quest ? 7000 : 6000, temperature: 0.8, timeoutMs: 150000 });
     } catch (e) { fail(`the AI didn't answer (${String((e as Error)?.message ?? e).slice(0, 140)})`); continue; }
     const s = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
-    const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500), reference = s(j?.reference, 6000), brute = s(j?.brute, 6000);
+    const title = s(j?.title, 60), statement = s(j?.statement, o.quest ? 4500 : 3500);
+    const reference = s(j?.reference, 6000) && fixPyNewlines(s(j?.reference, 6000)!), brute = s(j?.brute, 6000) && fixPyNewlines(s(j?.brute, 6000)!);
     const samples: string[] = Array.isArray(j?.samples) ? j.samples.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 3) : [];
     const small: string[] = Array.isArray(j?.small) ? j.small.filter((x: unknown) => typeof x === "string" && x.trim()).slice(0, 6) : [];
     const gens: string[] = Array.isArray(j?.big_gens) ? j.big_gens.filter((x: unknown) => typeof x === "string" && x.includes("return")).slice(0, 2) : [];
@@ -329,8 +356,14 @@ export async function generateWrite(env: Env, o: { difficulty: Difficulty; topic
         } else if (r.s === "ok" && r.o && r.n <= 2000 && r.t <= limit * 0.4) keep.push(i);  // a big test that fails or is slow is dropped, not the problem
       }
       if (!ok) continue;
+      // medium and hard are about speed: without a single big test, ask for another problem
+      if (bigs.length && o.difficulty !== "easy" && !keep.some((i) => i >= lits.length)) {
+        const ge = ref.rows.slice(lits.length).find((r) => r.s !== "ok");
+        fail(ge?.s === "ge" ? `its big test generators failed (${String(ge.e).replace(/\s+/g, " ").slice(-120)})` : "its solution was too slow on the big tests");
+        continue;
+      }
       return {
-        title, statement, reference, timeLimit: limit,
+        title, statement, reference: reference!, timeLimit: limit,
         hint: s(j?.hint, 400) ?? "", topic: s(j?.topic, 40) ?? "",
         tests: keep.map((i) => ({ input: all[i].input, gen: all[i].gen, expected: normOut(ref.rows[i].o), sample: i < samples.length ? 1 : 0 })),
       };

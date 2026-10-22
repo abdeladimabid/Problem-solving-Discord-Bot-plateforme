@@ -505,7 +505,12 @@ function fakeAI() {
         return { response: JSON.stringify({ answer: ai.mode === "lying" ? wrong : right, why: "..." }) };
       }
       if (sys.includes("design programming problems")) {
-        const p = ai.mode === "badwrite" ? { ...WRITE_PROBLEM, brute: "print(0)" } : WRITE_PROBLEM;
+        const p = ai.mode === "badwrite" ? { ...WRITE_PROBLEM, brute: "print(0)" }
+          // the AI's usual mistakes: "\n" read as a real line break inside a string, a generator that returns a list
+          : ai.mode === "brokengens" ? { ...WRITE_PROBLEM, reference: WRITE_PROBLEM.reference.replace("print(best)", "print(best, end='\n')"),
+            big_gens: ["n = 200000\nreturn str(n) + '\n' + ' '.join(str(r(-10**9, 10**9)) for _ in range(n)) + '\n'", "n = 150000\nreturn [str(n), ' '.join(str(r(-5, 5)) for _ in range(n))]"] }
+          : ai.mode === "deadgens" ? { ...WRITE_PROBLEM, big_gens: ["return undefined_name"] }
+          : WRITE_PROBLEM;
         return { output: [{ type: "reasoning", content: [] }, { type: "message", content: [{ type: "output_text", text: "```json\n" + JSON.stringify(p) + "\n```" }] }] };
       }
       if (sys.includes("really wrote and understands")) {

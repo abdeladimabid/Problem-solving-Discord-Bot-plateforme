@@ -186,9 +186,16 @@ except BaseException as e:
     raise SystemExit(0)
 for _t in _T:
     if "g" in _t:
-        _ns = {}
-        exec(_t["g"], _ns)
-        _data = _ns["gen"]()
+        # a big test the AI's generator can't build is left out (the other tests still run)
+        try:
+            _ns = {}
+            exec(_t["g"], _ns)
+            _data = _ns["gen"]()
+            if not isinstance(_data, str):
+                _data = chr(10).join(map(str, _data)) if isinstance(_data, (list, tuple)) else str(_data)
+        except BaseException as e:
+            _res.append({"s": "ge", "t": 0, "h": "", "o": "", "n": 0, "e": "".join(traceback.format_exception_only(type(e), e)).strip()[-300:]})
+            continue
     else:
         _data = _t["i"]
     try:
@@ -226,7 +233,7 @@ for _t in _T:
 print(_MARK + json.dumps(_res))
 `;
 
-interface HarnessRow { s: "ok" | "tle" | "re"; t: number; h: string; o: string; n: number; e: string }
+interface HarnessRow { s: "ok" | "tle" | "re" | "ge"; t: number; h: string; o: string; n: number; e: string }   // ge: the test's generator failed
 
 /** Run Python code on several tests in one request. `full` = chars of output to return per test. */
 export async function runPythonTests(env: Env, src: string, tests: { input: string | null; gen: string | null }[], limit: number, full = 300)
@@ -308,8 +315,9 @@ const start = Date.now();
 for (const t of T) {
   let data = t.i;
   if (data == null) {
-    const g = sh(PY, ["-c", t.g + "\nimport sys\nsys.stdout.write(gen())"], { timeout: 20000 });
-    if (g.status !== 0) done({ je: "test generator failed: " + (g.stderr || "").slice(-300) });
+    const g = sh(PY, ["-c", t.g + "\nimport sys\n_v = gen()\nif not isinstance(_v, str):\n    _v = chr(10).join(map(str, _v)) if isinstance(_v, (list, tuple)) else str(_v)\nsys.stdout.write(_v)"], { timeout: 20000 });
+    // a big test the AI's generator can't build is left out (the other tests still run)
+    if (g.status !== 0) { rows.push({ s: "ge", t: 0, h: "", o: "", n: 0, e: "test generator failed: " + (g.stderr || "").slice(-300) }); continue; }
     data = g.stdout;
   }
   const s0 = process.hrtime.bigint();
