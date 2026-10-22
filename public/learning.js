@@ -1080,6 +1080,7 @@ function renderDebrief() {
       ${rec.squad ? squadMembersHtml(rec, st, final) : ""}
     </div>
     <aside class="stack db-side">
+      <section class="panel" id="db-ai"></section>
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
       <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
       <section class="panel" id="db-oral"></section>

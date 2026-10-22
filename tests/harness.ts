@@ -349,6 +349,11 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const onBranch = gm && url.searchParams.get("sha") ? github.commits[gm[1] + "@" + url.searchParams.get("sha")] : null;
     if (onBranch) return Response.json(onBranch.filter((c: any) => !url.searchParams.get("since") || c.commit.author.date >= url.searchParams.get("since")!));
     if (gm && github.commits[gm[1]]) return Response.json(github.commits[gm[1]]);
+    // a file's content (raw), and one commit with its stats
+    const cm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/(.+)$/);
+    if (cm) { github.calls++; const f = github.files[`${cm[1]}/HEAD/${decodeURIComponent(cm[2])}`]; return f === undefined ? new Response("Not Found", { status: 404 }) : new Response(f, { status: 200 }); }
+    const one = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits\/([0-9a-f]{7,40})$/);
+    if (one && github.sizes[one[2]]) return Response.json({ sha: one[2], stats: { additions: github.sizes[one[2]].additions, deletions: github.sizes[one[2]].deletions }, files: [] });
     gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([^/]+)$/);
     if (gm && github.trees[gm[1] + "@" + gm[2]]) return Response.json({ tree: github.trees[gm[1] + "@" + gm[2]].map((path) => ({ type: "blob", path })) });
   }
@@ -474,6 +479,10 @@ function fakeAI() {
         teams.sort((a, b) => Number(b.c.includes("presque")) - Number(a.c.includes("presque")));
         ai.users.push(user);
         return { response: JSON.stringify({ classement: teams.map((t) => ({ equipe: t.l, pourquoi: t.c.includes("presque") ? "La boucle est presque juste." : "Le code ne fait encore rien d'utile." })) }) };
+      }
+      if (sys.includes("ressemblent à du code généré par une IA")) {
+        const hit = /Here's the updated code|reduce\(/.test(user);
+        return { response: JSON.stringify({ probabilite: hit ? 70 : 10, parties: hit ? [{ fichier: "app.js", ou: "function total", pourquoi: "Style très homogène et reduce() avant de l'avoir vu en cours." }] : [], resume: hit ? "Plusieurs parties ressemblent à du code généré." : "Rien de particulier." }) };
       }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));

@@ -829,6 +829,12 @@ const W_LV_NAME = Object.fromEntries(W_LV);
 .pg-copy { display: none; position: absolute; left: 24px; top: -3px; z-index: 5; width: 28px; height: 28px; padding: 0; border-radius: 7px; border: 1px solid var(--line-strong);
   background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: var(--shadow-m); font-size: 14px; }
 .pg-cell:hover .pg-copy, .pg-cell:focus-within .pg-copy { display: inline-flex; align-items: center; justify-content: center; }
+.aic-top { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; margin-top: 10px; } .aic-top .small { grid-column: 1 / -1; }
+.aic-bar { height: 8px; border-radius: 9px; background: var(--line); overflow: hidden; } .aic-bar i { display: block; height: 100%; border-radius: 9px; background: var(--good, #16a34a); }
+.aic-bar i.warn { background: #f59e0b; } .aic-bar i.bad { background: #dc2626; }
+.aic-sig { display: grid; gap: 8px; margin-top: 12px; } .aic-sig div { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2, rgba(0,0,0,.03)); border: 1px solid var(--line); }
+.aic-h { font-size: 13px; margin: 14px 0 6px; } .aic-parts { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; } .aic-parts code { font-size: 12.5px; }
+.aic-note { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
 .pg-year { display: inline-flex; gap: 10px; font-size: 13px; font-weight: 700; } .pg-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; background: var(--c); }`;
   document.head.append(st);
 })();
@@ -861,7 +867,29 @@ function wPropLevel() {
 }
 
 // Called at the end of the debrief page: fills its "Oral questions" and "Level" panels
+// 🤖 AI use: signals with their evidence and the parts to ask about in the oral; a hint, never a proof
+function wAiCheck() {
+  const box = $("#db-ai"), c = DB.R.review?.aiCheck;
+  if (!box) return;
+  const LV = { low: ["Low", "good"], some: ["Some", "warn"], high: ["High", "bad"] };
+  const lv = c ? LV[c.level] || LV.low : null;
+  box.innerHTML = `<div class="panel-head" style="margin:0"><h2>🤖 AI use</h2><button class="btn small" id="db-aic">${c ? "↻ Check again" : "🔎 Check"}</button></div>
+    ${!c ? `<p class="muted small" style="margin:6px 0 0">Looks for signs the code was generated: the pushes (very big, faster than typing), the code (chatbot leftovers, techniques the class hasn't seen, a file in another style), the assessment, and one AI reading. Never a verdict: it tells you what to ask about in the oral.</p>`
+    : `<div class="aic-top"><span class="lvl ${lv[1]}">${lv[0]} suspicion</span><div class="aic-bar"><i class="${lv[1]}" style="width:${c.score}%"></i></div><span class="small muted">${c.commits} commit${c.commits === 1 ? "" : "s"} · ${c.lines} lines · ${fmtAgo(Math.floor(c.at / 1000))}</span></div>
+      ${c.signals.length ? `<div class="aic-sig">${c.signals.map((x) => `<div><b>${esc(x.label)}</b><span class="small muted">${esc(x.detail)}</span></div>`).join("")}</div>` : `<p class="small muted" style="margin:8px 0 0">No signal: nothing points to generated code.</p>`}
+      ${c.parts.length && c.level !== "low" ? `<h3 class="aic-h">Ask them to explain</h3><ul class="aic-parts">${c.parts.map((p) => `<li><code>${esc(p.where)}</code> <span class="small muted">${esc(p.why)}</span></li>`).join("")}</ul>
+        <p class="small muted" style="margin:6px 0 0">✨ New oral questions start with these parts.</p>` : ""}
+      <p class="small muted aic-note">A hint, never a proof: someone who wrote the code can explain it and change it in front of you.</p>`}`;
+  $("#db-aic", box).onclick = (e) => busy(e.currentTarget, async () => {
+    toast("⏳ Reading the pushes and the code…");
+    const R = await api(`/briefs/${DB.bid}/review/aicheck`, { method: "POST", body: { who: DB.who } });
+    DB.R = { ...DB.R, ...R };
+    wDebriefExtras();
+  });
+}
+
 function wDebriefExtras() {
+  wAiCheck();
   const rec = DB.R.review, final = DB.R.status === "final";
   const box = $("#db-oral"), lvBox = $("#db-level"), body = $("#db-body");
   if (!rec || !box || !lvBox) return;

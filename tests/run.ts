@@ -3588,6 +3588,38 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
   check(rp.status === 200 && rp.data.repos.length === 2 && rp.data.repos[0].repo === "carol/site" && rp.data.repos[0].activity === 1 && rp.data.repos[0].private && !rp.data.repos[1].during, "debrief: the student's GitHub repos to pick from, the one they pushed to during the brief first");
   const rpB = await api("GET", `/api/briefs/${bidR}/review/repos?g=${G}&who=u:${U.bob.id}`);
   check(rpB.status === 200 && rpB.data.missing.length === 1 && !rpB.data.repos.length, "…a student not connected to GitHub is reported");
+  {
+    // 🤖 AI use: the pushes (from the webhook), the code as it is now, the AI's reading; the parts go into the oral questions
+    const AC = await import("../src/shared/review/aicheck.ts");
+    const calm = AC.pushSignals([{ t: 1000, adds: 40 }, { t: 1000 + 3600, adds: 55 }, { t: 1000 + 7200, adds: 30 }, { t: 1000 + 86400, adds: 60 }]);
+    check(!calm.signals.length && !AC.codeSignals({ "app.js": "let total = 0;\nfor (let i = 0; i < notes.length; i++) {\n  total = total + notes[i];\n}\n" }, { lang: "fr", taught: "boucles" }).signals.length
+      && AC.aiLevel([]).level === "low", "regular small commits and simple code: no signal");
+    check(AC.assessSignal(16, 0.9)?.pts === 25 && AC.assessSignal(80, 0.9) === null && AC.ADVANCED.some(([n]) => n === "reduce()"), "a project far above the assessment is a signal");
+    const br = q1("SELECT start_at, created_at, due_at FROM briefs WHERE id = ?", bidR), t0 = (br.start_at ?? br.created_at) + 3600;
+    github.trees["carol/site@HEAD"] = ["index.html", "app.js", "node_modules/lib/x.js"];
+    github.files["carol/site/HEAD/index.html"] = "<!doctype html><html><body><h1>Hammam</h1><script src=\"app.js\"></script></body></html>";
+    github.files["carol/site/HEAD/app.js"] = "// Here's the updated code with the cart feature\n/**\n * Adds an item.\n * @param {object} item\n */\nfunction add(item) { cart.push(item); }\n/**\n * Sums.\n * @returns {number}\n */\nconst total = () => cart.reduce((s, x) => s + x.price, 0);\n/**\n * Loads.\n * @param {string} url\n */\nasync function load(url) { const r = await fetch(url); return r.json(); }\n";
+    const keptLog = q("SELECT * FROM gh_log WHERE discord_id = ?", U.carol.id);
+    run1("DELETE FROM gh_log WHERE discord_id = ?", U.carol.id);
+    for (const [i, adds, dt] of [[1, 40, 0], [2, 520, 600], [3, 12, 4000]] as [number, number, number][])
+      run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files) VALUES (?, ?, ?, 'commit', 'carol/site', ?, ?, 'real', ?, 0, 3)", G, `c${i}`.padEnd(40, String(i)), U.carol.id, t0 + dt, i === 2 ? "add everything" : "work", adds);
+    const recA = { at: Date.now(), first: "Carol", brief: "Hammam", repos: ["carol/site"], checks: [], result: { exigences: [{ type: "story", texte: "Panier", statut: "fait" }], competences: [], feedback: "" }, oral: [] };
+    run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidR, `u:${U.carol.id}`);
+    run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bidR, G, `u:${U.carol.id}`, JSON.stringify(recA), clock.now());
+    run1("DELETE FROM ai_usage");
+    const ac = await api("POST", `/api/briefs/${bidR}/review/aicheck`, { g: G, who: `u:${U.carol.id}` });
+    const c = ac.data.review?.aiCheck;
+    const ids = (c?.signals || []).map((x: any) => x.id);
+    check(ac.status === 200 && c.level === "high" && ["leftover", "big", "fast", "share", "jsdoc", "level", "ai"].every((x) => ids.includes(x)) && c.commits === 3 && c.lines === 572,
+      `🤖 AI use: the pushes, the code and the AI's reading give the signals, each with its evidence (${c?.level} ${c?.score}: ${ids.join(", ")})`);
+    check(c.parts.some((p: any) => p.where.startsWith("app.js")) && c.parts.some((p: any) => /commit c2/.test(p.where)) && !JSON.stringify(c).includes("node_modules") && /reduce\(\)/.test(c.signals.find((x: any) => x.id === "level").detail),
+      "…with the parts to ask about (the file, the big commit), never the libraries");
+    await api("POST", `/api/briefs/${bidR}/review/oral`, { g: G, who: `u:${U.carol.id}` });
+    check(ai.users[ai.users.length - 1].includes("PARTIES À LUI FAIRE EXPLIQUER") && ai.users[ai.users.length - 1].includes("app.js"), "…and the ✨ oral questions start with them");
+    run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidR, `u:${U.carol.id}`);
+    run1("DELETE FROM gh_log WHERE discord_id = ?", U.carol.id);
+    for (const r of keptLog) run1(`INSERT INTO gh_log (${Object.keys(r).join(", ")}) VALUES (${Object.keys(r).map(() => "?").join(", ")})`, ...Object.values(r));
+  }
   await api("DELETE", `/api/github/app?g=${G}`);
   check(!(await api("GET", `/api/github?g=${G}`)).data.setup.own, "back to the school's App");
   const data = { names: JSON.stringify({ "555000": { n: "Dora" } }), "inst:4242": JSON.stringify({ discordId: U.bob.id, githubId: 8001, login: "bob-gh", linkedAt: new Date().toISOString() }),
