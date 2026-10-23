@@ -4311,6 +4311,22 @@ section("plan d'action: the weak students, improving or not, engaged or not, the
   const stl = await api("GET", `/api/students?g=${G}`);
   const bn = stl.data.find((r: any) => r.discord_id === U.bob.id)?.niveau;
   check(bn?.lv === "faible" && bn.trend === "up" && /Plan B2/.test(bn.from), "Students: each one's niveau (last debrief) and how it moves");
+  {
+    // a new brief analysed but not finalized yet: Bob's level, the plan and the progress page's draft square
+    run1(`INSERT INTO briefs (guild_id, title, status, data, start_at, due_at, created_at) VALUES (?, 'Plan B3', 'assigned', '{}', ?, ?, ?)`, G, T - 2 * 86400, T - 86400, T - 2 * 86400);
+    const b3 = q1("SELECT id FROM briefs WHERE title = 'Plan B3'").id;
+    run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at, level) VALUES (?, ?, ?, '{}', 'draft', ?, 'excellent')", b3, G, `u:${U.bob.id}`, T);
+    const n2 = (await api("GET", `/api/students?g=${G}`)).data.find((r: any) => r.discord_id === U.bob.id)?.niveau;
+    const p2 = (await api("GET", `/api/plan?g=${G}`)).data.plan?.find((r: any) => r.discord_id === U.bob.id);
+    const pr = await api("GET", `/api/progress?g=${G}`);
+    check(n2?.lv === "faible" && /Plan B2/.test(n2.from) && p2?.current === "faible" && !p2.debriefs.some((d: any) => d.bid === b3) && pr.data.cells[`${b3}:${U.bob.id}`]?.final === false,
+      "a debrief not finalized yet never moves the level (Students, plan d'action): only the finalized ones count; Progress still shows it as a draft");
+    run1("UPDATE brief_reviews SET status = 'final' WHERE brief_id = ? AND who = ?", b3, `u:${U.bob.id}`);
+    const n3 = (await api("GET", `/api/students?g=${G}`)).data.find((r: any) => r.discord_id === U.bob.id)?.niveau;
+    check(n3?.lv === "excellent" && /Plan B3/.test(n3.from), "…once finalized, it counts");
+    run1("DELETE FROM brief_reviews WHERE brief_id = ?", b3);
+    run1("DELETE FROM briefs WHERE id = ?", b3);
+  }
   const sv = await api("PUT", `/api/plan/${U.bob.id}`, { g: G, note: "  Vu avec Bob : il refait le formulaire.  " });
   const v2 = await api("GET", `/api/plan?g=${G}`);
   check(sv.status === 200 && v2.data.plan.find((r: any) => r.discord_id === U.bob.id).note?.text === "Vu avec Bob : il refait le formulaire." && v2.data.plan.find((r: any) => r.discord_id === U.bob.id).note.by === "you", "the teacher's comment, saved");

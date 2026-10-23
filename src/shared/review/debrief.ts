@@ -826,13 +826,17 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
   await levelCols(env, b.id, who, rec);
 }
 
-/** Progress: one column per brief, one square per debrief (its level); a squad's debrief counts for each member. */
-export async function progressView(env: Env, g: GuildRow) {
+/**
+ * Progress: one column per brief, one square per debrief (its level); a squad's debrief counts for each member.
+ * finalOnly: only the finalized debriefs, for everything that judges a student (their niveau, the plan d'action, the
+ * random picks, balanced squads, the class report): a debrief still being worked on never moves their level.
+ */
+export async function progressView(env: Env, g: GuildRow, o: { finalOnly?: boolean } = {}) {
   const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null; kind: string | null }>(env,
     "SELECT id, title, due_at, squads, kind FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
   // a squad's record too: each member has their own level
   const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string; record: string | null }>(env,
-    "SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?", g.id);
+    `SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?${o.finalOnly ? " AND status = 'final'" : ""}`, g.id);
   const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
   const squadsOf = new Map(briefs.map((b) => [b.id, cleanSquads(b.squads || "[]")]));
   const cells: Record<string, { lv: string; plv: string; who: string; final: boolean }> = {};

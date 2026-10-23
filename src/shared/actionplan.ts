@@ -61,7 +61,7 @@ export function engagement(rows: AsgRow[], lastActive: number | null, t0 = now()
 }
 
 export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
-  const P = await progressView(env, g);
+  const P = await progressView(env, g, { finalOnly: true });
   const sprints = await all<{ discord_id: string; sprint: number; lv: string | null }>(env,
     "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []);
   const notes = await all<NoteRow>(env, "SELECT discord_id, note, note_by, note_at, flagged FROM plan_notes WHERE guild_id = ?", g.id).catch(() => []);
@@ -176,7 +176,7 @@ export async function aiPlanNote(env: Env, g: GuildRow, row: Awaited<ReturnType<
 
 /** Each student's niveau (excellent … critique): their last debrief's level, else their last sprint's, and how it moves. */
 export async function niveaux(env: Env, g: GuildRow) {
-  const P = await progressView(env, g);
+  const P = await progressView(env, g, { finalOnly: true });
   const sprints = await all<{ discord_id: string; sprint: number; lv: string | null }>(env,
     "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []);
   const out: Record<string, { lv: string; from: string; trend: string; history: string[] }> = {};

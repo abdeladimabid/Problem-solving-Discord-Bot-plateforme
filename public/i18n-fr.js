@@ -1145,7 +1145,7 @@ window.CB_FR = {
 "Next for this student": "La suite pour cet apprenant",
 "Next week": "Semaine prochaine",
 "Next: choose the students →": "Suivant : choisis les apprenants →",
-"Niveau: the level of their last debrief (B1, B2…), else of their last sprint. ↑ ↓ when it moves from the levels before.": "Niveau : celui du dernier débrief (B1, B2…), sinon celui du dernier sprint. ↑ ↓ quand il bouge par rapport aux niveaux précédents.",
+"Niveau: the level of their last finalized debrief (B1, B2…), else of their last sprint. A debrief still in progress doesn't count. ↑ ↓ when it moves from the levels before.": "Niveau : celui du dernier débrief finalisé (B1, B2…), sinon celui du dernier sprint. Un débrief en cours ne compte pas. ↑ ↓ quand il bouge par rapport aux niveaux précédents.",
 "No Battle Royale yet": "Pas encore de Battle Royale",
 "No Code Relay yet": "Pas encore de Code Relay",
 "No Discord channel for the reports: Settings → GitHub & Watcher.": "Pas de salon Discord pour les rapports : Réglages → GitHub & Watcher.",

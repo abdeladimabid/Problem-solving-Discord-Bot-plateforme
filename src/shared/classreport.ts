@@ -46,7 +46,7 @@ function counted(items: string[], min = 1, max = 8) {
 }
 
 export async function classReport(env: Env, g: GuildRow, students: (PlanStudent & { name: string | null })[]) {
-  const P = await progressView(env, g);
+  const P = await progressView(env, g, { finalOnly: true });
   const plan = await planView(env, g, students);
   const byId = new Map([...plan.plan, ...plan.others].map((r) => [r.discord_id, r]));
   const prog = await programOf(env, g as any).catch(() => null);

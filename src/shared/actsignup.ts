@@ -323,7 +323,7 @@ async function countsFor(env: Env, gid: string): Promise<Map<string, Count>> {
 export async function levelsOf(env: Env, g: GuildRow): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   try {
-    const P = await progressView(env, g);
+    const P = await progressView(env, g, { finalOnly: true });
     for (const s of P.students) {
       let lv = "";
       for (const b of P.briefs) { const c = P.cells[`${b.id}:${s.discord_id}`]; if (c && (c.lv || c.plv)) lv = c.lv || c.plv; }

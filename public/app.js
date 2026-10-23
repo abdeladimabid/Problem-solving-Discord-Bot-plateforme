@@ -506,7 +506,7 @@ async function viewStudents() {
       <div class="niv-keys">${NIV.map(([v, l]) => `<button class="niv-k" data-nf="niv:${v}"><i class="pgc-${v}"></i><b>${count[v]}</b> ${l}</button>`).join("")}
         <button class="niv-k" data-nf="niv:none"><i class="nolv"></i><b>${none}</b> no level yet</button>
         ${attn ? `<button class="niv-k attn" data-nf="attention"><span class="attn-dot"></span><b>${attn}</b> need attention</button>` : ""}</div>
-      <p class="muted small" style="margin:8px 0 0">Niveau: the level of their last debrief (B1, B2…), else of their last sprint. ↑ ↓ when it moves from the levels before.</p></section>
+      <p class="muted small" style="margin:8px 0 0">Niveau: the level of their last finalized debrief (B1, B2…), else of their last sprint. A debrief still in progress doesn't count. ↑ ↓ when it moves from the levels before.</p></section>
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search by name or HackerRank username" aria-label="Search students" style="flex:1;min-width:220px">
       <select id="filter" aria-label="Filter students">
