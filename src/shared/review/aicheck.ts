@@ -8,12 +8,16 @@
 //   • optionally, one AI reading of the code (one signal among the others, never alone)
 
 export interface AiSignal { id: string; label: string; detail: string; pts: number; refs?: string[] }
-export interface AiPart { where: string; why: string }
+export interface AiPart { where: string; why: string; url?: string }
 export interface AiCheck { at: number; score: number; level: "low" | "some" | "high"; signals: AiSignal[]; parts: AiPart[]; commits: number; lines: number; ai: { pct: number; note: string } | null }
-export interface PushRow { t: number; adds: number; dels?: number; files?: number; title?: string; id?: string }
+export interface PushRow { t: number; adds: number; dels?: number; files?: number; title?: string; id?: string; repo?: string; branch?: string; main?: string }
 
 const short = (sha?: string) => (sha ? String(sha).slice(0, 7) : "");
 const msg = (t?: string) => String(t || "").split("\n")[0].slice(0, 60);
+/** Where a commit is: its sha, message, and the branch (and repo, when it's not the brief's), with a link to it on GitHub. */
+const commitPart = (r: PushRow, why: string): AiPart => ({
+  where: `commit ${short(r.id) || when(r.t)}${r.title ? ` “${msg(r.title)}”` : ""}${r.branch ? ` · ${r.branch}` : ""}${r.repo && r.main && r.repo.toLowerCase() !== r.main.toLowerCase() ? ` · ${r.repo}` : ""}`,
+  why, ...(r.repo && r.id && /^[0-9a-f]{40}$/.test(r.id) ? { url: `https://github.com/${r.repo}/commit/${r.id}` } : {}) });
 const when = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
 
 /** The pushes: big commits, code faster than typing, a project in very few commits. */
@@ -27,7 +31,7 @@ export function pushSignals(rows: PushRow[]): { signals: AiSignal[]; parts: AiPa
   if (big.length) {
     signals.push({ id: "big", label: "Very big commits", pts: Math.min(30, 15 + 5 * (big.length - 1)),
       detail: big.slice(0, 3).map((r) => `+${r.adds} lines in one commit${r.title ? ` (“${msg(r.title)}”)` : ""}`).join(" · "), refs: big.map((r) => short(r.id)).filter(Boolean) });
-    for (const r of big.slice(0, 2)) parts.push({ where: `commit ${short(r.id) || when(r.t)}${r.title ? ` “${msg(r.title)}”` : ""}`, why: `+${r.adds} lines at once` });
+    for (const r of big.slice(0, 2)) parts.push(commitPart(r, `+${r.adds} lines at once`));
   }
   // 2. one commit holds most of the project
   const top = list.reduce((m, r) => (r.adds > m.adds ? r : m), list[0]);
@@ -41,7 +45,7 @@ export function pushSignals(rows: PushRow[]): { signals: AiSignal[]; parts: AiPa
   if (fast.length) {
     signals.push({ id: "fast", label: "Code faster than typing", pts: Math.min(25, 15 + 5 * (fast.length - 1)),
       detail: fast.slice(0, 3).map((f) => `+${f.r.adds} lines ${f.mins} min after the previous push (${f.pace} lines/min)`).join(" · "), refs: fast.map((f) => short(f.r.id)).filter(Boolean) });
-    for (const f of fast.slice(0, 2)) if (!parts.some((p) => p.where.includes(short(f.r.id) || "§"))) parts.push({ where: `commit ${short(f.r.id) || when(f.r.t)}${f.r.title ? ` “${msg(f.r.title)}”` : ""}`, why: `+${f.r.adds} lines in ${f.mins} min` });
+    for (const f of fast.slice(0, 2)) if (!parts.some((p) => p.where.includes(short(f.r.id) || "§"))) parts.push(commitPart(f.r, `+${f.r.adds} lines in ${f.mins} min`));
   }
   // 4. a whole project in very few commits
   if (list.length <= 2 && total >= 300) signals.push({ id: "few", label: "A whole project in very few commits", pts: 10, detail: `${total} lines in ${list.length} commit${list.length > 1 ? "s" : ""}` });

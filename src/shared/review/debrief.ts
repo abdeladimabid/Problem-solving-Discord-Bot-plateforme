@@ -19,7 +19,7 @@ import {
   DEBRIEF_LEVELS, capByAssess, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
-import { githubGet, githubText, installationToken, repoFiles, repoSnapshot, squadContribution } from "./gh.ts";
+import { commitSizes, githubGet, githubText, installationToken, repoFiles, repoSnapshot, squadContribution } from "./gh.ts";
 import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
@@ -1059,22 +1059,57 @@ export async function checkAi(env: Env, g: GuildRow, b: BriefCtx, who: string) {
   let token = "";
   for (const p of players.filter((x) => x.gh_inst)) { try { token = await installationToken(env, app, p.gh_inst!); break; } catch { /* the next one */ } }
   if (!token) throw new DebriefError("Can't read the repo: the student hasn't linked GitHub (/github).");
-  // 1. the pushes of the brief (from the webhook), else from GitHub
-  const from = b.start - 86400, to = b.due + 7 * 86400;
-  let pushes = ids.length ? (await all<{ id: string; t: number; title: string | null; adds: number | null; dels: number | null; files: number | null; repo: string | null }>(env,
-    `SELECT id, t, title, adds, dels, files, repo FROM gh_log WHERE guild_id = ? AND kind = 'commit' AND COALESCE(size, '') != 'merge' AND adds IS NOT NULL AND t >= ? AND t <= ? AND discord_id IN (${ids.map(() => "?").join(",")})`,
-    g.id, from, to, ...ids).catch(() => [])) : [];
-  const inRepo = pushes.filter((p) => String(p.repo || "").toLowerCase() === repo.toLowerCase());
-  if (inRepo.length) pushes = inRepo;
-  if (!pushes.length) {
-    const list = await githubGet(`/repos/${repo}/commits?since=${new Date(from * 1000).toISOString()}&per_page=30`, token).catch(() => []);
-    const arr = (Array.isArray(list) ? list : []).filter((c: any) => !(c.parents && c.parents.length > 1)).slice(0, 15);
-    pushes = (await Promise.all(arr.map(async (c: any) => {
-      const d = await githubGet(`/repos/${repo}/commits/${c.sha}`, token).catch(() => null);
-      return d ? { id: String(c.sha), t: Math.floor(Date.parse(c.commit?.author?.date || "") / 1000), title: String(c.commit?.message || ""), adds: Number(d.stats?.additions ?? 0), dels: Number(d.stats?.deletions ?? 0), files: (d.files || []).length, repo } : null;
-    }))).filter((x): x is NonNullable<typeof x> => !!x && Number.isFinite(x.t));
+  // 1. the commits of the brief as they are in the repo now, on every branch. The push log alone is not enough: a commit
+  //    pushed to another repo, or rewritten later (amend, rebase, force push), is not part of the project, so it never
+  //    counts. The log only gives the sizes it already knows.
+  const from = b.start - 86400, to = b.due + 7 * 86400, iso = (t: number) => new Date(t * 1000).toISOString();
+  const repos = [...new Set((rec.repos || []).map((x: any) => String(x || "")).filter(Boolean))].slice(0, 3) as string[];
+  const inRepos = (x: string | null) => repos.some((r) => r.toLowerCase() === String(x || "").toLowerCase());
+  const logged = ids.length ? (await all<{ id: string; t: number; title: string | null; adds: number | null; dels: number | null; files: number | null; repo: string | null; branch: string | null }>(env,
+    `SELECT id, t, title, adds, dels, files, repo, branch FROM gh_log WHERE guild_id = ? AND kind = 'commit' AND COALESCE(size, '') != 'merge' AND t >= ? AND t <= ? AND discord_id IN (${ids.map(() => "?").join(",")})`,
+    g.id, from, to, ...ids).catch(() => [])).filter((p) => inRepos(p.repo)) : [];
+  const known = new Map(logged.map((p) => [p.id, p]));
+  const logins = new Set(players.map((p) => String(p.github_login || "").toLowerCase()).filter(Boolean));
+  type Push = { id: string; t: number; title: string; adds: number; dels: number; files: number; repo: string; branch: string };
+  let pushes: Push[] = [];
+  let listed = false;
+  for (const rp of repos) {
+    const seen = new Map<string, { c: any; br: string }>();
+    const brs = await githubGet(`/repos/${rp}/branches?per_page=30`, token).catch(() => null);
+    const names: string[] = Array.isArray(brs) && brs.length ? brs.map((x: any) => String(x.name)).slice(0, 15) : [""];
+    for (const br of names) {
+      const list = await githubGet(`/repos/${rp}/commits?per_page=100&since=${iso(from)}&until=${iso(to)}${br ? `&sha=${encodeURIComponent(br)}` : ""}`, token).catch(() => null);
+      if (!Array.isArray(list)) continue;
+      listed = true;
+      for (const c of list) if (/^[0-9a-f]{40}$/.test(String(c?.sha)) && !seen.has(c.sha)) seen.set(c.sha, { c, br });
+    }
+    let rows = [...seen.values()].filter(({ c }) => !(c.parents && c.parents.length > 1));
+    // the student's (or the squad's) own commits, when GitHub knows who wrote them
+    if (logins.size) { const mine = rows.filter(({ c }) => logins.has(String(c.author?.login || "").toLowerCase())); if (mine.length) rows = mine; }
+    rows = rows.slice(0, 60);
+    // the sizes: from the log, else from GitHub (one request for all)
+    const need = rows.map(({ c }) => c.sha).filter((sha) => known.get(sha)?.adds == null);
+    let sizes: Record<string, { additions: number; deletions: number; merge?: boolean }> = {};
+    const inst = players.find((x) => x.gh_inst)?.gh_inst;
+    if (need.length && inst) sizes = await commitSizes(env, app, inst, rp, need).catch(() => ({}));
+    for (const sha of need.filter((x) => !sizes[x]).slice(0, 15)) {
+      const d = await githubGet(`/repos/${rp}/commits/${sha}`, token).catch(() => null);
+      if (d?.stats) sizes[sha] = { additions: Number(d.stats.additions) || 0, deletions: Number(d.stats.deletions) || 0 };
+    }
+    for (const { c, br } of rows) {
+      const k = known.get(c.sha), z = sizes[c.sha];
+      if (z?.merge) continue;
+      const adds = k?.adds ?? z?.additions;
+      if (adds == null) continue;
+      const t = Math.floor(Date.parse(c.commit?.author?.date || c.commit?.committer?.date || "") / 1000);
+      pushes.push({ id: c.sha, t: Number.isFinite(t) ? t : k?.t ?? 0, title: String(c.commit?.message || k?.title || ""), adds: Number(adds) || 0, dels: Number(k?.dels ?? z?.deletions ?? 0) || 0,
+        files: Number(k?.files) || 0, repo: rp, branch: br || String(k?.branch || "") });
+    }
   }
-  const push = pushSignals(pushes.map((p) => ({ id: p.id, t: p.t, title: p.title || "", adds: Number(p.adds) || 0, dels: Number(p.dels) || 0, files: Number(p.files) || 0 })));
+  // GitHub didn't answer: the logged commits of the brief's repos (never another repo's)
+  if (!listed) pushes = logged.filter((p) => p.adds != null).map((p) => ({ id: p.id, t: p.t, title: p.title || "", adds: Number(p.adds) || 0, dels: Number(p.dels) || 0, files: Number(p.files) || 0, repo: String(p.repo), branch: String(p.branch || "") }));
+  const main0 = repos[0] || repo;
+  const push = pushSignals(pushes.map((p) => ({ id: p.id, t: p.t, title: p.title || "", adds: p.adds, dels: p.dels, files: p.files, repo: p.repo, branch: p.branch, main: main0 })));
   // 2. the code, as it is now: the student's own files (not the libraries), the biggest scripts first
   const tree = await repoFiles(token, repo).catch(() => [] as any[]);
   const pick = tree.filter((f: any) => CODE_FILE.test(f.path) && !NOT_OURS.test(f.path) && !(f.size > 200000))

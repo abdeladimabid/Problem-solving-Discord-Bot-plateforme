@@ -3603,6 +3603,13 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
     run1("DELETE FROM gh_log WHERE discord_id = ?", U.carol.id);
     for (const [i, adds, dt] of [[1, 40, 0], [2, 520, 600], [3, 12, 4000]] as [number, number, number][])
       run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files) VALUES (?, ?, ?, 'commit', 'carol/site', ?, ?, 'real', ?, 0, 3)", G, `c${i}`.padEnd(40, String(i)), U.carol.id, t0 + dt, i === 2 ? "add everything" : "work", adds);
+    // the log also holds a commit that was rewritten away (force push) and one in another repo: neither is in the project
+    run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files) VALUES (?, ?, ?, 'commit', 'carol/site', ?, 'ghost', 'real', 900, 0, 3)", G, "d".repeat(40), U.carol.id, t0 + 700);
+    run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files) VALUES (?, ?, ?, 'commit', 'carol/other', ?, 'elsewhere', 'real', 800, 0, 3)", G, "e".repeat(40), U.carol.id, t0 + 800);
+    const gc = (i: number, dt: number, msg: string) => ({ sha: `c${i}`.padEnd(40, String(i)), parents: [{}], author: { login: "carol-gh" }, commit: { message: msg, author: { date: new Date((t0 + dt) * 1000).toISOString() } } });
+    github.branches["carol/site"] = ["main", "feat"];
+    github.commits["carol/site@main"] = [gc(3, 4000, "work"), gc(1, 0, "work")];
+    github.commits["carol/site@feat"] = [gc(2, 600, "add everything"), gc(1, 0, "work")];
     const recA = { at: Date.now(), first: "Carol", brief: "Hammam", repos: ["carol/site"], checks: [], result: { exigences: [{ type: "story", texte: "Panier", statut: "fait" }], competences: [], feedback: "" }, oral: [] };
     run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidR, `u:${U.carol.id}`);
     run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bidR, G, `u:${U.carol.id}`, JSON.stringify(recA), clock.now());
@@ -3614,10 +3621,13 @@ section("GitHub: each class can have its own GitHub App; Watcher import from its
       `🤖 AI use: the pushes, the code and the AI's reading give the signals, each with its evidence (${c?.level} ${c?.score}: ${ids.join(", ")})`);
     check(c.parts.some((p: any) => p.where.startsWith("app.js")) && c.parts.some((p: any) => /commit c2/.test(p.where)) && !JSON.stringify(c).includes("node_modules") && /reduce\(\)/.test(c.signals.find((x: any) => x.id === "level").detail),
       "…with the parts to ask about (the file, the big commit), never the libraries");
+    check(!JSON.stringify(c).includes("ghost") && !JSON.stringify(c).includes("elsewhere") && c.parts.some((p: any) => /commit c2{6}.*· feat/.test(p.where) && p.url === `https://github.com/carol/site/commit/${"c".padEnd(40, "2")}`),
+      "…only commits that are on a branch of the brief's repo now (not rewritten away, not another repo), with their branch and a link");
     await api("POST", `/api/briefs/${bidR}/review/oral`, { g: G, who: `u:${U.carol.id}` });
     check(ai.users[ai.users.length - 1].includes("PARTIES À LUI FAIRE EXPLIQUER") && ai.users[ai.users.length - 1].includes("app.js"), "…and the ✨ oral questions start with them");
     run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidR, `u:${U.carol.id}`);
     run1("DELETE FROM gh_log WHERE discord_id = ?", U.carol.id);
+    delete github.branches["carol/site"]; delete github.commits["carol/site@main"]; delete github.commits["carol/site@feat"];
     for (const r of keptLog) run1(`INSERT INTO gh_log (${Object.keys(r).join(", ")}) VALUES (${Object.keys(r).map(() => "?").join(", ")})`, ...Object.values(r));
   }
   await api("DELETE", `/api/github/app?g=${G}`);
