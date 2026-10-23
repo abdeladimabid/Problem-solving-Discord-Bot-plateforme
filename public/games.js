@@ -155,9 +155,9 @@ function gameDialog(d, kind, pre = {}) {
       <div class="field-row"><div><label for="gm-tot">Time per round</label><select id="gm-tot">${[180, 240, 300, 420, 600, 900].map((s) => `<option value="${s}" ${s === 300 ? "selected" : ""}>${s / 60} min (÷ squad size each)</option>`).join("")}</select></div>
         <div><label for="gm-rounds">Rounds</label><select id="gm-rounds">${[1, 2, 3].map((n) => `<option>${n}</option>`).join("")}</select></div></div>
       <label class="check"><input type="checkbox" id="gm-noise" checked> 🎤 No talking: the microphones listen</label>
-      <div class="field-row" id="gm-noiseopts"><div><label for="gm-sens">Sensitivity</label><select id="gm-sens"><option value="low">Low (only loud talking)</option><option value="medium" selected>Medium</option><option value="high">High (even whispers)</option></select></div>
+      <div class="field-row"><div id="gm-noiseopts"><label for="gm-sens">Sensitivity</label><select id="gm-sens"><option value="low">Low (only clear talking)</option><option value="medium" selected>Medium</option><option value="high">High (even quiet talking)</option></select></div>
         <div><label for="gm-str">Out after</label><select id="gm-str">${[1, 2, 3, 5].map((n) => `<option value="${n}" ${n === 3 ? "selected" : ""}>${n} strike${n > 1 ? "s" : ""}</option>`).join("")}</select></div></div>
-      <p class="small muted" style="margin-top:0">Each student's device listens; a voice near it gives the squad a strike. On the TV, click a squad's strikes to cancel a false one.</p>
+      <p class="small muted" style="margin-top:0" id="gm-noisehelp">Each student sets their voice in the lobby: their mic then only counts a voice next to their own screen, and when several squads' mics hear the same moment, only the squad where it was loudest gets the strike. On the TV, ＋ gives a strike by hand, and clicking a squad's strikes cancels one.</p>
       <label class="check"><input type="checkbox" id="gm-lock" checked> 🖥️ Full screen: leaving it, the tab or the window stops the student until you let them back in (from the TV)</label>
       <label class="check"><input type="checkbox" id="gm-nopaste" checked> 🚫 No copy-paste (blocked, and the TV shows who tried)</label>` : ""}
     <div class="field-row"><div><label for="gm-rw">Winners get</label><select id="gm-rw">${[0, 10, 20, 30, 50].map((s) => `<option value="${s}" ${s === 20 ? "selected" : ""}>${s ? s + " pts each" : "no points"}</option>`).join("")}</select></div>
@@ -271,7 +271,12 @@ function gameDialog(d, kind, pre = {}) {
       try { const r = await api("/games/task", { method: "POST", body: { prompt: $("#gm-tp").value, level: $("#gm-tl").value, lang: $("#gm-lang").value, avoid: [...d.tasks, ...(d.myTasks || [])].map((t) => t.title) } }); picked = r.task; $("#gm-tprev").innerHTML = prevTask(r.task) + `<p class="small muted">Not great? Click “Generate a challenge” again.</p>`; }
       catch (x) { $("#gm-tprev").innerHTML = `<div class="notice">${esc(x.message)}</div>`; }
     });
-    $("#gm-noise").onchange = () => { $("#gm-noiseopts").hidden = !$("#gm-noise").checked; };
+    $("#gm-noise").onchange = () => {
+      const on = $("#gm-noise").checked;
+      $("#gm-noiseopts").hidden = !on;
+      $("#gm-noisehelp").textContent = on ? "Each student sets their voice in the lobby: their mic then only counts a voice next to their own screen, and when several squads' mics hear the same moment, only the squad where it was loudest gets the strike. On the TV, ＋ gives a strike by hand, and clicking a squad's strikes cancels one."
+        : "No microphones: you give the strikes yourself on the TV (＋ next to a squad's strikes) when a squad talks or cheats; clicking the strikes cancels one.";
+    };
   }
 }
 /** The teacher's own relay function: the tests are lines "[args] => expected". */

@@ -18,7 +18,7 @@ const html = (body: string) => new Response(body, { headers: { "content-type": "
 const esc = (s: string) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]!));
 const GONE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Class game</title>
 <body style="margin:0;display:grid;place-items:center;min-height:100vh;background:#0b1020;color:#e7edf8;font:18px system-ui,sans-serif;text-align:center"><div><div style="font-size:64px">🎮</div><p>This game doesn't exist anymore.<br>Ask your teacher for the new link.</p></div></body>`;
-const HOST_ACTIONS = ["letin", "start", "reveal", "next", "hold", "stop", "kick", "unban", "announce", "pardon", "results", "runtests", "reset"];
+const HOST_ACTIONS = ["letin", "start", "reveal", "next", "hold", "stop", "kick", "unban", "announce", "pardon", "strike", "results", "runtests", "reset"];
 
 async function body(request: Request): Promise<any> { try { return await request.json(); } catch { return {}; } }
 
@@ -84,7 +84,7 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
       case "accuse": return json(await accuseSql(env, gm, p, String(b.name || "").slice(0, 80)));
       case "code": await saveRelayCode(env, gm, p, Number(b.turn), String(b.code ?? "")); return json({ ok: true, at: Date.now() });
       case "cheat": return json(await cheatRelay(env, gm, p, String(b.what || "")));
-      case "noise": return json(await noiseRelay(env, gm, p, Date.now(), b.why === "muted" ? "muted" : "voice"));
+      case "noise": return json(await noiseRelay(env, gm, p, Date.now(), b.why === "muted" ? "muted" : "voice", b.rel == null ? null : Number(b.rel)));
       case "try": return json(await tryRelay(env, gm, p, String(b.code ?? "")));
       case "mic": {
         const v = b.state === "muted" ? 2 : b.on ? 1 : 0;
@@ -193,6 +193,7 @@ h1.big{font-size:3.6vw;margin:0 0 1vh}h2{font-size:1.8vw;margin:0 0 1vh}
 .rhead{display:flex;justify-content:space-between;align-items:center;gap:1vw}
 .spips{display:flex;gap:.4vw;border:0;background:none;padding:0}.spips i{width:1.7vw;height:1.7vw;border-radius:.5vw;border:2px solid rgba(239,68,68,.5);display:grid;place-items:center;font-style:normal;font-size:.9vw;font-weight:900;color:#fff}
 .spips i.on{background:linear-gradient(135deg,#ef4444,#b91c1c);border-color:#fca5a5;box-shadow:0 0 1vw rgba(239,68,68,.7)}
+.sbtn{display:flex;align-items:center;gap:.5vw}.sadd{width:1.7vw;height:1.7vw;border-radius:50%;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.06);color:#fca5a5;font-size:1.1vw;font-weight:800;line-height:1;cursor:pointer;opacity:.45;transition:opacity .2s,background .2s}.rcard:hover .sadd,.sadd:hover{opacity:1}.sadd:hover{background:rgba(239,68,68,.35);color:#fff}
 .wrow{display:flex;gap:1vw;align-items:center;margin:.6vh 0}
 .wav{width:4vw;height:4vw;border-radius:50%;display:grid;place-items:center;font-weight:900;font-size:1.4vw;background:var(--c);box-shadow:0 0 0 .4vw color-mix(in srgb,var(--c) 30%,transparent),0 0 2vw var(--c);animation:bob 2s ease-in-out infinite}
 .typing{display:inline-flex;gap:.25vw;vertical-align:middle;margin-left:.4vw}.typing i{width:.5vw;height:.5vw;border-radius:50%;background:var(--soft);animation:pulse 1s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
@@ -369,7 +370,7 @@ function bannedLine() {
 }
 function lobby(extra) {
   const head = S.kind === "sql" ? '<h1 class="big">🕵️ ' + e(S.case.title) + '</h1><p class="story">' + e(S.case.story) + '</p><p class="muted">' + T("Notions : ", "Notions: ") + S.case.notions.map(e).join(" · ") + "</p>"
-    : S.kind === "relay" ? '<h1 class="big">🏃 ' + T("Relais de code", "Code Relay") + " · " + e(S.task.title) + ' <span class="chip" style="font-size:1.2vw;vertical-align:middle">' + e(S.langName || "JavaScript") + '</span></h1><p class="story">' + e(S.task.text) + '</p><p class="muted">' + T("Chacun écrit à son tour : ", "Each one writes in turn: ") + mmss(S.totalMs) + T(" ÷ la taille du squad. ", " ÷ the squad size. ") + (S.noise ? T("Interdit de parler : les micros écoutent (", "No talking: the mics are listening (") + S.strikesMax + T(" avertissements = éliminés).", " strikes = out).") : "") + "</p>"
+    : S.kind === "relay" ? '<h1 class="big">🏃 ' + T("Relais de code", "Code Relay") + " · " + e(S.task.title) + ' <span class="chip" style="font-size:1.2vw;vertical-align:middle">' + e(S.langName || "JavaScript") + '</span></h1><p class="story">' + e(S.task.text) + '</p><p class="muted">' + T("Chacun écrit à son tour : ", "Each one writes in turn: ") + mmss(S.totalMs) + T(" ÷ la taille du squad. ", " ÷ the squad size. ") + (S.noise ? T("Interdit de parler : les micros écoutent (", "No talking: the mics are listening (") + S.strikesMax + T(" avertissements = éliminés).", " strikes = out).") : T("Interdit de parler : le formateur donne les avertissements (", "No talking: the teacher gives the strikes (") + S.strikesMax + T(" = éliminés).", " = out).")) + "</p>"
     : '<div class="crown">👑</div><h1 class="ptitle">Battle Royale</h1><p class="story">' + T("Une mauvaise réponse et tu es éliminé. Le dernier debout gagne !", "One wrong answer and you're out. The last one standing wins!") + (S.mode !== "solo" ? T(" En squad, vos bonnes réponses donnent des points pour ramener un coéquipier. Un squad dont tous les membres tombent est éliminé.", " In squads, your right answers earn points to bring a teammate back. A squad whose members all fall is wiped out.") : "") + "</p>";
   const bySquad = S.mode === "squads" ? '<div class="sqrow">' + S.squads.map((q, i) => {
     if (!q) return "";
@@ -561,11 +562,11 @@ function relayView() {
     const pct = Math.max(0, Math.min(100, 100 * (nowMs() - t.turnStart) / (t.turnEnd - t.turnStart)));
     const pp = []; for (let i = 0; i < S.strikesMax; i++) pp.push('<i class="' + (i < t.strikes ? "on" : "") + '">' + (i < t.strikes ? "✖" : "") + "</i>");
     const ln = t.lastNoise, hit = noiseSeen[t.squad];
-    const stamp = hit ? '<div class="stamp' + (t.out ? " ko" : "") + '"><b>' + (t.out ? "🔇 " + T("ÉLIMINÉS", "OUT") : "✖ " + T("AVERTISSEMENT", "STRIKE") + " " + t.strikes + "/" + S.strikesMax) + "</b>" + (ln ? "<span>" + e(ln.name) + (ln.why === "muted" ? T(" : micro coupé", ": mic muted") : T(" a parlé", " talked")) + "</span>" : "") + "</div>" : "";
-    return '<div class="rcard' + (t.out ? " out" : "") + (hit ? " noise" : "") + '" style="--c:' + s.color + '">' + stamp + '<div class="rhead"><h3>' + e(s.emoji + " " + s.name) + "</h3>" + (S.noise ? '<button class="spips" data-pardon="' + t.squad + '" title="' + T("Cliquer pour annuler un avertissement", "Click to cancel a strike") + '">' + pp.join("") + "</button>" : "") + "</div>" +
-      (t.out ? '<div class="writer">🔇 ' + T("Éliminés (bruit)", "Out (noise)") + "</div>" : '<div class="wrow"><span class="wav">' + e(initials(w ? w.name : "?")) + '</span><div><div class="muted" style="font-size:.95vw">' + T("Au clavier", "At the keyboard") + '</div><div class="writer">' + e(w ? w.name : "…") + ' <span class="typing"><i></i><i></i><i></i></span></div></div></div><div class="tbar"><i data-bar="' + t.squad + '" style="width:' + pct + '%"></i></div><div class="muted" style="font-size:1vw">' + T("Tour ", "Turn ") + (t.turn + 1) + " · " + T("manche ", "round ") + t.round + "/" + S.rounds + " · " + t.lines + T(" lignes", " lines") + "</div>") +
+    const stamp = hit ? '<div class="stamp' + (t.out ? " ko" : "") + '"><b>' + (t.out ? "🔇 " + T("ÉLIMINÉS", "OUT") : "✖ " + T("AVERTISSEMENT", "STRIKE") + " " + t.strikes + "/" + S.strikesMax) + "</b>" + (ln ? "<span>" + (ln.why === "teacher" ? "👩‍🏫 " + T("du formateur", "from the teacher") : e(ln.name) + (ln.why === "muted" ? T(" : micro coupé", ": mic muted") : T(" a parlé", " talked"))) + "</span>" : "") + "</div>" : "";
+    return '<div class="rcard' + (t.out ? " out" : "") + (hit ? " noise" : "") + '" style="--c:' + s.color + '">' + stamp + '<div class="rhead"><h3>' + e(s.emoji + " " + s.name) + "</h3>" + '<span class="sbtn"><button class="spips" data-pardon="' + t.squad + '" title="' + T("Cliquer pour annuler un avertissement", "Click to cancel a strike") + '">' + pp.join("") + "</button>" + (t.out ? "" : '<button class="sadd" data-strike="' + t.squad + '" title="' + T("Donner un avertissement (il parle, il triche…)", "Give a strike (talking, cheating…)") + '">＋</button>') + "</span>" + "</div>" +
+      (t.out ? '<div class="writer">🔇 ' + (S.noise ? T("Éliminés (bruit)", "Out (noise)") : T("Éliminés", "Out")) + "</div>" : '<div class="wrow"><span class="wav">' + e(initials(w ? w.name : "?")) + '</span><div><div class="muted" style="font-size:.95vw">' + T("Au clavier", "At the keyboard") + '</div><div class="writer">' + e(w ? w.name : "…") + ' <span class="typing"><i></i><i></i><i></i></span></div></div></div><div class="tbar"><i data-bar="' + t.squad + '" style="width:' + pct + '%"></i></div><div class="muted" style="font-size:1vw">' + T("Tour ", "Turn ") + (t.turn + 1) + " · " + T("manche ", "round ") + t.round + "/" + S.rounds + " · " + t.lines + T(" lignes", " lines") + "</div>") +
       '<div class="order">' + t.order.map((pid, i) => { const p = pl(pid); return (i ? '<em>›</em>' : "") + "<span" + (pid === t.writer ? ' class="on"' : "") + ">" + ((t.locks || {})[pid] ? '<b class="moff" title="' + T("session arrêtée", "stopped") + '">🔒</b>' : "") + (S.noise && p.mic !== 1 ? '<b class="moff" title="' + (p.mic === 2 ? T("micro coupé", "mic muted") : T("micro pas activé", "mic not on")) + '">🔇</b>' : "") + e(p.name) + "</span>"; }).join("") + "</div></div>";
-  }).join("") + '</div><div id="alerts"></div><div class="rtask glass"><div class="rtt">🎯 ' + e(S.task.title) + ' <span class="chip">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="rrules">🤫 ' + T("Silence total", "Total silence") + (S.noise ? " · ✖ " + S.strikesMax + T(" avertissements = éliminés", " strikes = out") : "") + " · 🧪 " + S.task.tests + T(" tests à la fin", " tests at the end") + "</div></div>";
+  }).join("") + '</div><div id="alerts"></div><div class="rtask glass"><div class="rtt">🎯 ' + e(S.task.title) + ' <span class="chip">' + e(S.langName || "JavaScript") + '</span></div><p>' + e(S.task.text) + '</p><div class="rrules">🤫 ' + T("Silence total", "Total silence") + " · ✖ " + S.strikesMax + T(" avertissements = éliminés", " strikes = out") + " · 🧪 " + S.task.tests + T(" tests à la fin", " tests at the end") + "</div></div>";
 }
 async function runAll() {
   tested = true;
@@ -624,6 +625,7 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("[data-panel]")) { panel = true; manage = ""; drawPanel(); return; }
   if (ev.target.matches("[data-close]")) { panel = false; manage = ""; drawPanel(); return; }
   const p = ev.target.closest("[data-pardon]"); if (p) { act("pardon", { squad: Number(p.dataset.pardon) }); return; }
+  const sk = ev.target.closest("[data-strike]"); if (sk) { act("strike", { squad: Number(sk.dataset.strike) }); return; }
   const li = ev.target.closest("[data-letin]"); if (li) { li.disabled = true; act("letin", { pid: li.dataset.letin }); return; }
   if (ev.target.closest("#rerun")) { tested = false; runAll(); return; }
   if (ev.target.closest("#fs")) { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
@@ -692,6 +694,8 @@ const RELAY_CSS = `/* ---- 🏃 relay */
 .mtest{display:flex;gap:16px;align-items:center;text-align:left;padding:14px 16px;border-radius:18px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.45);max-width:560px;margin:0 auto}
 .mtest.ok{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.45)}
 .mtest p{margin:4px 0 8px}
+.calib{margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.12);font-size:13px}.calib .ok{color:#86efac}.calib .btn{margin-left:6px;padding:5px 12px;font-size:13px}
+.calib.on{animation:calp 1.2s ease-in-out infinite}.calib .say{font-size:17px;font-weight:700;margin:6px 0 0;color:#fff}@keyframes calp{50%{opacity:.6}}
 .mic-ic{width:64px;height:64px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:30px;background:rgba(255,255,255,.08)}
 .mic-ic.pulse{animation:pulseb 1.4s infinite}
 .tcard .th{display:flex;justify-content:space-between;gap:10px;align-items:center}
@@ -1044,7 +1048,12 @@ function resultHtml() {
 // the microphone: the voice band only, a noise floor learned from the room, a "voice bucket" that fills while someone talks
 let mic = null, micDenied = false, level = -100, hist = [], bucket = 0, heat = 0, lastNoise = 0, quietUntil = 0, saving = false, myTurn = -1, edited = false, saveT = 0, testOut = "";
 let silentSince = 0, mutedState = false, offSince = 0, seenStrikes = null, seenOut = null, fxBusy = false, histN = 0;
-const SENS = { low: { margin: 15, min: -50, limit: 11 }, medium: { margin: 10, min: -57, limit: 7 }, high: { margin: 6, min: -64, limit: 4 } };
+// only the voice of the student in front of the screen: a voice is heard when it's nearly as loud as their own (measured
+// once in the lobby), so someone talking a few metres away (another squad) stays under the line; and it must last
+const SENS = { low: { drop: 4, margin: 18, limit: 16 }, medium: { drop: 8, margin: 14, limit: 10 }, high: { drop: 13, margin: 9, limit: 6 } };
+const VOICE0 = -30;
+let voice = (() => { try { const v = Number(localStorage.getItem("cb-voice")); return v < -10 && v > -60 ? v : null; } catch (x) { return null; } })();
+let calib = null, calibMsg = "", burstMax = -100;
 const EXT = { javascript: "js", python: "py", php: "php" };
 async function micStart() {
   if (mic || window.__micBusy || !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) return;
@@ -1100,17 +1109,29 @@ function listen() {
   // the room's noise: a low percentile of the last 8 s (a voice barely moves it)
   const sorted = hist.slice().sort((a, b) => a - b);
   const floor = sorted.length > 10 ? sorted[Math.floor(sorted.length * .3)] : -75;
-  const thr = Math.max(Math.min(floor, -36) + cfg.margin, cfg.min);
-  const over = !dead && level > thr && Date.now() > quietUntil;
+  const thr = Math.max(Math.min(floor, -36) + cfg.margin, (voice == null ? VOICE0 : voice) - cfg.drop, -60);
+  // calibrating: the levels of their voice (well above the room)
+  if (calib) {
+    if (!dead && level > floor + 8) calib.v.push(level);
+    if (Date.now() > calib.end) {
+      const v = calib.v.sort((a, b) => a - b); calib = null;
+      if (v.length < 12) calibMsg = T("Je ne t'ai pas entendu : recommence en lisant la phrase à voix normale.", "I didn't hear you: try again, reading the sentence in your normal voice.");
+      else { voice = Math.max(-38, Math.min(-20, v[Math.floor(v.length * .8)])); calibMsg = ""; try { localStorage.setItem("cb-voice", String(Math.round(voice))); } catch (x) {} }
+      lastKey = ""; draw();
+    }
+  }
+  const over = !dead && !calib && level > thr && Date.now() > quietUntil;
   if (!dead && (!over || ++histN % 12 === 0)) { hist.push(level); if (hist.length > 160) hist.shift(); }
   bucket = over ? Math.min(cfg.limit * 1.6, bucket + 1 + Math.min(1, (level - thr) / 12)) : Math.max(0, bucket - .7);
+  if (over) burstMax = Math.max(burstMax, level); else if (bucket === 0) burstMax = -100;
   // the louder and the longer, the more the screen shakes
   const target = over ? Math.min(1, .3 + (level - thr) / 22 + .45 * bucket / cfg.limit) : Math.min(.45, .45 * bucket / cfg.limit);
   heat += (target - heat) * (target > heat ? .55 : .14);
   const v = $("#vu"); if (v) { v.style.width = Math.max(3, Math.min(100, (level + 75) * 1.6)) + "%"; v.className = over ? "hot" : ""; }
   const lt = $("#ltest"); if (lt) lt.textContent = over ? T("🔴 Je t'entends !", "🔴 I can hear you!") : T("🟢 Silence", "🟢 Quiet");
   const playing = S && S.phase === "playing" && S.noise && !S.out;
-  if (playing && bucket >= cfg.limit && Date.now() - lastNoise > 4000) { lastNoise = Date.now(); bucket = 0; call("noise", { why: "voice" }).then(poke).catch(() => {}); }
+  // how loud next to their own voice: the server compares it with the other squads' microphones at the same moment
+  if (playing && bucket >= cfg.limit && Date.now() - lastNoise > 4000) { lastNoise = Date.now(); bucket = 0; call("noise", { why: "voice", rel: Math.round(burstMax - (voice == null ? VOICE0 : voice)) }).then(poke).catch(() => {}); burstMax = -100; }
   const ta = $("#code");
   if (ta) { const lock = playing && heat > .38; if (ta.readOnly !== lock) { ta.readOnly = lock; ta.closest(".ide").classList.toggle("loud", lock); } }
 }
@@ -1133,15 +1154,15 @@ function relayEffects() {
   if (seenStrikes === null || S.phase === "lobby") { seenStrikes = S.strikes; seenOut = S.out; return; }
   if (S.strikes > seenStrikes) {
     quietUntil = Date.now() + 2500; bucket = 0;
-    const ln = S.lastNoise || {}, who = ln.name ? (ln.why === "muted" ? T("Le micro de ", "") + e(ln.name) + T(" était coupé", "'s mic was muted") : e(ln.name) + T(" a parlé", " talked")) : "";
+    const ln = S.lastNoise || {}, who = ln.why === "teacher" ? T("Avertissement du formateur", "From the teacher") : ln.name ? (ln.why === "muted" ? T("Le micro de ", "") + e(ln.name) + T(" était coupé", "'s mic was muted") : e(ln.name) + T(" a parlé", " talked")) : "";
     const out = S.out && !seenOut;
-    fx("strk", '<div class="sx">✖</div><div class="sl">' + T("AVERTISSEMENT", "STRIKE") + '</div><div class="sc">' + S.strikes + " / " + S.strikesMax + "</div>" + pips(S.strikes, S.strikesMax, true) + (who ? '<p>🗣️ ' + who + "</p>" : "") + (!out && S.strikesMax - S.strikes === 1 ? '<p class="last">⚠️ ' + T("Encore un et votre squad est éliminé !", "One more and your squad is out!") + "</p>" : ""), 2300, out ? outFx : null);
+    fx("strk", '<div class="sx">✖</div><div class="sl">' + T("AVERTISSEMENT", "STRIKE") + '</div><div class="sc">' + S.strikes + " / " + S.strikesMax + "</div>" + pips(S.strikes, S.strikesMax, true) + (who ? "<p>" + (ln.why === "teacher" ? "👩‍🏫 " : "🗣️ ") + who + "</p>" : "") + (!out && S.strikesMax - S.strikes === 1 ? '<p class="last">⚠️ ' + T("Encore un et votre squad est éliminé !", "One more and your squad is out!") + "</p>" : ""), 2300, out ? outFx : null);
     if (navigator.vibrate) navigator.vibrate([220, 90, 220]);
   } else if (S.out && !seenOut) outFx();
   seenStrikes = S.strikes; seenOut = S.out;
 }
 function outFx() {
-  fx("kout", '<div class="crack"></div><div class="ko">🔇</div><div class="kt" data-t="' + T("ÉLIMINÉS", "KNOCKED OUT") + '">' + T("ÉLIMINÉS", "KNOCKED OUT") + "</div><p>" + T("Trop de bruit : votre squad quitte le relais.", "Too much noise: your squad leaves the relay.") + "</p>", 3600);
+  fx("kout", '<div class="crack"></div><div class="ko">🔇</div><div class="kt" data-t="' + T("ÉLIMINÉS", "KNOCKED OUT") + '">' + T("ÉLIMINÉS", "KNOCKED OUT") + "</div><p>" + (S.noise ? T("Trop de bruit : votre squad quitte le relais.", "Too much noise: your squad leaves the relay.") : T("Trop d'avertissements : votre squad quitte le relais.", "Too many strikes: your squad leaves the relay.")) + "</p>", 3600);
   if (navigator.vibrate) navigator.vibrate([400, 120, 400, 120, 700]);
 }
 function turnFx() {
@@ -1168,9 +1189,14 @@ function micPill() {
   if (micOk()) return '<span class="micp ok">🎤 <span class="vu"><i id="vu"></i></span></span>';
   return '<button class="micp bad" id="micb">' + (mutedState ? "🔇 " + T("Micro coupé", "Mic muted") : "🎤 " + T("Activer le micro", "Turn on the mic")) + "</button>";
 }
+function calibHtml() {
+  if (calib) return '<div class="calib on"><b>🗣️ ' + T("Lis à voix normale :", "Read in your normal voice:") + '</b><p class="say">' + T("« Je suis prêt pour le relais, et je ne dirai plus un mot. »", "“I'm ready for the relay, and I won't say another word.”") + "</p></div>";
+  return '<div class="calib">' + (voice != null ? '<span class="ok">✓ ' + T("Ta voix est réglée : seules les voix aussi fortes que la tienne, près de ton écran, comptent.", "Your voice is set: only voices as loud as yours, next to your screen, count.") + "</span> " : '<span>' + T("Règle ta voix : le micro ne comptera que les voix proches de ton écran, pas les autres squads.", "Set your voice: the mic will only count voices next to your screen, not the other squads.") + "</span> ") +
+    '<button class="btn" id="calb">🗣️ ' + (voice != null ? T("Refaire", "Again") : T("Régler ma voix", "Set my voice")) + "</button>" + (calibMsg ? '<p class="err">' + e(calibMsg) + "</p>" : "") + "</div>";
+}
 function hud() {
   return '<div class="hud"><div class="hc"><span class="hl">⏱ ' + T("Relais", "Relay") + '</span><b id="tot">' + (S.endAt ? mmss(S.endAt - nowMs()) : "") + "</b></div>" +
-    (S.noise ? '<div class="hc"><span class="hl">' + T("Avertissements", "Strikes") + "</span>" + pips(S.strikes, S.strikesMax) + "</div>" : "") +
+    '<div class="hc"><span class="hl">' + T("Avertissements", "Strikes") + "</span>" + pips(S.strikes, S.strikesMax) + "</div>" +
     '<div class="hc"><span class="hl">' + T("Manche", "Round") + "</span><b>" + (S.round || 1) + "/" + (S.rounds || 1) + "</b></div>" +
     (S.noise ? '<div class="hc"><span class="hl">' + T("Micro", "Mic") + "</span>" + micPill() + "</div>" : "") + "</div>";
 }
@@ -1217,7 +1243,7 @@ function fsGate() {
 function relayView() {
   const mwarn = mwarnHtml();
   if (S.phase === "lobby") {
-    const m = !S.noise ? "" : micOk() ? '<div class="mtest ok"><div class="mic-ic">🎤</div><div style="flex:1"><b>' + T("Micro prêt", "Mic ready") + ' ✓</b><div class="vu big"><i id="vu"></i></div><span class="muted" id="ltest"></span><p class="muted small">' + T("Essaie : parle un peu et regarde l'écran trembler. Pendant le relais, chaque voix entendue = un avertissement pour ton squad.", "Try it: say something and watch the screen shake. During the relay, every voice heard = a strike for your squad.") + "</p></div></div>"
+    const m = !S.noise ? "" : micOk() ? '<div class="mtest ok"><div class="mic-ic">🎤</div><div style="flex:1"><b>' + T("Micro prêt", "Mic ready") + ' ✓</b><div class="vu big"><i id="vu"></i></div><span class="muted" id="ltest"></span><p class="muted small">' + T("Essaie : parle un peu et regarde l'écran trembler. Pendant le relais, chaque voix entendue = un avertissement pour ton squad.", "Try it: say something and watch the screen shake. During the relay, every voice heard = a strike for your squad.") + "</p>" + calibHtml() + "</div></div>"
       : '<div class="mtest"><div class="mic-ic pulse">🎤</div><div style="flex:1"><b>' + (mutedState ? T("Ton micro est coupé", "Your mic is muted") : micDenied ? T("Micro refusé", "Mic blocked") : T("Active ton micro", "Turn on your mic")) + '</b><p class="muted small">' + (micDenied ? T("Autorise le micro (🔒 à gauche de l'adresse) puis recharge la page. Sans micro, tu ne peux pas écrire.", "Allow the mic (🔒 left of the address) then reload. Without a mic, you can't write.") : mutedState ? T("Réactive-le (touche micro du clavier ou réglages) : un micro coupé pendant le relais = un avertissement.", "Unmute it (the mic key or the settings): a muted mic during the relay = a strike.") : T("Obligatoire : sans micro, tu ne pourras pas écrire ton tour.", "Required: without the mic, you won't be able to write your turn.")) + "</p>" + (mutedState || micDenied ? "" : '<button class="btn primary" id="micb">🎤 ' + T("Activer mon micro", "Turn on my mic") + "</button>") + "</div></div>";
     return '<div class="card rhero"><div class="lane"><span class="runner">🏃</span></div><h2>' + T("Tu es dans le relais !", "You're in the relay!") + '</h2><div class="rules"><div><i>🤫</i>' + T("Interdit de parler", "No talking") + "</div><div><i>✍️</i>" + T("Chacun écrit à son tour", "Each one writes in turn") + "</div><div><i>✖</i>" + (S.strikesMax || 3) + T(" avertissements = éliminés", " strikes = out") + "</div>" + (S.lockScreen && FS_OK ? "<div><i>🖥️</i>" + T("En plein écran", "In full screen") + "</div>" : "") + (S.noPaste ? "<div><i>🚫</i>" + T("Pas de copier-coller", "No copy-paste") + "</div>" : "") + "</div>" + m + (S.lockScreen && FS_OK && !document.fullscreenElement ? '<p style="margin:14px 0 0"><button class="btn" id="fsgo">🖥️ ' + T("Passer en plein écran maintenant", "Go full screen now") + "</button></p>" : "") + "</div>" + taskCard();
   }
@@ -1231,7 +1257,7 @@ function relayView() {
   }
   if (S.phase === "playing" && !S.out && S.locked) return lockView();
   if (needFs() && !document.fullscreenElement) return fsGate();
-  if (S.out) return '<div class="card bigc outc"><div class="trophy">🔇</div><h2>' + T("Votre squad est éliminé", "Your squad is out") + "</h2>" + pips(S.strikes, S.strikesMax) + '<p class="muted">' + T("Trop de bruit pendant le relais. Restez silencieux : les autres squads continuent.", "Too much noise during the relay. Stay quiet: the other squads carry on.") + "</p></div>";
+  if (S.out) return '<div class="card bigc outc"><div class="trophy">🔇</div><h2>' + T("Votre squad est éliminé", "Your squad is out") + "</h2>" + pips(S.strikes, S.strikesMax) + '<p class="muted">' + (S.noise ? T("Trop de bruit pendant le relais. Restez silencieux : les autres squads continuent.", "Too much noise during the relay. Stay quiet: the other squads carry on.") : T("Trop d'avertissements. Restez silencieux : les autres squads continuent.", "Too many strikes. Stay quiet: the other squads carry on.")) + "</p></div>";
   if (S.writing) {
     return mwarn + hud() + '<div class="wtop"><div><h2>✍️ ' + T("C'est à toi !", "Your turn!") + '</h2><p class="muted">' + T("Lis le code de ton équipe et continue-le. Pas un mot !", "Read your team's code and carry on. Not a word!") + '</p></div><div class="tbox"><span class="hl">' + T("ton tour", "your turn") + '</span><b id="tm"></b></div></div><div class="tbar"><i id="wbar"></i></div>' + taskCard(true) +
       '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(S.task.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted" id="saved"></span></div><div class="ed"><pre class="gut" id="gut">1</pre><textarea class="js" id="code" spellcheck="false" wrap="off" autocomplete="off"></textarea><div class="gate" id="gate"><div>🎤</div><b>' + T("Active ton micro pour écrire", "Turn your mic on to write") + '</b><span class="muted">' + T("Le relais se joue en silence, micro ouvert.", "The relay is played in silence, mic on.") + '</span></div><div class="shout">🤫 ' + T("CHUT ! Tu ne peux pas écrire en parlant", "SHH! You can't write while talking") + '</div></div><div class="ifoot"><button class="btn" id="try">▶ ' + T("Tester les exemples", "Try the examples") + '</button><span class="muted small">Tab = ' + T("indentation", "indent") + '</span></div><div id="tout">' + testOut + "</div></div>";
@@ -1258,7 +1284,7 @@ function render() {
   }
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
   if (KIND === "royale") royaleEffects();
-  if (KIND === "relay") { relayEffects(); const hp = document.querySelector(".hud .pips"); if (hp && S.noise) hp.outerHTML = pips(S.strikes, S.strikesMax); }
+  if (KIND === "relay") { relayEffects(); const hp = document.querySelector(".hud .pips"); if (hp) hp.outerHTML = pips(S.strikes, S.strikesMax); }
   const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "") + "." + (S.locked || "") + "." + (document.fullscreenElement ? 1 : 0);
   if (key === lastKey) return;
   lastKey = key;
@@ -1276,6 +1302,7 @@ function wire() {
   if ($("#fsgo")) $("#fsgo").onclick = goFs;
   if ($("#accb")) $("#accb").onclick = accuse;
   document.querySelectorAll("#micb").forEach((b) => b.onclick = () => micStart());
+  const cb = $("#calb"); if (cb) cb.onclick = () => { calib = { end: Date.now() + 4000, v: [] }; calibMsg = ""; lastKey = ""; draw(); };
   if ($("#try")) $("#try").onclick = tryIt;
   const ta = $("#code");
   if (ta) {

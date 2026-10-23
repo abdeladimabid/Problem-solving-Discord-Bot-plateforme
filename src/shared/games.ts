@@ -39,7 +39,7 @@ export interface GSettings {
 export interface RQ { prompt: string; code?: string; options: string[]; answer: number; topic?: string }
 export interface GState {
   phase: "lobby" | "question" | "reveal" | "playing" | "testing" | "over";
-  seq: number; startAt: number | null; rewarded?: boolean;
+  seq: number; startAt: number | null; rewarded?: boolean; noiseAt?: number;
   // royale
   step?: number; order?: number[]; qAt?: number; qEnd?: number;
   last?: { out: string[]; everyone: boolean; right: number; dist: number[]; final: boolean; wiped?: number[] } | null;
@@ -336,7 +336,7 @@ export function squadList(gm: Game, players: Player[]): GSquad[] {
 }
 
 // ------------------------------------------------------------------ the teacher's buttons (on the TV)
-export type GAction = { a: "letin"; pid: string } | { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "hold" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "unban"; pid: string } | { a: "announce" } | { a: "pardon"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
+export type GAction = { a: "letin"; pid: string } | { a: "start" } | { a: "reveal" } | { a: "next" } | { a: "hold" } | { a: "stop" } | { a: "kick"; pid: string } | { a: "unban"; pid: string } | { a: "announce" } | { a: "pardon"; squad: number } | { a: "strike"; squad: number } | { a: "results"; results: any } | { a: "runtests" } | { a: "reset" };
 export const COUNTDOWN_MS = 5000, NEXT_MS = 3000;
 export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()): Promise<Game> {
   const st: GState = structuredClone(gm.state), readSeq = gm.state.seq;
@@ -387,6 +387,18 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
     case "pardon": {
       if (gm.kind !== "relay") throw new GameError("Only in Code Relay.");
       await updateTeam(env, gm.id, Number(x.squad), (d) => { d.strikes = Math.max(0, (d.strikes || 0) - 1); if (d.strikes < gm.settings.strikes) d.out = false; return d; });
+      await bump(env, gm);
+      return gm;
+    }
+    case "strike": {
+      // the teacher saw a squad talk, cheat…: a strike by hand (with or without the microphones)
+      if (gm.kind !== "relay") throw new GameError("Only in Code Relay.");
+      if (st.phase !== "playing") throw new GameError("The relay isn't running.");
+      await updateTeam(env, gm.id, Number(x.squad), (d) => {
+        if (d.out) return null;
+        const strikes = (d.strikes || 0) + 1;
+        return { ...d, strikes, strikeAt: at, out: strikes >= gm.settings.strikes, lastNoise: { pid: "", name: "", at, why: "teacher" } };
+      });
       await bump(env, gm);
       return gm;
     }
@@ -708,20 +720,57 @@ export async function saveRelayCode(env: Env, gm: Game, p: Player, turn: number,
   if (!(turn === cur.turn && cur.writer === p.pid) && !prev) throw new GameError("It's not your turn.");
   await updateTeam(env, gm.id, p.squad, (x) => (x.turnSaved > turn ? null : { ...x, code: String(code ?? "").slice(0, 20000), savedAt: at, savedBy: p.pid, turnSaved: turn }));
 }
-/** A strike for the squad: someone talked ("voice"), or kept their microphone muted ("muted": they could talk unheard). */
-export async function noiseRelay(env: Env, gm: Game, p: Player, at = Date.now(), why: "voice" | "muted" = "voice") {
+/**
+ * Someone talked ("voice") or kept their microphone muted ("muted": they could talk unheard).
+ * A muted mic is a strike at once. A voice is only heard for now: all the squads play in the same room, so the
+ * voice one squad's microphone hears may be another squad's. `rel` says how loud it was next to that student's own
+ * voice (0 = as loud as them speaking into it, -10 = far away). After HEAR_MS, the hearings of the same moment are
+ * compared: only the squad whose microphone heard it loudest gets the strike (resolveNoise, from liveGame).
+ */
+export const HEAR_MS = 1500, NEAR_DB = 4;
+export async function noiseRelay(env: Env, gm: Game, p: Player, at = Date.now(), why: "voice" | "muted" = "voice", rel: number | null = null) {
   if (gm.kind !== "relay" || gm.state.phase !== "playing" || !gm.settings.noise) return { strikes: 0, out: false, ignored: true };
+  const r = Number.isFinite(rel) ? Math.max(-60, Math.min(30, Math.round(Number(rel)))) : null;
   const d = await updateTeam(env, gm.id, p.squad, (x) => {
     if (x.out) return null;
     const k = why === "muted" ? "m:" + p.pid : p.pid;
     const lastAt = (x.noise || {})[k] || 0;
-    if (at - lastAt < (why === "muted" ? 15000 : 5000)) return null;    // one strike per voice burst (per silent stretch)
+    if (at - lastAt < (why === "muted" ? 15000 : 5000)) return null;    // one per voice burst (per silent stretch)
+    const noise = { ...(x.noise || {}), [k]: at };
+    if (why === "voice") return { ...x, noise, heard: [...(x.heard || []).filter((h: any) => at - h.at < 20000), { pid: p.pid, name: p.name, at, rel: r }] };
     if (at - (x.strikeAt || 0) < 3000) return null;                      // the squad's phones react to a strike: not a second one
     const strikes = (x.strikes || 0) + 1;
-    return { ...x, strikes, strikeAt: at, out: strikes >= gm.settings.strikes, noise: { ...(x.noise || {}), [k]: at }, lastNoise: { pid: p.pid, name: p.name, at, why } };
+    return { ...x, strikes, strikeAt: at, out: strikes >= gm.settings.strikes, noise, lastNoise: { pid: p.pid, name: p.name, at, why } };
   });
-  if (d) await bump(env, gm);
-  return d ? { strikes: d.strikes, out: d.out } : { strikes: 0, out: false, ignored: true };
+  if (d && why === "voice") { await run(env, "UPDATE games SET state = json_set(state, '$.noiseAt', ?) WHERE id = ?", at, gm.id); gm.state.noiseAt = at; }
+  if (d && why === "muted") await bump(env, gm);
+  return d ? { strikes: d.strikes || 0, out: !!d.out, pending: why === "voice" } : { strikes: 0, out: false, ignored: true };
+}
+/** The voices heard HEAR_MS ago or more: a strike, unless another squad's microphone heard the same moment much louder. */
+export async function resolveNoise(env: Env, gm: Game, at = Date.now()) {
+  const teams = await teamsOf(env, gm.id);
+  const all = teams.flatMap((t) => (t.data.heard || []).map((h: any) => ({ ...h, squad: t.squad })));
+  const due = (h: any) => !h.done && at - h.at >= HEAR_MS;
+  let changed = false;
+  for (const t of teams) {
+    if (!(t.data.heard || []).some(due)) continue;
+    const d = await updateTeam(env, gm.id, t.squad, (x) => {
+      if (!(x.heard || []).some(due)) return null;
+      let y = { ...x };
+      y.heard = (x.heard || []).map((h: any) => {
+        if (!due(h)) return h;
+        // the same sound, heard louder by another squad: it was their voice, not ours
+        const louder = all.find((o) => o.squad !== t.squad && Math.abs(o.at - h.at) <= HEAR_MS && o.rel != null && h.rel != null && o.rel >= h.rel + NEAR_DB);
+        if (louder || y.out || h.at - (y.strikeAt || 0) < 3000) return { ...h, done: true, ok: false, by: louder ? louder.squad : null };
+        const strikes = (y.strikes || 0) + 1;
+        y = { ...y, strikes, strikeAt: h.at, out: strikes >= gm.settings.strikes, lastNoise: { pid: h.pid, name: h.name, at: h.at, why: "voice" } };
+        return { ...h, done: true, ok: true };
+      });
+      return y;
+    });
+    if (d) changed = true;
+  }
+  if (changed) await bump(env, gm);
 }
 
 /**
@@ -756,6 +805,8 @@ export async function tryRelay(env: Env, gm: Game, p: Player, code: string) {
 /** Things that happen by themselves: a royale question whose time is long gone (the TV is closed), the end of the relay. */
 export async function liveGame(env: Env, gm: Game, at = Date.now()): Promise<Game> {
   const st = gm.state;
+  // the voices heard a moment ago: who gets the strike
+  if (gm.kind === "relay" && st.phase === "playing" && st.noiseAt && at - st.noiseAt < 30000) await resolveNoise(env, gm, at);
   if (gm.kind === "relay" && st.phase === "playing" && st.endAt && at >= st.endAt) {
     const n = structuredClone(st); n.phase = "testing";
     if (!(await saveState(env, gm, n, st.seq))) { const f = await getGame(env, gm.id); if (f) Object.assign(gm, f); }

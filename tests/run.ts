@@ -4928,18 +4928,31 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check((await ry.play("code", keyOf(w0), { turn: 0, code: "late" })).status === 200 && JSON.parse(q1("SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", Y.data.id, tA.squad).data).code === "late", "a last save a moment after the turn ends still counts…");
   await ry.play("code", keyOf(w1p), { turn: 1, code: "function somme(t) {\n  let s = 0;\n  for (const x of t) s += x;\n  return s;\n}" });
   check((await ry.play("code", keyOf(w0), { turn: 0, code: "too late" })).status === 409, "…but never over the next one's work");
-  // the other squad talks twice: out
+  // the other squad talks: heard at once, the strike a moment later (once every squad's microphone was compared)
   const tB = ys.data.teams[1];
-  const n1 = await ry.play("noise", keyOf(tB.order[0]), {});
-  check(n1.data.strikes === 1 && !n1.data.out && (await ry.play("noise", keyOf(tB.order[0]), {})).data.ignored, "a voice: a strike for the squad (one per burst)");
+  const strikesOf = (v: any, q: number) => v.data.teams.find((t: any) => t.squad === q).strikes;
+  const n1 = await ry.play("noise", keyOf(tB.order[0]), { rel: 0 });
+  check(n1.data.pending && (await ry.play("noise", keyOf(tB.order[0]), { rel: 0 })).data.ignored && strikesOf(await ry.tv("state"), tB.squad) === 0, "a voice is heard (one per burst), no strike yet…");
+  clock.advance(2);
+  check(strikesOf(await ry.tv("state"), tB.squad) === 1 && (await ry.play("state", keyOf(tB.order[1]))).data.lastNoise?.why === "voice", "…a moment later, the strike for the squad");
   const pardon = await ry.tv("act", { a: "pardon", squad: tB.squad });
   check(pardon.data.teams.find((t: any) => t.squad === tB.squad).strikes === 0, "the teacher cancels a false strike");
-  await ry.play("noise", keyOf(tB.order[0]), {}).catch(() => null);
+  // the same room: squad B talks, squad A's microphone hears it too, much quieter: only B gets the strike
   clock.advance(6);
-  const n2 = await ry.play("noise", keyOf(tB.order[1]), {});
+  await ry.play("noise", keyOf(tB.order[1]), { rel: -1 });
+  await ry.play("noise", keyOf(tA.order[0]), { rel: -12 });
+  clock.advance(2);
+  const sameRoom = await ry.tv("state");
+  check(strikesOf(sameRoom, tB.squad) === 1 && strikesOf(sameRoom, tA.squad) === 0, "another squad talking: only the squad whose microphone heard it loudest gets the strike");
+  // both squads talk at the same moment (heard as loud by both): both get one
   clock.advance(6);
-  const n3 = await ry.play("noise", keyOf(tB.order[1]), {});
-  check(n2.data.strikes === 1 && n3.data.strikes === 2 && n3.data.out && (await ry.play("code", keyOf(tB.order[1]), { turn: 1, code: "x" })).status === 409, "2 strikes: the squad is out");
+  await ry.play("noise", keyOf(tB.order[0]), { rel: -2 });
+  await ry.play("noise", keyOf(tA.order[0]), { rel: 0 });
+  clock.advance(2);
+  const both = await ry.tv("state");
+  check(strikesOf(both, tB.squad) === 2 && both.data.teams.find((t: any) => t.squad === tB.squad).out && strikesOf(both, tA.squad) === 1 && (await ry.play("code", keyOf(tB.order[1]), { turn: 1, code: "x" })).status === 409,
+    "two squads talking at once: both get a strike; 2 strikes: the squad is out");
+  await ry.tv("act", { a: "pardon", squad: tA.squad });
   // anti-cheat: leaving full screen stops the student (no saving) until the teacher lets them back in; copy-paste: the TV is told
   {
     const wA = ys.data.teams[0].order[1];
@@ -4959,13 +4972,14 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   // a muted microphone (the keyboard's mute key): the TV sees it, and the squad gets a strike
   await ry.play("mic", keyOf(tA.order[1]), { state: "muted" });
   const tvm = await ry.tv("state");
+  clock.advance(4);
   const mutedV = await ry.play("noise", keyOf(tA.order[1]), { why: "muted" });
-  const againM = await ry.play("noise", keyOf(tA.order[0]), {});
   const avM = await ry.play("state", keyOf(tA.order[0]));
-  check(tvm.data.players.find((p: any) => p.pid === tA.order[1]).mic === 2 && mutedV.data.strikes === 1 && againM.data.ignored
-    && avM.data.lastNoise.why === "muted" && avM.data.mates.length === 2 && avM.data.mates.find((m: any) => !m.me).mic === 2 && avM.data.rounds === 1, "a muted mic: shown on the TV, a strike (and not a second one right after), the squad sees who");
+  check(tvm.data.players.find((p: any) => p.pid === tA.order[1]).mic === 2 && mutedV.data.strikes === 1
+    && avM.data.lastNoise.why === "muted" && avM.data.mates.length === 2 && avM.data.mates.find((m: any) => !m.me).mic === 2 && avM.data.rounds === 1, "a muted mic: shown on the TV, a strike, the squad sees who");
   await ry.tv("act", { a: "pardon", squad: tA.squad });
-  clock.advance(60);
+  await ry.tv("act", { a: "pardon", squad: tA.squad });
+  clock.advance(40);
   const test = await ry.tv("state");
   check(test.data.phase === "testing" && test.data.teams.find((t: any) => t.squad === tA.squad).code.includes("return s"), "time's up: the tests (the TV gets the codes)");
   const codes = await ry.tv("codes");
@@ -4983,6 +4997,16 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
     const s2 = await r2.tv("act", { a: "start" });
     const kOf = (pid: string) => dev([U.alice.id, U.bob.id, U.carol.id, "104"].indexOf(pid) + 1);
     const [sa, sb] = s2.data.teams;
+    // no microphones: the teacher gives the strikes from the TV
+    const ign = await r2.play("noise", kOf(sa.order[0]), { rel: 0 });
+    const st1 = await r2.tv("act", { a: "strike", squad: sa.squad });
+    const pv = await r2.play("state", kOf(sa.order[1]));
+    check(ign.data.ignored && st1.data.teams.find((t: any) => t.squad === sa.squad).strikes === 1 && pv.data.strikes === 1 && pv.data.lastNoise?.why === "teacher" && pv.data.noise === false,
+      "microphones off: a voice is ignored, the teacher gives a strike from the TV (the squad sees it's from the teacher)");
+    await r2.tv("act", { a: "strike", squad: sa.squad });
+    const st3 = await r2.tv("act", { a: "strike", squad: sa.squad });
+    check(st3.data.teams.find((t: any) => t.squad === sa.squad).out && (await r2.tv("act", { a: "strike", squad: sa.squad })).data.teams.find((t: any) => t.squad === sa.squad).strikes === 3, "…3 strikes (the default): out, and no more after");
+    await r2.tv("act", { a: "pardon", squad: sa.squad });
     await r2.play("code", kOf(sa.order[0]), { turn: 0, code: "function somme(t) {\n  // rien\n  return 0\n}" });
     await r2.play("code", kOf(sb.order[0]), { turn: 0, code: "function somme(t) {\n  // presque\n  let s = 0; for (const x of t) s + x;\n  return s;\n}" });
     clock.advance(130);
