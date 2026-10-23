@@ -700,7 +700,7 @@ async function briefView(env: Env, g: GuildRow, id: number) {
       const st = statesOf(rec);
       if (st) {
         const ex = rec.result?.exigences ?? [];
-        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus/i.test(String(e.type || "")));
+        const main = ex.map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/^(bonus|crit|oral)/i.test(String(e.type || "")));   // only the brief's requirements count
         pct = main.length ? Math.round((main.filter(([, v]: any) => v).length / main.length) * 100) : null;
         ok = Object.entries(st.co).filter(([, v]) => v).map(([c]) => c);
         ko = Object.entries(st.co).filter(([, v]) => !v).map(([c]) => c);

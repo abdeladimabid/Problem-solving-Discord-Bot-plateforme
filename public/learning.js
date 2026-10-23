@@ -1066,7 +1066,7 @@ function renderDebrief() {
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
       <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
         ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
-          const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${/bonus|crit/i.test(type) ? " · not counted in the %" : ""}</span>`;
+          const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${NOT_IN_PCT(type) ? " · not counted in the %" : ""}</span>`;
           // Criterion, Deliverable and Bonus: folded by default (open them to check or switch)
           return `${fold ? `<details class="db-fold"><summary><h3>${head}</h3></summary>` : `<h3>${head}</h3>`}
           <div class="db-rows">${idx.map((i) => { const e = ex[i], bound = e.check && e.check in st.ck; const s = STATUT[e.statut] || ["", e.statut];
@@ -1237,9 +1237,11 @@ function currentStates() {
   const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
   return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
 }
+/** The requirements that never count in the project's % (the same rule as the server's level). */
+const NOT_IN_PCT = (t) => /^(bonus|crit|oral)/i.test(String(t || ""));
 function updateMeter() {
   const ex = DB.R.review?.result?.exigences || [];
-  const vals = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([e]) => e && !/bonus/i.test(e.type || ""));   // bonuses never count in the %
+  const vals = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([e]) => e && !NOT_IN_PCT(e.type));   // only the brief's requirements: bonuses, criteria and oral points never count
   const pct = vals.length ? Math.round((vals.filter(([, v]) => v).length / vals.length) * 100) : null;
   if ($("#db-meter")) $("#db-meter").innerHTML = meter(pct, "Requirements validated");
   if ($("#db-pct")) $("#db-pct").innerHTML = pct == null ? "" : `<b style="color:${masteryInk(pct)}">${pct}%</b> <span class="muted small">of the requirements · ${$$("[data-co]:checked").length}/${$$("[data-co]").length} competencies</span>`;
@@ -2339,7 +2341,7 @@ function studentBriefCard(b, i, compNameOf) {
   const link = `#/debrief/${b.id}~${encodeURIComponent(b.who)}`;
   const repos = rv?.repos?.length ? rv.repos : b.handin ? [b.handin.repo] : [];
   const reqs = rv?.reqs || [];
-  const main = reqs.filter((r) => r.type !== "bonus" && r.type !== "critere");
+  const main = reqs.filter((r) => !NOT_IN_PCT(r.type));
   const done = reqs.filter((r) => r.done), todo = reqs.filter((r) => !r.done);
   const byType = (list) => list.map((r) => `<li class="${r.done ? "ok" : "ko"}"><span>${r.done ? "✓" : "✗"}</span><div>${esc(r.t)}${r.type ? ` <span class="sbx-type">${esc(EXTYPE[r.type] || r.type)}</span>` : ""}</div></li>`).join("");
   const mesTxt = rv?.mes ? (MES.find(([v]) => v === rv.mes.r)?.[1] || "not done yet") : "";

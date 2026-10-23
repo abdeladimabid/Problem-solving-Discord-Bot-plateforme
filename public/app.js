@@ -643,7 +643,7 @@ function wireWorkOn(sid, name) {
 function latestBriefHtml(L, sid) {
   const b = L.briefs.find((x) => !x.review || x.review.status !== "final") || L.briefs[0];
   if (!b) return `<section class="panel"><h2>📄 Brief</h2><p class="muted small">No brief assigned yet.</p></section>`;
-  const rv = b.review, reqs = rv?.reqs || [], main = reqs.filter((r) => r.type !== "bonus" && r.type !== "critere");
+  const rv = b.review, reqs = rv?.reqs || [], main = reqs.filter((r) => !/^(bonus|crit|oral)/i.test(String(r.type || "")));
   const left = b.due ? b.due - Date.now() / 1000 : null;
   const due = left == null ? "" : left > 0 ? `due ${fmtDate(b.due)} · ${left > 86400 ? `${Math.round(left / 86400)} day(s) left` : `${Math.max(1, Math.round(left / 3600))} hour(s) left`}` : `ended ${fmtDate(b.due)}`;
   return `<section class="panel stu-brief"><div class="panel-head"><h2>📄 ${esc(b.title)}</h2><a class="btn small" href="#/student/${esc(sid)}?tab=learning">All briefs →</a></div>

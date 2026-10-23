@@ -3916,6 +3916,17 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   check(row(U.alice.id).cells[code].r === "ok" && row(U.bob.id).cells[code].r === "low" && row(U.carol.id).cells[code].r === "ko", "✓ at the level asked, lower level, ✗");
   // the other brief of the sprint (Hammam) is 100 % for Alice once its performance criteria aren't counted: (100 + 50) / 2
   check(row(U.alice.id).pct === 75 && row(U.alice.id).evald >= 1 && row(U.carol.id).prop === "non_valide", `grid % of the finalized debrief, briefs evaluated, proposal (${row(U.alice.id).pct} ${JSON.stringify(V.data.briefs.map((b: any) => b.title))})`);
+  {
+    // the project's %: only the brief's requirements (stories, deliverables); bonuses, criteria and oral points never count
+    const rec2 = { ...rec, result: { ...rec.result, exigences: [{ type: "story", texte: "A", statut: "fait" }, { type: "livrable", texte: "L", statut: "fait" }, { type: "critere", texte: "C", statut: "absent" }, { type: "oral", texte: "O", statut: "absent" }, { type: "bonus", texte: "X", statut: "absent" }] } };
+    run1("UPDATE brief_reviews SET record = ? WHERE brief_id = ? AND who = ?", JSON.stringify(rec2), bid, `u:${U.alice.id}`);
+    const { studentBriefs } = await import("../src/shared/learning.ts");
+    const sb = (await studentBriefs(env, q1("SELECT * FROM guilds WHERE id = ?", G), U.alice.id)).find((x: any) => x.id === bid);
+    const bv = await api("GET", `/api/briefs/${bid}?g=${G}`);
+    const bvAlice = JSON.stringify(bv.data).match(/"pct":(\d+)/);
+    check(sb?.review?.pct === 100 && bvAlice?.[1] === "100", `every requirement of the brief done = 100 %, whatever the criteria, oral points and bonuses (${sb?.review?.pct} ${bvAlice?.[1]})`);
+    run1("UPDATE brief_reviews SET record = ? WHERE brief_id = ? AND who = ?", JSON.stringify(rec), bid, `u:${U.alice.id}`);
+  }
   // by default (before ✨ Propose levels): the level of the student's last finalized debrief of the sprint; a draft doesn't count
   run1("UPDATE briefs SET due_at = ? WHERE id = ?", clock.now() + 400 * 86400, bid);
   run1("UPDATE brief_reviews SET level = 'bon' WHERE brief_id = ? AND who = ?", bid, `u:${U.alice.id}`);
