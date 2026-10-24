@@ -139,15 +139,46 @@ export async function quickSolvesToday(env: Env, guildId: string, discordId: str
 export interface StandingRow { key: string; discord_id: string | null; hr: string | null; name: string; points: number }
 
 /** Season (or all-time when season is null) standings, linked players and unlinked HackerRank names alike. */
+// ---------------------------------------------------------------- the teacher in the rankings
+// The class's teacher (guilds.teacher_id: who ran /teacher setup) plays too, but by default their points and coins
+// don't count: not in the class's leaderboards, not in the league. Two switches in Settings → Scoring turn them on.
+export interface TeacherRank { board: boolean; league: boolean }   // true = the teacher counts
+export async function teacherRank(env: Env, gid: string): Promise<TeacherRank> {
+  const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", `teacher-rank:${gid}`).catch(() => null);
+  let o: any = {};
+  try { o = r ? JSON.parse(r.v) : {}; } catch { o = {}; }
+  return { board: o?.board === true, league: o?.league === true };
+}
+export async function setTeacherRank(env: Env, gid: string, b: Partial<TeacherRank>): Promise<TeacherRank> {
+  const cur = await teacherRank(env, gid);
+  const next = { board: b.board === undefined ? cur.board : !!b.board, league: b.league === undefined ? cur.league : !!b.league };
+  await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", `teacher-rank:${gid}`, JSON.stringify(next), now());
+  return next;
+}
+/** Who to leave out of this class's leaderboards: its teacher, unless they count. "" = nobody. */
+export async function boardHidden(env: Env, guildId: string): Promise<string> {
+  const g = await one<{ teacher_id: string | null }>(env, "SELECT teacher_id FROM guilds WHERE id = ?", guildId).catch(() => null);
+  if (!g?.teacher_id) return "";
+  return (await teacherRank(env, guildId)).board ? "" : g.teacher_id;
+}
+/** "guild:teacher" for every class whose teacher doesn't count in the league (the default). */
+export async function leagueHidden(env: Env): Promise<string[]> {
+  const gs = await all<{ id: string; teacher_id: string }>(env, "SELECT id, teacher_id FROM guilds WHERE teacher_id IS NOT NULL AND teacher_id != ''").catch(() => []);
+  const on = new Set((await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE 'teacher-rank:%'").catch(() => []))
+    .filter((r) => { try { return JSON.parse(r.v)?.league === true; } catch { return false; } }).map((r) => r.k.slice("teacher-rank:".length)));
+  return gs.filter((g) => !on.has(g.id)).map((g) => `${g.id}:${g.teacher_id}`);
+}
+
 export async function standings(env: Env, guildId: string, season: string | null, limit = 50): Promise<StandingRow[]> {
+  const hidden = await boardHidden(env, guildId);
   const rows = await all<{ key: string; discord_id: string | null; hr: string | null; points: number; pname: string | null; hrd: string | null }>(
     env,
     `SELECT COALESCE(l.discord_id, 'hr:' || l.hr_username) AS key, l.discord_id, MAX(l.hr_username) AS hr,
             SUM(l.amount) AS points, MAX(p.name) AS pname, MAX(p.hr_display) AS hrd
        FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? ${season ? "AND l.season = ?" : ""}
+      WHERE l.guild_id = ? ${season ? "AND l.season = ?" : ""} AND COALESCE(l.discord_id, '') != ?
       GROUP BY key HAVING points > 0 ORDER BY points DESC LIMIT ${Number(limit)}`,
-    ...(season ? [guildId, season] : [guildId]),
+    ...(season ? [guildId, season, hidden] : [guildId, hidden]),
   );
   return rows.map((r) => ({ key: r.key, discord_id: r.discord_id, hr: r.hr, points: r.points, name: r.pname ?? r.hrd ?? r.hr ?? "?" }));
 }

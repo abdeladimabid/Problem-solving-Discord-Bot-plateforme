@@ -3295,5 +3295,12 @@ window.CB_FR = {
 "Couldn't load the PDF reader: check the internet connection.": "Impossible de charger le lecteur de PDF : vérifie la connexion internet.",
 "Clearer, more precise, short and direct: same question, same level": "Plus claire, plus précise, courte et directe : même question, même niveau",
 "Class removed from your league": "Classe retirée de ta ligue",
-"New link made (…{s}): send it to the other teachers": "Nouveau lien créé (…{s}) : envoie-le aux autres formateurs"
+"New link made (…{s}): send it to the other teachers": "Nouveau lien créé (…{s}) : envoie-le aux autres formateurs",
+"The teacher in the rankings": "Le formateur dans les classements",
+"This class's teacher (set with /teacher setup):": "Formateur de cette classe (défini avec /teacher setup) :",
+"No teacher set yet: run /teacher setup in Discord.": "Pas encore de formateur : lance /teacher setup dans Discord.",
+"When you play too (testing challenges, duels…), your points and coins can stay out of the rankings. They're kept either way: turning a switch on brings them back.": "Quand tu joues aussi (tester des défis, des duels…), tes points et tes pièces peuvent rester hors des classements. Ils sont gardés dans tous les cas : activer un interrupteur les remet.",
+"Count the teacher in the class leaderboards (points and coins)": "Compter le formateur dans les classements de la classe (points et pièces)",
+"Count the teacher in the league between classes": "Compter le formateur dans la ligue entre classes",
+"Saved: the rankings follow it right away": "Enregistré : les classements suivent tout de suite"
 };

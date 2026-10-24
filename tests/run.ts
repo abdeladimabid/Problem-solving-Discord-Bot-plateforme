@@ -2368,6 +2368,32 @@ section("profiles you can share, certificates, class league, all classes");
   check(rm.data.table.length === 2 && !rm.data.remotes.length, "removing it (the link sent in the body, as the dashboard's ✕ does)");
   const rn = await api("PUT", `/api/league?g=${G}`, { newLink: true });
   check(rn.data.link !== link && (await bot.fetch(new Request(link), env, makeCtx())).status === 404, "renewing the link stops the old one");
+  {
+    // 🧑‍🏫 the teacher plays too: by default their points and coins stay out of the rankings and the league
+    const g0 = q1("SELECT teacher_id, season FROM guilds WHERE id = ?", G);
+    run1("UPDATE guilds SET teacher_id = ? WHERE id = ?", "199", G);
+    run1("INSERT INTO players (guild_id, discord_id, name, coins, last_active, created_at) VALUES (?, '199', 'Prof', 99999, ?, ?)", G, clock.now(), clock.now());
+    run1("INSERT INTO ledger (guild_id, discord_id, amount, reason, season, created_at) VALUES (?, '199', 5000, 'practice', ?, ?)", G, g0.season, clock.now());
+    const { standings: st } = await import("../src/shared/db.ts");
+    const lgPts = async () => (await api("GET", `/api/league?g=${G}`)).data.table.find((r: any) => r.guild_id === G);
+    const off = await api("GET", `/api/settings/teacher-rank?g=${G}`);
+    const before = await lgPts();
+    check(off.data.board === false && off.data.league === false && off.data.teacher.id === "199" && !(await st(env, G, g0.season, 50)).some((r: any) => r.discord_id === "199"),
+      "by default the teacher isn't in the class's leaderboard");
+    const coinsOff = JSON.stringify(await slash(U.alice, "leaderboard", { board: "coins" }));
+    await api("PUT", `/api/settings/teacher-rank?g=${G}`, { board: true });
+    const coinsOn = JSON.stringify(await slash(U.alice, "leaderboard", { board: "coins" }));
+    await api("PUT", `/api/settings/teacher-rank?g=${G}`, { board: false });
+    check(!coinsOff.includes("99999") && coinsOn.includes("99999"), "…nor in the coins leaderboard (back when switched on)");
+    await api("PUT", `/api/settings/teacher-rank?g=${G}`, { board: true });
+    check((await st(env, G, g0.season, 50))[0]?.discord_id === "199" && (await lgPts()).points === before.points, "switched on: the teacher is back in the leaderboard (the league still leaves them out)");
+    await api("PUT", `/api/settings/teacher-rank?g=${G}`, { league: true });
+    check((await lgPts()).points === before.points + 5000, "…and in the league when that switch is on too");
+    await api("PUT", `/api/settings/teacher-rank?g=${G}`, { board: false, league: false });
+    run1("DELETE FROM ledger WHERE discord_id = '199'");
+    run1("DELETE FROM players WHERE discord_id = '199'");
+    run1("UPDATE guilds SET teacher_id = ? WHERE id = ?", g0.teacher_id, G);
+  }
   const cmp = await api("GET", "/api/compare");
   check(cmp.data.classes.length >= 2 && cmp.data.classes.every((c: any) => c.trend.length === 4), "dashboard compares all classes with a 4-week trend");
   // new season: certificates by DM

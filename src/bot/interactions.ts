@@ -7,7 +7,7 @@ import type { AttemptRow, ChallengeRow, Ctx, Difficulty, DuelRow, Env, GuildRow,
 import { levelFor, tailoredPick } from "../shared/forme.ts";
 import { SKILLS, skillName } from "../shared/skills.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg, setTeacher } from "../shared/notify.ts";
-import { all, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
+import { all, boardHidden, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, secondsToNextDay, titleKey } from "../shared/game.ts";
 import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
@@ -571,7 +571,7 @@ async function cmdLeaderboard(ix: Ix, board: string) {
     title = t(L, "lb.duels");
     lines = rows.map((r, i) => `${medal(i)} ${who(r)} · **${r.rating}** · ${r.w}W`);
   } else if (board === "coins") {
-    const rows = await all<{ discord_id: string; coins: number }>(ix.env, "SELECT discord_id, coins FROM players WHERE guild_id = ? ORDER BY coins DESC LIMIT 15", g.id);
+    const rows = await all<{ discord_id: string; coins: number }>(ix.env, "SELECT discord_id, coins FROM players WHERE guild_id = ? AND discord_id != ? ORDER BY coins DESC LIMIT 15", g.id, await boardHidden(ix.env, g.id));
     title = t(L, "lb.coins");
     lines = rows.map((r, i) => `${medal(i)} ${who(r)} · ${r.coins} 🪙`);
   } else {
@@ -644,7 +644,7 @@ async function cmdBet(ix: Ix, player: string, amount: number) {
 
 async function cmdCoins(ix: Ix) {
   const L = ix.L;
-  const rows = await all<{ discord_id: string; coins: number }>(ix.env, "SELECT discord_id, coins FROM players WHERE guild_id = ? ORDER BY coins DESC LIMIT 10", ix.guild.id);
+  const rows = await all<{ discord_id: string; coins: number }>(ix.env, "SELECT discord_id, coins FROM players WHERE guild_id = ? AND discord_id != ? ORDER BY coins DESC LIMIT 10", ix.guild.id, await boardHidden(ix.env, ix.guild.id));
   const me = await findPlayer(ix.env, ix.guild.id, ix.userId);
   return reply({ embeds: [{
     title: t(L, "lb.coins"), color: COLORS.purple,

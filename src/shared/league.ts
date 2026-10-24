@@ -3,7 +3,7 @@
 // fair for classes of different sizes: points earned by students this week divided by the
 // class size (at least 5). Points the teacher hands out by hand don't count.
 import type { Env, GuildRow } from "./types.ts";
-import { all, now, one, run } from "./db.ts";
+import { all, leagueHidden, now, one, run } from "./db.ts";
 import { t } from "./i18n.ts";
 import { COLORS, MEDALS, send } from "./discord.ts";
 import { arenaChannel } from "./arena.ts";
@@ -140,16 +140,19 @@ export async function classNumbers(env: Env, g: GuildRow, from: number, to: numb
  */
 export async function weeklyNumbers(env: Env, from: number, weeks: number): Promise<Map<string, Omit<ClassScore, "score" | "name">[]>> {
   const to = from + weeks * 7 * 86400;
+  // the teachers (unless their class counts them): not their points, not their solves, not in the class size
+  const hid = await leagueHidden(env);
+  const notT = `(guild_id || ':' || COALESCE(discord_id, '')) NOT IN (${hid.map(() => "?").join(", ") || "''"})`;
   const pts = await all<{ guild_id: string; w: number; p: number; a: number }>(env,
     `SELECT guild_id, CAST((created_at - ?) / 604800 AS INTEGER) AS w, COALESCE(SUM(amount), 0) AS p, COUNT(DISTINCT discord_id) AS a FROM ledger
-      WHERE created_at >= ? AND created_at < ? AND discord_id IS NOT NULL AND amount > 0 AND reason NOT IN ${NOT_EARNED}
-      GROUP BY guild_id, w`, from, from, to);
+      WHERE created_at >= ? AND created_at < ? AND discord_id IS NOT NULL AND amount > 0 AND reason NOT IN ${NOT_EARNED} AND ${notT}
+      GROUP BY guild_id, w`, from, from, to, ...hid);
   const solved = await all<{ guild_id: string; w: number; n: number }>(env,
     `SELECT guild_id, CAST((finished_at - ?) / 604800 AS INTEGER) AS w, COUNT(*) AS n FROM attempts
-      WHERE status = 'solved' AND finished_at >= ? AND finished_at < ? GROUP BY guild_id, w`, from, from, to);
+      WHERE status = 'solved' AND finished_at >= ? AND finished_at < ? AND ${notT} GROUP BY guild_id, w`, from, from, to, ...hid);
   // students active in the 30 days before each week
   const cols = Array.from({ length: weeks }, (_, w) => `SUM(last_active > ${Math.floor(from + w * 7 * 86400 - 30 * 86400)}) AS s${w}`).join(", ");
-  const sizes = await all<Record<string, any>>(env, `SELECT guild_id, ${cols} FROM players WHERE last_active IS NOT NULL GROUP BY guild_id`);
+  const sizes = await all<Record<string, any>>(env, `SELECT guild_id, ${cols} FROM players WHERE last_active IS NOT NULL AND ${notT} GROUP BY guild_id`, ...hid);
   const out = new Map<string, Omit<ClassScore, "score" | "name">[]>();
   const ids = new Set([...pts.map((r) => r.guild_id), ...solved.map((r) => r.guild_id), ...sizes.map((r) => r.guild_id)]);
   for (const id of ids) {

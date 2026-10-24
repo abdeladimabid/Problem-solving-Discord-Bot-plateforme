@@ -51,7 +51,7 @@ import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appse
 import { SquadError, createSquadSet, deleteSquadSet, notifySquads, pendingBuddies, sentAt, squadSets, updateSquadSet } from "../shared/squads.ts";
 import { LeagueError, addRemote, compareClasses, leagueLink, leagueOf, leagueTable, refreshRemotes, remoteRows, removeRemote, setLeague, weekStart } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
-import { standings } from "../shared/db.ts";
+import { boardHidden, setTeacherRank, standings, teacherRank } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
@@ -770,6 +770,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       return ok({ ...r, ...(await notifyState(env, await guild())) });
     }
     if (path === "/settings" && method === "GET") return ok(await settings(env, await guild()));
+    if (path === "/settings/teacher-rank") {
+      // does the teacher's score count in the class's leaderboards and in the league? (default: no)
+      const g = await guild();
+      if (method === "PUT") await setTeacherRank(env, g.id, { board: body.board === undefined ? undefined : !!body.board, league: body.league === undefined ? undefined : !!body.league });
+      const tp = g.teacher_id ? await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", g.id, g.teacher_id) : null;
+      return ok({ ...(await teacherRank(env, g.id)), teacher: g.teacher_id ? { id: g.teacher_id, name: tp?.name || null } : null });
+    }
     if (path === "/settings" && method === "PUT") {
       const g = await guild();
       const v = (k: string, def: unknown) => (body[k] === undefined ? def : body[k] === "" ? null : body[k]);
@@ -1447,7 +1454,7 @@ async function overview(env: Env, g: GuildRow) {
   });
   const movers = await all(env,
     `SELECT l.discord_id, p.name, SUM(l.amount) AS pts FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7);
+      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7, await boardHidden(env, g.id));
   const feedA = await all<any>(env,
     `SELECT a.finished_at AS at, a.discord_id, p.name, a.status, a.origin, a.points, c.title, c.difficulty
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id

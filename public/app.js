@@ -1678,7 +1678,7 @@ async function intranetMatchCard(root, data = null) {
 }
 
 async function viewSettings(arg) {
-  const [g] = await Promise.all([api("/settings"), loadDiscord()]);
+  const [g, tr] = await Promise.all([api("/settings"), api("/settings/teacher-rank").catch(() => null), loadDiscord()]);
   S.guild = g;
   const roles = (sel) => `<option value="">Off</option>` + S.discord.roles.map((r) => `<option value="${r.id}" ${r.id === sel ? "selected" : ""}>@${esc(r.name)}</option>`).join("");
   const offset = -new Date().getTimezoneOffset() / 60;
@@ -1758,6 +1758,12 @@ async function viewSettings(arg) {
 
     <section class="set-sec" data-sec="scoring" hidden>
       ${head("Scoring", `Points = <b>level base × type multiplier</b> (then daily ×1.5, assignment on time ×1.5, duel win ×2, hint ×0.5…). ${g.scoring_custom ? "<b>Custom scoring is on.</b>" : "Default scoring."}`)}
+      ${tr ? `<div class="panel set-card"><h3>The teacher in the rankings</h3>
+        <p class="muted small" style="margin-top:0">${tr.teacher ? `<span>This class's teacher (set with /teacher setup):</span> <b>${esc(tr.teacher.name || tr.teacher.id)}</b>` : `<span>No teacher set yet: run /teacher setup in Discord.</span>`}</p>
+        <p class="muted small">When you play too (testing challenges, duels…), your points and coins can stay out of the rankings. They're kept either way: turning a switch on brings them back.</p>
+        <label class="check"><input type="checkbox" id="tr-board" ${tr.board ? "checked" : ""}> Count the teacher in the class leaderboards (points and coins)</label>
+        <label class="check"><input type="checkbox" id="tr-league" ${tr.league ? "checked" : ""}> Count the teacher in the league between classes</label>
+      </div>` : ""}
       <div class="grid cols-2-even">
         <div class="stack">
           <div class="panel set-card"><h3>Base points per level</h3>
@@ -1894,6 +1900,10 @@ async function viewSettings(arg) {
   };
   $$("[id^=sq-]").forEach((i) => (i.oninput = qsum));
   qsum();
+  $$("#tr-board, #tr-league").forEach((c) => c.onchange = async () => {
+    try { await api("/settings/teacher-rank", { method: "PUT", body: { board: $("#tr-board").checked, league: $("#tr-league").checked } }); toast("Saved: the rankings follow it right away"); }
+    catch (e) { c.checked = !c.checked; toast(e.message, true); }
+  });
   $("#save").onclick = (e) => busy(e.currentTarget, async () => {
     const arena = $("#s-arena").value;
     S.guild = await api("/settings", { method: "PUT", body: {

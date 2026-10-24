@@ -2,7 +2,7 @@
 // reminders, the daily challenge and the Monday recap.
 import { seasonCron } from "../shared/season.ts";
 import type { ChallengeRow, Difficulty, DuelRow, Env, GuildRow } from "../shared/types.ts";
-import { all, getGuild, now, one, run } from "../shared/db.ts";
+import { all, boardHidden, getGuild, now, one, run } from "../shared/db.ts";
 import { RULES, dayKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
 import { COLORS, btn, dm, mention, row, send, ts } from "../shared/discord.ts";
@@ -152,7 +152,7 @@ async function weeklyDigests(env: Env) {
     if (!channel) continue;
     const L = g.lang;
     const top = await all<{ discord_id: string; s: number }>(env,
-      "SELECT discord_id, SUM(amount) AS s FROM ledger WHERE guild_id = ? AND created_at >= ? AND discord_id IS NOT NULL GROUP BY discord_id ORDER BY s DESC LIMIT 5", g.id, since);
+      "SELECT discord_id, SUM(amount) AS s FROM ledger WHERE guild_id = ? AND created_at >= ? AND discord_id IS NOT NULL AND discord_id != ? GROUP BY discord_id ORDER BY s DESC LIMIT 5", g.id, since, await boardHidden(env, g.id));
     const solvers = await all<{ discord_id: string; n: number }>(env,
       "SELECT discord_id, COUNT(*) AS n FROM attempts WHERE guild_id = ? AND finished_at >= ? AND status = 'solved' GROUP BY discord_id ORDER BY n DESC LIMIT 3", g.id, since);
     const duelist = await one<{ winner_id: string; n: number }>(env,
