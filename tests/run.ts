@@ -3353,8 +3353,9 @@ section("assessments: several competencies per question, why each grade, invitat
   await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 10, techs: ["HTML", "CSS"] });
   check(Math.max(...ai.maxTokens) >= 4400, `10 questions in batches of 6: each answer has room for all of its questions (${ai.maxTokens.join(",")})`);
   const planned = ai.users.filter((x: string) => /Q1 — /.test(x));
-  check(planned.length === 2 && planned.every((x: string) => /notion : notion numéro \d+ · tâche : .+ · situation : /.test(x)) && new Set(planned.join("\n").match(/notion numéro \d+/g)).size === 10,
-    "variety: one quick call lists distinct notions, then each question gets its own notion, kind of task and situation (two batches with different ones)");
+  check(planned.length === 2 && planned.every((x: string) => /notion : notion numéro \d+ · tâche : .+/.test(x) && !/situation :/.test(x)) && new Set(planned.join("\n").match(/notion numéro \d+/g)).size === 10
+    && /STYLE : comme un quiz de formateur, court et direct[\s\S]*AUCUNE mise en situation/.test(ai.prompts.at(-1)!),
+    "variety: one quick call lists distinct notions, then each question gets its own notion and kind of task; short, direct questions, no invented situation");
   // however the AI wraps its list, the questions are read; a technology named only in a wrong option doesn't remove one
   ai.gen = "array";
   const bare = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 2, techs: ["HTML", "CSS"] });
@@ -3405,6 +3406,21 @@ section("assessments: several competencies per question, why each grade, invitat
   check(fl.status === 200 && /git switch -c feature\/home-layout/.test(fl.data.expected) && fl.data.starter.startsWith("# 1.") && mc.data.choices.length === 4 && mc.data.answer[0] === 0 && /branche suivie/.test(ex.data.expected),
     "✨ Write the starter code and expected answer (code), the expected answer (explain), the choices (multiple choice)");
   check((await api("POST", "/api/assessments/qai", { g: G, action: "fill", q: { type: "code", prompt: "" } })).status === 400, "…the question has to be written first");
+  // 📄 a quiz made on Wayground, uploaded as a PDF: the pages as pictures, the questions read, then in French with their answers
+  freeAi();
+  const img = "data:image/jpeg;base64," + Buffer.from("fake page").toString("base64");
+  const ip = await api("POST", "/api/assessments/import-pages", { g: G, images: [img, img], text: "" });
+  const iq = ip.data.questions || [];
+  check(ip.status === 200 && iq.length === 4 && ip.data.title === "HTML/ CSS" && ai.images.at(-1) === 2, `📄 import: the pages are read as pictures (${ip.status} ${ip.data.error ?? iq.length})`);
+  check(/enfants directs/.test(iq[0].prompt) && iq[0].answer[0] === 1 && iq[1].choices.join() === "Vrai,Faux" && iq[1].answer[0] === 0
+    && iq[2].type === "code" && /class Chien ____ Animal/.test(iq[2].code) && iq[2].expected === "implements" && /schématise/.test(iq[3].prompt) && iq[3].type === "explain",
+    "…in French, with the right choices, the code of the screenshot and its expected answer, a drawing turned into a written answer");
+  check(JSON.stringify(iq[0].comps) === JSON.stringify([{ code: "C3", level: 1 }]), "…competencies only from the class's programme");
+  ai.mode = "blind";
+  const noVision = await api("POST", "/api/assessments/import-pages", { g: G, images: [img], text: "" });
+  const textOnly = await api("POST", "/api/assessments/import-pages", { g: G, images: [img], text: "1. Which selector targets only direct <p> children of a <div> element? a) div p b) div > p c) div + p d) div ~ p 2. z-index has no effect if position is static. a) True b) False" });
+  ai.mode = "";
+  check(noVision.status === 400 && /Gemini or Groq key/.test(noVision.data.error) && textOnly.status !== 400, `no AI that sees images: said clearly; a PDF with text is read from its text (${noVision.data.error} / ${textOnly.status} ${textOnly.data.error ?? ""})`);
   for (const r of keptAssess) run1(`INSERT INTO assessments (${Object.keys(r).join(", ")}) VALUES (${Object.keys(r).map(() => "?").join(", ")})`, ...Object.values(r));
   const qs = [{ type: "explain", prompt: "Explique flexbox et ses axes.", expected: "axe principal, axe secondaire", points: 2, comps: ["C3N1", "CT4N2"], skills: ["css"] }];
   const mk = await api("POST", "/api/assessments", { g: G, title: "Deux compétences", questions: qs, settings: { minutes: 0, target: [U.carol.id] } });

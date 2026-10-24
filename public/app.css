@@ -953,6 +953,7 @@ ol.league li.me b { color: var(--blue); }
 /* new brief: import a page */
 .drop { display: flex; align-items: center; justify-content: center; text-align: center; min-height: 84px; padding: 16px; border: 2px dashed var(--line); border-radius: var(--radius-m); background: var(--surface-2); cursor: pointer; font-weight: 400; margin: 0; }
 .drop:hover, .drop.over { border-color: var(--blue); background: var(--blue-50); }
+.drop.off { opacity: .5; pointer-events: none; }
 .imp-card { margin-top: 10px; border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: var(--radius-m); padding: 12px 14px; background: var(--surface); }
 .imp-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 15px; }
 .imp-figs { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--ink-faint); }

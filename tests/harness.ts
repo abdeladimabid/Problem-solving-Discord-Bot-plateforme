@@ -384,6 +384,7 @@ export const ai = {
   mode: "good" as "good" | "lying" | "broken" | "badwrite",
   judgeVerdict: "accepted",
   prompts: [] as string[],
+  images: [] as number[],
   users: [] as string[],
   chTech: false,
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
@@ -465,6 +466,17 @@ function fakeAI() {
   return {
     async run(_model: string, input: any) {
       ai.calls++;
+      // a model that sees images: the pages of an uploaded quiz
+      if (Array.isArray(input.messages?.[0]?.content)) {
+        const parts = input.messages[0].content;
+        ai.images.push(parts.filter((x: any) => x.type === "image_url").length);
+        if (ai.mode === "blind") throw new Error("this model can't see images");
+        return { response: JSON.stringify({ titre: "HTML/ CSS", questions: [
+          { n: 1, type: "mcq", prompt: "Which selector targets only direct <p> children of a <div> element?", choices: ["div p", "div > p", "div + p", "div ~ p"] },
+          { n: 2, type: "mcq", prompt: "z-index has no effect if position is static.", choices: ["True", "False"] },
+          { n: 3, type: "code", prompt: "Veuillez compléter ce qui suit :", code: "class Chien ____ Animal {\n    public function crier() {\n        return \"Wouf\";\n    }\n}" },
+          { n: 4, type: "explain", prompt: "Dans un diagramme de classes, comment modélise-t-on une composition ?", draw: true }] }) };
+      }
       ai.maxTokens.push(Number(input.max_tokens) || 0);
       const sys: string = input.messages[0].content;
       const user: string = input.messages[1]?.content ?? "";
@@ -650,6 +662,13 @@ function fakeAI() {
       if (sys.includes("Tu prépares une évaluation") || sys.includes("You prepare an assessment")) {
         const n = Number(sys.match(/Liste (\d+)|List (\d+)/)?.slice(1).find(Boolean) || 3);
         return { response: JSON.stringify({ notions: Array.from({ length: n }, (_, i) => `notion numéro ${i + 1}`) }) };
+      }
+      if (sys.includes("Tu prépares des questions de quiz importées")) {
+        const qs = JSON.parse(user.slice(user.indexOf("<<<") + 4, user.lastIndexOf(">>>")).trim());
+        return { response: JSON.stringify({ questions: qs.map((q: any) => q.n === 1 ? { n: 1, type: "mcq", prompt: "Quel sélecteur cible uniquement les <p> enfants directs d'une <div> ?", choices: ["div p", "div > p", "div + p", "div ~ p"], answer: [1], points: 1, skills: ["css"], comps: ["C3N1", "C99N1"] }
+          : q.n === 2 ? { n: 2, type: "mcq", prompt: "z-index n'a aucun effet si position vaut static.", choices: ["Vrai", "Faux"], answer: [0], points: 1 }
+          : q.n === 3 ? { n: 3, type: "code", prompt: "Complétez le code avec le bon mot-clé.", code: q.code, lang: "php", expected: "implements", points: 2 }
+          : { n: q.n, type: "explain", prompt: q.prompt + " (décris ou schématise ta réponse)", expected: "un losange plein du côté du composé", points: 2 }) }) };
       }
       if (sys.includes("Améliore l'ÉNONCÉ")) return { response: JSON.stringify({ prompt: "Pour le site de la salle de sport, écris les commandes Git qui créent le dépôt, ajoutent les fichiers, créent la branche feature/home-layout, la poussent sur GitHub et ouvrent une Pull Request. Une commande par ligne." }) };
       if (sys.includes("Écris le code de départ")) return { response: JSON.stringify({ starter: "# 1. créer le dépôt\n# 2. …", expected: "git init\ngit add .\ngit commit -m \"init\"\ngit switch -c feature/home-layout\ngit push -u origin feature/home-layout\ngh pr create" }) };

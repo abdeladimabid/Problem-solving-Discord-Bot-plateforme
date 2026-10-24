@@ -19,7 +19,7 @@ import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_disco
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
-import { AssessError, generateQuestions, gradeTaker, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
@@ -580,10 +580,17 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope, avoid });
     return ok({ questions: qs });
   }
+  if (path === "/assessments/import-pages" && method === "POST") {
+    // a quiz uploaded as a PDF (Wayground…): a few pages at a time, as pictures and their text
+    const g = await guild();
+    const p = await programOf(env, g);
+    return ok(await importPages(env, { images: Array.isArray(body.images) ? body.images.map(String) : [], text: String(body.text || ""),
+      techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).slice(0, 8) : [], referential: p.referential.map((c) => ({ code: c.code, name: c.name })) }));
+  }
   if (path === "/assessments/qai" && method === "POST") {
     const g = await guild();
     const action = body.action === "rephrase" ? "rephrase" : "fill";
-    return ok(await questionAi(env, { action, q: body.q ?? {}, lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)) }));
+    return ok(await questionAi(env, { action, q: body.q ?? {}, lang: "fr", techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)) }));
   }
   if (path === "/assessments/import" && method === "POST") {
     // a link shared by another teacher (this ClassBot or another one): preview first, then a draft copy

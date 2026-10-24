@@ -3281,5 +3281,17 @@ window.CB_FR = {
 "Write the expected answer": "Écrire la réponse attendue",
 "Write the choices": "Écrire les choix",
 "Undo": "Annuler",
-"Clearer, more precise, in a concrete situation: same question, same level": "Plus claire, plus précise, dans une situation concrète : même question, même niveau"
+"Clearer, more precise, in a concrete situation: same question, same level": "Plus claire, plus précise, dans une situation concrète : même question, même niveau",
+"Import a quiz (PDF)": "Importer un quiz (PDF)",
+"Wayground doesn't let other sites read your library, so: open your quiz on Wayground, download or print it as a PDF, and drop it here. ClassBot reads every page (even scanned ones and code in screenshots), puts the questions in French, and writes what grading needs: the right choices, the expected answers, the code to complete. Check them before saving.": "Wayground ne laisse pas les autres sites lire ta bibliothèque, donc : ouvre ton quiz sur Wayground, télécharge-le ou imprime-le en PDF, et dépose-le ici. ClassBot lit chaque page (même scannée, même le code en capture d’écran), met les questions en français et écrit ce qu’il faut pour corriger : les bons choix, les réponses attendues, le code à compléter. Vérifie-les avant d’enregistrer.",
+"Choose a PDF, or drop it here": "Choisis un PDF, ou dépose-le ici",
+"⏳ Opening the PDF…": "⏳ Ouverture du PDF…",
+"⏳ Reading page {n} of {n}…": "⏳ Lecture de la page {n} sur {n}…",
+"⏳ Questions of pages {n}–{n} of {n} (about 20 s each)…": "⏳ Questions des pages {n}–{n} sur {n} (environ 20 s chacune)…",
+"No question found in this PDF.": "Aucune question trouvée dans ce PDF.",
+"That isn't a PDF.": "Ce n’est pas un PDF.",
+"{n} questions imported: check them, then save": "{n} questions importées : vérifie-les, puis enregistre",
+"A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here": "Un quiz fait sur Wayground (ou une fiche d’exercices) : télécharge-le en PDF et dépose-le ici",
+"Couldn't load the PDF reader: check the internet connection.": "Impossible de charger le lecteur de PDF : vérifie la connexion internet.",
+"Clearer, more precise, short and direct: same question, same level": "Plus claire, plus précise, courte et directe : même question, même niveau"
 };

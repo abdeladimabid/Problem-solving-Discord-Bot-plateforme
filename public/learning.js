@@ -1609,7 +1609,7 @@ function assessQuestionsTab(root) {
     </section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
     <div id="aq-list" class="qe-list"></div>
-    ${locked ? "" : `<p class="toolbar" style="margin-top:14px"><button class="btn" data-addq="code">+ Write code</button><button class="btn" data-addq="explain">+ Explain</button><button class="btn" data-addq="mcq">+ Multiple choice</button><button class="btn" id="aq-ai">✨ Add with AI</button></p>`}
+    ${locked ? "" : `<p class="toolbar" style="margin-top:14px"><button class="btn" data-addq="code">+ Write code</button><button class="btn" data-addq="explain">+ Explain</button><button class="btn" data-addq="mcq">+ Multiple choice</button><button class="btn" id="aq-ai">✨ Add with AI</button><button class="btn" id="aq-pdf" title="A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here">📄 Import a quiz (PDF)</button></p>`}
     ${saveBarHtml("aq-save")}`;
   let Q = JSON.parse(JSON.stringify(a.questions));
   const draw = () => {
@@ -1643,6 +1643,11 @@ function assessQuestionsTab(root) {
   draw();
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });
   if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); });
+  if ($("#aq-pdf")) $("#aq-pdf").onclick = () => importPdfDialog((qs, title) => {
+    Q = [...readQuestions(), ...qs]; draw(); mark();
+    if (title && /^(new assessment|nouvelle évaluation|assessment)$/i.test($("#aq-title").value.trim())) $("#aq-title").value = title;
+    toast(`${qs.length} questions imported: check them, then save`);
+  });
   $("#aq-save").onclick = (e) => busy(e.currentTarget, async () => {
     const qs = readQuestions();
     const bad = qs.findIndex((q) => q.prompt.trim().length < 5 || (q.type === "mcq" && (q.choices.filter(Boolean).length < 2 || !q.answer.length)));
@@ -1651,6 +1656,68 @@ function assessQuestionsTab(root) {
       settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked } } });
     AS.dirty = false; toast("Saved"); renderAssessment();
   });
+}
+
+// ------------------------------------------------------------------ importing a quiz from a PDF (Wayground…)
+const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+async function pdfLib() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((ok, ko) => { const sc = document.createElement("script"); sc.src = PDFJS + "pdf.min.js"; sc.onload = ok; sc.onerror = () => ko(new Error("Couldn't load the PDF reader: check the internet connection.")); document.head.append(sc); });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+/** Each page of the PDF as a picture (JPEG, about 1200 px wide) and its text (empty for a scanned page). */
+async function pdfPages(file, onPage) {
+  const lib = await pdfLib();
+  const doc = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const out = [];
+  for (let n = 1; n <= Math.min(doc.numPages, 40); n++) {
+    const page = await doc.getPage(n);
+    const vp0 = page.getViewport({ scale: 1 }), vp = page.getViewport({ scale: Math.min(2.2, 1240 / vp0.width) });
+    const cv = document.createElement("canvas"); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    const cx = cv.getContext("2d"); cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvasContext: cx, viewport: vp }).promise;
+    const text = (await page.getTextContent()).items.map((i) => i.str).join(" ").replace(/\s+/g, " ").trim();
+    out.push({ image: cv.toDataURL("image/jpeg", 0.8), text });
+    onPage?.(n, doc.numPages);
+  }
+  return out;
+}
+function importPdfDialog(done) {
+  const dlg = openDialog("📄 Import a quiz (PDF)", `
+    <p class="small muted" style="margin-top:0">Wayground doesn't let other sites read your library, so: open your quiz on Wayground, download or print it as a PDF, and drop it here. ClassBot reads every page (even scanned ones and code in screenshots), puts the questions in French, and writes what grading needs: the right choices, the expected answers, the code to complete. Check them before saving.</p>
+    <label class="drop" id="ip-drop"><input type="file" id="ip-file" accept="application/pdf,.pdf" hidden><span>📄 Choose a PDF, or drop it here</span></label>
+    <div class="aa-bar" id="ip-bar" hidden><span style="width:0%"></span></div>
+    <p class="small" id="ip-st"></p>`, []);
+  const st = (m) => { $("#ip-st", dlg).textContent = m; };
+  const bar = (f) => { $("#ip-bar", dlg).hidden = false; $("#ip-bar span", dlg).style.width = `${Math.round(f * 100)}%`; };
+  let busyNow = false;
+  const go = async (file) => {
+    if (!file || busyNow) return;
+    if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) { st("That isn't a PDF."); return; }
+    busyNow = true; $("#ip-drop", dlg).classList.add("off");
+    try {
+      st("⏳ Opening the PDF…");
+      const pages = await pdfPages(file, (n, t) => { st(`⏳ Reading page ${n} of ${t}…`); bar((n / t) * 0.15); });
+      const all = []; let title = "";
+      for (let i = 0; i < pages.length; i += 2) {
+        const part = pages.slice(i, i + 2);
+        st(`⏳ Questions of pages ${i + 1}–${Math.min(i + 2, pages.length)} of ${pages.length} (about 20 s each)…`);
+        const r = await api("/assessments/import-pages", { method: "POST", body: { images: part.map((p) => p.image), text: part.map((p) => p.text).join("\n\n") } });
+        title = title || r.title || "";
+        for (const q of r.questions || []) if (!all.some((x) => x.prompt.trim().toLowerCase() === q.prompt.trim().toLowerCase() && (x.code || "") === (q.code || ""))) all.push(q);
+        bar(0.15 + 0.85 * Math.min(1, (i + 2) / pages.length));
+      }
+      if (!all.length) throw new Error("No question found in this PDF.");
+      dlg.close(); done(all, title);
+    } catch (e) { st(`❌ ${e.message}`); }
+    finally { busyNow = false; $("#ip-drop", dlg).classList.remove("off"); }
+  };
+  $("#ip-file", dlg).onchange = (e) => go(e.target.files[0]);
+  const dz = $("#ip-drop", dlg);
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("over"));
+  dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("over"); go(e.dataTransfer.files[0]); });
 }
 
 function wireComps(card) { $$("[data-delcomp]", card).forEach((b) => b.onclick = () => { b.closest(".qe-comp").remove(); AS.dirty = true; }); }
@@ -1663,7 +1730,7 @@ function questionCard(q, i, n, locked) {
       <label class="small qe-pts">Points <input type="number" data-qp min="1" max="20" value="${q.points || 1}"></label>
       <span class="qe-act">${i > 0 ? `<button class="btn small" data-mv="-1" title="Move up">↑</button>` : ""}${i < n - 1 ? `<button class="btn small" data-mv="1" title="Move down">↓</button>` : ""}${locked ? "" : `<button class="btn small danger" data-qdel>Remove</button>`}</span></header>
     <textarea data-qprompt placeholder="The question or the task" style="min-height:70px">${esc(q.prompt)}</textarea>
-    <div class="qe-ai"><button type="button" class="btn small" data-qai="rephrase" title="Clearer, more precise, in a concrete situation: same question, same level">✨ Improve the wording</button>
+    <div class="qe-ai"><button type="button" class="btn small" data-qai="rephrase" title="Clearer, more precise, short and direct: same question, same level">✨ Improve the wording</button>
       <button type="button" class="btn small" data-qai="fill">✨ ${q.type === "code" ? "Write the starter code and expected answer" : q.type === "explain" ? "Write the expected answer" : "Write the choices"}</button>
       <button type="button" class="btn small" data-qundo style="display:none">↶ Undo</button></div>
     <details ${q.code ? "open" : ""}><summary class="small">Code shown with the question</summary><textarea data-qcode class="code" style="min-height:90px" spellcheck="false">${esc(q.code || "")}</textarea></details>
