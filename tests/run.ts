@@ -2361,8 +2361,11 @@ section("profiles you can share, certificates, class league, all classes");
   const rf = await api("POST", `/api/league/refresh?g=${G}`);
   check(rf.data.remotes[0].error && rf.data.table.some((r: any) => r.name === "Group C (Safi)"), "a link that stops working is reported (its last numbers stay)");
   leagueFake.status = 200;
-  const rm = await api("DELETE", `/api/league/remotes?g=${G}&url=${encodeURIComponent(remoteUrl)}`);
-  check(rm.data.table.length === 2 && !rm.data.remotes.length, "removing it");
+  // the dashboard's ✕ sends the link in the body as well: both are read
+  const rmBody = await api("DELETE", `/api/league/remotes?g=${G}`, { url: "https://other.example/league/feed/1.nothere" });
+  check(rmBody.status === 200 && rmBody.data.remotes.length === 1, "removing a link that isn't there changes nothing");
+  const rm = await api("DELETE", `/api/league/remotes?g=${G}`, { url: remoteUrl });
+  check(rm.data.table.length === 2 && !rm.data.remotes.length, "removing it (the link sent in the body, as the dashboard's ✕ does)");
   const rn = await api("PUT", `/api/league?g=${G}`, { newLink: true });
   check(rn.data.link !== link && (await bot.fetch(new Request(link), env, makeCtx())).status === 404, "renewing the link stops the old one");
   const cmp = await api("GET", "/api/compare");

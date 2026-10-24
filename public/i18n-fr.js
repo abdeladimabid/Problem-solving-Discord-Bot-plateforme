@@ -3293,5 +3293,7 @@ window.CB_FR = {
 "{n} questions imported: check them, then save": "{n} questions importées : vérifie-les, puis enregistre",
 "A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here": "Un quiz fait sur Wayground (ou une fiche d’exercices) : télécharge-le en PDF et dépose-le ici",
 "Couldn't load the PDF reader: check the internet connection.": "Impossible de charger le lecteur de PDF : vérifie la connexion internet.",
-"Clearer, more precise, short and direct: same question, same level": "Plus claire, plus précise, courte et directe : même question, même niveau"
+"Clearer, more precise, short and direct: same question, same level": "Plus claire, plus précise, courte et directe : même question, même niveau",
+"Class removed from your league": "Classe retirée de ta ligue",
+"New link made (…{s}): send it to the other teachers": "Nouveau lien créé (…{s}) : envoie-le aux autres formateurs"
 };

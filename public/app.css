@@ -966,6 +966,7 @@ ol.league li.me b { color: var(--blue); }
 .lg-box h3 { margin: 0 0 8px; font-size: 14px; }
 .lg-link { display: flex; gap: 8px; align-items: center; background: var(--surface-2); border-radius: var(--radius-s); padding: 6px 8px; }
 .lg-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.lg-link.fresh { animation: lgfresh 1.6s ease-out; } @keyframes lgfresh { 0% { box-shadow: 0 0 0 3px var(--blue); } 100% { box-shadow: 0 0 0 0 transparent; } }
 .lg-remotes { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
 .lg-remotes li { display: flex; gap: 10px; justify-content: space-between; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); }
 

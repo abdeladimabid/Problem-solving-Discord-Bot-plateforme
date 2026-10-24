@@ -75,7 +75,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
   const url = new URL(request.url);
   const path = url.pathname.replace(/^\/api/, "");
   const method = request.method;
-  const body: any = method === "GET" || method === "DELETE" ? {} : await request.json().catch(() => ({}));
+  // a DELETE may carry its details in a JSON body too (the league's ✕ did, and was ignored)
+  const body: any = method === "GET" ? {} : await request.json().catch(() => ({}));
   const gid = url.searchParams.get("g") ?? body.g;
   if (gid) env = forClass(env, gid);   // the AI uses this class's keys (Settings → AI)
   const guild = async () => {

@@ -186,6 +186,8 @@ function certCards(items) {
   if (!items.length) return `<p class="empty">Nobody scored in this season yet.</p>`;
   return items.map((c) => `<a class="cert-card ${c.rank <= 3 ? "top" : ""}" href="${esc(c.url)}" target="_blank" rel="noopener"><span class="cert-rank">${["🥇", "🥈", "🥉"][c.rank - 1] || "#" + c.rank}</span><span class="cert-name">${esc(c.name)}</span><span class="small muted">${c.points} pts</span><span class="cert-open">Open ↗</span></a>`).join("");
 }
+/** The league link with its end visible: the part that changes when the link is renewed. */
+const shortLink = (u) => { const x = String(u || "").replace(/^https?:\/\//, ""); return x.length > 48 ? `${x.slice(0, 20)}…${x.slice(-27)}` : x; };
 async function viewClasses() {
   const [cmp, lg, certs] = await Promise.all([api("/compare"), api("/league"), api("/certificates")]);
   const cls = cmp.classes;
@@ -248,7 +250,7 @@ async function viewClasses() {
             <div class="lg-box">
               <h3>🔗 Invite other classes</h3>
               ${lg.link ? `<p class="small muted" style="margin:0 0 8px">Send this link to the other teachers (each on their own ClassBot): they paste it under <i>Classes from other ClassBots</i>. Only class numbers are shared, never students' names.</p>
-                <div class="lg-link"><code>${esc(lg.link)}</code><button class="btn small primary" id="lg-copy">Copy</button></div>
+                <div class="lg-link"><code title="${esc(lg.link)}">${esc(shortLink(lg.link))}</code><button class="btn small primary" id="lg-copy">Copy</button></div>
                 <button class="linkish small" id="lg-renew">Renew the link (the old one stops working)</button>`
                 : `<p class="small muted" style="margin:0">Turn on <b>Plays in the league</b> and save: your invitation link appears here.</p>`}
             </div>
@@ -275,9 +277,9 @@ async function viewClasses() {
   $$("[data-open]").forEach((b) => b.onclick = () => { const sel = $("#guild"); sel.value = b.dataset.open; sel.onchange(); location.hash = "#/overview"; });
   $("#lg-save").onclick = (e) => busy(e.currentTarget, async () => { await api("/league", { method: "PUT", body: { on: $("#lg-on").checked, name: $("#lg-name").value } }); toast("League settings saved"); viewClasses(); });
   if ($("#lg-copy")) $("#lg-copy").onclick = () => navigator.clipboard.writeText(lg.link).then(() => toast("League link copied: send it to the other teachers"), () => toast("Copy failed: select the link by hand", true));
-  if ($("#lg-renew")) $("#lg-renew").onclick = () => confirmDialog("Renew the league link?", "The other ClassBots that added this class stop seeing it until you send them the new link.", "Renew", async () => { await api("/league", { method: "PUT", body: { newLink: true } }); toast("New link made"); viewClasses(); });
+  if ($("#lg-renew")) $("#lg-renew").onclick = () => confirmDialog("Renew the league link?", "The other ClassBots that added this class stop seeing it until you send them the new link.", "Renew", async () => { const r = await api("/league", { method: "PUT", body: { newLink: true } }); toast(`New link made (…${String(r.link || "").slice(-6)}): send it to the other teachers`); await viewClasses(); $(".lg-link")?.classList.add("fresh"); });
   $("#lg-add").onclick = (e) => busy(e.currentTarget, async () => { await api("/league/remotes", { method: "POST", body: { url: $("#lg-url").value } }); toast("Class added to your league"); viewClasses(); });
-  $$("[data-rm]").forEach((b) => b.onclick = () => confirmDialog("Remove this class from your league?", "It stops showing in your league and in /league. You can add it back with its link.", "Remove", async () => { await api("/league/remotes", { method: "DELETE", body: { url: b.dataset.rm } }); viewClasses(); }));
+  $$("[data-rm]").forEach((b) => b.onclick = () => confirmDialog("Remove this class from your league?", "It stops showing in your league and in /league. You can add it back with its link.", "Remove", async () => { await api(`/league/remotes?url=${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE", body: { url: b.dataset.rm } }); toast("Class removed from your league"); viewClasses(); }));
   if ($("#lg-refresh")) $("#lg-refresh").onclick = (e) => busy(e.currentTarget, async () => { await api("/league/refresh", { method: "POST" }); viewClasses(); });
   $("#ct-season").onchange = async () => { const d = await api(`/certificates?season=${encodeURIComponent($("#ct-season").value)}`); $(".cert-grid").innerHTML = certCards(d.items); };
   $("#ct-send").onclick = () => confirmDialog("Send the certificates now?", `Every student who scored in “${$("#ct-season").value}” gets their certificate link by DM.`, "Send", async () => { const r = await api("/certificates/send", { method: "POST", body: { season: $("#ct-season").value } }); toast(`${r.sent} certificate(s) sent`); });
