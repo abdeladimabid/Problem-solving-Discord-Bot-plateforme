@@ -198,7 +198,7 @@ Open `https://classbot-admin.<subdomain>.workers.dev`. The menu has **Overview**
 - **Export CSV.**
 
 **Student page** (click a student):
-- **Header:** level, team, GitHub, HackerRank, and the actions: Assign a challenge, Give points, ✏️ Edit name, Mark HackerRank verified / Unlink HackerRank, Remove from class.
+- **Header:** level, team, GitHub, HackerRank, and the actions: Assign a challenge, Give points, ✏️ Edit name, Mark HackerRank verified / Unlink HackerRank, Remove from class (their points stay in the history but no longer count in the leaderboards, certificates or league).
 - **Tabs:** Overview, Briefs & debriefs (sprint reviews, each debrief with its level), Assessments, Competencies, GitHub, Challenges, Points & history.
 - **Coach:**
   - skill bars: 80% from code, 20% from the rest, with *no code* and *mistakes found in their code* marks
@@ -456,7 +456,7 @@ Winners get 20 points by default (0–200), and the result can be posted in #are
 
 #### Classes & league
 - **Your classes side by side:** students, active, solved, points per student, accuracy, and a 4-week trend.
-- **🏆 Class league:** points earned this week ÷ class size (at least 5), with points you give by hand not counting. Tick **Plays in the league** and set a name.
+- **🏆 Class league:** points earned this week ÷ class size (at least 5), with points you give by hand not counting. Only the class's students count: a student you removed from the class no longer adds to its points or its size. Tick **Plays in the league** and set a name.
 - **Other ClassBots:** **🔗 Invite other classes** gives a link for teachers on other ClassBots. Paste theirs under **🌍 Classes from other ClassBots**; they are read every 30 minutes, and only class numbers are shared. *Renew the link* stops the old one. Results go to #arena on Mondays and to `/league`.
 - **🎓 Certificates** for any season: open them, or **Send by DM now**.
 

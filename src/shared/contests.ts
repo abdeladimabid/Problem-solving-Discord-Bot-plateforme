@@ -1,7 +1,7 @@
 // HackerRank contest tracking: live commentary, freeze & reveal, awards,
 // season points, team results, predictions and champion roles.
 import type { D1Stmt, ContestRow, Entry, Env, GuildRow } from "./types.ts";
-import { addPoints, all, boardHidden, checkBadges, getGuild, now, one, run } from "./db.ts";
+import { addPoints, all, boardHidden, checkBadges, getGuild, inClass, now, one, run } from "./db.ts";
 import type { Award, Snap } from "./game.ts";
 import { RULES, addSnapshot, computeAwards, contestPoints, fmtDuration, isPhotoFinish, rivalPasses, scoringOf, settleBet, teamResults } from "./game.ts";
 import { t } from "./i18n.ts";
@@ -446,7 +446,7 @@ async function awardsEmbed(env: Env, g: GuildRow, season: string, awards: Award[
     env,
     `SELECT COALESCE(MAX(p.name), MAX(l.hr_username)) AS name, SUM(l.amount) AS points
        FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? AND l.season = ? AND COALESCE(l.discord_id, '') != ? GROUP BY COALESCE(l.discord_id, l.hr_username) ORDER BY points DESC LIMIT 5`,
+      WHERE l.guild_id = ? AND l.season = ? AND COALESCE(l.discord_id, '') != ? AND ${inClass("l.discord_id", "l.guild_id")} GROUP BY COALESCE(l.discord_id, l.hr_username) ORDER BY points DESC LIMIT 5`,
     g.id, season, await boardHidden(env, g.id),
   );
   if (top.length) fields.push({ name: t(L, "awards.season_top", { season }), value: top.map((r, i) => `\`${i + 1}.\` **${r.name}** · ${r.points} pts`).join("\n") });
