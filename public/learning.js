@@ -1441,6 +1441,120 @@ function importAssessmentDialog() {
   $("#im-url", dlg).oninput = () => { previewed = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Preview"; };
 }
 
+// ---- with Claude, outside the app: a quiz written by Claude (JSON), the papers exported for grading, Claude's grades
+/** A JSON box: paste it, or choose / drop a .json file (its text goes in the box). */
+function jsonBox(id, placeholder) {
+  return `<label class="drop cj-drop" id="${id}-drop"><input type="file" id="${id}-file" accept=".json,application/json" hidden><span>📄 Choose a <b>.json</b> file, or drop it here</span></label>
+    <textarea id="${id}" class="cj-json" spellcheck="false" placeholder="${esc(placeholder)}"></textarea>`;
+}
+function wireJsonBox(root, id, onChange) {
+  const ta = $(`#${id}`, root), drop = $(`#${id}-drop`, root), inp = $(`#${id}-file`, root);
+  const load = async (f) => { if (!f) return; ta.value = await f.text(); onChange?.(); };
+  inp.onchange = () => load(inp.files[0]);
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); load(e.dataTransfer.files[0]); });
+  ta.oninput = () => onChange?.();
+}
+const problemsHtml = (list) => (list || []).length ? `<div class="notice warn cj-probs"><b>${list.length} problem${list.length > 1 ? "s" : ""} to fix in the file:</b><ul>${list.map((p) => `<li><b>${esc(p.where)}</b> · ${esc(p.msg)}</li>`).join("")}</ul></div>` : "";
+
+/** Import a quiz written by Claude (classbot-assessment@1): the prompt to write it, then the JSON → a preview → a draft. */
+async function importQuizJsonDialog() {
+  let checked = "";
+  openDialog("{ } Import a quiz (JSON)", `
+    <div class="cj-step"><b>1 · Write it with Claude</b>
+      <p class="small muted" style="margin:4px 0 8px">Pick the programme week: the prompt gives Claude the exact format, the rules (French, beginners) and that week's objective, notions, competencies and technologies, with what comes later as out of scope.</p>
+      <div class="toolbar" style="margin:0"><select id="cj-week" style="flex:1"><option>Loading…</option></select><button class="btn small" id="cj-cp">📋 Copy the prompt for Claude (creation)</button></div></div>
+    <div class="cj-step"><b>2 · Paste Claude's JSON</b>
+      ${jsonBox("cj-q", '{ "format": "classbot-assessment@1", "title": "…", "questions": [ … ] }')}</div>
+    <div id="cj-prev"></div>`,
+  [{ label: "Check", primary: true, action: async () => {
+    const json = $("#cj-q", dlg).value;
+    if (!json.trim()) throw new Error("Paste the JSON, or choose the .json file.");
+    if (checked && checked === json) {
+      const r = await api("/assessments/claude-import", { method: "POST", body: { json, import: true } });
+      if (r.problems?.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; return; }
+      dlg.close(); toast("Imported as a draft ✅"); location.hash = `#/assessment/${r.id}`; return;
+    }
+    const r = await api("/assessments/claude-import", { method: "POST", body: { json } });
+    const btn = $(".dlg-foot .btn.primary", dlg);
+    if (r.problems.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+    const p = r.preview;
+    checked = json;
+    $("#cj-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>
+      <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points · ${p.minutes} min</p>
+      ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : `<p class="small muted">No competency.</p>`}
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
+    btn.textContent = "Import as a draft";
+  } }]);
+  dlg.classList.add("wide");
+  wireJsonBox(dlg, "cj-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
+  // the programme weeks (the current one first selected) and the prompt of the week picked
+  const load = async (week) => api(`/assessments/claude-prompt${week ? `?week=${encodeURIComponent(week)}` : ""}`);
+  let cur = await load("").catch(() => null);
+  const sel = $("#cj-week", dlg);
+  if (sel && cur) sel.innerHTML = cur.weeks.length ? cur.weeks.map((w) => `<option value="${w.n}" ${w.n === cur.week ? "selected" : ""}>Week ${w.n}${w.sprint ? ` · sprint ${w.sprint}` : ""} · ${esc(w.title || "")}</option>`).join("") : `<option value="">No programme week</option>`;
+  if (sel) sel.onchange = async () => { cur = await load(sel.value).catch(() => cur); };
+  $("#cj-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    if (!cur || String(cur.week ?? "") !== String(sel.value || cur.week || "")) cur = await load(sel.value);
+    copyText(cur.prompt, "Prompt copied: paste it in Claude");
+  });
+}
+
+/** Export the papers handed in, anonymous, for Claude to grade (classbot-grading-export@1): the file and the prompt. */
+async function exportGradingDialog(a) {
+  const r = await api(`/assessments/${a.id}/claude-export`, { method: "POST", body: {} });
+  const f = r.file, json = JSON.stringify(f, null, 2);
+  const name = `classbot-correction-${a.id}-${f.assessment.export}.json`;
+  saveBlob(new Blob([json], { type: "application/json" }), name);
+  openDialog("Export for grading (JSON)", `
+    <p style="margin-top:0">✅ <b>${esc(name)}</b> is downloaded: ${f.papers.length} paper${f.papers.length > 1 ? "s" : ""} handed in (${f.papers.map((p) => p.ref).join(", ")}), ${f.assessment.questions.length} questions.</p>
+    <p class="small muted">The file holds the questions, the expected answers and grading notes, the answers and the grading instructions. The papers are anonymous (P01, P02…): no names, Discord ids, GitHub logins or emails. Who is who stays here. The multiple-choice questions are already graded.</p>
+    <ol class="small"><li>In Claude, paste the prompt and attach the file (or paste it after the prompt).</li><li>Claude answers with a JSON (<code>classbot-grading-result@1</code>).</li><li>Here: <b>Import the grading (JSON)</b>, check the preview, apply it, then send the results.</li></ol>
+    <p class="small muted">Export again later (more papers handed in): the students keep their reference, and only the last export's grading can be imported.</p>`,
+  [{ label: "📋 Copy the prompt for Claude (grading)", action: async () => copyText(f.instructions, "Prompt copied: paste it in Claude with the file") },
+   { label: "Copy the JSON", action: async () => copyText(json, "JSON copied") },
+   { label: "Download again", action: async () => saveBlob(new Blob([json], { type: "application/json" }), name) },
+   { label: "Done", primary: true, action: async () => dlg.close() }]);
+}
+
+/** Import Claude's grading (classbot-grading-result@1): checked, a preview (who, score before → after), then applied as your grades. */
+function importGradingDialog(a) {
+  let checked = "";
+  const pct = (v) => (v == null ? `<span class="muted">—</span>` : `<b style="color:${masteryInk(v)}">${v}%</b>`);
+  openDialog("Import the grading (JSON)", `
+    <p class="small muted" style="margin-top:0">Claude's answer to the last export. The grades become <b>your</b> grades (✎): <b>↻ Grade with AI</b> never changes them. The multiple-choice grades stay. Nothing is sent: check, then use <b>Send results by DM</b>.</p>
+    <div class="toolbar" style="margin:0 0 8px"><button class="btn small" id="cg-cp">📋 Copy the prompt for Claude (grading)</button></div>
+    ${jsonBox("cg-j", '{ "format": "classbot-grading-result@1", "assessment": …, "export": "e-…", "papers": [ … ] }')}
+    <div id="cg-prev"></div>`,
+  [{ label: "Check", primary: true, action: async () => {
+    const json = $("#cg-j", dlg).value;
+    if (!json.trim()) throw new Error("Paste Claude's JSON, or choose the .json file.");
+    const btn = $(".dlg-foot .btn.primary", dlg);
+    if (checked && checked === json) {
+      const r = await api(`/assessments/${a.id}/claude-grading`, { method: "POST", body: { json, apply: true } });
+      if (r.problems?.length) { $("#cg-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+      AS.A = r; dlg.close(); AS.tab = "results"; renderAssessment();
+      toast(`Grading applied to ${r.applied} paper${r.applied > 1 ? "s" : ""}: check it, then send the results`);
+      return;
+    }
+    const r = await api(`/assessments/${a.id}/claude-grading`, { method: "POST", body: { json } });
+    if (r.problems.length) { $("#cg-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+    const ok = r.rows.filter((x) => !x.skipped);
+    checked = json;
+    $("#cg-prev", dlg).innerHTML = `<div class="table-wrap"><table class="cj-table"><thead><tr><th>Paper</th><th>Student</th><th class="ctr">Score</th><th class="ctr">Questions graded</th><th></th></tr></thead><tbody>
+      ${r.rows.map((x) => `<tr class="${x.skipped ? "muted" : ""}"><td><code>${esc(x.ref)}</code></td><td>${esc(x.name)}</td><td class="ctr">${pct(x.before)} → ${x.skipped ? pct(x.before) : pct(x.after)}</td><td class="ctr">${x.graded}</td>
+        <td class="small">${x.skipped ? `⏭ Not changed: ${esc(x.skipped)}` : x.stays.length ? `⏳ ${esc(x.stays.join(", "))} still to grade: the paper stays "to grade"` : "✅"}</td></tr>`).join("")}
+      ${r.absent.map((x) => `<tr class="muted"><td><code>${esc(x.ref)}</code></td><td>${esc(x.name)}</td><td class="ctr">${pct(x.before)}</td><td class="ctr">0</td><td class="small">Not in the file: stays as it is</td></tr>`).join("")}
+      </tbody></table></div>`;
+    btn.textContent = ok.length ? `Apply the grading (${ok.length} paper${ok.length > 1 ? "s" : ""})` : "Check";
+    if (!ok.length) checked = "";
+  } }]);
+  dlg.classList.add("wide");
+  wireJsonBox(dlg, "cg-j", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
+  $("#cg-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => copyText((await api(`/assessments/${a.id}/claude-prompt`)).prompt, "Prompt copied: paste it in Claude with the exported file"));
+}
+
 /** Share: a link for other teachers (questions only). */
 async function shareAssessmentDialog(id) {
   const r = await api(`/assessments/${id}/share`);
@@ -1458,7 +1572,7 @@ async function viewAssessments() {
   const locked = r.items.reduce((s, a) => s + (a.status === "open" ? a.locked : 0), 0);
   view.innerHTML = `
     <div class="page-head"><div><h1>Assessments</h1><p class="sub">Web tests in full screen: each student gets their own link, questions in their own order. Leaving full screen stops them until you let them back in. Results go to their competencies and skills.</p></div>
-      <div class="toolbar" style="margin:0"><button class="btn" id="as-imp">🔗 Import from a link</button><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="as-imp">🔗 Import from a link</button><button class="btn" id="as-json" title="A quiz written by Claude, as JSON: the prompt to write it is inside">{ } Import a quiz (JSON)</button><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">📝</span><div><b>${r.items.filter((a) => a.status === "open").length}</b><span>open now</span></div></div>
       <div class="figure ${locked ? "cs-attn" : ""}"><span class="ico">⛔</span><div><b>${locked}</b><span>student(s) stopped, waiting for you</span></div></div>
@@ -1474,6 +1588,7 @@ async function viewAssessments() {
     ], r.items, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: "No assessment yet." })}</section>`;
   $("#as-gen").onclick = () => generateQuestionsDialog(null);
   $("#as-imp").onclick = () => importAssessmentDialog();
+  $("#as-json").onclick = (e) => busy(e.currentTarget, () => importQuizJsonDialog());
   $("#as-blank").onclick = (e) => busy(e.currentTarget, async () => {
     const a = await api("/assessments", { method: "POST", body: { title: "New assessment", questions: [], settings: { minutes: 45 } } });
     location.hash = `#/assessment/${a.assessment.id}`;
@@ -1884,6 +1999,7 @@ function assessResultsTab(root) {
     </div>
     <section class="panel">
     <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0">
+      ${done.length ? `<button class="btn small" id="rs-cexp" title="The papers handed in, anonymous, with the grading instructions: for Claude to grade them">Export for grading (JSON)</button><button class="btn small" id="rs-cimp" title="Claude's grading of the last export: checked and previewed before it's applied as your grades">Import the grading (JSON)</button>` : ""}
       <button class="btn small" id="rs-grade" title="The AI grades the papers not graded yet (or all again); grades you changed and finalized debriefs stay">↻ Grade with AI</button><button class="btn small primary" id="rs-send">Send results by DM</button></span></div>
     <p class="muted small" style="margin-top:0">Click a <b>student</b> to read their whole paper (each answer, what was right, what was wrong, the mistakes in their code), or a <b>score</b> for one question. ✎ = changed by you.</p>
     ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Student</th><th>Score</th>${qs.map((q, i) => `<th class="ctr" title="${esc(q.prompt.slice(0, 200))}"><span class="qh">${QI[q.type]} Q${i + 1}</span><small>${q.points} pt</small></th>`).join("")}</tr></thead>
@@ -1900,6 +2016,8 @@ function assessResultsTab(root) {
       ${done.some((t) => t.summary) ? `<section class="panel"><h2>AI summary per student</h2>${done.filter((t) => t.summary).map((t) => `<p class="small"><b>${esc(t.name || t.discord_id)}</b>: ${esc(t.summary)}</p>`).join("")}</section>` : ""}
     </div>` : ""}`;
   $("#rs-grade").onclick = () => gradeAllDialog(a);
+  if ($("#rs-cexp")) $("#rs-cexp").onclick = (e) => busy(e.currentTarget, () => exportGradingDialog(a));
+  if ($("#rs-cimp")) $("#rs-cimp").onclick = () => importGradingDialog(a);
   $("#rs-send").onclick = () => confirmDialog("Send the results?", `Each graded student gets their score${a.settings.showResults ? " and the corrections" : ""} by DM, and the results go to their competencies and skills${a.settings.points ? ` (+ up to ${a.settings.points} pts)` : ""}.`, "Send", async () => {
     const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: {} }); toast(`Sent to ${r.sent} student(s)`);
   });

@@ -362,6 +362,16 @@ Web tests in full screen. Create one from **✨ Generate with AI** (a topic and 
 
 Scores feed the skills and competencies of each question.
 
+**With Claude, outside the app** (three versioned JSON files, `src/shared/assessclaude.ts`):
+
+1. **{ } Import a quiz (JSON)** (Assessments page). Pick a programme week and **📋 Copy the prompt for Claude (creation)**: the exact format with an example, the rules (French, beginners, only that week's notions and before) and the week's objective, notions, competencies, technologies and what is out of scope. Paste Claude's JSON (or its `.json` file), **Check** (a preview, or every problem with its question number), then **Import as a draft**.
+   `classbot-assessment@1`: `title`, `minutes`, `lang`, `codeLang`, `passAt`, `points`, `brief_id`, and `questions` with `type` (`code`, `explain`, `mcq`), `prompt`, `starter`, `choices` + `correct` (one right choice), `expected` + `grading` (grading notes, kept with the expected answer), `points` (1–20), `competencies` (`C3N1`, `CT2N1`), `skills`, `notion`.
+2. **Invite** and let the class answer, as usual.
+3. **Export for grading (JSON)** (Results tab): a `.json` file (`classbot-grading-export@1`) with the questions, the expected answers and grading notes, the papers handed in as **P01, P02…** with their answers, and the grading instructions. No names, Discord ids, GitHub logins or emails, even typed in an answer. Who is who stays on the server; a student keeps their reference from one export to the next. Multiple choice comes already graded. **📋 Copy the prompt for Claude (grading)** gives the same instructions to paste with the file.
+4. Claude answers with `classbot-grading-result@1`. For each paper (`ref`) and each code/explain question (`question` id) it gives `verdict` (`correct`, `partial`, `wrong`, `empty`), `score` (in points, 0 to the question's points), `comment` (to the student, « tu » like the app's corrections), `right`, `wrong` and `errors` (line by line). Each paper also gets a `summary`. The file names the assessment and the export: a file for another assessment or an older export is refused.
+5. **Import the grading (JSON)** (Results tab), **Check**: every problem, or a preview (paper → student, score before → after, questions graded; the papers not in the file stay as they are). **Apply the grading**: the grades become **your** grades (✎), so ↻ Grade with AI never changes them. Multiple choice stays as it was, the scores, competencies and skills follow, and the papers of a finalized debrief are left alone.
+6. Check the results, then **Send results by DM** (never automatic).
+
 #### Competencies
 - The whole class on the référentiel: the highest level each student validated, and the % of the class that validated each competency.
 - Click a cell to **validate it at a level or invalidate it yourself** (✍️, with a note). Your decision replaces earlier results; later briefs and assessments still count on top. *Back to automatic* removes it.

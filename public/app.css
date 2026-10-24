@@ -1957,3 +1957,12 @@ dialog.confirm-dlg.act-exists { width: min(720px, calc(100vw - 32px)); }
 .lib-recent li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
 .lib-what { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .lib-tag { font-size: 11px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--blue-50); color: var(--blue); white-space: nowrap; }
+
+/* assessments with Claude: a quiz imported from JSON, the papers exported for grading, Claude's grading imported */
+.cj-step { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 12px 14px; margin-bottom: 12px; }
+.cj-drop { min-height: 56px; margin: 8px 0; }
+.cj-json { width: 100%; min-height: 180px; font: 12px/1.45 var(--mono, ui-monospace, SFMono-Regular, Consolas, monospace); }
+.cj-probs { margin-top: 10px; }
+.cj-probs ul { margin: 6px 0 0; padding-left: 18px; max-height: 240px; overflow: auto; }
+.cj-table { width: 100%; margin-top: 10px; }
+.cj-table tr.muted td { color: var(--ink-soft); }
