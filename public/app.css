@@ -1966,3 +1966,12 @@ dialog.confirm-dlg.act-exists { width: min(720px, calc(100vw - 32px)); }
 .cj-probs ul { margin: 6px 0 0; padding-left: 18px; max-height: 240px; overflow: auto; }
 .cj-table { width: 100%; margin-top: 10px; }
 .cj-table tr.muted td { color: var(--ink-soft); }
+
+/* an assessment's linked brief: the brief page's actions and the confirmation */
+.dbt-asrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.dbt-asrow .dbt-as { flex: 1 1 220px; min-width: 0; }
+.dbt-asact { display: flex; flex-wrap: wrap; gap: 6px; }
+.lk-path { font-weight: 600; }
+.lk-path b { color: var(--ink-soft); margin: 0 6px; }
+.lk-effects { margin: 6px 0; padding-left: 18px; }
+.lk-effects li { margin: 3px 0; }

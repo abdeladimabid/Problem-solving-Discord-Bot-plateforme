@@ -4506,6 +4506,87 @@ section("AI keys: an OpenRouter model that isn't free anymore is replaced by one
   if (p) await api("DELETE", `/api/settings/ai/providers/${p.id}?g=${G}`);
 }
 
+section("assessments: the linked brief changed or removed at any time (drafts follow, finalized debriefs never change)");
+{
+  const LK = await import("../src/shared/assesslink.ts");
+  const { getReview } = await import("../src/shared/review/debrief.ts");
+  // ---- pure: the plan
+  const linked = [{ id: 1, title: "Quiz", brief_id: 10 }, { id: 2, title: "Autre", brief_id: 20 }, { id: 3, title: "Libre", brief_id: null }];
+  const reviews = [{ brief_id: 10, status: "draft" }, { brief_id: 10, status: "draft" }, { brief_id: 10, status: "final" }, { brief_id: 20, status: "draft" }, { brief_id: 20, status: "final" }];
+  const base = { briefs: [10, 20, 30], linked, reviews };
+  const mv = LK.planLink({ ...base, assessment: 1, to: 30 });
+  check(mv.from === 10 && mv.to === 30 && !mv.same && mv.drafts.from === 2 && mv.finals.from === 1 && mv.drafts.to === 0 && !mv.others.length, "change the link: what moves (2 drafts of the old brief, 1 finalized left as it is)");
+  const rm = LK.planLink({ ...base, assessment: 1, to: "" });
+  check(rm.to === null && rm.drafts.from === 2 && LK.planLink({ ...base, assessment: 1, to: null }).to === null && LK.planLink({ ...base, assessment: 1, to: 0 }).to === null, "remove the link: \"\", null and 0 all mean no brief");
+  const onto = LK.planLink({ ...base, assessment: 1, to: 20 });
+  const rep = LK.planLink({ ...base, assessment: 1, to: 20, replace: true });
+  check(onto.others.map((o) => o.id).join() === "2" && !onto.replace.length && rep.replace.join() === "2" && rep.drafts.to === 1 && rep.finals.to === 1, "the new brief already has an assessment: replace it or keep both");
+  check(LK.planLink({ ...base, assessment: 3, to: 10 }).from === null && LK.planLink({ ...base, assessment: 1, to: 10 }).same, "from no brief; the same brief changes nothing");
+  const refused = (to: unknown) => { try { LK.planLink({ ...base, assessment: 1, to }); return false; } catch (e) { return e instanceof LK.LinkError; } };
+  const status = (to: unknown) => { try { LK.planLink({ ...base, assessment: 1, to }); } catch (e) { return (e as any).status; } };
+  check(refused(99) && refused("abc") && refused(-2) && refused(1.5) && status(99) === 404 && status("abc") === 400, "a brief that isn't in the class is refused (404; not a brief id: 400)");
+  const recO = { oral: [{ q: "a", src: "evaluation" }, { q: "b", src: "brief" }, { q: "c", src: "evaluation", unlinked: 9 }], final: { oral: [true, false, false] } };
+  check(LK.markOral(recO, 1, true) === 1 && (recO.oral[0] as any).unlinked === 1 && (recO.oral[2] as any).unlinked === 9 && !(recO.oral[1] as any).unlinked && recO.oral.length === 3 && recO.final.oral.join() === "true,false,false",
+    "unlinked: the oral questions from the assessment are kept with their switches, and marked");
+  check(LK.markOral(recO, 1, false) === 1 && !(recO.oral[0] as any).unlinked && (recO.oral[2] as any).unlinked === 9, "linked again: the mark goes (only that assessment's)");
+
+  // ---- through the dashboard
+  const brief = (title: string) => { run1("INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, ?, 'assigned', '{}', ?)", G, title, clock.now()); return q1("SELECT MAX(id) AS id FROM briefs").id as number; };
+  const A = brief("Lien A"), B = brief("Lien B");
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Quiz lien", brief_id: A, questions: [{ type: "explain", prompt: "Explique margin et padding.", expected: "dehors / dedans", points: 1 }], settings: { minutes: 0 } });
+  const aid = mk.data.assessment.id;
+  check((await api("POST", "/api/assessments", { g: G, title: "x", brief_id: 987654, questions: [] })).status === 404, "a new assessment can't be linked to a brief that isn't in the class");
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.alice.id, U.carol.id], send: false });
+  run1("UPDATE assessment_takers SET status = 'graded', score = 80, grades = '{}' WHERE assessment_id = ?", aid);
+  const rec = (extra: any = {}) => JSON.stringify({ at: Date.now(), brief: "Lien", result: { exigences: [{ type: "story", texte: "Page d'accueil", statut: "fait" }], competences: [{ code: "C3", avis: "validable" }] }, checks: [], ...extra });
+  const putRev = (bid: number, who: string, status: string, r: string) => run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, plevel, updated_at) VALUES (?, ?, ?, ?, ?, 'bon', 'bon', ?)", bid, G, who, r, status, clock.now());
+  putRev(A, `u:${U.alice.id}`, "draft", rec({ oral: [{ q: "Q éval", a: "…", notion: "margin", src: "evaluation" }, { q: "Q brief", a: "…", notion: "html", src: "brief" }], final: { oral: [true, false] }, level: { lvl: "bon", prop: "bon", by: "calc" } }));
+  putRev(A, `u:${U.bob.id}`, "final", rec({ assess: [{ id: aid, title: "Quiz lien", score: 80, done: 1, of: 1, comps: {} }] }));
+  putRev(B, `u:${U.carol.id}`, "draft", rec());
+  const finalBefore = q1("SELECT record, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", A, `u:${U.bob.id}`);
+  check((await getReview(env, A, `u:${U.alice.id}`))!.rec.assess.length === 1 && (await getReview(env, B, `u:${U.carol.id}`))!.rec.assess.length === 0, "linked to A: A's draft uses it, B's doesn't");
+  // the confirmation first: nothing written
+  const pv = await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: B, preview: true });
+  check(pv.status === 200 && pv.data.plan.from === A && pv.data.plan.to === B && pv.data.plan.drafts.from === 1 && pv.data.plan.finals.from === 1 && pv.data.plan.drafts.to === 1 && q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === A,
+    "preview: what changes (A: 1 draft to the project only, 1 finalized left as it is; B: 1 draft), nothing written");
+  // A → B
+  const ch = await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: B });
+  const ra = (await getReview(env, A, `u:${U.alice.id}`))!.rec, rb = (await getReview(env, B, `u:${U.carol.id}`))!.rec, rf = (await getReview(env, A, `u:${U.bob.id}`))!.rec;
+  check(ch.status === 200 && ch.data.brief_id === B && ch.data.assessment.brief_id === B && q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === B, "changed to B: the API returns the new state");
+  check(ra.assess.length === 0 && rb.assess.length === 1 && rb.assess[0].id === aid, "A's draft now uses the project only, B's draft uses the assessment");
+  check(ra.oral.length === 2 && ra.oral[0].unlinked === aid && !ra.oral[1].unlinked && ra.final.oral.join() === "true,false" && ra.level?.by === "calc" && !!ra.level?.prop,
+    "…A's oral questions stay (with their switches), the one from the assessment is marked; the level is proposed again");
+  const finalAfter = q1("SELECT record, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", A, `u:${U.bob.id}`);
+  check(finalAfter.record === finalBefore.record && finalAfter.level === finalBefore.level && rf.assess.length === 1 && rf.assess[0].id === aid, "a finalized debrief never changes (it keeps the assessment it was finalized with)");
+  check(q("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", aid)[0].n === 2, "the papers and grades stay: only the link changed");
+  const bA = (await api("GET", `/api/briefs/${A}?g=${G}`)).data.assessments, bB = (await api("GET", `/api/briefs/${B}?g=${G}`)).data.assessments;
+  check(!bA.length && bB.length === 1 && bB[0].id === aid, "both pages show the same state (A: none, B: it)");
+  // another assessment onto B: replace or keep both
+  const mk2 = await api("POST", "/api/assessments", { g: G, title: "Quiz 2", questions: [{ type: "explain", prompt: "Explique flexbox.", expected: "x", points: 1 }], settings: { minutes: 0 } });
+  const aid2 = mk2.data.assessment.id;
+  const pv2 = await api("POST", `/api/assessments/${aid2}/link`, { g: G, brief_id: B, preview: true });
+  check(pv2.data.plan.others.length === 1 && pv2.data.plan.others[0].id === aid, "B already has one: the confirmation says so");
+  await api("POST", `/api/assessments/${aid2}/link`, { g: G, brief_id: B, replace: true });
+  check(q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === null && q1("SELECT brief_id FROM assessments WHERE id = ?", aid2).brief_id === B, "replace: the other one is unlinked");
+  await api("POST", `/api/assessments/${aid2}/link`, { g: G, brief_id: null });
+  // back to A from the assessment's Settings (the same rules): A's oral mark goes
+  const put = await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Quiz lien", brief_id: A, questions: mk.data.assessment.questions, settings: { minutes: 0 } });
+  check(put.status === 200 && put.data.assessment.brief_id === A && !(await getReview(env, A, `u:${U.alice.id}`))!.rec.oral[0].unlinked, "from Settings too: linked to A again, the mark on A's oral question goes");
+  check((await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Quiz lien", brief_id: 987654, questions: mk.data.assessment.questions })).status === 404 && q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === A
+    && (await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: 987654 })).status === 404
+    && (await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: "abc" })).status === 400, "a brief that isn't in the class is refused (Settings and the brief page)");
+  // remove the link, then a brief deleted takes its links with it
+  const rmv = await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: null });
+  check(rmv.data.brief_id === null && (await getReview(env, A, `u:${U.alice.id}`))!.rec.assess.length === 0, "remove the link: no brief, the drafts use the project only");
+  const C = brief("Lien C");
+  await api("POST", `/api/assessments/${aid}/link`, { g: G, brief_id: C });
+  await api("DELETE", `/api/briefs/${C}?g=${G}`);
+  check(q1("SELECT brief_id FROM assessments WHERE id = ?", aid).brief_id === null, "a brief deleted: its assessment isn't linked to a brief that doesn't exist anymore");
+  for (const id of [aid, aid2]) await api("DELETE", `/api/assessments/${id}?g=${G}`);
+  run1("DELETE FROM brief_reviews WHERE brief_id IN (?, ?)", A, B);
+  run1("DELETE FROM briefs WHERE id IN (?, ?)", A, B);
+}
+
 section("assessments: graded by objectives, in lots that resume after an AI failure, finalized debriefs left alone");
 {
   const qs = [{ type: "explain", prompt: "Ajoute un lien qui s'ouvre dans un nouvel onglet.", expected: "<a href target=_blank>", points: 1 }];
@@ -4865,7 +4946,9 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const dev = (n: number) => String(n).repeat(32).slice(0, 32);
   const game = (created: any) => {
     const play = (path: string, key: string, body?: any) => bot.fetch(new Request(created.join + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-player-key": key }, body: body ? JSON.stringify({ key, ...body }) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
-    const tv = (path: string, body?: any) => bot.fetch(new Request(created.tv + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
+    // the TV, as the teacher's screen calls it: its link (before #) and the teacher's key (after #h=) in a header
+    const [tvBase, hostK] = String(created.tv).split("#h=");
+    const tv = (path: string, body?: any, key: string | null = hostK) => bot.fetch(new Request(tvBase + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", ...(key ? { "x-host-key": key } : {}) }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
     const join = async (k: number, pid: string) => play("join", dev(k), { pass: await GM.gamePass(env, created.id, pid) });
     return { play, tv, join };
   };
@@ -4876,6 +4959,14 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(R.status === 200 && R.data.tv.includes("/game/") && R.data.join.includes("/play/") && R.data.qr.startsWith("<svg") && R.data.live.phase === "lobby", "royale created: TV link, join link + QR");
   const r = game(R.data);
   const tvHtml = await (await bot.fetch(new Request(R.data.tv), env, makeCtx())).text();
+  {
+    // 🔒 only the teacher controls the game: the TV link alone (read on the projector, passed around) shows and does nothing
+    const noKey = await r.tv("state", undefined, null), badKey = await r.tv("state", undefined, "x".repeat(32));
+    const stop = await r.tv("act", { a: "stop" }, null), kickTry = await r.tv("act", { a: "kick", pid: U.alice.id }, "nope");
+    check(R.data.tv.includes("#h=") && noKey.status === 403 && noKey.data.host && badKey.status === 403 && stop.status === 403 && kickTry.status === 403 && q1("SELECT json_extract(state, '$.phase') AS p FROM games WHERE id = ?", R.data.id).p === "lobby",
+      "🔒 the TV link without the teacher's key: nothing shown, no control (stop, kick… refused)");
+    check(!tvHtml.includes(R.data.tv.split("#h=")[1]) && /history\.replaceState/.test(tvHtml) && (await r.tv("state")).status === 200, "…the key comes from the dashboard's link (after #, never in the page), and comes off the address bar");
+  }
   const plHtml = await (await bot.fetch(new Request(R.data.join), env, makeCtx())).text();
   let parsed = true;
   try { new Function(scriptOf(tvHtml)); new Function(scriptOf(plHtml)); } catch (e) { parsed = false; console.log(e); }
@@ -4983,7 +5074,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check((await api("POST", `/api/games/${R.data.id}/announce?g=${G}`, {})).status === 200 && discordCalls.slice(pc1).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "📣 the dashboard posts a new Join button in Discord");
   const pc2 = discordCalls.length;
   await api("POST", `/api/games/${R.data.id}/clear?g=${G}`, {});
-  await bot.fetch(new Request(R.data.tv), env, makeCtx());
+  await r.tv("state");
   check(discordCalls.slice(pc2).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "after freeing everyone, opening the TV posts the Join button again by itself");
   const relink = await r.join(1, U.alice.id);
   check(relink.status === 200 && relink.data.phase === "lobby", "…and the students join again with their Discord link");
@@ -5150,7 +5241,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   }
   check(runOk, "the test runner: right/wrong per test, a missing function said clearly");
   const del = await api("DELETE", `/api/games/${Y.data.id}?g=${G}`);
-  check(del.status === 200 && !q1("SELECT COUNT(*) AS n FROM game_players WHERE game_id = ?", Y.data.id).n && (await bot.fetch(new Request(Y.data.tv + "/state"), env, makeCtx())).status === 404, "a deleted game: its links stop working");
+  check(del.status === 200 && !q1("SELECT COUNT(*) AS n FROM game_players WHERE game_id = ?", Y.data.id).n && (await bot.fetch(new Request(Y.data.tv.split("#")[0] + "/state"), env, makeCtx())).status === 404, "a deleted game: its links stop working");
   // ---------------------------------------------------------------- the built-in relay challenges: each reference solution passes its tests
   const GC = await import("../src/shared/gamecontent.ts");
   let bankOk = true;
