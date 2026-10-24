@@ -2,7 +2,7 @@
 // difficulty check, and the Monday summary.
 import type { ChallengeRow, D1Stmt, Difficulty, Env, GuildRow } from "./types.ts";
 import { guildLangs } from "./challenges.ts";
-import { all, boardHidden, now, one, run } from "./db.ts";
+import { all, boardHidden, inClass, now, one, run } from "./db.ts";
 import { t } from "./i18n.ts";
 import { COLORS, dm } from "./discord.ts";
 import { SKILL_KEYS, masteryFrom, skillName, skillsOf } from "./skills.ts";
@@ -194,7 +194,7 @@ export async function teacherSummary(env: Env, g: GuildRow) {
     `SELECT SUM(a.started_at >= ?) AS n, SUM(a.started_at < ?) AS p FROM attempts a WHERE a.guild_id = ? AND a.status = 'solved' AND a.started_at >= ?`, week, week, g.id, prev);
   const movers = await all<{ discord_id: string; name: string | null; pts: number }>(env,
     `SELECT l.discord_id, p.name, SUM(l.amount) AS pts FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? GROUP BY l.discord_id ORDER BY pts DESC LIMIT 3`, g.id, week, await boardHidden(env, g.id));
+      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? AND ${inClass("l.discord_id", "l.guild_id")} GROUP BY l.discord_id ORDER BY pts DESC LIMIT 3`, g.id, week, await boardHidden(env, g.id));
   const quiet = await all<{ discord_id: string; name: string | null }>(env,
     `SELECT p.discord_id, p.name FROM players p WHERE p.guild_id = ?
         AND EXISTS (SELECT 1 FROM attempts a WHERE a.guild_id = p.guild_id AND a.discord_id = p.discord_id AND a.started_at < ? AND a.started_at >= ?)
