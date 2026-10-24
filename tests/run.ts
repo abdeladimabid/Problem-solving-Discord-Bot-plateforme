@@ -3343,9 +3343,18 @@ section("programme from an Excel workbook (ClassBot template or YouCode planning
 
 section("assessments: several competencies per question, why each grade, invitations taken back");
 {
+  // the fake AI always writes the same questions: the class's earlier assessments are set aside here (they would be avoided)
+  const keptAssess = q("SELECT * FROM assessments WHERE guild_id = ?", G);
+  run1("DELETE FROM assessments WHERE guild_id = ?", G);
   ai.maxTokens.length = 0;
+  ai.users.length = 0;
+  const freeAi = () => run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);   // these tries don't eat the class's AI budget
+  freeAi();
   await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 10, techs: ["HTML", "CSS"] });
-  check(ai.maxTokens.at(-1)! >= 6800, `10 questions: the AI's answer has room for all of them, not cut at 2 500 tokens (${ai.maxTokens.at(-1)})`);
+  check(Math.max(...ai.maxTokens) >= 4400, `10 questions in batches of 6: each answer has room for all of its questions (${ai.maxTokens.join(",")})`);
+  const planned = ai.users.filter((x: string) => /Q1 — /.test(x));
+  check(planned.length === 2 && planned.every((x: string) => /notion : notion numéro \d+ · tâche : .+ · situation : /.test(x)) && new Set(planned.join("\n").match(/notion numéro \d+/g)).size === 10,
+    "variety: one quick call lists distinct notions, then each question gets its own notion, kind of task and situation (two batches with different ones)");
   // however the AI wraps its list, the questions are read; a technology named only in a wrong option doesn't remove one
   ai.gen = "array";
   const bare = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 2, techs: ["HTML", "CSS"] });
@@ -3358,6 +3367,7 @@ section("assessments: several competencies per question, why each grade, invitat
   check(none.status === 400 && /wrote 3 question\(s\), none usable: 1 incomplete · 2 using a technology not selected \(Tailwind CSS\): add it to the technologies/.test(none.data.error), `nothing usable: the message says why (${none.data.error})`);
   // competencies: the AI gets the class's list with their names; an invented code is dropped; from a brief, only its own, at its level
   ai.gen = "comps";
+  freeAi();
   const cp = await api("POST", "/api/assessments/generate", { g: G, topic: "HTML", count: 2, techs: ["HTML", "CSS"] });
   check(/C3 : Réaliser des interfaces utilisateur statiques/.test(ai.prompts.at(-1)!) && /jamais l’ordre de la liste/.test(ai.prompts.at(-1)!), "the AI chooses competencies from the class's list, by their meaning");
   check(cp.status === 200 && cp.data.questions[0].comps.map((c: any) => c.code).join() === "C1,C3" && !cp.data.questions[1].comps, `a code outside the list (C9) is dropped (${JSON.stringify(cp.data.questions?.map((q: any) => q.comps))})`);
@@ -3367,15 +3377,35 @@ section("assessments: several competencies per question, why each grade, invitat
   check(cb.status === 200 && JSON.stringify(cb.data.questions[0].comps) === JSON.stringify([{ code: "C3", level: 2 }]), `…and only those are kept, at the brief's level (${JSON.stringify(cb.data.questions?.[0]?.comps)})`);
   run1("DELETE FROM briefs WHERE id = ?", sb.data.brief.id);
   ai.gen = "array";
+  freeAi();
   const calls0 = ai.calls;
   const twenty = await api("POST", "/api/assessments/generate", { g: G, topic: "CSS", count: 20, techs: ["HTML", "CSS"] });
-  check(twenty.status === 200 && ai.calls - calls0 === 2 && twenty.data.questions.length === 2, `20 questions: asked in 2 batches of 10, put together without the same question twice (${ai.calls - calls0} calls, ${twenty.data.questions?.length})`);
+  check(twenty.status === 200 && ai.calls - calls0 === 5 && twenty.data.questions.length === 2, `20 questions: the notions, then 4 batches with their own plan, put together without the same question twice (${ai.calls - calls0} calls, ${twenty.data.questions?.length})`);
+  // the same question with other names is dropped; a question the class already had isn't asked again
+  ai.gen = "dups";
+  freeAi();
+  const dd = await api("POST", "/api/assessments/generate", { g: G, topic: "JS", count: 3, techs: ["JavaScript"] });
+  check(dd.status === 200 && dd.data.questions.length === 2 && dd.data.questions.filter((x: any) => /panier/.test(x.prompt)).length === 1, `the same question with other words (prix / montants) is kept once (${dd.data.questions?.length})`);
+  const dd2 = await api("POST", "/api/assessments/generate", { g: G, topic: "JS", count: 3, techs: ["JavaScript"], existing: ["Explique pourquoi la page du cinéma se recharge quand on envoie le formulaire de réservation ?"] });
+  check(dd2.status === 200 && !dd2.data.questions.some((x: any) => /cinéma/.test(x.prompt)) && /DÉJÀ POSÉES À CETTE CLASSE[\s\S]*cinéma/.test(ai.users.at(-1)!), "a question already in the assessment (or the class's earlier ones) is never asked again");
   ai.gen = "";
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);   // these 3 tries don't eat the class's AI budget for the next tests
   const two = await api("POST", "/api/assessments/generate", { g: G, topic: "Intégration", count: 5, techs: ["HTML", "CSS"] });
   const tq = two.data.questions;
   check(two.status === 200 && !tq.some((q: any) => /tailwind/i.test(q.prompt)) && tq.length === 4, "questions on several technologies at once, nothing outside them (no Tailwind in an HTML/CSS test)");
   check(tq.find((q: any) => /carte en HTML/.test(q.prompt))?.starter === "" && tq.find((q: any) => /carte en HTML/.test(q.prompt))?.lang === "html", "a starter code that gives the answer away is removed");
+  // ✨ on a question written by hand: a better wording, the starter and the expected answer, the choices
+  freeAi();
+  const raw = { type: "code", prompt: "Écrivez les commandes Git pour créer un dépôt, ajouter les fichiers, créer une branche feature/home-layout, la pousser et ouvrir une PR.", lang: "text" };
+  const rp = await api("POST", "/api/assessments/qai", { g: G, action: "rephrase", q: raw });
+  const fl = await api("POST", "/api/assessments/qai", { g: G, action: "fill", q: raw });
+  const mc = await api("POST", "/api/assessments/qai", { g: G, action: "fill", q: { type: "mcq", prompt: "Quelle commande envoie tes commits sur GitHub ?", choices: ["", ""] } });
+  const ex = await api("POST", "/api/assessments/qai", { g: G, action: "fill", q: { type: "explain", prompt: "Explique ce que fait git push -u." } });
+  check(rp.status === 200 && /feature\/home-layout/.test(rp.data.prompt) && /ÉNONCÉ :\n<<<\nÉcrivez les commandes Git/.test(ai.users.at(-4)!), "✨ Improve the wording: same question, clearer (the teacher's text is sent as data)");
+  check(fl.status === 200 && /git switch -c feature\/home-layout/.test(fl.data.expected) && fl.data.starter.startsWith("# 1.") && mc.data.choices.length === 4 && mc.data.answer[0] === 0 && /branche suivie/.test(ex.data.expected),
+    "✨ Write the starter code and expected answer (code), the expected answer (explain), the choices (multiple choice)");
+  check((await api("POST", "/api/assessments/qai", { g: G, action: "fill", q: { type: "code", prompt: "" } })).status === 400, "…the question has to be written first");
+  for (const r of keptAssess) run1(`INSERT INTO assessments (${Object.keys(r).join(", ")}) VALUES (${Object.keys(r).map(() => "?").join(", ")})`, ...Object.values(r));
   const qs = [{ type: "explain", prompt: "Explique flexbox et ses axes.", expected: "axe principal, axe secondaire", points: 2, comps: ["C3N1", "CT4N2"], skills: ["css"] }];
   const mk = await api("POST", "/api/assessments", { g: G, title: "Deux compétences", questions: qs, settings: { minutes: 0, target: [U.carol.id] } });
   const aid = mk.data.assessment.id;

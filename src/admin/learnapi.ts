@@ -19,7 +19,7 @@ import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_disco
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
-import { AssessError, generateQuestions, gradeTaker, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
@@ -571,10 +571,19 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const ev = await all<{ skill: string; n: number }>(env, "SELECT skill, COUNT(*) AS n FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND ok = 0 GROUP BY skill ORDER BY n DESC LIMIT 4", g.id, uid);
       skills = [...skills, ...ev.map((r) => r.skill)];
     }
+    // what this class was already asked (its earlier assessments, and the questions already in this one): not again
+    const past = await all<{ questions: string }>(env, "SELECT questions FROM assessments WHERE guild_id = ? ORDER BY id DESC LIMIT 30", g.id).catch(() => []);
+    const avoid = [...(Array.isArray(body.existing) ? body.existing.map(String) : []), ...past.flatMap((r) => { try { return (JSON.parse(r.questions) as any[]).map((q) => String(q?.prompt || "")); } catch { return []; } })]
+      .map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 10).filter((x, i, a) => a.indexOf(x) === i).slice(0, 120);
     const mix = { code: Number(body.mix?.code ?? 50), explain: Number(body.mix?.explain ?? 20), mcq: Number(body.mix?.mcq ?? 30) };
     const qs = await generateQuestions(env, { topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
-      codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope });
+      codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope, avoid });
     return ok({ questions: qs });
+  }
+  if (path === "/assessments/qai" && method === "POST") {
+    const g = await guild();
+    const action = body.action === "rephrase" ? "rephrase" : "fill";
+    return ok(await questionAi(env, { action, q: body.q ?? {}, lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)) }));
   }
   if (path === "/assessments/import" && method === "POST") {
     // a link shared by another teacher (this ClassBot or another one): preview first, then a draft copy

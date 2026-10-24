@@ -1506,7 +1506,8 @@ async function generateQuestionsDialog(onDone, preset = null) {
     [{ label: "Generate", primary: true, action: async () => {
       $("#gq-st").textContent = "⏳ Writing the questions (up to a minute)…";
       const body = { topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
-        techs: tagValues(dlg, "gq-tech"), codeLang: (tagValues(dlg, "gq-tech")[0] || "javascript").toLowerCase(), lang: $("#gq-lang").value, mix: { code: $("#gq-mc").value, explain: $("#gq-me").value, mcq: $("#gq-mm").value } };
+        techs: tagValues(dlg, "gq-tech"), codeLang: (tagValues(dlg, "gq-tech")[0] || "javascript").toLowerCase(), lang: $("#gq-lang").value, mix: { code: $("#gq-mc").value, explain: $("#gq-me").value, mcq: $("#gq-mm").value },
+        existing: $$("[data-qprompt]").map((t) => t.value).filter(Boolean) };   // the questions already in the assessment: not again
       if (!body.techs.length) throw new Error("Pick at least one technology to assess.");
       try { localStorage.setItem("classbot.techs", JSON.stringify(body.techs)); } catch { /* private window */ }
       const r = await api("/assessments/generate", { method: "POST", body }).catch((e) => { $("#gq-st").textContent = ""; throw e; });
@@ -1623,6 +1624,18 @@ function assessQuestionsTab(root) {
       wireTags(card, mark);
       $("[data-addcomp]", card).onclick = (e) => { e.currentTarget.insertAdjacentHTML("beforebegin", compRow({ code: "", level: 1 }, REF?.referential || [])); wireComps(card); mark(); };
       wireComps(card);
+      // ✨ on a question written by hand: the wording, or what goes with it (starter, expected answer, choices)
+      $$("[data-qai]", card).forEach((b) => b.onclick = () => busy(b, async () => {
+        Q = readQuestions();
+        const before = JSON.parse(JSON.stringify(Q[i]));
+        const r = await api("/assessments/qai", { method: "POST", body: { action: b.dataset.qai, q: Q[i], lang: $("#aq-lang").value, techs: [Q[i].lang || s.codeLang].filter(Boolean) } });
+        Object.assign(Q[i], r);
+        if (b.dataset.qai === "fill" && Q[i].type !== "mcq" && !r.starter && Q[i].type === "code") Q[i].starter = before.starter || "";
+        draw(); mark();
+        const c2 = $$(".qe", root)[i], u = c2 && $("[data-qundo]", c2);
+        if (u) { u.style.display = ""; u.onclick = () => { Q = readQuestions(); Q[i] = before; draw(); mark(); }; }
+        c2?.scrollIntoView({ block: "nearest" });
+      }));
     });
   };
   const mark = () => { AS.dirty = true; $("#aq-save-bar").classList.add("dirty"); $("#aq-save-st").textContent = "Unsaved changes"; };
@@ -1650,6 +1663,9 @@ function questionCard(q, i, n, locked) {
       <label class="small qe-pts">Points <input type="number" data-qp min="1" max="20" value="${q.points || 1}"></label>
       <span class="qe-act">${i > 0 ? `<button class="btn small" data-mv="-1" title="Move up">↑</button>` : ""}${i < n - 1 ? `<button class="btn small" data-mv="1" title="Move down">↓</button>` : ""}${locked ? "" : `<button class="btn small danger" data-qdel>Remove</button>`}</span></header>
     <textarea data-qprompt placeholder="The question or the task" style="min-height:70px">${esc(q.prompt)}</textarea>
+    <div class="qe-ai"><button type="button" class="btn small" data-qai="rephrase" title="Clearer, more precise, in a concrete situation: same question, same level">✨ Improve the wording</button>
+      <button type="button" class="btn small" data-qai="fill">✨ ${q.type === "code" ? "Write the starter code and expected answer" : q.type === "explain" ? "Write the expected answer" : "Write the choices"}</button>
+      <button type="button" class="btn small" data-qundo style="display:none">↶ Undo</button></div>
     <details ${q.code ? "open" : ""}><summary class="small">Code shown with the question</summary><textarea data-qcode class="code" style="min-height:90px" spellcheck="false">${esc(q.code || "")}</textarea></details>
     ${q.type === "code" ? `<div class="field-row"><div><label class="small">Language</label><select data-qlang>${CODE_LANGS.map((l) => `<option ${l === (q.lang || "javascript") ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
       <label class="small">Starter code <span class="muted">(optional)</span></label><textarea data-qstart class="code" style="min-height:70px" spellcheck="false">${esc(q.starter || "")}</textarea>` : ""}

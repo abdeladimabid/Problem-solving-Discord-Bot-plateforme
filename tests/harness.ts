@@ -647,10 +647,22 @@ function fakeAI() {
         if (user.includes("OBJ-TEST")) return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: "wrong", score: 0, objectifs: [{ objectif: "une balise <a>", poids: 40, atteint: "oui" }, { objectif: "target=_blank", poids: 40, atteint: "non" }, { objectif: "syntaxe correcte", poids: 20, atteint: "partiel" }], commentaire: "Le lien est là, il manque target." })), bilan: "Bien." }) };
         return { response: JSON.stringify({ notes: ids.map((id) => ({ id, verdict: user.includes("display: flex") ? "correct" : "partial", score: user.includes("display: flex") ? 100 : 50, juste: "Il utilise display: flex.", faux: user.includes("display: flex") ? "" : "Il manque la media query.", erreurs: [{ ligne: 1, extrait: "display: flex", probleme: "Il manque le point-virgule.", gravite: "mineure" }], commentaire: "Bien vu." })), bilan: "Bon travail, revois le padding." }) };
       }
+      if (sys.includes("Tu prépares une évaluation") || sys.includes("You prepare an assessment")) {
+        const n = Number(sys.match(/Liste (\d+)|List (\d+)/)?.slice(1).find(Boolean) || 3);
+        return { response: JSON.stringify({ notions: Array.from({ length: n }, (_, i) => `notion numéro ${i + 1}`) }) };
+      }
+      if (sys.includes("Améliore l'ÉNONCÉ")) return { response: JSON.stringify({ prompt: "Pour le site de la salle de sport, écris les commandes Git qui créent le dépôt, ajoutent les fichiers, créent la branche feature/home-layout, la poussent sur GitHub et ouvrent une Pull Request. Une commande par ligne." }) };
+      if (sys.includes("Écris le code de départ")) return { response: JSON.stringify({ starter: "# 1. créer le dépôt\n# 2. …", expected: "git init\ngit add .\ngit commit -m \"init\"\ngit switch -c feature/home-layout\ngit push -u origin feature/home-layout\ngh pr create" }) };
+      if (sys.includes("Écris 4 choix")) return { response: JSON.stringify({ choices: ["git push", "git pull", "git fetch", "git clone"], answer: [0] }) };
+      if (sys.includes("Écris la réponse attendue")) return { response: JSON.stringify({ expected: "- le dépôt distant\n- la branche suivie" }) };
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
         if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
           { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },
           { type: "explain", prompt: "Explique le rôle de la balise main.", expected: "le contenu principal", points: 2, comps: ["C9N1"] }] }) };
+        if (ai.gen === "dups") return { response: JSON.stringify({ questions: [
+          { type: "code", prompt: "Écris une fonction qui calcule le total des prix d'un panier de la boulangerie.", lang: "javascript", expected: "reduce", points: 2 },
+          { type: "code", prompt: "Écris une fonction qui calcule le total des montants d'un panier de la boulangerie.", lang: "javascript", expected: "reduce", points: 2 },
+          { type: "explain", prompt: "Explique pourquoi la page du cinéma se recharge quand on envoie le formulaire de réservation.", expected: "preventDefault", points: 2 }] }) };
         if (ai.gen === "array") return { response: JSON.stringify([
           { type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "dehors / dedans", points: 2 },
           { type: "mcq", prompt: "Quelle unité dépend de la taille de police racine ?", choices: ["px", "rem", "%", "vw"], answer: [1], points: 1 }]) };

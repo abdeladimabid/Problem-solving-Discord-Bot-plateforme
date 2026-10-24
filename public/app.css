@@ -690,6 +690,7 @@ ol.league li.me b { color: var(--blue); }
 .qe-act { margin-left: auto; display: flex; gap: 6px; }
 .qe details { margin: 6px 0; }
 .qe-choices { display: grid; gap: 6px; margin-bottom: 6px; }
+.qe-ai { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 2px; }
 .qe-choice { display: flex; gap: 8px; align-items: center; }
 .qe-meta { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .qe-meta select { width: auto; max-width: 340px; }

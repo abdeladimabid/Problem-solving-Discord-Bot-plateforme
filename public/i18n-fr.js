@@ -3275,5 +3275,11 @@ window.CB_FR = {
 "Low (only clear talking)": "Faible (seulement une vraie conversation)",
 "High (even quiet talking)": "Élevée (même à voix basse)",
 "Each student sets their voice in the lobby: their mic then only counts a voice next to their own screen, and when several squads' mics hear the same moment, only the squad where it was loudest gets the strike. On the TV, ＋ gives a strike by hand, and clicking a squad's strikes cancels one.": "Chaque apprenant règle sa voix dans le salon : son micro ne compte alors qu’une voix proche de son écran, et quand les micros de plusieurs squads entendent le même moment, seul le squad où c’était le plus fort prend l’avertissement. Sur la TV, ＋ donne un avertissement à la main, et un clic sur les avertissements d’un squad en annule un.",
-"No microphones: you give the strikes yourself on the TV (＋ next to a squad's strikes) when a squad talks or cheats; clicking the strikes cancels one.": "Sans micros : tu donnes toi-même les avertissements sur la TV (＋ à côté des avertissements d’un squad) quand un squad parle ou triche ; un clic sur les avertissements en annule un."
+"No microphones: you give the strikes yourself on the TV (＋ next to a squad's strikes) when a squad talks or cheats; clicking the strikes cancels one.": "Sans micros : tu donnes toi-même les avertissements sur la TV (＋ à côté des avertissements d’un squad) quand un squad parle ou triche ; un clic sur les avertissements en annule un.",
+"Improve the wording": "Améliorer la formulation",
+"Write the starter code and expected answer": "Écrire le code de départ et la réponse attendue",
+"Write the expected answer": "Écrire la réponse attendue",
+"Write the choices": "Écrire les choix",
+"Undo": "Annuler",
+"Clearer, more precise, in a concrete situation: same question, same level": "Plus claire, plus précise, dans une situation concrète : même question, même niveau"
 };
