@@ -51,7 +51,7 @@ import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appse
 import { SquadError, createSquadSet, deleteSquadSet, notifySquads, pendingBuddies, sentAt, squadSets, updateSquadSet } from "../shared/squads.ts";
 import { LeagueError, addRemote, compareClasses, leagueLink, leagueOf, leagueTable, refreshRemotes, remoteRows, removeRemote, setLeague, weekStart } from "../shared/league.ts";
 import { certUrl, sendCertificates } from "../shared/share.ts";
-import { boardHidden, setTeacherRank, standings, teacherRank } from "../shared/db.ts";
+import { boardHidden, inClass, setTeacherRank, standings, teacherRank } from "../shared/db.ts";
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
@@ -1454,7 +1454,7 @@ async function overview(env: Env, g: GuildRow) {
   });
   const movers = await all(env,
     `SELECT l.discord_id, p.name, SUM(l.amount) AS pts FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7, await boardHidden(env, g.id));
+      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? AND ${inClass("l.discord_id", "l.guild_id")} GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7, await boardHidden(env, g.id));
   const feedA = await all<any>(env,
     `SELECT a.finished_at AS at, a.discord_id, p.name, a.status, a.origin, a.points, c.title, c.difficulty
        FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id

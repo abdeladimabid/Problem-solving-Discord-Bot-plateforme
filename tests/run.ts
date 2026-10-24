@@ -2394,6 +2394,28 @@ section("profiles you can share, certificates, class league, all classes");
     run1("DELETE FROM players WHERE discord_id = '199'");
     run1("UPDATE guilds SET teacher_id = ? WHERE id = ?", g0.teacher_id, G);
   }
+  {
+    // a student removed from the class: their points stay in the history, but no « ? » in the rankings and the league
+    // counts the class's students only (not 27 for a class of 25)
+    const g0 = q1("SELECT season FROM guilds WHERE id = ?", G);
+    run1("INSERT INTO players (guild_id, discord_id, name, last_active, created_at) VALUES (?, '198', 'Quitte', ?, ?)", G, clock.now(), clock.now());
+    run1("INSERT INTO ledger (guild_id, discord_id, amount, reason, season, created_at) VALUES (?, '198', 72, 'practice', ?, ?)", G, g0.season, clock.now());
+    run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, used_hint, verified, points, started_at, finished_at) VALUES (?, '198', 1, 'practice', 'solved', 1, 0, 1, 72, ?, ?)", G, clock.now(), clock.now());
+    const { standings: st } = await import("../src/shared/db.ts");
+    const lg = async () => (await api("GET", `/api/league?g=${G}`)).data.table.find((r: any) => r.guild_id === G);
+    const cert = async () => (await api("GET", `/api/certificates?g=${G}`)).data.items;
+    const inside = await lg();
+    check((await st(env, G, g0.season, 200)).some((r: any) => r.discord_id === "198") && (await cert()).some((c: any) => c.discord_id === "198"), "a student in the class: in the leaderboard and the certificates");
+    check((await api("DELETE", `/api/students/198?g=${G}`)).status === 200, "the teacher removes them from the class");
+    const out = await lg();
+    check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = '198'").n === 72, "…their points stay in the history");
+    check(!(await st(env, G, g0.season, 200)).some((r: any) => r.discord_id === "198" || r.name === "?") && !(await cert()).some((c: any) => c.discord_id === "198" || c.name === "?"),
+      "…but no « ? » in the leaderboard nor in the certificates");
+    check(out.points === inside.points - 72 && out.active === inside.active - 1 && out.students === inside.students - 1 && out.solved === inside.solved - 1,
+      `…and the league counts the class's students only: their points, their solves and them out of the class size (${inside.students} → ${out.students} students, ${inside.points} → ${out.points} pts)`);
+    run1("DELETE FROM ledger WHERE discord_id = '198'");
+    run1("DELETE FROM attempts WHERE discord_id = '198'");
+  }
   const cmp = await api("GET", "/api/compare");
   check(cmp.data.classes.length >= 2 && cmp.data.classes.every((c: any) => c.trend.length === 4), "dashboard compares all classes with a 4-week trend");
   // new season: certificates by DM
@@ -5285,6 +5307,132 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(q1("SELECT COUNT(*) AS n FROM activity_claims WHERE activity_id = ? AND status IN ('pending', 'approved')", v2).n === 0, "a deleted activity takes its requests with it");
   const pg = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
   check(pg.status === 200, "student page still fine");
+}
+
+section("assessments with Claude: a quiz imported from JSON, the papers exported anonymous for grading, Claude's grading imported as the teacher's");
+{
+  const CJ = await import("../src/shared/assessclaude.ts");
+  // ---- A. the quiz format, checked strictly and mapped to the app's model
+  const good = CJ.checkQuiz(JSON.stringify(CJ.QUIZ_EXAMPLE), { known: new Set(["C3", "C4", "T1"]) });
+  const qz = good.quiz!;
+  check(!good.problems.length && qz.title === "Flexbox : aligner et répartir" && qz.settings.minutes === 40 && qz.settings.passAt === 60 && qz.settings.points === 20 && qz.settings.codeLang === "css",
+    `a quiz written by Claude: checked and mapped (${good.problems.map((p) => p.msg).join(" | ")})`);
+  check(qz.questions[0].type === "mcq" && qz.questions[0].answer.join() === "1" && qz.questions[1].expected.includes("Critères de correction : display: flex (1 pt)") && qz.questions[1].expected.includes("Notion évaluée : flex-wrap et gap")
+    && qz.questions[1].starter.includes("ton code ici") && qz.questions[2].comps.join() === "C3N1" && qz.questions[0].skills.join() === "css",
+    "…QCM: the right choice; code/explain: the expected answer with the grading notes (the field the grader reads); competencies, skills");
+  check(good.preview!.n === 3 && good.preview!.code === 1 && good.preview!.explain === 1 && good.preview!.mcq === 1 && good.preview!.points === 6 && good.preview!.comps.join() === "C3N1", "…the preview: questions per type, total points, competencies");
+  check(CJ.checkQuiz("```json\n" + JSON.stringify(CJ.QUIZ_EXAMPLE) + "\n```").problems.length === 0, "…even wrapped in ```json by Claude");
+  const badQuiz = { ...CJ.QUIZ_EXAMPLE, format: "classbot-assessment@2", minutes: 0, questions: [
+    { type: "mcq", prompt: "Quelle balise ?", choices: ["<a>", "<a>"], correct: [0, 1], points: 1, competencies: ["C99N1", "C3"], skills: ["css", "kung-fu"] },
+    { type: "code", prompt: "Écris le CSS.", points: 0, starter: "p{}", expected: "p{}", competencies: ["C3N1"] },
+    { type: "explain", prompt: "Explique.", points: 2 },
+    { type: "dessin", prompt: "Dessine un chat", points: 1 } ] };
+  const bq = CJ.checkQuiz(badQuiz, { known: new Set(["C3", "C4"]) });
+  const has = (where: string, rx: RegExp) => bq.problems.some((p) => p.where === where && rx.test(p.msg));
+  check(!bq.quiz && has("quiz", /format.*classbot-assessment@1/) && has("quiz", /minutes/) && has("question 1", /ONE right choice/) && has("question 1", /two choices are the same/) && has("question 1", /C99N1.*isn't in the class's programme/)
+    && has("question 1", /"C3".*C3N1/) && has("question 1", /unknown skill.*kung-fu/) && has("question 2", /points/) && has("question 2", /starter.*expected answer/) && has("question 3", /expected/) && has("question 4", /type/),
+    `a wrong quiz is refused, every problem with its question number (${bq.problems.length} problems)`);
+  check(CJ.checkQuiz("{ pas du json").problems[0].msg.startsWith("This isn't valid JSON"), "…not JSON: said clearly");
+  // ---- B. references and anonymity
+  const refs = CJ.assignRefs({ P01: 5 }, [7, 5, 3]);
+  check(refs.P01 === 5 && refs.P02 === 3 && refs.P03 === 7 && Object.keys(refs).length === 3, "each paper keeps its reference from one export to the next; new papers get the next numbers");
+  check(CJ.scrub("// Yasmine Benali yasmine@mail.com 123456789012345678 yb-gh\nconst nom = 'Yasmine';", ["Yasmine", "Benali", "yb-gh", "123456789012345678"]) === "// [nom] [nom] [email] [id] [nom]\nconst nom = '[nom]';", "names, logins, emails and ids typed in an answer are removed");
+  // ---- C. the grading result, checked against the export
+  const Q = [{ id: "mcq001", type: "mcq", prompt: "?", points: 1, skills: [], choices: ["a", "b"], answer: [1] }, { id: "code01", type: "code", prompt: "?", points: 3, skills: [], starter: "p{}" }, { id: "expl01", type: "explain", prompt: "?", points: 2, skills: [] }] as any;
+  const ctx = { assessmentId: 7, exportId: "e-aaaa1111", refs: { P01: 11, P02: 12 }, questions: Q };
+  const res = (papers: any[], over: any = {}) => ({ format: "classbot-grading-result@1", assessment: 7, export: "e-aaaa1111", papers, ...over });
+  const okRes = CJ.checkGradingResult(res([{ ref: "P01", summary: "Tu progresses.", grades: [{ question: "code01", verdict: "partial", score: 1.5, comment: "Il manque flex-wrap.", right: "display: flex", wrong: "pas de flex-wrap", errors: [{ line: 2, text: "gap", issue: "ajoute flex-wrap", major: false }] }] }]), ctx);
+  const gd = okRes.papers[0]?.grades.code01;
+  check(!okRes.problems.length && okRes.papers[0].takerId === 11 && gd.verdict === "partial" && gd.score === 50 && gd.teacher === true && gd.marks?.[0].line === 2 && gd.right === "display: flex" && okRes.papers[0].summary === "Tu progresses.",
+    "Claude's grades: the score in points becomes the app's % (1.5 of 3 = 50), saved as the teacher's grade (✎), with the line errors");
+  const errs = (r: any, c = ctx) => CJ.checkGradingResult(r, c).problems.map((p) => `${p.where}: ${p.msg}`).join(" | ");
+  check(/another assessment \(#8\)/.test(errs(res([], { assessment: 8 }))), "a grading for another assessment is refused");
+  check(/another or an older export/.test(errs(res([], { export: "e-old00000" }))), "…from an older export too");
+  check(/Export the papers first/.test(errs(res([]), { ...ctx, exportId: null } as any)), "…and nothing can be imported before an export");
+  const many = errs(res([
+    { ref: "P09", grades: [] },
+    { ref: "P01", grades: [{ question: "zzz", verdict: "correct", score: 1, comment: "ok" }, { question: "mcq001", verdict: "correct", score: 1, comment: "ok" },
+      { question: "code01", verdict: "parfait", score: 1, comment: "ok" }, { question: "expl01", verdict: "partial", score: 3, comment: "ok" }] },
+    { ref: "P02", grades: [{ question: "code01", verdict: "empty", score: 1, comment: "Non tentée." }, { question: "expl01", verdict: "correct", score: 2, comment: "" }] },
+  ]));
+  check(/P09.*unknown paper reference/.test(many) && /unknown question id/.test(many) && /multiple-choice question is already graded/.test(many) && /"verdict" must be/.test(many) && /"score": a number from 0 to 2/.test(many)
+    && /"empty" \(not attempted\) is always 0/.test(many) && /"comment" for the student/.test(many), `a wrong grading: unknown paper, unknown question, a QCM, a bad verdict, a score out of range, an empty with points, no comment (${many.slice(0, 160)}…)`);
+  // the paper's grades after the import: the QCM graded at once if it wasn't, an unanswered question not attempted
+  const merged = CJ.mergeGrades(Q, { mcq001: [1], code01: "p{}", expl01: "padding dedans" }, {}, { expl01: { verdict: "correct", score: 100, comment: "Bien.", teacher: true } }, "fr");
+  check(merged.complete && merged.grades.mcq001.score === 100 && !merged.grades.mcq001.teacher && merged.grades.code01.verdict === "empty" && merged.grades.expl01.teacher === true, "merged: the QCM auto-graded, the starter code handed back = not attempted, Claude's grade kept");
+  const partial = CJ.mergeGrades(Q, { mcq001: [0], code01: "p{color:red}", expl01: "x" }, {}, { expl01: { verdict: "correct", score: 100, comment: "Bien.", teacher: true } }, "fr");
+  check(!partial.complete && partial.missing.join() === "code01", "an answered question neither in the file nor graded: the paper stays to grade");
+
+  // ---- through the dashboard: import → invite → answer → export → grade with Claude → import → check → (send)
+  const pr = await api("GET", `/api/assessments/claude-prompt?g=${G}`);
+  check(pr.status === 200 && pr.data.prompt.includes('"format": "classbot-assessment@1"') && pr.data.prompt.includes("HORS PÉRIMÈTRE") && pr.data.prompt.includes("débutants") && Array.isArray(pr.data.weeks),
+    "the prompt for Claude (creation): the format with an example, the rules, the week's programme and what's out of scope");
+  const wk = pr.data.weeks[1]?.n;
+  if (wk) check((await api("GET", `/api/assessments/claude-prompt?g=${G}&week=${wk}`)).data.prompt.includes(`semaine ${wk} `), "…for the week picked");
+  check((await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...CJ.QUIZ_EXAMPLE, brief_id: 987654 }) })).data.problems.some((p: any) => /brief #987654/.test(p.msg)), "a linked brief that isn't in the class is refused");
+  const pv = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(CJ.QUIZ_EXAMPLE) });
+  check(pv.status === 200 && !pv.data.problems.length && pv.data.preview.n === 3 && !pv.data.id, "Import a quiz (JSON): a preview first, nothing created");
+  const im = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(CJ.QUIZ_EXAMPLE), import: true });
+  const aid = im.data.id;
+  const A0 = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.assessment;
+  check(A0.status === "draft" && A0.questions.length === 3 && A0.settings.minutes === 40 && A0.settings.codeLang === "css", "…then a draft, like any other assessment");
+  const qMcq = A0.questions.find((x: any) => x.type === "mcq"), qCode = A0.questions.find((x: any) => x.type === "code"), qExp = A0.questions.find((x: any) => x.type === "explain");
+  run1("UPDATE players SET github_login = 'bob-gh' WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id, U.carol.id], send: false });
+  const links = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links;
+  ai.mode = "broken";   // nobody grades them in the app: Claude will
+  for (const [who, sid, code, exp, pick] of [[U.bob.id, "sessionCLJBBBBBBBBBBBBB1", ".cartes {\n  display: flex;\n  gap: 16px;\n} /* Bob bob-gh bob@ecole.ma */", "Le padding est dedans, la marge dehors.", 1],
+    [U.carol.id, "sessionCLJCCCCCCCCCCCCC1", "", "La marge c'est la couleur.", 0]] as const) {
+    const tok = links[who].split("/quiz/")[1];
+    const quiz = async (action: string, body: any) => { const c = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, c); await c.flush(); return r.json() as any; };
+    await quiz("start", { sid });
+    await quiz("answer", { sid, qid: qMcq.id, answer: [pick] });
+    if (code) await quiz("answer", { sid, qid: qCode.id, answer: code });
+    await quiz("answer", { sid, qid: qExp.id, answer: exp });
+    await quiz("submit", { sid });
+  }
+  ai.mode = "good";
+  const takers = () => q("SELECT t.*, p.name FROM assessment_takers t LEFT JOIN players p ON p.guild_id = t.guild_id AND p.discord_id = t.discord_id WHERE t.assessment_id = ? ORDER BY t.id", aid);
+  check(takers().every((t: any) => t.status === "submitted"), "two papers handed in, not graded in the app");
+  const ex = await api("POST", `/api/assessments/${aid}/claude-export`, { g: G });
+  const file = ex.data.file, raw = JSON.stringify(file);
+  check(ex.status === 200 && file.format === "classbot-grading-export@1" && file.assessment.id === aid && /^e-[a-f0-9]{8}$/.test(file.assessment.export) && file.papers.map((p: any) => p.ref).join() === "P01,P02"
+    && file.assessment.questions.find((x: any) => x.type === "code").expected.includes("Critères de correction") && file.instructions.includes("classbot-grading-result@1") && file.instructions.includes("TUTOIEMENT"),
+    "Export for grading: the questions (expected answers, grading notes), the papers P01/P02, the instructions and the answer format");
+  check(!/Bob|Carol|bob-gh|bob@ecole\.ma/i.test(raw) && !raw.includes(U.bob.id) && !raw.includes(U.carol.id) && file.papers[0].answers[qCode.id].includes("[nom]") && file.papers[0].answers[qCode.id].includes("[email]"),
+    "…no personal data in the file: no name, no Discord id, no GitHub login, no email (even typed in an answer)");
+  check(file.papers[0].autoGraded[qMcq.id].verdict === "correct" && file.papers[0].autoGraded[qMcq.id].score === 1 && file.papers[1].autoGraded[qMcq.id].verdict === "wrong" && file.papers[0].answers[qMcq.id][0].startsWith("B · "),
+    "…the QCM answers are there, already graded (Claude focuses on code and explanations)");
+  // Claude's answer
+  const result = { format: "classbot-grading-result@1", assessment: aid, export: file.assessment.export, papers: [
+    { ref: "P01", summary: "Tu maîtrises Flexbox. Pense à flex-wrap.", grades: [
+      { question: qCode.id, verdict: "partial", score: 2, comment: "Ton conteneur est en flex avec un gap, mais il manque flex-wrap.", right: "display: flex et gap: 16px", wrong: "flex-wrap manque", errors: [{ line: 3, text: "gap: 16px;", issue: "Ajoute flex-wrap: wrap;", major: false }] },
+      { question: qExp.id, verdict: "correct", score: 2, comment: "Explication juste.", right: "dedans / dehors", wrong: "" }] },
+    { ref: "P02", summary: "Revois le modèle de boîte.", grades: [
+      { question: qCode.id, verdict: "empty", score: 0, comment: "Non tentée." },
+      { question: qExp.id, verdict: "wrong", score: 0, comment: "La marge est un espace, pas une couleur.", right: "", wrong: "confond marge et couleur" }] } ] };
+  const pv2 = await api("POST", `/api/assessments/${aid}/claude-grading`, { g: G, json: JSON.stringify(result) });
+  const bobRow = pv2.data.rows.find((r: any) => r.ref === "P01");
+  check(pv2.status === 200 && !pv2.data.problems.length && pv2.data.rows.length === 2 && bobRow.name === "Bob" && bobRow.before === null && typeof bobRow.after === "number" && bobRow.graded === 2 && takers().every((t: any) => t.status === "submitted"),
+    `Import the grading: a preview (P01 → the student's name, here only; score before → after), nothing written yet (${bobRow?.before} → ${bobRow?.after})`);
+  const ap = await api("POST", `/api/assessments/${aid}/claude-grading`, { g: G, json: JSON.stringify(result), apply: true });
+  const [tb, tc] = takers();
+  const gb = JSON.parse(tb.grades);
+  check(ap.status === 200 && ap.data.applied === 2 && tb.status === "graded" && tc.status === "graded" && tb.score === bobRow.after && gb[qCode.id].teacher === true && gb[qCode.id].score === 67 && gb[qCode.id].marks[0].line === 3 && !gb[qMcq.id].teacher && gb[qMcq.id].score === 100 && tb.summary === "Tu maîtrises Flexbox. Pense à flex-wrap.",
+    `applied: the teacher's grades (✎), the QCM unchanged, the score recomputed, the papers graded, the summary (${tb.score}%)`);
+  check(q("SELECT COUNT(*) AS n FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id = ?", aid, U.bob.id)[0].n > 0 && ap.data.assessment?.id === aid, "…and the competencies follow, like any grading");
+  const before = tb.grades;
+  await api("POST", `/api/assessments/${aid}/grade`, { g: G, all: true, lot: 5 });
+  check(JSON.parse(takers()[0].grades)[qCode.id].comment === gb[qCode.id].comment && JSON.parse(takers()[0].grades)[qCode.id].teacher === true && takers()[0].grades === before, "↻ Grade with AI keeps the imported grades");
+  // a paper not in the file stays as it is; a new export refuses the older file and keeps the references
+  const only = await api("POST", `/api/assessments/${aid}/claude-grading`, { g: G, json: JSON.stringify({ ...result, papers: [result.papers[0]] }) });
+  check(only.data.rows.length === 1 && only.data.absent.length === 1 && only.data.absent[0].ref === "P02" && only.data.absent[0].name === "Carol", "a paper missing from the file: the preview says it stays as it is");
+  const ex2 = await api("POST", `/api/assessments/${aid}/claude-export`, { g: G });
+  const old = await api("POST", `/api/assessments/${aid}/claude-grading`, { g: G, json: JSON.stringify(result) });
+  check(ex2.data.file.assessment.export !== file.assessment.export && ex2.data.file.papers.map((p: any) => p.ref).join() === "P01,P02" && old.data.problems.some((p: any) => /older export/.test(p.msg)),
+    "a new export: same references, and the grading of the older export is refused");
+  check((await api("GET", `/api/assessments/${aid}/claude-prompt?g=${G}`)).data.prompt === ex2.data.file.instructions, "the prompt for Claude (grading) is the file's instructions");
+  run1("UPDATE players SET github_login = NULL WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
 }
 
 section("📚 shared library: the A1 classes share activities, assessments, quizzes and games content");

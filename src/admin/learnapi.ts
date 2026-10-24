@@ -24,6 +24,8 @@ import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
+import { applyGrading, checkQuiz, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
+import { nextProgrammeWeek, techSoFar } from "../shared/activities.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
 import { WatcherError, importWatcher, markWatcherImport, memoryKv, watcherImportOf, watcherKeys, watcherValues } from "../shared/watcher.ts";
@@ -606,6 +608,43 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const id = await saveAssessment(env, g, null, body);
     await libAssessment(env, g, id);
     return ok(await assessView(env, g, id));
+  }
+  // ---- with Claude, outside the app (assessclaude.ts): the prompt to write a quiz on a programme week, a quiz imported
+  // from its JSON (preview, then a draft), the papers exported for grading (anonymous), Claude's grades imported
+  if (path === "/assessments/claude-prompt" && method === "GET") {
+    const g = await guild();
+    const p = await programOf(env, g);
+    const weeks = p.weeks.filter((w) => w.kind === "brief");
+    const pick = Number(url.searchParams.get("week")) || weekAt(p, new Date().toISOString().slice(0, 10))?.n || weeks[0]?.n || 0;
+    const week = p.weeks.find((w) => w.n === pick) ?? null;
+    return ok({ weeks: weeks.map((w) => ({ n: w.n, title: w.title, sprint: w.sprint, start: w.start })), week: week?.n ?? null,
+      prompt: creationPrompt({ program: p, week, next: week ? nextProgrammeWeek(p, week) : null, techs: week ? techSoFar(p, week) : [] }) });
+  }
+  if (path === "/assessments/claude-import" && method === "POST") {
+    const g = await guild();
+    const p = await programOf(env, g);
+    const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)) });
+    if (r.quiz?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", r.quiz.brief_id, g.id))) r.problems.push({ where: "quiz", msg: `"brief_id": brief #${r.quiz.brief_id} isn't in this class (or null).` });
+    if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
+    const id = await saveAssessment(env, g, null, r.quiz);
+    await libAssessment(env, g, id);
+    return ok({ id, problems: [] });
+  }
+  if ((m = path.match(/^\/assessments\/(\d+)\/claude-(export|grading|prompt)$/))) {
+    const g = await guild();
+    const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", Number(m[1]), g.id);
+    if (!a) throw new ApiError(404, "This assessment doesn't exist anymore.");
+    if (m[2] === "prompt" && method === "GET") return ok({ prompt: gradingInstructions(settingsOf(a).lang) });
+    if (m[2] === "export" && method === "POST") {
+      try { return ok({ file: await exportForGrading(env, a) }); } catch (e) { bad((e as Error).message); }
+    }
+    if (m[2] === "grading" && method === "POST") {
+      // never the papers of a student whose debrief of the linked brief is finalized (like "Grade with AI")
+      const locked = await finalizedIn(env, a.brief_id);
+      if (!body.apply) return ok(await previewGrading(env, a, body.json, locked));
+      const r = await applyGrading(env, a, body.json, locked);
+      return ok({ ...r, papers: undefined, ...(await assessView(env, g, a.id)) });
+    }
   }
   if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|unlock|grade|close|reopen|results|links|remove|share|link|options))?$/))) {
     const g = await guild();

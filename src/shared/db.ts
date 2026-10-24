@@ -161,6 +161,15 @@ export async function boardHidden(env: Env, guildId: string): Promise<string> {
   if (!g?.teacher_id) return "";
   return (await teacherRank(env, guildId)).board ? "" : g.teacher_id;
 }
+/**
+ * Only the class's students count in its rankings: a student removed from the class (no profile anymore) keeps their
+ * points in the history, but they don't count in the leaderboards, the certificates or the league (they showed as
+ * « ? » and made the class look bigger). SQL condition on a ledger / attempts row; pass its columns with their table
+ * or alias ("l.discord_id", "l.guild_id"), never bare: inside the subquery a bare name would be the players' column.
+ * A row without a Discord account (a HackerRank name not linked yet) still counts.
+ */
+export const inClass = (discordCol: string, guildCol: string) =>
+  `(${discordCol} IS NULL OR EXISTS (SELECT 1 FROM players ic WHERE ic.guild_id = ${guildCol} AND ic.discord_id = ${discordCol}))`;
 /** "guild:teacher" for every class whose teacher doesn't count in the league (the default). */
 export async function leagueHidden(env: Env): Promise<string[]> {
   const gs = await all<{ id: string; teacher_id: string }>(env, "SELECT id, teacher_id FROM guilds WHERE teacher_id IS NOT NULL AND teacher_id != ''").catch(() => []);
@@ -176,7 +185,7 @@ export async function standings(env: Env, guildId: string, season: string | null
     `SELECT COALESCE(l.discord_id, 'hr:' || l.hr_username) AS key, l.discord_id, MAX(l.hr_username) AS hr,
             SUM(l.amount) AS points, MAX(p.name) AS pname, MAX(p.hr_display) AS hrd
        FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? ${season ? "AND l.season = ?" : ""} AND COALESCE(l.discord_id, '') != ?
+      WHERE l.guild_id = ? ${season ? "AND l.season = ?" : ""} AND COALESCE(l.discord_id, '') != ? AND ${inClass("l.discord_id", "l.guild_id")}
       GROUP BY key HAVING points > 0 ORDER BY points DESC LIMIT ${Number(limit)}`,
     ...(season ? [guildId, season, hidden] : [guildId, hidden]),
   );

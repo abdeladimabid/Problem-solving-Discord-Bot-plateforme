@@ -854,7 +854,7 @@ async function viewStudent(arg) {
     setTimeout(() => $("#st-nm")?.focus(), 0);
   };
   $("#st-del").onclick = () => confirmDialog(`Remove ${p.name || "this student"} from the class?`,
-    "Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. If they use ClassBot again, they start a new profile. This can't be undone.",
+    "Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. Their points stay in the history but no longer count in the leaderboards, the certificates or the league. If they use ClassBot again, they start a new profile. This can't be undone.",
     "Remove", async () => { await api(`/students/${id}`, { method: "DELETE" }); S.students = null; toast("Removed from the class"); location.hash = "#/students"; }, true);
   if ($("#hr-ok")) $("#hr-ok").onclick = () => confirmDialog("Mark this HackerRank account as theirs?", "Do this only if you checked it really belongs to this student. Their HackerRank solves and contest results will count for them.", "Mark verified", hrAction("verify", "HackerRank link verified"));
   if ($("#hr-unlink")) $("#hr-unlink").onclick = () => confirmDialog("Unlink this HackerRank account?", "The student can link again with /link.", "Unlink", hrAction("unlink", "HackerRank account unlinked"), true);
