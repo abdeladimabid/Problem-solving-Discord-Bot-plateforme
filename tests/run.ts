@@ -4843,7 +4843,9 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const dev = (n: number) => String(n).repeat(32).slice(0, 32);
   const game = (created: any) => {
     const play = (path: string, key: string, body?: any) => bot.fetch(new Request(created.join + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", "x-player-key": key }, body: body ? JSON.stringify({ key, ...body }) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
-    const tv = (path: string, body?: any) => bot.fetch(new Request(created.tv + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
+    // the TV, as the teacher's screen calls it: its link (before #) and the teacher's key (after #h=) in a header
+    const [tvBase, hostK] = String(created.tv).split("#h=");
+    const tv = (path: string, body?: any, key: string | null = hostK) => bot.fetch(new Request(tvBase + "/" + path, { method: body ? "POST" : "GET", headers: { "content-type": "application/json", ...(key ? { "x-host-key": key } : {}) }, body: body ? JSON.stringify(body) : undefined }), env, makeCtx()).then(async (r) => ({ status: r.status, data: await r.json() as any }));
     const join = async (k: number, pid: string) => play("join", dev(k), { pass: await GM.gamePass(env, created.id, pid) });
     return { play, tv, join };
   };
@@ -4854,6 +4856,14 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check(R.status === 200 && R.data.tv.includes("/game/") && R.data.join.includes("/play/") && R.data.qr.startsWith("<svg") && R.data.live.phase === "lobby", "royale created: TV link, join link + QR");
   const r = game(R.data);
   const tvHtml = await (await bot.fetch(new Request(R.data.tv), env, makeCtx())).text();
+  {
+    // 🔒 only the teacher controls the game: the TV link alone (read on the projector, passed around) shows and does nothing
+    const noKey = await r.tv("state", undefined, null), badKey = await r.tv("state", undefined, "x".repeat(32));
+    const stop = await r.tv("act", { a: "stop" }, null), kickTry = await r.tv("act", { a: "kick", pid: U.alice.id }, "nope");
+    check(R.data.tv.includes("#h=") && noKey.status === 403 && noKey.data.host && badKey.status === 403 && stop.status === 403 && kickTry.status === 403 && q1("SELECT json_extract(state, '$.phase') AS p FROM games WHERE id = ?", R.data.id).p === "lobby",
+      "🔒 the TV link without the teacher's key: nothing shown, no control (stop, kick… refused)");
+    check(!tvHtml.includes(R.data.tv.split("#h=")[1]) && /history\.replaceState/.test(tvHtml) && (await r.tv("state")).status === 200, "…the key comes from the dashboard's link (after #, never in the page), and comes off the address bar");
+  }
   const plHtml = await (await bot.fetch(new Request(R.data.join), env, makeCtx())).text();
   let parsed = true;
   try { new Function(scriptOf(tvHtml)); new Function(scriptOf(plHtml)); } catch (e) { parsed = false; console.log(e); }
@@ -4961,7 +4971,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   check((await api("POST", `/api/games/${R.data.id}/announce?g=${G}`, {})).status === 200 && discordCalls.slice(pc1).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "📣 the dashboard posts a new Join button in Discord");
   const pc2 = discordCalls.length;
   await api("POST", `/api/games/${R.data.id}/clear?g=${G}`, {});
-  await bot.fetch(new Request(R.data.tv), env, makeCtx());
+  await r.tv("state");
   check(discordCalls.slice(pc2).some((c) => JSON.stringify(c.body).includes(`gjoin:${R.data.id}`)), "after freeing everyone, opening the TV posts the Join button again by itself");
   const relink = await r.join(1, U.alice.id);
   check(relink.status === 200 && relink.data.phase === "lobby", "…and the students join again with their Discord link");
@@ -5128,7 +5138,7 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   }
   check(runOk, "the test runner: right/wrong per test, a missing function said clearly");
   const del = await api("DELETE", `/api/games/${Y.data.id}?g=${G}`);
-  check(del.status === 200 && !q1("SELECT COUNT(*) AS n FROM game_players WHERE game_id = ?", Y.data.id).n && (await bot.fetch(new Request(Y.data.tv + "/state"), env, makeCtx())).status === 404, "a deleted game: its links stop working");
+  check(del.status === 200 && !q1("SELECT COUNT(*) AS n FROM game_players WHERE game_id = ?", Y.data.id).n && (await bot.fetch(new Request(Y.data.tv.split("#")[0] + "/state"), env, makeCtx())).status === 404, "a deleted game: its links stop working");
   // ---------------------------------------------------------------- the built-in relay challenges: each reference solution passes its tests
   const GC = await import("../src/shared/gamecontent.ts");
   let bankOk = true;

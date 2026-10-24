@@ -3302,5 +3302,8 @@ window.CB_FR = {
 "When you play too (testing challenges, duels…), your points and coins can stay out of the rankings. They're kept either way: turning a switch on brings them back.": "Quand tu joues aussi (tester des défis, des duels…), tes points et tes pièces peuvent rester hors des classements. Ils sont gardés dans tous les cas : activer un interrupteur les remet.",
 "Count the teacher in the class leaderboards (points and coins)": "Compter le formateur dans les classements de la classe (points et pièces)",
 "Count the teacher in the league between classes": "Compter le formateur dans la ligue entre classes",
-"Saved: the rankings follow it right away": "Enregistré : les classements suivent tout de suite"
+"Saved: the rankings follow it right away": "Enregistré : les classements suivent tout de suite",
+"Copy the teacher's link": "Copier le lien du formateur",
+"It opens the controls of the game: keep it for yourself (to open the TV on another computer)": "Il ouvre les commandes du jeu : garde-le pour toi (pour ouvrir la TV sur un autre ordinateur)",
+"Teacher's TV link copied: it controls the game, don't share it": "Lien TV du formateur copié : il contrôle le jeu, ne le partage pas"
 };

@@ -850,6 +850,20 @@ async function finish(env: Env, gm: Game) {
 }
 
 // ------------------------------------------------------------------ what each screen sees
+/**
+ * The teacher's key to the TV screen (its controls: start, stop, kick…). The TV link alone isn't enough: it can be read
+ * on the projector or passed around. The dashboard opens the TV with the key after # (never sent to a server log);
+ * the TV keeps it and takes it off the address bar, so the screen never shows it.
+ */
+export const hostKey = (env: Env, gm: { id: number; tv_token: string }) => signText(env, `game-host:${gm.id}.${gm.tv_token}`);
+export async function isHost(env: Env, gm: { id: number; tv_token: string }, key: string | null) {
+  const want = await hostKey(env, gm), got = String(key || "");
+  let diff = want.length ^ got.length;
+  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ (got.charCodeAt(i) || 0);
+  return !diff;
+}
+/** The TV link the teacher opens (from the dashboard): with their key. */
+export async function hostTvUrl(env: Env, gm: { id: number; tv_token: string }) { return `${tvUrl(env, gm)}#h=${await hostKey(env, gm)}`; }
 export function tvUrl(env: Env, gm: { id: number; tv_token: string }) { return `${String(env.PUBLIC_URL || "").replace(/\/$/, "")}/game/${gm.id}.${gm.tv_token}`; }
 export function joinUrl(env: Env, gm: { id: number; join_code: string }) { return `${String(env.PUBLIC_URL || "").replace(/\/$/, "")}/play/${gm.id}.${gm.join_code}`; }
 

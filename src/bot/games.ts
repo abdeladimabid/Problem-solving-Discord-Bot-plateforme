@@ -8,7 +8,7 @@
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { COUNTDOWN_MS, GameError, NEXT_MS, bumpGame, cheatRelay, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, isHost, NEXT_MS, bumpGame, cheatRelay, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -30,18 +30,19 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
   const url = new URL(request.url);
   try {
     if (who === "tv") {
-      if (!action) {
-        // the first time the TV opens the lobby: the 🎮 Join button goes to #arena by itself
-        if (gm.state.phase === "lobby" && !gm.state.posted) await postJoin(env, gm).catch((e) => console.error("game join post", e?.message ?? e));
-        return html(TV(gm));
-      }
+      // the page itself (it asks for the key it got from the dashboard), and the join QR code: for anyone
+      if (!action) return html(TV(gm));
+      if (action === "qr.svg") return new Response(qrSvg(joinUrl(env, gm), { dark: "#0b1020" }), { headers: { "content-type": "image/svg+xml", "cache-control": "no-store" } });
+      // everything else (what the screen shows, the squads' code, the controls): only the teacher, with their key
+      if (!(await isHost(env, gm, request.headers.get("x-host-key")))) return json({ error: "Only the teacher can open this screen: open it from the dashboard (📺 Open the TV screen).", host: true }, 403);
+      // the first time the teacher's TV shows the lobby: the 🎮 Join button goes to #arena by itself
+      if (action === "state" && gm.state.phase === "lobby" && !gm.state.posted) await postJoin(env, gm).catch((e) => console.error("game join post", e?.message ?? e));
       if (action === "state") {
         const since = Number(url.searchParams.get("seq") || 0);
         // nothing new: a tiny answer (the clocks run on the screen); during a royale question the answer count moves
         if (since && since === gm.state.seq && !(gm.kind === "royale" && gm.state.phase === "question") && !(gm.kind === "relay" && gm.state.phase === "playing")) return json({ seq: gm.state.seq, same: true, now: Date.now() });
         return json(await tvView(env, gm));
       }
-      if (action === "qr.svg") return new Response(qrSvg(joinUrl(env, gm), { dark: "#0b1020" }), { headers: { "content-type": "image/svg+xml", "cache-control": "no-store" } });
       if (action === "codes" && gm.kind === "relay") {
         const teams = await teamsOf(env, gm.id);
         return json({ fn: gm.content.task.fn, tests: gm.content.task.tests, codes: Object.fromEntries(teams.map((t) => [t.squad, t.data.out ? null : t.data.code ?? relayStarter(gm)])) });
@@ -334,7 +335,13 @@ canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
 <script>
 "use strict";
 const BASE = location.pathname.replace(/\\/$/, "");
-let S = null, off = 0, busy = false, lastSeq = 0, lastKey = "", kick = "";
+// the teacher's key (from the dashboard's link, after #): kept in this browser, taken off the address bar
+let HOST = "";
+{ const k = "cb-host-" + BASE, m = location.hash.match(/h=([A-Za-z0-9_-]+)/);
+  if (m) { HOST = m[1]; try { localStorage.setItem(k, HOST); } catch (x) {} try { history.replaceState(null, "", location.pathname + location.search); } catch (x) {} }
+  else { try { HOST = localStorage.getItem(k) || ""; } catch (x) {} } }
+const HH = { "x-host-key": HOST };
+let S = null, off = 0, busy = false, lastSeq = 0, lastKey = "", kick = "", locked = false;
 const $ = (s) => document.querySelector(s);
 const e = (s) => String(s == null ? "" : s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]));
 const nowMs = () => Date.now() + off;
@@ -350,15 +357,25 @@ function toast(t) { const d = document.createElement("div"); d.className = "toas
 async function act(a, extra) {
   if (busy) return; busy = true;
   try {
-    const r = await fetch(BASE + "/act", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.assign({ a: a }, extra || {})) });
+    const r = await fetch(BASE + "/act", { method: "POST", headers: Object.assign({ "content-type": "application/json" }, HH), body: JSON.stringify(Object.assign({ a: a }, extra || {})) });
     const d = await r.json();
     if (!r.ok) toast(d.error || "Error"); else take(d);
   } catch (x) { toast(T("Pas de connexion", "No connection")); } finally { busy = false; }
 }
 function take(d) { if (d.same) { off = d.now - Date.now(); return; } off = d.now - Date.now(); S = d; render(); }
 async function poll() {
-  try { const r = await fetch(BASE + "/state?seq=" + (S ? S.seq : 0)); if (r.ok) take(await r.json()); } catch (x) {}
+  try {
+    const r = await fetch(BASE + "/state?seq=" + (S ? S.seq : 0), { headers: HH });
+    if (r.status === 403) { lockedScreen(); return; }
+    if (r.ok) take(await r.json());
+  } catch (x) {}
   setTimeout(poll, S && (S.phase === "question" || (S.phase === "reveal" && S.nextAt && S.nextAt - nowMs() < 2000)) ? 800 : 1500);
+}
+// no key (the link was passed around, or read on the projector): nothing to see, nothing to control
+function lockedScreen() {
+  if (locked) return; locked = true;
+  $("#bar").innerHTML = ""; $("#info").innerHTML = "";
+  $("#app").innerHTML = '<div class="card" style="max-width:640px;margin:12vh auto;text-align:center;padding:4vh 3vw"><div style="font-size:5vw">🔒</div><h2>' + T("Écran réservé au formateur", "This screen is for the teacher") + '</h2><p class="muted" style="font-size:1.2vw">' + T("Ouvre-le depuis le tableau de bord (📺 Ouvrir l'écran TV). Pour jouer, utilise ton propre lien : 🎮 Rejoindre dans Discord, ou /play.", "Open it from the dashboard (📺 Open the TV screen). To play, use your own link: 🎮 Join in Discord, or /play.") + "</p></div>";
 }
 let manage = "", panel = false;
 const initials = (n) => String(n || "?").trim().split(/\\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
@@ -572,7 +589,7 @@ async function runAll() {
   tested = true;
   if (S.codeLang && S.codeLang !== "javascript") { await act("runtests"); if (S.phase === "testing") tested = false; return; }
   try {
-    const d = await (await fetch(BASE + "/codes")).json();
+    const d = await (await fetch(BASE + "/codes", { headers: HH })).json();
     const results = {};
     for (const [k, code] of Object.entries(d.codes)) {
       if (code == null) { results[k] = { passed: 0, total: d.tests.length, error: "out" }; continue; }

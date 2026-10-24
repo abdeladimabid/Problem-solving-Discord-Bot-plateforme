@@ -313,7 +313,7 @@ async function viewGame(id) {
       <section class="panel gm-card"><div class="gm-ic" aria-hidden="true">📺</div><div>
         <h2>Show it on the TV</h2>
         <p class="small muted">Open it on the class computer, in <b>full screen</b>, sound on. Your buttons (start, next, end, 👥 players) are at the bottom of the TV.</p>
-        <div class="toolbar" style="margin:0"><a class="btn primary" href="${esc(G.tv)}" target="_blank" rel="noopener">📺 Open the TV screen</a><button class="btn" id="gm-cptv">Copy the link</button></div></div></section>
+        <div class="toolbar" style="margin:0"><a class="btn primary" href="${esc(G.tv)}" target="_blank" rel="noopener">📺 Open the TV screen</a><button class="btn" id="gm-cptv" title="It opens the controls of the game: keep it for yourself (to open the TV on another computer)">Copy the teacher's link</button></div></div></section>
       <section class="panel gm-card"><div class="gm-ic" aria-hidden="true">📱</div><div>
         <h2>The students join from Discord</h2>
         <p class="small muted">When the TV opens, the bot posts a <b>🎮 Join</b> button in #arena (or they type <code>/play</code>). Each one gets their <b>own link</b>, tied to their Discord account${G.kind === "royale" ? ", to open on their phone" : ", to open on a laptop"}.${G.kind === "relay" && G.settings.noise ? " 🎤 They must allow the microphone." : ""}</p>
@@ -327,7 +327,7 @@ async function viewGame(id) {
     ${G.kind === "relay" ? `<section class="panel"><h2>🏃 ${esc(G.content.task.title)}</h2><p>${esc(G.content.task.text)}</p><pre class="code small">${esc(G.content.starter || "")}</pre>${G.content.task.solution ? `<details><summary class="small">A reference solution (Python)</summary><pre class="code small">${esc(G.content.task.solution)}</pre></details>` : ""}
       <div class="small">${G.content.task.tests.map((t, i) => `${i < 2 ? "👁 " : "🔒 "}<code>${esc(G.content.task.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div>
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
-  $("#gm-cptv").onclick = () => copyText(G.tv, "TV link copied");
+  $("#gm-cptv").onclick = () => copyText(G.tv, "Teacher's TV link copied: it controls the game, don't share it");
   $("#gm-post").onclick = (e) => busy(e.currentTarget, async () => { await api(`/games/${id}/announce`, { method: "POST" }); toast("🎮 Join button posted in #arena: the students can join"); });
   $("#gm-del").onclick = () => confirmDialog("Delete this game?", "The TV and the join links stop working.", "Delete", async () => { await api(`/games/${id}`, { method: "DELETE" }); location.hash = `#/games/${G.kind}`; }, true);
   // reuse the game: free the players, remove one, other squads (the TV and the phones follow by themselves)

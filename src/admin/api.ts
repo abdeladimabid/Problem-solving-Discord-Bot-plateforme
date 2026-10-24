@@ -42,7 +42,7 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, tvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
 import { SQL_CASES } from "../shared/sqlcases.ts";
 import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
@@ -575,7 +575,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           return { id: x.id, kind: x.kind, mode: x.mode, title: x.title, settings: x.settings, squads: x.squads, status: x.status, created_at: x.created_at,
             content: x.kind === "royale" ? { questions: x.content.questions } : x.kind === "relay" ? { task: x.content.task, starter: starterFor({ fn: x.content.task.fn, params: x.content.task.params || [] }, x.settings.codeLang || "javascript"), lang: RELAY_LANGS[x.settings.codeLang || "javascript"] }
               : { caseId: x.content.caseId, case: x.content.case ?? SQL_CASES.find((c) => c.id === x.content.caseId) ?? null },
-            tv: gameTvUrl(env, x), join: gameJoinUrl(env, x), code: x.join_code, qr: qrSvg(gameJoinUrl(env, x), { dark: "#0b1020" }), live: await gameTvView(env, x) };
+            tv: await gameTvUrl(env, x), join: gameJoinUrl(env, x), code: x.join_code, qr: qrSvg(gameJoinUrl(env, x), { dark: "#0b1020" }), live: await gameTvView(env, x) };
         };
         if (path === "/games" && method === "GET") {
           await syncLibrary(env, g).catch(() => null);
