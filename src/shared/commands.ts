@@ -35,6 +35,7 @@ export const COMMANDS: any[] = [
           { name: "Regular expression", name_localizations: fr("Expression régulière"), value: "regex" },
           { name: "Git question", name_localizations: fr("Question Git"), value: "git" },
           { name: "HackerRank problem (verified)", name_localizations: fr("Problème HackerRank (vérifié)"), value: "coding" },
+          { name: "📋 My challenges to verify (lost message)", name_localizations: fr("📋 Mes défis à vérifier (message perdu)"), value: "pending" },
         ],
       },
       { type: STRING, name: "topic", description: "Optional topic, e.g. recursion, strings", description_localizations: fr("Thème facultatif, ex. récursivité, chaînes"), max_length: 60 },

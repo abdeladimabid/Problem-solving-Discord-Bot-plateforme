@@ -97,6 +97,7 @@ async function command(ix: Ix): Promise<Response> {
     // in a SQL class, /practice without a type gives SQL too
     case "practice":
       if (o.type === "forme") return cmdForMe(ix, o.difficulty ?? null);
+      if (o.type === "pending") return cmdPending(ix);
       return o.language === "sql" || (!o.type && !o.topic && !o.language && trackOf(ix.guild).family === "sql")
         ? cmdPractice(ix, o.difficulty ?? null, "sql", null, null)
         : cmdPractice(ix, o.difficulty ?? null, o.type ?? "quick", o.topic ?? null, o.language ?? null);
@@ -195,6 +196,24 @@ async function cmdForMe(ix: Ix, chosen: Difficulty | null) {
     return renderFor(ix.env, ix.guild, c, a, { notice: why });
   });
   return deferReply(true);
+}
+
+/**
+ * The HackerRank challenges a student was given and hasn't verified yet. The challenge message is only for them and
+ * Discord drops it (restart, "Dismiss"…): from here, each one opens again, with its link and ✅ Verify.
+ */
+async function cmdPending(ix: Ix) {
+  const L = ix.L;
+  const rows = await all<{ id: number; started_at: number; title: string }>(ix.env,
+    `SELECT a.id, a.started_at, c.title FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+      WHERE a.guild_id = ? AND a.discord_id = ? AND a.status = 'pending' AND a.origin NOT IN ('exam', 'duel') AND c.hr_slug IS NOT NULL AND c.hr_slug != ''
+      ORDER BY a.started_at DESC LIMIT 10`, ix.guild.id, ix.userId);
+  if (!rows.length) return say(t(L, "pending.none"));
+  const lines = rows.map((r, i) => t(L, "pending.line", { n: i + 1, title: r.title, when: ts(r.started_at) }));
+  const buttons = rows.map((r, i) => btn(`${i + 1}. ${r.title}`.slice(0, 80), `ropen:${r.id}`, 1, "🔁"));
+  const comps: unknown[] = [];
+  for (let i = 0; i < buttons.length; i += 5) comps.push(row(...buttons.slice(i, i + 5)));
+  return reply({ content: `${t(L, "pending.head")}\n${lines.join("\n")}`, components: comps }, true);
 }
 
 async function cmdPractice(ix: Ix, diffIn: Difficulty | null, type: string, topic: string | null, language: string | null) {
@@ -972,6 +991,14 @@ async function component(ix: Ix): Promise<Response> {
         return out.payload;
       });
       return deferUpdate();
+    }
+    case "ropen": {
+      // a challenge opened again from /practice type:pending: the whole message, with its link and ✅ Verify
+      const r = await ownAttempt(ix, id);
+      if (r instanceof Response) return r;
+      if (r.a.status !== "pending") return say(t(L, r.a.status === "expired" ? "pending.expired" : "res.already"));
+      later(ix, async () => renderFor(ix.env, ix.guild, r.c, r.a));
+      return deferReply(true);
     }
     case "claim": {
       const r = await ownAttempt(ix, id);

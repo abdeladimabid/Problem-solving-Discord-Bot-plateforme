@@ -394,6 +394,27 @@ section("HackerRank problems: only verified solves count");
   check(text(lastPatch()).includes("confirms"), "solve verified via HackerRank");
   check(q1("SELECT verified, status FROM attempts WHERE id = ?", aid).verified === 1, "attempt marked verified");
 
+  // 📋 the challenge message was lost (Discord dropped it): /practice type:pending opens it again, with ✅ Verify
+  {
+    await slash(U.alice, "practice", { difficulty: "easy", type: "coding" });
+    const lost = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);
+    check(/Message gone before you verified/.test(text(lastPatch())), "the HackerRank challenge says how to get it back");
+    const pl = await slash(U.alice, "practice", { type: "pending" });
+    const title = q1("SELECT c.title FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.id = ?", lost).title;
+    const plj = JSON.stringify(pl);
+    check(plj.includes(`"ropen:${lost}"`) && plj.includes(title) && !plj.includes(`"ropen:${aid}"`) && (pl as any).data.flags === 64, "📋 my challenges to verify: the pending one (only them can see it), not the verified one");
+    check(/not yours|pas à toi|isn't yours/i.test(JSON.stringify(await click(U.bob, `ropen:${lost}`))), "…nobody else can open it");
+    await click(U.alice, `ropen:${lost}`);
+    check(ids(lastPatch()).includes(`chk:${lost}`) && text(lastPatch()).includes("hackerrank.com/challenges/"), "…it opens again: the link and ✅ Verify");
+    const cL = solveAnswer(q1("SELECT challenge_id FROM attempts WHERE id = ?", lost).challenge_id);
+    hr.solves["alice_hr"] = [...(hr.solves["alice_hr"] || []), { slug: cL.hr_slug, at: clock.now() }];
+    await click(U.alice, `chk:${lost}`);
+    check(q1("SELECT status FROM attempts WHERE id = ?", lost).status === "solved" && /no HackerRank challenge waiting/.test(text(await slash(U.alice, "practice", { type: "pending" }))),
+      "…verified from there; then nothing left to verify");
+    run1("UPDATE attempts SET status = 'expired' WHERE id = ?", lost);
+    check(/has expired/.test(JSON.stringify(await click(U.alice, `ropen:${lost}`))), "…an expired one says so");
+  }
+
   // an old solve (before the challenge was handed out) doesn't count
   await slash(U.carol, "practice", { difficulty: "medium", type: "coding" });
   const aidC = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);

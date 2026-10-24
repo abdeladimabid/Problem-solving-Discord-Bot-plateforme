@@ -223,6 +223,7 @@ export function renderChallenge(guild: GuildRow, c: ChallengeRow, a: AttemptRow,
     lines.push(t(L, "ch.code_intro", { title: c.title }));
     if (o.hrState === "none") lines.push("", t(L, "ch.code_link_hint"));
     if (o.hrState === "unverified") lines.push("", t(L, "ch.code_verify_hint"));
+    if (o.hrState === "ok" && a.status === "pending" && !["exam", "duel"].includes(a.origin)) lines.push("", t(L, "ch.code_lost_hint"));
     const actions: unknown[] = [];
     if (c.url) actions.push(linkBtn(t(L, "ch.open_btn"), c.url, "🔗"));
     if (o.hrState === "ok") actions.push(btn(t(L, "ch.check_btn"), `chk:${a.id}`, 3, "✅"));
