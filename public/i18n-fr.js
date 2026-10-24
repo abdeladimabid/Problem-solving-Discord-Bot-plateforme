@@ -3305,7 +3305,7 @@ window.CB_FR = {
 "Saved: the rankings follow it right away": "Enregistré : les classements suivent tout de suite",
 "Copy the teacher's link": "Copier le lien du formateur",
 "It opens the controls of the game: keep it for yourself (to open the TV on another computer)": "Il ouvre les commandes du jeu : garde-le pour toi (pour ouvrir la TV sur un autre ordinateur)",
-"Teacher's TV link copied: it controls the game, don't share it": "Lien TV du formateur copié : il contrôle le jeu, ne le partage pas"
+"Teacher's TV link copied: it controls the game, don't share it": "Lien TV du formateur copié : il contrôle le jeu, ne le partage pas",
 "{ } Import a quiz (JSON)": "{ } Importer un quiz (JSON)",
 "A quiz written by Claude, as JSON: the prompt to write it is inside": "Un quiz écrit par Claude, en JSON : le prompt pour l’écrire est à l’intérieur",
 "1 · Write it with Claude": "1 · L’écrire avec Claude",
