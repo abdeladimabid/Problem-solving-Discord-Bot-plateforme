@@ -26,6 +26,7 @@ import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
 import { applyGrading, checkQuiz, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
 import { nextProgrammeWeek, techSoFar } from "../shared/activities.ts";
+import { LinkError, changeLink, previewLink, unlinkBrief } from "../shared/assesslink.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
 import { WatcherError, importWatcher, markWatcherImport, memoryKv, watcherImportOf, watcherKeys, watcherValues } from "../shared/watcher.ts";
@@ -178,6 +179,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (method === "GET") return ok(await briefView(env, g, id));
     if (method === "DELETE") {
       await deleteBrief(env, g, id);
+      await unlinkBrief(env, g, id);   // its assessments aren't linked to a brief that doesn't exist anymore
       await env.DB.batch([env.DB.prepare("DELETE FROM brief_handins WHERE brief_id = ?").bind(id), env.DB.prepare("DELETE FROM brief_reviews WHERE brief_id = ? AND status != 'final'").bind(id)]);
       return ok({ ok: true });
     }
@@ -605,6 +607,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   }
   if (path === "/assessments" && method === "POST") {
     const g = await guild();
+    if (body?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", Number(body.brief_id), g.id))) throw new ApiError(404, "This brief isn't in this class (or doesn't exist anymore).");
     const id = await saveAssessment(env, g, null, body);
     await libAssessment(env, g, id);
     return ok(await assessView(env, g, id));
@@ -653,7 +656,14 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!a) throw new ApiError(404, "This assessment doesn't exist anymore.");
     const act = m[2];
     if (!act && method === "GET") { await syncLibrary(env, g).catch(() => null); return ok(await assessView(env, g, id)); }
-    if (!act && method === "PUT") { await saveAssessment(env, g, id, body); await libAssessment(env, g, id); return ok(await assessView(env, g, id)); }
+    if (!act && method === "PUT") {
+      // a linked brief sent with the questions: the same rules as "link" (a brief of this class; the drafts follow)
+      if (body && "brief_id" in body && (Number(body.brief_id) || null) !== (a.brief_id ?? null)) {
+        try { await changeLink(env, g, id, body.brief_id); } catch (e) { if (e instanceof LinkError) throw new ApiError(e.status, e.message); throw e; }
+      }
+      const { brief_id: _link, ...rest } = body ?? {};
+      await saveAssessment(env, g, id, rest); await libAssessment(env, g, id); return ok(await assessView(env, g, id));
+    }
     if (!act && method === "DELETE") {
       await libAssessment(env, g, id, true);   // shared: removed for the other classes too (their papers stay with them)
       await env.DB.batch([env.DB.prepare("DELETE FROM assessment_takers WHERE assessment_id = ?").bind(id), env.DB.prepare("DELETE FROM assessments WHERE id = ?").bind(id)]);
@@ -665,11 +675,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     }
     if (act === "options" && method === "POST") { await saveOptions(env, g, id, body); await libAssessment(env, g, id); return ok(await assessView(env, g, id)); }
     if (act === "link" && method === "POST") {
-      // linked to a brief (from the debrief): its results count in that brief's debriefs
-      const bid = Number(body.brief_id) || null;
-      if (bid && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", bid, g.id))) throw new ApiError(404, "This brief doesn't exist anymore.");
-      await run(env, "UPDATE assessments SET brief_id = ? WHERE id = ?", bid, id);
-      return ok({ ok: true, brief_id: bid });
+      // the brief it's linked to (its results count in that brief's debriefs): changed or removed at any time
+      // (assesslink.ts). preview: what it would do, for the confirmation; replace: the new brief's other assessment goes
+      try {
+        if (body.preview) return ok({ plan: await previewLink(env, g, id, body.brief_id) });
+        const r = await changeLink(env, g, id, body.brief_id, { replace: !!body.replace });
+        return ok({ ok: true, brief_id: r.plan.to, plan: r.plan, updated: r.updated, ...(await assessView(env, g, id)) });
+      } catch (e) { if (e instanceof LinkError) throw new ApiError(e.status, e.message); throw e; }
     }
     if (act === "remove") {
       // take back an invitation (their link stops working); a paper already handed in stays

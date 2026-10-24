@@ -142,7 +142,9 @@ export async function getReview(env: Env, briefId: number, who: string): Promise
   if (!r) return null;
   let rec: any = {};
   try { rec = JSON.parse(r.record || "{}"); } catch { rec = {}; }
-  rec.assess = await briefAssessments(env, briefId, who, rec);
+  // a finalized debrief keeps the assessment as it was when it was finalized (the link can change since: it never moves);
+  // a draft reads the assessments linked to the brief now
+  rec.assess = r.status === "final" && Array.isArray(rec.assess) ? rec.assess : await briefAssessments(env, briefId, who, rec);
   await currentNames(env, r.guild_id, who, rec);
   return { ...r, rec };
 }
