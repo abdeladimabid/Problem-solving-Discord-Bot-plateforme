@@ -661,7 +661,8 @@ function debriefToolsHtml() {
   const { B } = BR, list = B.assessments || [];
   const waiting = debriefQueue().length, all = debriefQueue(true, true).length;
   const asHtml = list.length
-    ? list.map((a) => `<a class="dbt-as" href="#/assessment/${a.id}"><b>${esc(a.title)}</b><span>${a.takers ? `${a.done}/${a.takers} handed in · ${a.graded} graded` : "nobody invited yet: open it to invite the class"}</span></a>`).join("")
+    ? list.map((a) => `<div class="dbt-asrow"><a class="dbt-as" href="#/assessment/${a.id}"><b>${esc(a.title)}</b><span>${a.takers ? `${a.done}/${a.takers} handed in · ${a.graded} graded` : "nobody invited yet: open it to invite the class"}</span></a>
+        <span class="dbt-asact"><button class="btn small" data-asmove="${a.id}" title="Link it to another brief">Change the brief</button><button class="btn small" data-asunlink="${a.id}" title="This brief's draft debriefs will use the project only">Remove the link</button></span></div>`).join("")
     : `<div class="dbt-none"><span>No assessment linked. Link one and it counts in <b>every</b> student's debrief.</span>
         <div class="dbt-link"><select id="dbt-sel" aria-label="Assessment to link"><option value="">Loading…</option></select><button class="btn small" id="dbt-link">Link to this brief</button><button class="btn small" id="dbt-ai">✨ Generate one</button></div></div>`;
   return `<section class="panel dbt"><div class="dbt-col"><span class="dbt-h">Assessment of the brief</span>${asHtml}
@@ -669,6 +670,53 @@ function debriefToolsHtml() {
     <div class="dbt-col dbt-run"><span class="dbt-h">Debriefs</span>
       <p class="small" style="margin:0 0 8px">${waiting ? `<b>${waiting}</b> ${B.kind === "squad" ? "squad(s)" : "student(s)"} handed in and not analyzed yet.` : debriefQueue(true).length ? "Every hand-in is analyzed." : all ? "Nothing handed in yet: Analyze all can use the repos they pushed to during the brief." : "Every debrief is finalized."}</p>
       <button class="btn ${waiting ? "primary" : ""}" id="dbt-all" ${all ? "" : "disabled"}>🔍 Analyze all…</button></div></section>`;
+}
+/**
+ * Change (or remove) the brief an assessment is linked to, from the assessment or from the brief: what it does to the
+ * debriefs first (drafts follow, finalized ones never change), then the change. `briefs`: [{id, title}] for the names.
+ */
+async function briefLinkFlow(aid, to, { briefs = [], onDone, onCancel } = {}) {
+  const { plan } = await api(`/assessments/${aid}/link`, { method: "POST", body: { brief_id: to || null, preview: true } });
+  if (plan.same) { onCancel?.(); return; }
+  const name = (id) => { const b = briefs.find((x) => String(x.id) === String(id)); return b ? b.title : `#${id}`; };
+  const lines = [];
+  if (plan.from) {
+    lines.push(plan.drafts.from ? `${plan.drafts.from} draft debrief(s) of the old brief will now use the project only.` : "No draft debrief of the old brief uses it.");
+    if (plan.finals.from) lines.push(`${plan.finals.from} finalized debrief(s) of the old brief used it: they stay as they are.`);
+  }
+  if (plan.to) {
+    lines.push(plan.drafts.to ? `${plan.drafts.to} draft debrief(s) of the new brief will now use this assessment.` : "The new brief's debriefs will use it when they are analyzed.");
+    if (plan.finals.to) lines.push(`${plan.finals.to} finalized debrief(s) of the new brief don't change.`);
+  }
+  lines.push("Finalized debriefs never change. The assessment keeps its invitations, papers and grades: only the link changes.");
+  let applied = false;
+  const apply = (replace) => async () => {
+    const r = await api(`/assessments/${aid}/link`, { method: "POST", body: { brief_id: to || null, replace } });
+    applied = true; dlg.close();
+    toast(r.brief_id ? (r.updated ? "Linked: the draft debriefs follow" : "Linked") : "Link removed");
+    onDone?.(r);
+  };
+  const others = plan.others || [];
+  openDialog(plan.to ? (plan.from ? "Change the linked brief?" : "Link to this brief?") : "Remove the link?", `
+    <p style="margin-top:0" class="lk-path"><span>${plan.from ? esc(name(plan.from)) : "— none —"}</span> <b>→</b> <span>${plan.to ? esc(name(plan.to)) : "— none —"}</span></p>
+    <ul class="lk-effects">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+    ${others.length ? `<div class="notice warn"><p style="margin:0">The new brief already has an assessment linked:</p><ul class="lk-effects">${others.map((o) => `<li>${esc(o.title)}</li>`).join("")}</ul><p class="small" style="margin:6px 0 0">Replace it (it is unlinked, its results stay), or keep both: both count in the brief's debriefs.</p></div>` : ""}`,
+    others.length ? [{ label: "Keep both", action: apply(false) }, { label: "Replace it", primary: true, action: apply(true) }]
+      : [{ label: plan.to ? (plan.from ? "Change the brief" : "Link it") : "Remove the link", primary: true, danger: !plan.to, action: apply(false) }]);
+  dlg.addEventListener("close", () => { if (!applied) onCancel?.(); }, { once: true });
+}
+/** The brief page: move one of its assessments to another brief. */
+async function moveAssessmentDialog(aid, title, fromId) {
+  const r = await api("/briefs");
+  const list = (r.items || []).filter((b) => String(b.id) !== String(fromId));
+  openDialog("Change the brief", `<p class="small muted" style="margin-top:0"><b>${esc(title)}</b>: the brief its results count in.</p>
+    <label for="mv-b">New brief</label><select id="mv-b" style="width:100%">${list.map((b) => `<option value="${b.id}">${esc(b.title)}${b.status === "assigned" ? "" : ` (${esc(b.status)})`}</option>`).join("")}</select>`,
+  [{ label: "Next", primary: true, action: async () => {
+    const to = $("#mv-b", dlg).value;
+    if (!to) throw new Error("Choose the brief");
+    dlg.close();
+    await briefLinkFlow(aid, to, { briefs: r.items || [], onDone: async () => { BR.B = await api(`/briefs/${fromId}`); renderBrief(); } });
+  } }]);
 }
 function wireDebriefTools(root) {
   const { B } = BR, id = B.brief.id;
@@ -681,13 +729,18 @@ function wireDebriefTools(root) {
     $("#dbt-link", root).onclick = (e) => busy(e.currentTarget, async () => {
       const v = $("#dbt-sel", root).value;
       if (!v) throw new Error("Choose the assessment to link");
-      await api(`/assessments/${v}/link`, { method: "POST", body: { brief_id: id } });
-      BR.B = await api(`/briefs/${id}`);
-      toast(debriefQueue(true).length < debriefQueue(true, true).length ? "Linked. Debriefs already analyzed: analyze them again to use it" : "Linked to the whole brief");
-      renderBrief();
+      // it may be linked to another brief: what moves is said first
+      const briefs = (await api("/briefs")).items || [];
+      await briefLinkFlow(v, id, { briefs, onDone: async () => { BR.B = await api(`/briefs/${id}`); renderBrief(); } });
     });
     $("#dbt-ai", root).onclick = () => generateQuestionsDialog(null, { brief: id, title: B.brief.data.title });
   }
+  // a linked assessment: to another brief, or no brief
+  $$("[data-asmove]", root).forEach((b) => b.onclick = () => busy(b, () => moveAssessmentDialog(b.dataset.asmove, (B.assessments || []).find((a) => String(a.id) === b.dataset.asmove)?.title || "", id)));
+  $$("[data-asunlink]", root).forEach((b) => b.onclick = () => busy(b, async () => {
+    const briefs = (await api("/briefs")).items || [];
+    await briefLinkFlow(b.dataset.asunlink, null, { briefs, onDone: async () => { BR.B = await api(`/briefs/${id}`); renderBrief(); } });
+  }));
   $("#dbt-all", root).onclick = () => analyzeAllDialog(root);
 }
 /** The AI's per-minute limit (Groq tokens per minute…): seconds to wait before going on; 0 for a daily limit. */
@@ -928,10 +981,12 @@ function wireAssessLink(root) {
     if (act === "hide" || act === "show") { set(act === "hide"); renderDebrief(); return; }
     if (act === "ai") { generateQuestionsDialog(null, { brief: bid, title: DB.B.brief.title }); return; }
     if (!sel.value) throw new Error("Choose the assessment to link");
-    await api(`/assessments/${sel.value}/link`, { method: "POST", body: { brief_id: Number(bid) } });
-    toast(DB.R.review?.result ? "Assessment linked: analyze again so the debrief uses it" : "Assessment linked to this brief");
-    DB.R = await api(`/briefs/${bid}/review?who=${encodeURIComponent(DB.who)}`);
-    renderDebrief();
+    // it may be linked to another brief: what moves is said first
+    const briefs = (await api("/briefs")).items || [];
+    await briefLinkFlow(sel.value, Number(bid), { briefs, onDone: async () => {
+      DB.R = await api(`/briefs/${bid}/review?who=${encodeURIComponent(DB.who)}`);
+      renderDebrief();
+    } });
   }));
 }
 function assessPanelHtml(assess) {
@@ -1718,8 +1773,9 @@ function assessQuestionsTab(root) {
         <div><label>Passed at (%)</label><input type="number" id="aq-pass" min="1" max="100" value="${s.passAt}"></div>
         <div><label>Points for 100%</label><input type="number" id="aq-pts" min="0" max="200" value="${s.points}"></div>
       </div>
-      <label for="aq-brief">Linked brief <span class="muted">(its results count in that brief's debrief: competencies and comment)</span></label>
-      <select id="aq-brief" style="max-width:560px"><option value="">— none —</option>${(AS.briefs || []).map((b) => `<option value="${b.id}" ${b.id === a.brief_id ? "selected" : ""}>${esc(b.title)}${b.status === "assigned" ? "" : ` (${esc(b.status)})`}</option>`).join("")}</select>
+      <label for="aq-brief">Linked brief <span class="muted">(its results count in that brief's debrief: competencies and comment · changed at once, after a confirmation)</span></label>
+      <select id="aq-brief" style="max-width:560px"><option value="">— none —</option>${(AS.briefs || []).map((b) => `<option value="${b.id}" ${b.id === a.brief_id ? "selected" : ""}>${esc(b.title)}${b.status === "assigned" ? "" : ` (${esc(b.status)})`}</option>`).join("")}
+        ${a.brief_id && !(AS.briefs || []).some((b) => b.id === a.brief_id) ? `<option value="${a.brief_id}" selected>Brief #${a.brief_id} (deleted)</option>` : ""}</select>
       <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results, with a link to their full correction (each question, their answer, what to look up)</label>
     </section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
@@ -1754,6 +1810,15 @@ function assessQuestionsTab(root) {
     });
   };
   const mark = () => { AS.dirty = true; $("#aq-save-bar").classList.add("dirty"); $("#aq-save-st").textContent = "Unsaved changes"; };
+  // the linked brief isn't saved with the questions: it changes on its own, after saying what it does to the debriefs
+  const bsel = $("#aq-brief", root);
+  bsel.addEventListener("input", (e) => e.stopPropagation());
+  bsel.onchange = () => {
+    const was = a.brief_id ?? "";
+    briefLinkFlow(a.id, bsel.value || null, { briefs: AS.briefs || [],
+      onDone: (r) => { a.brief_id = r.brief_id; AS.A.assessment.brief_id = r.brief_id; if (!AS.dirty) { AS.A = r; renderAssessment(); } },
+      onCancel: () => { bsel.value = String(was); } }).catch((e) => { bsel.value = String(was); toast(e.message, true); });
+  };
   root.addEventListener("input", mark);
   draw();
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });
@@ -1767,7 +1832,7 @@ function assessQuestionsTab(root) {
     const qs = readQuestions();
     const bad = qs.findIndex((q) => q.prompt.trim().length < 5 || (q.type === "mcq" && (q.choices.filter(Boolean).length < 2 || !q.answer.length)));
     if (bad >= 0) throw new Error(`Question ${bad + 1}: write the question${qs[bad].type === "mcq" ? ", at least 2 choices and tick the right one(s)" : ""}.`);
-    AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, brief_id: $("#aq-brief").value || null, questions: qs,
+    AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, questions: qs,
       settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked } } });
     AS.dirty = false; toast("Saved"); renderAssessment();
   });

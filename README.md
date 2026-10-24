@@ -263,7 +263,7 @@ Ways to start a brief:
 - **Assign to the class:** dates, the expected repo name, an announcement in Discord (#general, or the channel in Settings), and reminders 3 days and 1 day before.
 - **Evaluation grid:** one point per line. A point linked to an automatic check (`vérif : form, map`) is decided by the code, not the AI.
 - **Steps:** dated parts (`name | YYYY-MM-DD HH:MM | expected`), found in the brief or with ✨.
-- **Assessment of the brief:** link one, or ✨ generate it, once for the whole class.
+- **Assessment of the brief:** link one, or ✨ generate it, once for the whole class. **Change the brief** and **Remove the link** work at any time, with the same rules as the linked brief in Assessments.
 - **Debriefs:** 🔍 Analyze all, and one row per student or squad.
 
 **Debrief** (per student or squad):
@@ -350,7 +350,7 @@ The veilles (in binôme, 3 at most) and live codings (1 or 2 people) your studen
 Web tests in full screen. Create one from **✨ Generate with AI** (a topic and the technologies to assess, a brief, or **one student's weak points**), **Blank assessment**, or **🔗 Import from a link**.
 
 - **Questions:** + Write code, + Explain, + Multiple choice, or ✨ Add with AI. Each question has an expected answer (never shown), skills and competencies.
-- **Settings:** time, page language, passed at (%), points for 100%, and a **linked brief**: its results count in that brief's debrief (competencies and comment).
+- **Settings:** time, page language, passed at (%), points for 100%, and a **linked brief**: its results count in that brief's debrief (competencies and comment). Change or remove it at any time, even after invitations or results: a confirmation tells what changes, the draft debriefs follow (the old brief's use the project only, its oral questions from the assessment are kept and marked), finalized debriefs never change, and the papers and grades stay.
 - **Invite:** each student gets their own link by DM, open for N days, with the order and going back set in Options.
 - **Live:** refreshes every 5 s. Who is answering, progress, who was stopped and why, **Let back in** (with extra minutes), and Remove.
 - **Results:**
