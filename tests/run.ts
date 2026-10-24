@@ -2394,6 +2394,28 @@ section("profiles you can share, certificates, class league, all classes");
     run1("DELETE FROM players WHERE discord_id = '199'");
     run1("UPDATE guilds SET teacher_id = ? WHERE id = ?", g0.teacher_id, G);
   }
+  {
+    // a student removed from the class: their points stay in the history, but no « ? » in the rankings and the league
+    // counts the class's students only (not 27 for a class of 25)
+    const g0 = q1("SELECT season FROM guilds WHERE id = ?", G);
+    run1("INSERT INTO players (guild_id, discord_id, name, last_active, created_at) VALUES (?, '198', 'Quitte', ?, ?)", G, clock.now(), clock.now());
+    run1("INSERT INTO ledger (guild_id, discord_id, amount, reason, season, created_at) VALUES (?, '198', 72, 'practice', ?, ?)", G, g0.season, clock.now());
+    run1("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, tries, used_hint, verified, points, started_at, finished_at) VALUES (?, '198', 1, 'practice', 'solved', 1, 0, 1, 72, ?, ?)", G, clock.now(), clock.now());
+    const { standings: st } = await import("../src/shared/db.ts");
+    const lg = async () => (await api("GET", `/api/league?g=${G}`)).data.table.find((r: any) => r.guild_id === G);
+    const cert = async () => (await api("GET", `/api/certificates?g=${G}`)).data.items;
+    const inside = await lg();
+    check((await st(env, G, g0.season, 200)).some((r: any) => r.discord_id === "198") && (await cert()).some((c: any) => c.discord_id === "198"), "a student in the class: in the leaderboard and the certificates");
+    check((await api("DELETE", `/api/students/198?g=${G}`)).status === 200, "the teacher removes them from the class");
+    const out = await lg();
+    check(q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = '198'").n === 72, "…their points stay in the history");
+    check(!(await st(env, G, g0.season, 200)).some((r: any) => r.discord_id === "198" || r.name === "?") && !(await cert()).some((c: any) => c.discord_id === "198" || c.name === "?"),
+      "…but no « ? » in the leaderboard nor in the certificates");
+    check(out.points === inside.points - 72 && out.active === inside.active - 1 && out.students === inside.students - 1 && out.solved === inside.solved - 1,
+      `…and the league counts the class's students only: their points, their solves and them out of the class size (${inside.students} → ${out.students} students, ${inside.points} → ${out.points} pts)`);
+    run1("DELETE FROM ledger WHERE discord_id = '198'");
+    run1("DELETE FROM attempts WHERE discord_id = '198'");
+  }
   const cmp = await api("GET", "/api/compare");
   check(cmp.data.classes.length >= 2 && cmp.data.classes.every((c: any) => c.trend.length === 4), "dashboard compares all classes with a 4-week trend");
   // new season: certificates by DM

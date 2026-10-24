@@ -3331,5 +3331,6 @@ window.CB_FR = {
 "Paste Claude's JSON, or choose the .json file.": "Collez le JSON de Claude, ou choisissez le fichier .json.",
 "Paper": "Copie",
 "Questions graded": "Questions corrigées",
-"Not in the file: stays as it is": "Absente du fichier : reste telle quelle"
+"Not in the file: stays as it is": "Absente du fichier : reste telle quelle",
+"Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. Their points stay in the history but no longer count in the leaderboards, the certificates or the league. If they use ClassBot again, they start a new profile. This can't be undone.": "Son profil est supprimé, avec ses liens (GitHub, HackerRank), son équipe, ses rendus et débriefings de briefs, son activité GitHub, ses compétences et ses évaluations. Les statistiques passées de la classe gardent ses réponses, sans nom. Ses points restent dans l’historique mais ne comptent plus dans les classements, les certificats ni la ligue. S’il utilise à nouveau ClassBot, il repart d’un nouveau profil. Cette action est irréversible."
 };
