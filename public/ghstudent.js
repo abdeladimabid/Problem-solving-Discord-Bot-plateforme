@@ -43,7 +43,16 @@ async function studentGithubTab(root, sid, d) {
     try { GHS.data = await api(`/students/${sid}/github/sync?days=${GHS.days}`, { method: "POST", body: { days: GHS.days } }); }
     catch (e) { GHS.syncError = e.message; }
   }
+  GHS.vsc = await api(`/vscode/days/${sid}?days=${GHS.days}`).catch(() => null);
   renderGithubTab(root, sid);
+}
+/** The day's VS Code time (Suivi VS Code), next to its commits; nothing when the learner never connected VS Code. */
+function ghVscDay(day) {
+  const V = GHS.vsc;
+  if (!V || !V.connected) return "";
+  const x = V.days[day];
+  const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${m} min`; };
+  return x && x[0] ? `<span class="small ghl-vsc" title="VS Code (WakaTime) that day: active time · writing time">🧑‍💻 ${esc(dur(x[0]))} · ${esc(dur(x[1]))} writing</span>` : `<span class="small muted ghl-vsc">🧑‍💻 no VS Code activity</span>`;
 }
 
 function renderGithubTab(root, sid) {
@@ -194,7 +203,7 @@ function drawLog(root) {
   $("#ghl-n", root).innerHTML = `${rows.length} shown ${filters}`;
   if ($("#ghl-day", root)) $("#ghl-day", root).onclick = () => { GHS.day = null; drawLog(root); };
   const allGroups = [...groups.entries()], more = allGroups.length - GHS.shown;
-  $("#ghl", root).innerHTML = rows.length ? allGroups.slice(0, GHS.shown).map(([day, list]) => `<div class="ghl-day"><div class="ghl-dh"><b>${esc(ghDayLabel(day))}</b><span class="small muted">${list.filter((r) => r.kind === "commit").length} commit(s)</span></div>
+  $("#ghl", root).innerHTML = rows.length ? allGroups.slice(0, GHS.shown).map(([day, list]) => `<div class="ghl-day"><div class="ghl-dh"><b>${esc(ghDayLabel(day))}</b><span class="small muted">${list.filter((r) => r.kind === "commit").length} commit(s)</span>${ghVscDay(day)}</div>
     ${list.map((r) => {
       const k = kindOf(r);
       const flags = (r.flags || "").split(",").filter(Boolean);

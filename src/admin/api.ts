@@ -56,6 +56,8 @@ import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
 import { activitiesApi } from "./actapi.ts";
+import { vscodeApi } from "./vscapi.ts";
+import { quietWriters } from "../shared/vscodedb.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
@@ -101,6 +103,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // the daily veilles and live codings (Activités)
     const acts = await activitiesApi(env, path, method, body, url, guild);
     if (acts) return acts;
+    // « Suivi VS Code »: the learners' coding time (WakaTime extension)
+    const vsc = await vscodeApi(env, ctx, path, method, body, url, guild);
+    if (vsc) return vsc;
 
     // -------------------------------------------------------------- daily
     if (path === "/daily" && method === "GET") return ok(await dailyOverview(env, await guild()));
@@ -330,7 +335,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const by = (table: string) => env.DB.prepare(`DELETE FROM ${table} WHERE guild_id = ? AND discord_id = ?`).bind(g.id, id);
       await env.DB.batch([
         ...["team_members", "gh_activity", "gh_log", "gh_summaries", "sprint_reviews", "daily_plans", "weekly_reports", "assessment_takers",
-          "competency_results", "skill_evidence", "hands", "purchases"].map(by),
+          "competency_results", "skill_evidence", "hands", "purchases", "vsc_days", "vsc_learners"].map(by),
         env.DB.prepare("DELETE FROM rivals WHERE guild_id = ? AND (owner_id = ? OR rival_id = ?)").bind(g.id, id, id),
         env.DB.prepare("DELETE FROM brief_handins WHERE guild_id = ? AND who = ?").bind(g.id, who),
         env.DB.prepare("DELETE FROM brief_reviews WHERE guild_id = ? AND who = ?").bind(g.id, who),
@@ -964,6 +969,8 @@ async function students(env: Env, g: GuildRow) {
        (SELECT t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = p.guild_id AND m.discord_id = p.discord_id) AS team
      FROM players p WHERE p.guild_id = ? ORDER BY season_pts DESC`,
     g.season, d7, d14, d7, g.id);
+  // VS Code: connected, and no writing time at all for the last 2 working days while a brief runs
+  const quiet = new Set((await quietWriters(env, g).catch(() => ({ learners: [] as { id: string }[] }))).learners.map((l) => l.id));
   return rows.map((r) => {
     const tries = r.solved + r.failed;
     const accuracy = tries ? Math.round((100 * r.solved) / tries) : null;
@@ -979,6 +986,7 @@ async function students(env: Env, g: GuildRow) {
     if (trend === "down") reasons.push("points dropping");
     if (accuracy !== null && tries >= 5 && accuracy < 40) reasons.push(`low accuracy (${accuracy}%)`);
     if (r.missed_asg) reasons.push(`${r.missed_asg} missed assignment(s)`);
+    if (quiet.has(r.discord_id)) reasons.push("no VS Code writing for 2 working days");
     return { ...r, accuracy, level: lv.level, title: t("en", titleKey(lv.level)), trend, attention: reasons };
   });
 }

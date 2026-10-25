@@ -2,7 +2,7 @@
 // of its pages when closed, and opens by itself on the page you're on. Simple mode: one section open at a time.
 /* global $, $$ */
 const NAV_GROUPS = [
-  { key: "class", icon: "🏫", label: "Class", items: ["#/students", "#/teams", "#/hands", "#/questions", "#/assignments"] },
+  { key: "class", icon: "🏫", label: "Class", items: ["#/students", "#/teams", "#/vscode", "#/hands", "#/questions", "#/assignments"] },
   { key: "projects", icon: "📄", label: "Projects", items: ["#/briefs", "#/activities", "#/presentations", "#/github"] },
   { key: "eval", icon: "🎓", label: "Evaluation", items: ["#/sprints", "#/progress", "#/assessments", "#/competencies", "#/integrity", "#/interviews"] },
   { key: "practice", icon: "🧩", label: "Practice", items: ["#/challenges", "#/daily", "#/path", "#/sessions"] },

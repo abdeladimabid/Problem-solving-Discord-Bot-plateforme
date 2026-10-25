@@ -1975,3 +1975,78 @@ dialog.confirm-dlg.act-exists { width: min(720px, calc(100vw - 32px)); }
 .lk-path b { color: var(--ink-soft); margin: 0 6px; }
 .lk-effects { margin: 6px 0; padding-left: 18px; }
 .lk-effects li { margin: 3px 0; }
+
+/* « Suivi VS Code »: the learners' coding time (public/vscode.js) */
+.vs-bar { gap: 8px 10px; }
+.vs-date { display: inline-flex; align-items: center; gap: 4px; }
+.vs-date input[type="date"] { width: auto; }
+.vs-bar input[type="search"] { width: 200px; max-width: 100%; }
+.vs-figs .figure b small { font-size: 15px; color: var(--ink-faint); font-weight: 600; margin-left: 2px; }
+.vs-figs .vs-live .ico { background: var(--up-bg); color: var(--up); }
+.vs-who { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.vs-who > span { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.vs-who small { font-size: 12px; }
+.vs-st { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-size: 13px; color: var(--ink-soft); }
+.vs-st i { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.vs-st.coding { color: var(--up); font-weight: 600; }
+.vs-st.coding i { background: var(--up); box-shadow: 0 0 0 0 color-mix(in srgb, var(--up) 55%, transparent); animation: vs-pulse 2s infinite; }
+.vs-st.idle i { background: var(--warn); }
+.vs-st.paused i { background: var(--ink-faint); }
+@keyframes vs-pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .vs-st.coding i { animation: none; } }
+.vs-cur { display: flex; flex-direction: column; max-width: 220px; line-height: 1.25; }
+.vs-cur b, .vs-cur small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vs-cur small { color: var(--ink-soft); font-family: var(--mono); font-size: 11.5px; }
+/* the hour-by-hour bars: active (light) behind writing (strong) */
+.vs-tl { display: inline-flex; align-items: flex-end; gap: 2px; height: 26px; vertical-align: middle; }
+.vs-tl i { position: relative; width: 8px; height: 100%; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--line); overflow: hidden; }
+.vs-tl i::before, .vs-tl i::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; }
+.vs-tl i::before { height: calc(var(--a, 0) * 100%); background: var(--s2); }
+.vs-tl i::after { height: calc(var(--w, 0) * 100%); background: var(--s1); }
+.vs-tl .vs-out { font-size: 11px; color: var(--ink-faint); margin-left: 3px; align-self: center; }
+.vs-legend .vs-tl { height: 12px; margin: 0 2px 0 8px; }
+.vs-legend .vs-tl i { width: 7px; }
+/* not connected yet */
+.vs-nc { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.vs-ncw { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-2); cursor: pointer; font-weight: 500; }
+.vs-ncw:has(input:checked) { border-color: var(--blue); background: var(--blue-50); }
+.vs-ncw input { accent-color: var(--blue); }
+.vs-ncw span { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+/* the week's heatmap */
+.vs-heat td, .vs-heat th { white-space: nowrap; }
+.vs-heat .vs-cell { text-align: center; font-variant-numeric: tabular-nums; font-size: 12.5px; border-radius: 6px; border: 2px solid var(--surface); min-width: 44px; }
+.vs-heat .vs-cell span { color: var(--ink); font-weight: 600; }
+.vs-heat tfoot th { border-top: 1px solid var(--line-strong); }
+/* one learner: a side sheet */
+dialog.vs-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(760px, 100vw); max-width: 100vw; border-radius: var(--radius-l) 0 0 var(--radius-l); display: flex; flex-direction: column; }
+dialog.vs-drawer:not([open]) { display: none; }
+dialog.vs-drawer[open] { animation: vs-in .18s ease-out; }
+@keyframes vs-in { from { transform: translateX(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { dialog.vs-drawer[open] { animation: none; } }
+.vs-dh { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 1; }
+.vs-db { padding: 6px 22px 28px; overflow: auto; }
+.vs-db h3 { margin: 22px 0 8px; font-size: 15px; }
+.vs-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 14px 0; }
+.vs-kpis > div { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 12px; display: flex; flex-direction: column; }
+.vs-kpis b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.vs-kpis span { color: var(--ink-soft); font-size: 12.5px; }
+.vs-day svg { width: 100%; height: auto; }
+.vs-ses ul, .vs-commits { margin: 6px 0 0; padding-left: 18px; }
+.vs-ses li, .vs-commits li { margin: 3px 0; }
+.vs-sig { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.vs-sig li { padding: 8px 12px; border: 1px solid #f6d79b; background: var(--warn-bg); border-radius: var(--radius-s); }
+:root[data-theme="dark"] .vs-sig li { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.vs-sig .tag { background: var(--surface); color: var(--warn); border-color: currentColor; }
+input.vs-time { width: 130px; }
+.m-vsc { margin: 10px 0 2px; padding: 8px 10px; border-radius: var(--radius-s); background: var(--surface-2); border: 1px solid var(--line); }
+.m-vsc:empty { display: none; }
+.m-vsc-files { margin-top: 3px; overflow-wrap: anywhere; }
+.ghl-vsc { margin-left: auto; color: var(--ink-soft); }
+.vs-checks { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.vs-checks li .muted { display: block; margin-left: 26px; word-break: break-word; }
+@media (max-width: 720px) {
+  dialog.vs-drawer { width: 100vw; border-radius: 0; }
+  .vs-dh, .vs-db { padding-left: 16px; padding-right: 16px; }
+  .vs-bar input[type="search"] { width: 100%; }
+  .vs-cur { max-width: 140px; }
+}

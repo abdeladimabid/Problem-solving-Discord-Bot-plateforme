@@ -1692,6 +1692,7 @@ async function viewSettings(arg) {
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
+    ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
     ["anticheat", "🛡️", "Anti-cheat", "Editor, explain, similarity"],
@@ -1855,6 +1856,11 @@ async function viewSettings(arg) {
       <div id="set-intranet"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="vscode" hidden>
+      ${head("VS Code tracking", "Each learner's coding time in VS Code (the WakaTime extension pointed at ClassBot). Nothing is recorded before the learner reads what is kept and says yes with /vscode setup; they can pause or delete it at any time.")}
+      <div id="set-vscode"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="diag" hidden>
       ${head("Diagnostics", "Checks, from Cloudflare, that the code runner, the AI and HackerRank answer. Run it after deploying or when something seems off.")}
       <div class="panel set-card"><p style="margin-top:0"><button class="btn primary" id="diag">Run checks</button></p><div id="diag-out"></div></div>
@@ -1872,6 +1878,7 @@ async function viewSettings(arg) {
       if (k === "ai") aiSettings($("#set-ai"));
       if (k === "library") librarySettings($("#set-library"));
       if (k === "intranet") intranetSettings($("#set-intranet"));
+      if (k === "vscode" && typeof vscodeSettings === "function") vscodeSettings($("#set-vscode")).catch((e) => { $("#set-vscode").innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; });
     }
   };
   $$(".set-nav a, [data-goto]").forEach((a) => a.onclick = (e) => { e.preventDefault(); showTab(a.dataset.tab || a.dataset.goto); window.scrollTo({ top: 0 }); });
