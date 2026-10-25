@@ -4875,6 +4875,355 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   check(!intranetFake.tokens.size && !(JSON.parse(q1("SELECT intranet FROM guilds WHERE id = ?", G).intranet || "{}").auth) && (await api("GET", `/api/intranet?g=${G}`)).data.trainer === null, "Disconnect: the token is revoked on the intranet and forgotten here");
 }
 
+section("VS Code activity: time zone, keys, paths and heartbeats (pure)");
+{
+  const V = await import("../src/shared/vscode.ts");
+  // Africa/Casablanca: days, weeks Monday → Sunday, the Ramadan clock change
+  check(V.dayOf(Date.UTC(2026, 9, 20, 23, 30) / 1000) === "2026-10-21" && V.dayOf(Date.UTC(2026, 9, 20, 22, 59) / 1000) === "2026-10-20", "a day is a Moroccan day (UTC+1 in October): 23:30 UTC is already tomorrow");
+  check(V.weekday("2026-10-25") === 6 && V.mondayOf("2026-10-25") === "2026-10-19" && V.mondayOf("2026-10-19") === "2026-10-19" && V.addDays("2026-12-31", 1) === "2027-01-01", "weeks run Monday → Sunday");
+  let lengths = new Set<number>(), okBounds = true;
+  for (let d = "2026-01-01"; d < "2027-01-01"; d = V.addDays(d, 1)) {
+    const c = V.dayClock(d);
+    lengths.add(c.end - c.start);
+    if (V.dayOf(c.start) !== d || V.dayOf(c.start - 1) !== V.addDays(d, -1) || V.dayOf(c.end - 1) !== d) okBounds = false;
+  }
+  check(okBounds && [...lengths].every((n) => [82800, 86400, 90000].includes(n)) && lengths.size > 1, "every day of 2026 starts and ends at Moroccan midnight, including the two Ramadan clock changes (a 23 h and a 25 h day)");
+  // keys: only the format wakatime-cli accepts, hashed, read from Basic (like the CLI), Bearer or ?api_key
+  const key = V.newKey();
+  const CLI_RE = /^(waka_)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;   // wakatime-cli pkg/params/params.go
+  check(CLI_RE.test(key) && key !== V.newKey(), "a new key has the format wakatime-cli requires (waka_ + UUID v4) and is random");
+  const h1 = await V.hashKey(key);
+  check(/^[a-f0-9]{64}$/.test(h1) && h1 === await V.hashKey(key.toUpperCase()) && h1 === await V.hashKey(key.slice(5)) && h1 !== await V.hashKey(V.newKey()), "the key is stored as its SHA-256 (with or without waka_, any case)");
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  check(V.keyOf("Basic " + b64(key), null) === key && V.keyOf("Basic " + b64(key + ":"), null) === key && V.keyOf("Basic " + b64(":" + key), null) === key
+    && V.keyOf("Bearer " + key, null) === key && V.keyOf(null, key) === key && V.keyOf("Basic " + b64(key.toUpperCase()), null) === key.toLowerCase(), "the key is read like wakatime-cli sends it (Basic base64(key)), and from Bearer or ?api_key=");
+  check(V.keyOf("Basic " + b64("not-a-key"), null) === null && V.keyOf("Basic !!!", null) === null && V.keyOf(null, null) === null && V.keyOf("Bearer waka_123", null) === null, "anything else is no key");
+  // paths: never absolute
+  check(V.relPath("C:\\Users\\Élève\\cours\\portfolio\\src\\index.html", 5) === "src/index.html" && V.relPath("C:/Users/Eleve/cours/portfolio/src/index.html", 5) === "src/index.html", "Windows: the path is cut after the project root (project_root_count)");
+  check(V.relPath("/Users/sara/dev/todo/app.js", 5) === "app.js" && V.relPath("/home/sara/dev/todo/lib/a.ts", 5) === "lib/a.ts", "macOS and Linux too (the CLI counts the first slash: /Users/sara/dev/todo/ = 5)");
+  check(V.relPath("/Users/sara/dev/todo/app.js", null) === "app.js" && V.relPath("C:/Users/x/secret/file.py", 0) === "file.py" && V.relPath("/a/b.js", 9) === "b.js", "no (or a wrong) root count: only the file name, never the path");
+  check(V.relPath("src/app.js", null) === "src/app.js" && V.relPath("./src/app.js", null) === "src/app.js" && V.relPath("../../etc/passwd", null) === "passwd" && V.relPath("HIDDEN.js", 3) === "HIDDEN.js", "relative paths (hide_project_folder) stay, '..' doesn't, HIDDEN (hide_file_names) stays");
+  check(V.relPath("ssh://user:pw@host/home/u/p/f.py", 3) === "f.py" && V.relPath("vscode-remote://wsl+Ubuntu/home/u/p/main.c", null) === "main.c", "a remote file: only its name (never a host or a password)");
+  check(V.editorOf("wakatime/v1.130.0 (windows-10.0.26100-x86_64) go1.24.4 vscode/1.105.1 vscode-wakatime/25.3.2") === "VS Code" && V.editorOf("wakatime/v1 (darwin) go1.24 cursor/1.7.0 vscode-wakatime/25.3.2") === "Cursor" && V.editorOf("") === "", "the editor from the user agent");
+  // one heartbeat
+  const t0 = Math.floor(Date.UTC(2026, 9, 20, 9) / 1000);
+  const base = { entity: "C:/Users/Sara/cours/todo/src/app.js", type: "file", time: t0, project: "todo", project_root_count: 5, language: "JavaScript", lines: 120, is_write: true, user_agent: "wakatime/v1 vscode/1.105 vscode-wakatime/25" };
+  const ok1 = V.checkHeartbeat(base, { now: t0 + 60, hideFiles: false }) as any;
+  check(ok1.ok && ok1.hb.f === "src/app.js" && ok1.hb.p === "todo" && ok1.hb.w === 1 && ok1.hb.lines === 120 && ok1.hb.ed === "VS Code" && ok1.hb.cat === "coding" && !JSON.stringify(ok1.hb).includes("Users"), "a heartbeat: what is kept (no absolute path)");
+  const bad = (h: any, now = t0 + 60) => V.checkHeartbeat(h, { now, hideFiles: false }) as any;
+  check(bad({ ...base, entity: "" }).status === 400 && bad({ ...base, time: "x" }).status === 400 && bad({ ...base, time: t0 + 3600 }, t0).status === 400 && bad(null).status === 400 && bad([1]).status === 400, "malformed (no entity, no time, in the future): 400, the CLI drops it");
+  check(bad({ ...base, type: "app" }).status === 201 && bad({ ...base, type: "domain" }).status === 201 && bad(base, t0 + 15 * 86400).status === 201 && (V.checkHeartbeat(base, { now: t0 + 8 * 86400, hideFiles: false, maxAgeDays: 7 }) as any).status === 201, "not a file, or older than 14 days (or than the retention): 201, not kept and not sent again");
+  const hid = V.checkHeartbeat({ ...base, category: "weird", ai_line_changes: 12, human_line_changes: 0 }, { now: t0 + 60, hideFiles: true }) as any;
+  check(hid.hb.f === "" && hid.hb.cat === "coding" && hid.hb.ai === 12 && hid.hb.lc === 1 && ok1.hb.lc === 0, "file names hidden (class or learner): no file; unknown category = coding; the line changes are kept when sent");
+  // duplicates (the offline queue sends some again) and the order (older ones arrive later)
+  const H = (min: number, x: Partial<any> = {}): any => ({ t: t0 + min * 60, p: "todo", f: "src/app.js", lang: "JavaScript", cat: "coding", w: 0, lines: 100, ai: 0, hu: 0, lc: 0, ed: "VS Code", ...x });
+  const m1 = V.mergeHeartbeats([H(2), H(0)], [H(0), H(1), H(1)]);
+  check(m1.added === 1 && m1.list.map((h: any) => (h.t - t0) / 60).join() === "0,1,2", "the same heartbeat twice counts once; the list stays in time order");
+  // Auto Save (or Ctrl+S every few seconds): one heartbeat per save, merged by bursts of 30 s on the same file
+  const saves = Array.from({ length: 24 }, (_, i) => H(i / 12, { w: i % 2, hu: 1, lc: 1, lines: 100 + i }));   // every 5 s for 2 minutes
+  const m2 = V.mergeHeartbeats([], saves);
+  check(m2.added === 24 && m2.list.length === 4 && m2.list.every((h: any) => h.w === 1) && m2.list.reduce((n: number, h: any) => n + h.hu, 0) === 24 && m2.list[3].lines === 123, "24 saves in 2 minutes: 4 heartbeats kept (one per 30 s), the saves and line changes kept");
+  const clkC = V.dayClock(V.dayOf(t0));
+  check(Math.abs(V.computeDay(m2.list, clkC, { idle: 5 }).active - V.computeDay(saves, clkC, { idle: 5 }).active) <= V.COALESCE, "…and the time hardly moves (at most the 30 s of a burst)");
+  check(V.mergeHeartbeats([], [H(0), H(0.2, { f: "src/b.js" }), H(0.4)]).list.length === 3, "another file in between is never merged");
+  // the compact raw goes and comes back
+  const clkR = V.dayClock("2026-10-20");
+  const back = V.unpackRaw(V.packRaw([H(0, { w: 1, ai: 3, lc: 1 }), H(5, { f: "", lang: "" })], clkR.start), clkR.start);
+  check(back.length === 2 && back[0].w === 1 && back[0].ai === 3 && back[0].lc === 1 && back[1].f === "" && Math.abs(back[1].t - (t0 + 300)) < 0.2 && V.unpackRaw("not json", 0).length === 0, "the raw heartbeats are stored compact and read back the same");
+}
+
+section("VS Code activity: temps actif, temps d'écriture, idle limit, midnight, time window (pure)");
+{
+  const V = await import("../src/shared/vscode.ts");
+  const day = "2026-10-20", clk = V.dayClock(day);   // a Tuesday, UTC+1
+  const at = (hh: number, mm: number, ss = 0) => V.localTime(day, hh * 60 + mm) + ss;
+  const H = (t: number, x: Partial<any> = {}): any => ({ t, p: "todo", f: "src/app.js", lang: "JavaScript", cat: "coding", w: 0, lines: 100, ai: 0, hu: 0, lc: 0, ed: "VS Code", ...x });
+  const o = { idle: 5 };
+  // typing: a heartbeat every 2 minutes, the file grows → all of it is writing; +60 s after the last one
+  const typing = [0, 2, 4, 6, 8, 10].map((m, i) => H(at(9, m), { lines: 100 + i * 3, hu: i ? 3 : 0, lc: 1 }));
+  const a1 = V.computeDay(typing, clk, o);
+  check(a1.active === 600 + V.LAST_SLICE && a1.write === 600 && a1.sessions.length === 1 && a1.first === at(9, 0) && a1.last === at(9, 10), "typing 10 minutes: temps actif 10 min + the last slice (60 s), temps d'écriture 10 min");
+  check(a1.hours[9][0] === 660 && a1.hours[9][1] === 600 && a1.hours[8][0] === 0, "counted in the local hour (09:00 Casablanca)");
+  check(a1.hu === 15 && a1.lineData && a1.projects[0][0] === "todo" && a1.files[0][1] === "src/app.js" && a1.langs[0][0] === "JavaScript", "the learner's lines, the project, the file and the language");
+  // reading: moving around without changing anything = active, not writing
+  const reading = [0, 2, 4].map((m) => H(at(10, m)));
+  const a2 = V.computeDay(reading, clk, o);
+  check(a2.active === 240 + V.LAST_SLICE && a2.write === 0 && !a2.lineData, "reading or navigating (no change, no save): temps actif only");
+  // saving is a change; a different line count than the file's previous heartbeat is one too
+  const a3 = V.computeDay([H(at(11, 0)), H(at(11, 2), { w: 1 }), H(at(11, 4)), H(at(11, 6), { lines: 140 })], clk, o);
+  check(a3.write === 240 && a3.active === 360 + V.LAST_SLICE, "a save, or the line count changing, makes the minutes before it writing time");
+  // a gap longer than the idle limit counts 0 (VS Code open, nobody working)
+  const a4 = V.computeDay([H(at(9, 0)), H(at(9, 3)), H(at(9, 20))], clk, o);
+  check(a4.active === 180 + 60 + 60 && a4.sessions.length === 2, "a 17-minute gap counts 0: two sessions");
+  const a5 = V.computeDay([H(at(9, 0)), H(at(9, 8))], clk, { idle: 10 });
+  check(a5.active === 480 + 60 && V.computeDay([H(at(9, 0)), H(at(9, 8))], clk, o).active === 120, "the idle limit is the class's setting (10 min: 8 minutes count; 5 min: they don't)");
+  // an AI writing: active (the learner is there), never writing time; its lines are counted apart
+  const a6 = V.computeDay([H(at(14, 0)), H(at(14, 2), { cat: "ai coding", ai: 40, lc: 1, lines: 140 }), H(at(14, 4), { hu: 2, lc: 1, lines: 142 })], clk, o);
+  check(a6.write === 120 && a6.aiTime === 120 + 0 && a6.ai === 40 && a6.hu === 2 && a6.active === 240 + 60, "an « ai coding » heartbeat: active time, not writing time; AI lines and the learner's lines apart");
+  // a big insertion (pasted or generated): the line count jumps between two heartbeats
+  const a7 = V.computeDay([H(at(15, 0), { lines: 20 }), H(at(15, 1), { lines: 260 })], clk, o);
+  check(a7.big.length === 1 && a7.big[0][3] === 240 && a7.big[0][2] === "src/app.js", "a big insertion is noted (240 lines in a minute)");
+  // across midnight: 23:58 → 00:02 is cut at midnight, never counted twice
+  const next = "2026-10-21", clkN = V.dayClock(next);
+  const late = [H(V.localTime(day, 23 * 60 + 58))], early = [H(V.localTime(next, 2), { w: 1 })];
+  const d1 = V.computeDay(late, clk, { ...o, next: { t: Math.floor(early[0].t), changed: true } });
+  const d2 = V.computeDay(early, clkN, { ...o, prev: { t: Math.floor(late[0].t) } });
+  check(d1.active === 120 && d1.write === 120 && d2.active === 120 + 60 && d2.write === 120 && d1.edge.next && d2.edge.prev, "a session across midnight: 2 minutes on each day (the 4-minute gap once), the writing too");
+  check(V.computeDay(late, clk, o).active === 60, "…without the next day: only the last slice");
+  // the class's time window: 08:00–18:00 Monday → Friday
+  const win = { on: true, from: "08:00", to: "18:00", weekdays: true };
+  const a8 = V.computeDay([H(at(7, 50)), H(at(7, 54)), H(at(7, 58)), H(at(8, 2)), H(at(8, 6))], clk, { ...o, window: win });
+  check(a8.active === 120 + 240 + 60 && V.computeDay([H(at(7, 50)), H(at(7, 54))], clk, { ...o, window: win }).active === 0, "the time window: only from 08:00 (before it doesn't count)");
+  const sat = V.dayClock("2026-10-24");
+  check(V.computeDay([H(V.localTime("2026-10-24", 600)), H(V.localTime("2026-10-24", 602))], sat, { ...o, window: win }).active === 0
+    && V.computeDay([H(V.localTime("2026-10-24", 600)), H(V.localTime("2026-10-24", 602))], sat, { ...o, window: { ...win, weekdays: false } }).active === 180, "weekdays only: a Saturday counts 0 (unless weekends are allowed)");
+  // a week, a brief: added up
+  const s = V.sumDays([a1, a2, a6]);
+  check(s.active === a1.active + a2.active + a6.active && s.write === a1.write + a6.write && s.days === 3 && s.files[0].file === "src/app.js", "days added up (a week, a brief's dates)");
+  check(V.sameProject("todo-app", "sara/Todo_App") && V.sameProject("portfolio", "x/portfolio.git") && !V.sameProject("todo", "x/portfolio") && !V.sameProject("", "x/y"), "a project and a repo are the same work when their names match");
+  // signals: « à vérifier », facts only
+  const sig = V.signals(day, a2, [{ t: at(10, 30), repo: "sara/todo", adds: 320, dels: 4 }]);
+  check(sig.some((x) => x.kind === "commit_little_writing" && x.n === 320 && x.minutes === 0), "320 lines committed on todo with no writing time on it that day: to check");
+  const longDay = V.computeDay(Array.from({ length: 50 }, (_, i) => H(at(9, 0) + i * 120)), clk, o);
+  check(V.signals(day, longDay, []).some((x) => x.kind === "long_no_commit" && x.file === "src/app.js") && !V.signals(day, longDay, [{ t: at(12, 0), repo: "sara/todo", adds: 10, dels: 0 }]).some((x) => x.kind === "long_no_commit"), "100 minutes on one file with no commit: maybe stuck (a commit on the project: not)");
+  check(V.signals(day, a7, []).some((x) => x.kind === "big_insert") && V.signals(day, { ...a6, ai: 120, hu: 30 }, []).some((x) => x.kind === "ai_share" && x.pct === 80) && !V.signals(day, a1, []).some((x) => x.kind === "ai_share"), "a big insertion; 80 % of the lines written by an AI");
+  // the status bar: two categories, so the extension shows both times
+  const sb = V.statusBar(4980, 2700, "fr");
+  check(sb.data.categories.length === 2 && sb.data.categories[0].name === "actif" && sb.data.categories[0].text === "1 h 23" && sb.data.categories[1].text === "45 min" && sb.data.grand_total.text.includes("écriture") && sb.has_team_features === false, "status bar: « 1 h 23 actif, 45 min écriture » (fr)");
+  check(V.statusBar(60, 0, "en").data.categories[0].text === "1 min" && V.durText(7200, "en") === "2 hrs 0 mins" && V.statusBar(0, 0, "en", "paused").data.categories.length === 0, "…in English, and a note instead when paused");
+  // settings
+  const st = V.vscSettings(null);
+  check(st.enabled && st.idle === 5 && st.retention === 30 && st.files && !st.window.on, "settings by default: on, 5 minutes, 30 days, file names, no time window");
+  check(V.vscSettings(JSON.stringify({ idle: 99, retention: 1, window: { on: true, from: "18:00", to: "08:00" } })).idle === 30 && V.vscSettings(JSON.stringify({ retention: 1 })).retention === 7 && !V.vscSettings(JSON.stringify({ window: { on: true, from: "18:00", to: "08:00" } })).window.on, "settings are kept in range (a window ending before it starts is off)");
+  const m2 = V.mergeSettings(st, { consent: "Mon texte" });
+  check(m2.consent === "Mon texte" && m2.consent_v === 2 && V.mergeSettings(m2, { idle: 7 }).consent_v === 2, "changing the consent text gives it a new version (learners are asked to read it again)");
+  // CPU: a full day is recomputed at each request (the Worker has 10 ms)
+  const big = Array.from({ length: V.MAX_PER_DAY }, (_, i) => H(clk.start + 3600 + i * 15, { f: `src/f${i % 40}.js`, lines: 100 + (i % 7), lc: i % 3 ? 1 : 0, hu: i % 3 }));
+  const typical = Array.from({ length: 300 }, (_, i) => H(at(8, 0) + i * 90, { f: `src/f${i % 12}.js`, lines: 100 + (i % 5) }));
+  const raw = V.packRaw(big, clk.start), rawT = V.packRaw(typical, clk.start);
+  for (let i = 0; i < 3; i++) V.computeDay(V.unpackRaw(raw, clk.start), clk, o);
+  let t1 = performance.now();
+  for (let i = 0; i < 10; i++) V.computeDay(V.unpackRaw(rawT, clk.start), clk, o);
+  const typMs = (performance.now() - t1) / 10;
+  t1 = performance.now();
+  for (let i = 0; i < 5; i++) { const l = V.mergeHeartbeats(V.unpackRaw(raw, clk.start), [H(clk.end - 60)]).list; V.packRaw(l, clk.start); V.computeDay(l, clk, o); }
+  const fullMs = (performance.now() - t1) / 5;
+  console.log(`    (CPU per request: a typical day of 300 heartbeats ${typMs.toFixed(2)} ms, the ${V.MAX_PER_DAY}-heartbeat cap ${fullMs.toFixed(2)} ms; raw ${Math.round(rawT.length / 1024)} KB / ${Math.round(raw.length / 1024)} KB)`);
+  check(typMs < 5 && fullMs < 40, "a typical day is recomputed well under the Worker's 10 ms (the per-day cap is printed above)");
+}
+
+section("VS Code activity: /vscode setup, the WakaTime API (heartbeats.bulk, status bar), pause, new key, delete");
+{
+  const V = await import("../src/shared/vscode.ts");
+  const W = await import("../src/bot/wakatime.ts");
+  const BASE = "https://bot.example.workers.dev/wakatime/api/v1";
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const waka = async (method: string, path: string, key: string | null, body?: unknown, extra: Record<string, string> = {}) => {
+    const res = await bot.fetch(new Request(BASE + path, {
+      method, headers: { "content-type": "application/json", "user-agent": "wakatime/v1.130.0 (windows-10.0-x86_64) go1.24.4 vscode/1.105.1 vscode-wakatime/25.3.2", ...(key ? { authorization: "Basic " + b64(key) } : {}), ...extra },
+      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+    }), env, makeCtx());
+    return { status: res.status, data: await res.json().catch(() => null) as any };
+  };
+  // setup: the consent first, then the key by DM
+  const s1 = await slash(U.alice, "vscode", {}, "setup");
+  check(s1.data.flags === 64 && text(s1).includes("What is recorded") && text(s1).includes("30 days") && ids(s1.data).includes("vsc:ok") && ids(s1.data).includes("vsc:no"), "/vscode setup: what is recorded, why, who sees it, how long, then « I agree » (private)");
+  check(!q1("SELECT 1 AS x FROM vsc_learners WHERE discord_id = ?", U.alice.id), "nothing is created before the learner agrees");
+  const c0 = await click(U.alice, "vsc:no");
+  check(text(c0).includes("nothing is recorded") && !q1("SELECT 1 AS x FROM vsc_learners WHERE discord_id = ?", U.alice.id), "Cancel: nothing created");
+  discordCalls.length = 0;
+  const ok = await click(U.alice, "vsc:ok");
+  check(ok.type === 6, "I agree: answered at once (the key goes by DM)");
+  const dmMsg = discordCalls.find((c) => c.method === "POST" && c.path === `/channels/dm-${U.alice.id}/messages`)?.body;
+  const key = (text(dmMsg).match(/waka_[a-f0-9-]{36}/) ?? [""])[0];
+  check(!!key && V.KEY_RE.test(key), "the setup DM carries the learner's own key");
+  check(text(dmMsg).includes("api_url = https://bot.example.workers.dev/wakatime/api/v1") && text(dmMsg).includes("hide_project_folder = true") && text(dmMsg).includes("powershell") && text(dmMsg).includes("bash") && text(dmMsg).includes(".wakatime-project") && text(dmMsg).includes("hide_file_names"), "…with ~/.wakatime.cfg, the PowerShell and bash lines, and the privacy options");
+  check(text(lastPatch()).includes("DMs"), "the setup message says the key is in the DMs");
+  const lr = q1("SELECT * FROM vsc_learners WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
+  check(lr.key_hash === await V.hashKey(key) && !JSON.stringify(lr).includes(key.slice(5)) && lr.consent_at && lr.consent_v === 1 && lr.key_hint === key.slice(-4), "only the key's hash is stored, with the consent and its version");
+  const st0 = await slash(U.alice, "vscode", {}, "status");
+  check(text(st0).includes("nothing received yet"), "/vscode status before any heartbeat: waiting, with what to check");
+  // auth
+  check((await waka("GET", "/users/current/statusbar/today", null)).status === 401 && (await waka("GET", "/users/current/statusbar/today", V.newKey())).status === 401, "no key or an unknown key: 401 (VS Code shows « Invalid Api Key »)");
+  const bar0 = await waka("GET", "/users/current/statusbar/today", key);
+  check(bar0.status === 200 && bar0.data.data.grand_total.total_seconds === 0 && bar0.data.data.categories.length === 2 && bar0.data.has_team_features === false, "the status bar endpoint answers like wakatime.com (200, grand_total, categories)");
+  // heartbeats, as wakatime-cli sends them: a bulk array, Basic auth
+  const now0 = clock.now();
+  // all on one Moroccan day, in the past: 00:30 today (or yesterday at noon, just after midnight)
+  let base = V.localTime(V.dayOf(now0), 30);
+  if (base > now0 - 2400) base = V.localTime(V.addDays(V.dayOf(now0), -1), 12 * 60);
+  const isToday = V.dayOf(base) === V.dayOf(now0);
+  const hb = (dt: number, x: Record<string, unknown> = {}) => ({ entity: "C:\\Users\\Alice\\Documents\\cours\\todo-app\\src\\app.js", type: "file", category: "coding", time: base + dt + 0.123, project: "todo-app", project_root_count: 6, language: "JavaScript", lines: 100, lineno: 3, cursorpos: 7, is_write: false, user_agent: "wakatime/v1.130.0 (windows-10.0-x86_64) go1.24.4 vscode/1.105.1 vscode-wakatime/25.3.2", ...x });
+  const r1 = await waka("POST", "/users/current/heartbeats.bulk", key, [hb(0), hb(120, { lines: 104, human_line_changes: 4 }), hb(240, { is_write: true, lines: 110, human_line_changes: 6 })]);
+  check(r1.status === 202 && Array.isArray(r1.data.responses) && r1.data.responses.length === 3 && r1.data.responses.every((x: any) => x[1] === 201 && typeof x[0].data.id === "string"), "heartbeats.bulk: 202 with one [body, 201] per heartbeat (what wakatime-cli parses)");
+  const today = V.dayOf(base);
+  const row1 = q1("SELECT * FROM vsc_days WHERE guild_id = ? AND discord_id = ? AND day = ?", G, U.alice.id, today);
+  check(row1 && row1.active_s === 240 + V.LAST_SLICE && row1.write_s === 240 && row1.n === 3 && row1.human_lines === 10, "the day's temps actif and temps d'écriture are computed and stored");
+  check(!row1.raw.includes("Users") && !row1.raw.includes("Alice") && !row1.agg.includes("Documents") && row1.raw.includes("src/app.js"), "no absolute path is stored: the file is relative to the project");
+  check(q1("SELECT first_seen FROM vsc_learners WHERE discord_id = ?", U.alice.id).first_seen > 0, "the first heartbeat marks the learner connected");
+  const bar1 = await waka("GET", "/users/current/statusbar/today", key);
+  check(!isToday || (bar1.data.data.grand_total.total_seconds === row1.active_s && bar1.data.data.categories[1].total_seconds === 240 && bar1.data.data.grand_total.text.includes("active")), "the status bar shows today's time, computed like the dashboard");
+  // the same heartbeats again (the offline queue): nothing changes, nothing written
+  const rev1 = row1.rev;
+  const r2 = await waka("POST", "/users/current/heartbeats.bulk", key, [hb(0), hb(120, { lines: 104, human_line_changes: 4 })]);
+  check(r2.status === 202 && q1("SELECT rev FROM vsc_days WHERE discord_id = ? AND day = ?", U.alice.id, today).rev === rev1, "the same heartbeats sent again: accepted, counted once, no write");
+  // older heartbeats arrive after newer ones: the day is recomputed in time order
+  await waka("POST", "/users/current/heartbeats.bulk", key, [hb(600, { lines: 112 }), hb(720, { lines: 112 })]);
+  await waka("POST", "/users/current/heartbeats.bulk", key, [hb(360, { lines: 110 }), hb(480, { lines: 112 })]);
+  const row2 = q1("SELECT * FROM vsc_days WHERE discord_id = ? AND day = ?", U.alice.id, today);
+  check(row2.n === 7 && row2.active_s === 720 + V.LAST_SLICE && row2.write_s === 240 + 120, "late heartbeats (the CLI's offline queue) fill their place: 12 minutes in a row");
+  // per item: a malformed one is refused, the others kept
+  const r3 = await waka("POST", "/users/current/heartbeats.bulk", key, [hb(800), { entity: "", time: now0 }, { ...hb(900), type: "app" }]);
+  check(r3.data.responses[0][1] === 201 && r3.data.responses[1][1] === 400 && r3.data.responses[1][0].error && r3.data.responses[2][1] === 201, "a malformed heartbeat gets its own 400, the others 201");
+  check((await waka("POST", "/users/current/heartbeats.bulk", key, "{not json")).status === 400 && (await waka("POST", "/users/current/heartbeats.bulk", key, Array.from({ length: 26 }, (_, i) => hb(i)))).status === 400, "invalid JSON or more than 25 heartbeats: 400");
+  const one1 = await waka("POST", "/users/current/heartbeats", key, hb(1000));
+  check(one1.status === 202 && one1.data.data.id, "the single heartbeat endpoint works too");
+  check((await waka("POST", "/plugins/errors", null, { message: "crash", stacktrace: "C:/Users/Alice/..." })).status === 201 && (await waka("GET", "/users/current/goals/x", key)).status === 404, "the CLI's crash reports: answered, never stored; other paths: 404");
+  check(W.rateLimited("test-key-rl") === false && Array.from({ length: 130 }, () => W.rateLimited("test-key-rl")).some(Boolean), "a key sending too much gets 429 (the CLI keeps the heartbeats and sends later)");
+  // /vscode status
+  const st1 = await slash(U.alice, "vscode", {}, "status");
+  check(text(st1).includes("Connected") && text(st1).includes("Today") && text(st1).includes("This week") && text(st1).includes(key.slice(-4)), "/vscode status: connected, last activity, today and this week, the key's last characters");
+  // pause: answered as usual (no error in VS Code), nothing kept
+  check(text(await slash(U.alice, "vscode", {}, "pause")).includes("Paused"), "/vscode pause");
+  const n0 = q1("SELECT n FROM vsc_days WHERE discord_id = ? AND day = ?", U.alice.id, today).n;
+  const rp = await waka("POST", "/users/current/heartbeats.bulk", key, [hb(1500)]);
+  check(rp.status === 202 && rp.data.responses[0][1] === 201 && q1("SELECT n FROM vsc_days WHERE discord_id = ? AND day = ?", U.alice.id, today).n === n0, "paused: the heartbeats are answered 201 but not kept");
+  check((await waka("GET", "/users/current/statusbar/today", key)).data.data.grand_total.text.includes("paused"), "…and the status bar says paused");
+  check(text(await slash(U.alice, "vscode", {}, "resume")).includes("Recording again"), "/vscode resume");
+  // a new key: the old one stops working at once
+  discordCalls.length = 0;
+  await slash(U.alice, "vscode", {}, "newkey");
+  const key2 = (text(discordCalls.find((c) => c.path === `/channels/dm-${U.alice.id}/messages`)?.body).match(/waka_[a-f0-9-]{36}/) ?? [""])[0];
+  check(key2 && key2 !== key && (await waka("GET", "/users/current/statusbar/today", key)).status === 401 && (await waka("GET", "/users/current/statusbar/today", key2)).status === 200, "/vscode newkey: a new key by DM, the old one gets 401");
+  check(text(await slash(U.bob, "vscode", {}, "newkey")).includes("haven't set up") || text(lastPatch()).includes("haven't set up"), "newkey without setup: says to run /vscode setup");
+  // the class turns it off: answered, not kept, the status bar says so
+  run1("UPDATE guilds SET vscode = ? WHERE id = ?", JSON.stringify({ enabled: false }), G);
+  const off = await waka("POST", "/users/current/heartbeats.bulk", key2, [hb(1600)]);
+  check(off.status === 202 && q1("SELECT n FROM vsc_days WHERE discord_id = ? AND day = ?", U.alice.id, today).n === n0 && (await waka("GET", "/users/current/statusbar/today", key2)).data.data.grand_total.text.includes("off"), "tracking off for the class: answered, nothing kept, the status bar says off");
+  check(text(await slash(U.bob, "vscode", {}, "setup")).includes("turned off"), "/vscode setup while it's off: says so");
+  run1("UPDATE guilds SET vscode = NULL WHERE id = ?", G);
+  // delete: after a confirmation, everything goes and the key stops working
+  const del = await slash(U.alice, "vscode", {}, "delete");
+  check(ids(del.data).includes("vsc:del") && q("SELECT 1 FROM vsc_days WHERE discord_id = ?", U.alice.id).length > 0, "/vscode delete asks first");
+  const del2 = await click(U.alice, "vsc:del");
+  check(text(del2).includes("Deleted") && !q("SELECT 1 FROM vsc_days WHERE discord_id = ?", U.alice.id).length && !q1("SELECT 1 AS x FROM vsc_learners WHERE discord_id = ?", U.alice.id) && (await waka("GET", "/users/current/statusbar/today", key2)).status === 401, "…then every day, the key and the consent are deleted");
+  // DMs closed: the key comes in the private answer itself
+  discordFake.fail.push({ method: "POST", path: "/users/@me/channels", status: 403, code: 50007, n: 1 });
+  await slash(U.bob, "vscode", {}, "setup");
+  await click(U.bob, "vsc:ok");
+  check(/waka_[a-f0-9-]{36}/.test(text(lastPatch())) && text(lastPatch()).includes("DMs are closed"), "DMs closed: the key and the steps in the private answer");
+  await slash(U.bob, "vscode", {}, "delete"); await click(U.bob, "vsc:del");
+}
+
+section("VS Code activity: the dashboard (today, week, learner, squads, CSV, reminder, settings, checks), midnight and retention in D1");
+{
+  const V = await import("../src/shared/vscode.ts");
+  const DB = await import("../src/shared/vscodedb.ts");
+  const BASE = "https://bot.example.workers.dev/wakatime/api/v1";
+  const waka = async (key: string, body: unknown) => {
+    const res = await bot.fetch(new Request(BASE + "/users/current/heartbeats.bulk", { method: "POST", headers: { "content-type": "application/json", authorization: "Basic " + Buffer.from(key).toString("base64") }, body: JSON.stringify(body) }), env, makeCtx());
+    return { status: res.status, data: await res.json() as any };
+  };
+  const now0 = clock.now(), today = V.dayOf(now0);
+  // Alice codes this morning (or the day before when it's just after midnight), on todo-app
+  let base = V.localTime(today, 30);
+  if (base > now0 - 2400) base = V.localTime(V.addDays(today, -1), 12 * 60);
+  const day = V.dayOf(base);
+  const keyA = await DB.acceptConsent(env, G, U.alice.id, 1);
+  const hb = (dt: number, x: Record<string, unknown> = {}) => ({ entity: `/home/alice/cours/todo-app/src/app.js`, type: "file", time: base + dt, project: "todo-app", project_root_count: 5, language: "JavaScript", lines: 100, is_write: false, ...x });
+  await waka(keyA, [hb(0), hb(120, { lines: 104, human_line_changes: 4 }), hb(240, { lines: 110, is_write: true, human_line_changes: 6 }), hb(360, { entity: "/home/alice/cours/todo-app/index.html", language: "HTML", lines: 30 })]);
+  // a commit of 320 lines on todo-app that day (GitHub), with only 4 minutes of writing on it
+  run1("INSERT OR REPLACE INTO gh_log (guild_id, id, discord_id, kind, repo, branch, t, title, size, bad, adds, dels, files) VALUES (?, 'vsc-sha1', ?, 'commit', 'alice/todo-app', 'main', ?, 'feat: everything', 'real', 0, 320, 2, 9)", G, U.alice.id, base + 600);
+  const d = await api("GET", `/api/vscode/day?g=${G}&date=${day}`);
+  const ra = d.data.rows.find((r: any) => r.id === U.alice.id), rb = d.data.rows.find((r: any) => r.id === U.bob.id);
+  check(d.status === 200 && ra.connected && ra.active === 360 + V.LAST_SLICE && ra.write === 240 && ra.cur.p === "todo-app" && ra.cur.f === "index.html" && ra.hours.length === 24, "Today: each learner's temps actif, temps d'écriture, current project and file, hour by hour");
+  check(rb.status === "none" && !rb.connected && d.data.notConnected.some((r: any) => r.id === U.bob.id) && !d.data.rows.some((r: any) => r.id === U.prof.id), "…who isn't connected yet; the teacher isn't a row");
+  check(d.data.cards.connected >= 1 && d.data.cards.write >= 240 && d.data.cards.students === d.data.rows.length, "…and the cards (connected, coding now, the class's writing time, no activity)");
+  const w = await api("GET", `/api/vscode/week?g=${G}&date=${day}`);
+  const wa = w.data.learners.find((l: any) => l.id === U.alice.id);
+  check(w.status === 200 && w.data.days.length === 7 && w.data.days[0] === V.mondayOf(day) && wa.write === 240 && wa.cells[V.weekday(day)][1] === 240, "Week: Monday → Sunday, a cell per learner and day, the totals");
+  const L = await api("GET", `/api/vscode/learner/${U.alice.id}?g=${G}&date=${day}`);
+  check(L.status === 200 && L.data.agg.sessions.length === 1 && L.data.week.length === 7 && L.data.commits.some((c: any) => c.adds === 320 && c.repo === "alice/todo-app"), "A learner: the day's sessions, the week, the day's commits next to the coding time");
+  check(L.data.signals.some((s: any) => s.kind === "commit_little_writing" && s.n === 320 && s.project === "todo-app"), "…and « à vérifier »: 320 lines committed on todo-app with 4 minutes of writing on it");
+  check((await api("GET", `/api/vscode/learner/999999?g=${G}`)).status === 400, "a learner who isn't in the class: refused");
+  // the CSV
+  const csv = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=day`);
+  check(csv.status === 200 && String(csv.data).includes("learner,squad,status,active_min,writing_min") && String(csv.data).includes("Alice") && String(csv.data).includes(",4,"), "Export CSV of the day (minutes)");
+  const csvw = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=week`);
+  check(String(csvw.data).includes(`${V.mondayOf(day)}_writing_min`) && String(csvw.data).includes("week_writing_min"), "…and of the week");
+  // the reminder: only to students not connected
+  discordCalls.length = 0;
+  const rem = await api("POST", "/api/vscode/remind", { g: G, ids: [U.bob.id, U.alice.id, "424242"] });
+  const dmTo = discordCalls.filter((c) => c.path === "/users/@me/channels").map((c) => c.body.recipient_id);
+  check(rem.data.sent === 1 && dmTo.join() === U.bob.id && text(discordCalls.find((c) => c.path === `/channels/dm-${U.bob.id}/messages`)?.body).includes("/vscode setup"), "the setup reminder by DM goes only to the ticked learners who aren't connected");
+  // settings: file names off, a new consent text
+  const s1 = await api("GET", `/api/vscode/settings?g=${G}`);
+  check(s1.data.settings.idle === 5 && s1.data.apiUrl === "https://bot.example.workers.dev/wakatime/api/v1" && s1.data.consentDefault.includes("30 days"), "Settings: the defaults, the address for VS Code, the default consent text");
+  const s2 = await api("PUT", "/api/vscode/settings", { g: G, files: false, idle: 7, consent: "Ton temps de code est suivi ({retention} jours)." });
+  check(s2.data.settings.files === false && s2.data.settings.idle === 7 && s2.data.settings.consent_v === 2, "…saved (a new consent text gets a new version)");
+  const L2 = await api("GET", `/api/vscode/learner/${U.alice.id}?g=${G}&date=${day}`);
+  const d2 = await api("GET", `/api/vscode/day?g=${G}&date=${day}`);
+  check(!L2.data.agg.files.length && d2.data.rows.find((r: any) => r.id === U.alice.id).cur.f === "" && !JSON.stringify(L2.data.signals).includes("src/app.js"), "file names off: the dashboard shows no file");
+  const st = await slash(U.alice, "vscode", {}, "status");
+  check(text(st).includes("changed the text") && ids(st.data).includes("vsc:setup"), "/vscode status asks to read the new text again (tracking goes on)");
+  check(text(await slash(U.bob, "vscode", {}, "setup")).includes("Ton temps de code est suivi (30 jours)"), "/vscode setup shows the class's own text");
+  run1("UPDATE guilds SET vscode = NULL WHERE id = ?", G);
+  // Run checks: a heartbeat through the endpoint's code, read back, deleted
+  const ck = await api("POST", "/api/vscode/check", { g: G });
+  check(ck.status === 200 && ck.data.steps.find((x: any) => x.name.startsWith("Send heartbeats")).ok && ck.data.steps.find((x: any) => x.name === "Read back").ok && ck.data.steps.find((x: any) => x.name === "Unknown key refused").ok, "Run checks: send, read back, the status bar, an unknown key refused");
+  check(!q("SELECT 1 FROM vsc_days WHERE discord_id = ?", DB.DIAG_ID).length && !q("SELECT 1 FROM vsc_learners WHERE discord_id = ?", DB.DIAG_ID).length, "…and the test heartbeats are deleted");
+  // squads: who worked on which file of the squad's repo
+  const sid = "a1b2c3";
+  const bid = Number(run1("INSERT INTO briefs (guild_id, title, status, data, kind, squads, start_at, due_at, created_at) VALUES (?, 'Todo en squad', 'assigned', '{}', 'squad', ?, ?, ?, ?)",
+    G, JSON.stringify([{ id: sid, name: "Les Todo", members: [U.alice.id, U.bob.id], sm: U.alice.id }]), base - 86400, base + 86400, base - 2 * 86400).lastInsertRowid);
+  run1("INSERT INTO brief_handins (brief_id, guild_id, who, repo, at) VALUES (?, ?, ?, 'alice/todo-app', ?)", bid, G, `s:${sid}`, base);
+  const sv = await api("GET", `/api/vscode/squads?g=${G}&brief=${bid}`);
+  const sq = sv.data.view.squads[0], ma = sq.members.find((m: any) => m.id === U.alice.id);
+  check(sv.status === 200 && sv.data.briefs.some((b: any) => b.id === bid) && sq.repo === "alice/todo-app" && ma.onProject.write === 240 && sq.members.find((m: any) => m.id === U.bob.id).onProject.active === 0, "Squads: each member's time on the squad's repo");
+  check(sq.files.some((f: any) => f.file === "src/app.js" && f.by[U.alice.id][1] === 240) && sq.files.some((f: any) => f.file === "index.html"), "…and who worked on which file");
+  // a learner removed from the class: their VS Code data goes too
+  run1("INSERT INTO players (guild_id, discord_id, name, coins, created_at) VALUES (?, '199', 'Temp', 0, ?)", G, now0);
+  const keyT = await DB.acceptConsent(env, G, "199", 1);
+  await waka(keyT, [hb(0), hb(60)]);
+  check(q("SELECT 1 FROM vsc_days WHERE discord_id = '199'").length === 1, "(a temporary student with a day of data)");
+  await api("DELETE", `/api/students/199?g=${G}`, undefined, {});
+  check(!q("SELECT 1 FROM vsc_days WHERE discord_id = '199'").length && !q("SELECT 1 FROM vsc_learners WHERE discord_id = '199'").length && (await waka(keyT, [hb(120)])).status === 401, "a student removed from the class: their days and key are deleted (the key gets 401)");
+  // midnight in D1: the day before ends on the first heartbeat after midnight, nothing counted twice
+  const dA = V.addDays(today, -3), dB = V.addDays(today, -2);
+  const who = { gid: G, uid: U.carol.id, settings: V.vscSettings(null) };
+  const H = (t: number, x: Partial<any> = {}): any => ({ t, p: "p", f: "a.js", lang: "JavaScript", cat: "coding", w: 0, lines: 10, ai: 0, hu: 0, lc: 0, ed: "VS Code", ...x });
+  await DB.ingest(env, who, [H(V.localTime(dA, 23 * 60 + 54)), H(V.localTime(dA, 23 * 60 + 58))]);
+  const a1 = q1("SELECT active_s FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, dA).active_s;
+  await DB.ingest(env, who, [H(V.localTime(dB, 2), { w: 1 }), H(V.localTime(dB, 4))]);
+  const ra2 = q1("SELECT active_s, write_s FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, dA), rb2 = q1("SELECT active_s, write_s FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, dB);
+  check(a1 === 240 + 60 && ra2.active_s === 240 + 120 && ra2.write_s === 120 && rb2.active_s === 120 + 120 + 60, "across midnight in the database: 23:58 → 00:02 counts 2 minutes on each day, the day before is updated");
+  // retention: the raw heartbeats go after N days, the totals stay, a late heartbeat can't change them
+  run1("UPDATE vsc_days SET day = ? WHERE discord_id = ? AND day = ?", V.addDays(today, -40), U.carol.id, dA);
+  const purged = await DB.purgeRaw(env);
+  const old = q1("SELECT raw, active_s FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, V.addDays(today, -40));
+  check(purged >= 1 && old.raw === null && old.active_s === 360 && q1("SELECT raw FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, dB).raw, "after the retention days (30): the raw heartbeats are cleared, the day's totals stay; recent days keep theirs");
+  check(await DB.ingest(env, who, [H(V.localTime(V.addDays(today, -40), 600))]) === 0 && q1("SELECT active_s FROM vsc_days WHERE discord_id = ? AND day = ?", U.carol.id, V.addDays(today, -40)).active_s === 360, "…and a late heartbeat can't change a finished day");
+  // integrations: the debrief's member card, the GitHub tab, needs attention
+  const mb = await api("GET", `/api/vscode/brief/${bid}?g=${G}&who=s:${sid}`);
+  const mA = mb.data.members[U.alice.id], mB = mb.data.members[U.bob.id];
+  check(mb.status === 200 && mb.data.repo === "alice/todo-app" && mA.connected && mA.onProject.write === 240 && mA.files.some((f: any) => f.file === "src/app.js") && mB && !mB.connected && mB.active === 0,
+    "debrief member card: each member's VS Code time during the brief, on the squad's repo, their most worked files");
+  const gd = await api("GET", `/api/vscode/days/${U.alice.id}?g=${G}&days=30`);
+  check(gd.data.connected && gd.data.days[day][1] === 240, "GitHub tab: the learner's coding time per day, next to the commits");
+  run1("INSERT INTO players (guild_id, discord_id, name, coins, created_at) VALUES (?, '198', 'Quiet', 0, ?)", G, now0);
+  await DB.acceptConsent(env, G, "198", 1);
+  run1("UPDATE vsc_learners SET first_seen = ? WHERE discord_id = '198'", now0 - 20 * 86400);
+  const qb = Number(run1("INSERT INTO briefs (guild_id, title, status, data, kind, start_at, due_at, created_at) VALUES (?, 'Brief en cours', 'assigned', '{}', 'solo', ?, ?, ?)", G, now0 - 15 * 86400, now0 + 5 * 86400, now0 - 16 * 86400).lastInsertRowid);
+  const reasonOf = async (id: string) => (await api("GET", `/api/students?g=${G}`)).data.find((r: any) => r.discord_id === id)?.attention ?? [];
+  check((await reasonOf("198")).includes("no VS Code writing for 2 working days") && !(await reasonOf(U.alice.id)).includes("no VS Code writing for 2 working days"), "needs attention: connected, no writing time for 2 working days during a brief (a learner connected today isn't)");
+  const lastWork = (() => { let x = V.addDays(today, -1); while ([5, 6].includes(V.weekday(x))) x = V.addDays(x, -1); return x; })();
+  run1("INSERT INTO vsc_days (guild_id, discord_id, day, active_s, write_s, n, agg, rev, updated_at) VALUES (?, '198', ?, 900, 300, 10, '{}', 1, ?)", G, lastWork, now0);
+  check(!(await reasonOf("198")).includes("no VS Code writing for 2 working days"), "…and not once they write again");
+  run1("DELETE FROM players WHERE discord_id = '198'"); run1("DELETE FROM briefs WHERE id = ?", qb);
+  run1("DELETE FROM vsc_days WHERE guild_id = ?", G); run1("DELETE FROM vsc_learners WHERE guild_id = ?", G);
+  run1("DELETE FROM brief_handins WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id = ?", bid); run1("DELETE FROM gh_log WHERE id = 'vsc-sha1'");
+}
+
 section("i18n: every key exists in English and French");
 {
   const en = Object.keys(DICTS.en), fr = Object.keys(DICTS.fr);

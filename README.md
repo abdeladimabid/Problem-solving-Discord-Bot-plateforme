@@ -154,6 +154,7 @@ Answers are private to the student (ephemeral). Public news goes to **#arena**. 
 | `/ask question` · `/faq [search]` | Looks in the class FAQ first. Otherwise you get a DM with an AI draft to check; they get your answer by DM, and it joins the FAQ. |
 | `/interview [difficulty]` | 🎤 A mock coding interview: they explain approach, edge cases and complexity, write the code, and get a scorecard (+5 points once a day). |
 | `/github` | 🐙 Link GitHub once, by installing the class's GitHub App on their repositories. |
+| `/vscode setup\|status\|pause\|resume\|newkey\|delete` | 🧑‍💻 Connect VS Code so you see their coding time. `setup` shows what is recorded first; after **J'accepte** they get their own key and the steps by DM. `status`: connected, last activity, today and this week. `pause` / `resume`, `newkey` (the old key stops working), `delete` (everything, after a confirmation). See [VS Code tracking](#vs-code-tracking). |
 | `/brief list` · `/brief submit repo [plan] [brief]` | Their briefs (dates, squad, hand-in, debrief result, competencies) · hand in the repo and the planning board (Trello, Jira, GitHub Project). In a squad, the scrum master hands in. |
 | `/activity list\|choose\|mine` | The veilles and live codings you shared: the free ones, ask for one (`partner` is required for a veille; `partner2` if you allow a third), and their own with the subject once approved. |
 | `/play` | 🎮 Their own link to the class game on the TV. |
@@ -223,6 +224,35 @@ Open `https://classbot-admin.<subdomain>.workers.dev`. The menu has **Overview**
   - a brief in squads, or a squad battle, loads them
   - **🤝 Squad buddy** (bought in the shop) keeps two students together
 - **🏆 Contest teams:** a team's contest score is the average of its members. A student is in one team.
+
+#### VS Code tracking
+How long each learner really codes, from the official **WakaTime extension** of VS Code pointed at ClassBot instead of wakatime.com. ClassBot receives the heartbeats and computes the time itself, in Moroccan time; weeks run Monday to Sunday.
+
+- **Two times, everywhere:**
+  - **Temps actif:** they were in VS Code (typing, moving between files, reading). The gap between two heartbeats counts when it is at most the idle limit (5 min by default); a longer gap counts 0, and 60 s are added after the last heartbeat of a session.
+  - **Temps d'écriture:** the minutes that end on a heartbeat where the file changed: saved, lines changed, or a different line count than the file's previous heartbeat. An AI writing (`ai coding`) is active time, never writing time.
+- **Today:**
+  - cards: learners connected, coding now (a heartbeat in the last 5 min), the class's writing time, connected with no activity
+  - one row per learner: status, active, writing, first and last activity, project and file now, an hour-by-hour bar (08:00 → 18:00, writing vs active), and AI lines / own lines (« non disponible » when the extension sent none)
+  - the table follows by itself every 45 s
+  - **Not connected yet**, with **Send the setup reminder (DM)**
+- **Week:** a heatmap of learners × days (Saturday and Sunday when there was activity), totals, the trend against the week before, and the class per day.
+- **Squads:** for a brief in squads, each member's time on the squad's handed-in repo (the VS Code project of the same name), and who worked on which file.
+- **A learner** (click a row): the day's sessions and gaps, commits on the same timeline, projects, files, languages, the week, and **à vérifier** signals. These are clues to talk about, never proof:
+  - many lines committed on a project with little writing time on it that day (GitHub has no file names per commit, so this is per repo and day)
+  - 90+ minutes on one file and no commit on its project that day
+  - a big insertion (the line count jumps 80+ lines in under 3 minutes)
+  - more than half of the day's changed lines came from an AI
+- Also: **Export CSV** of the day or the week; the debrief's squad member cards (*VS Code during the brief*, with **Copy** and **Add to the note**); the coding time next to each day's commits on the student's GitHub tab; *no VS Code writing for 2 working days* (during a brief) in **Needs your attention**.
+
+**Learner setup** (`/vscode setup`, after they agree):
+1. Install the **WakaTime** extension in VS Code.
+2. Run the one-line command the DM gives (PowerShell on Windows, bash on macOS/Linux). It adds or replaces only `api_url`, `api_key` and `hide_project_folder = true` in the `[settings]` of `~/.wakatime.cfg`, keeps a `.bak` copy and every other setting. The DM also has the block to paste by hand.
+3. Reload VS Code. After 2–3 minutes of coding, the status bar shows their time of the day (« 1 h 20 actif · 45 min écriture ») and `/vscode status` says connected.
+
+Recommended (in the DM): `include_only_with_project_file = true` plus an empty `.wakatime-project` file in each course folder (only those are tracked), and `hide_file_names = true` (no file names). `sync_ai_disabled = true` stops wakatime-cli from reading their AI tools' session logs (Claude Code, Cursor, Copilot…) to report AI coding.
+
+**Try it without VS Code:** `npm run preview` prints demo keys; `npm run vscode:simulate -- --key waka_… [--key …] [--url https://<bot>.workers.dev] [--minutes 90] [--live]` sends realistic heartbeats the way wakatime-cli does.
 
 #### Help queue
 - Raised hands from `/help-me`, oldest first, with their code and the challenge they're on. The page refreshes by itself.
@@ -474,6 +504,7 @@ Winners get 20 points by default (0–200), and the result can be posted in #are
 | 🛡️ **Anti-cheat** | Write-code answers only in the code editor (recommended) / editor or Discord form / form only. Explain your code, the similarity check, code as an image in quick challenges, the time to answer a quick challenge, and points in /practice. |
 | 🔔 **Notifications** | Who gets the `/help-me`, `/ask` and shop-reward DMs, and **Send me a test DM**. |
 | 🗓️ **Season** | Start a new season (season points restart from zero, history stays), optionally announced in #arena, with certificates by DM. |
+| 🧑‍💻 **VS Code tracking** | On/off for the class, the idle limit (minutes), an optional time window (e.g. 08:00–18:00, Monday to Friday), how many days the details are kept (30 by default; the day totals stay), store file names or not, the consent text the learners read (changing it asks them to read it again), the address for VS Code, and **Run checks** (a test heartbeat through the real endpoint, read back, then deleted). |
 | 🩺 **Diagnostics** | Checks from Cloudflare that the code runner, the AI and HackerRank answer. Also the AI budget today, the challenge bank by type and level, missing migrations, and role permissions. |
 
 ### Teacher commands in Discord
@@ -651,6 +682,7 @@ Every price, limit and duration can be changed or switched off, and you can add 
 **What it holds:**
 - **Students:** Discord ID and name, the HackerRank username and GitHub login they linked, answers and submitted code, and the editor's typing record (for the replay).
 - **Results:** the points and coins log, skills, competencies, debrief records (your switches, notes, comments, levels), assessment papers and grades, presentations, sign-ups.
+- **VS Code tracking** (only learners who agreed): per day, the active and writing time, the projects, the files (their path inside the project, never the full path of the computer; no file at all if the class or the learner hides them), the languages, the editor, and the lines changed by the learner or an AI. The day's heartbeats (time, file, saved, line counts) are kept for the retention days (30 by default), then only the totals stay. Never stored: the code, what they type, the computer's name, branches, dependencies, AI prompts or tokens. Their key is kept as a SHA-256 hash only.
 - **Class settings:** AI keys, GitHub App secrets and the intranet token. They are never sent back to the browser; the intranet token and secret are kept encrypted.
 
 **What leaves your Cloudflare account, and why:**
@@ -678,7 +710,7 @@ Every price, limit and duration can be changed or switched off, and you can add 
 
 **Exporting challenges:** `npm run export:challenges` writes the challenges you added to `migrations/00NN_my_challenges.sql`. It never exports students' answers, points or names, or the author's Discord ID.
 
-**Removing a student:** "Remove from class" on their page. Pending practice attempts expire after 24 h. Nothing else is deleted automatically.
+**Removing a student:** "Remove from class" on their page (their VS Code days and key go too). Pending practice attempts expire after 24 h. Nothing else is deleted automatically. A learner deletes their own VS Code data with `/vscode delete`.
 
 ---
 
@@ -694,7 +726,7 @@ public/         the dashboard: plain HTML/CSS/JS, no build step (i18n-fr.js is t
 migrations/     D1 schema and the challenge bank (applied in order)
 docs/activities/  the veille / live coding / workshop templates and the veille inspiration list
 tools/          Python generators that verify and write the challenge bank
-scripts/        setup, config check, command registration, challenge export
+scripts/        setup, config check, command registration, challenge export, VS Code heartbeat simulator
 tests/          end-to-end tests (run.ts, harness.ts) and the demo preview (preview.ts)
 ```
 
@@ -710,6 +742,7 @@ tests/          end-to-end tests (run.ts, harness.ts) and the demo preview (prev
 | `npm run logs` | Tail the bot Worker's logs |
 | `npm run check-config` | Check the wrangler files (runs before migrate and deploy) |
 | `npm run export:challenges` | Export your own challenges to a migration |
+| `npm run vscode:simulate -- --key waka_…` | Send realistic VS Code heartbeats to the preview or a deployed bot (`--url`, `--minutes`, `--live`) |
 
 ### Conventions
 - **A new migration** goes in `migrations/` with the next number, and in `MIGRATIONS` (`src/shared/schema.ts`) so Diagnostics reports it when missing.
@@ -731,6 +764,13 @@ tests/          end-to-end tests (run.ts, harness.ts) and the demo preview (prev
 - **Workshops** are not offered in Presentations or sent to the intranet: those take veilles and live codings only.
 - **The shared library** keeps the last edit: two teachers editing the same day's activity at the same time keep the later one.
 - **Certificates are web pages:** students use *Print → Save as PDF*.
+- **VS Code tracking is minute-level, not keystroke-level:**
+  - The extension sends at most one heartbeat every 2 minutes on the same file (at once on a save or a file switch), and wakatime-cli sends them every 2 minutes or later (its offline queue).
+  - An edit inside existing lines shows as writing only once the file is saved or its line count changes.
+  - Only editors with the WakaTime extension report (VS Code and its forks; another editor sharing `~/.wakatime.cfg` shows with its name).
+  - Copy-paste from a browser or ChatGPT is not detected as AI: at most a big insertion is noted.
+  - AI lines are the net line changes the extension reports, so they are a clue, not an exact count.
+- **The per-key rate limit** (120 requests per 10 minutes) is kept in the Worker's memory: enough for wakatime-cli, not a hard guarantee. A learner's day is capped at 2000 heartbeats either way.
 
 **FAQ and troubleshooting:**
 

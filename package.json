@@ -21,6 +21,7 @@
     "logs": "wrangler tail -c wrangler.bot.jsonc",
     "test": "node --experimental-strip-types --no-warnings tests/run.ts",
     "preview": "node --experimental-strip-types --no-warnings tests/preview.ts",
+    "vscode:simulate": "node scripts/vscode-simulate.mjs",
     "export:challenges": "node --no-warnings scripts/export-challenges.mjs"
   },
   "devDependencies": {
