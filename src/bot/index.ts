@@ -5,6 +5,7 @@
 //   GET  /cert/:token      an end-of-season certificate (print / save as PDF)
 //   GET  /quiz/:token      a student's assessment (full screen)
 //   GET  /github/connect   a student links GitHub (from /github); POST /github/webhook: the class's GitHub App
+//   /wakatime/api/v1/…     the learners' VS Code (WakaTime extension) sends its heartbeats here (/vscode setup)
 //   cron every minute      contests, duels, assignments, daily, weekly recap
 import { libraryRoute } from "../shared/library.ts";
 import type { Ctx, Env } from "../shared/types.ts";
@@ -23,6 +24,7 @@ import { handleGame } from "./games.ts";
 import { sharePage } from "../shared/assessshare.ts";
 import { applyAppSettings } from "../shared/appsettings.ts";
 import { githubPages, githubWebhook } from "../shared/github.ts";
+import { handleWakatime } from "./wakatime.ts";
 
 /** A quick challenge's code as a PNG (Discord shows it instead of copyable text). Cached at the edge. */
 async function codeImage(request: Request, env: Env, ctx: Ctx, id: number): Promise<Response> {
@@ -80,6 +82,8 @@ export default {
     if (ghw && request.method === "POST") return githubWebhook(request, env, ctx, ghw[1] ?? null);
     const ghp = url.pathname.match(/^\/github\/(connect|callback|setup)(?:\/[\w-]{1,30})?$/);
     if (ghp && request.method === "GET") return githubPages(request, env, ghp[1]);
+    const wk = url.pathname.match(/^\/wakatime\/api\/v1(\/[\w./-]{0,80})?$/);
+    if (wk) return handleWakatime(request, env, ctx, wk[1] ?? "/");
     if (url.pathname === "/") return new Response("ClassBot is running ✅ (Discord endpoint: /interactions)");
     return new Response("not found", { status: 404 });
   },

@@ -75,6 +75,7 @@ export interface GuildRow {
   shop?: string | null;      // JSON: shop prices, items on/off, own rewards
   program?: string | null;   // programme the class follows ("builtin:dwwm-2026" or "db:<id>")
   github?: string | null;    // JSON: GitHub settings (activity channel/forum, reports, hidden repos…)
+  vscode?: string | null;    // JSON: VS Code activity settings (see shared/vscode.ts)
   streak_role: string | null;
   champion_holders: string;
   streak_holders: string;
