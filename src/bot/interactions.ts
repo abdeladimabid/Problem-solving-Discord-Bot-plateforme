@@ -28,6 +28,7 @@ import { pickForSkill } from "../shared/coach.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
+import { cmdVscode, vscButton } from "./vscodecmd.ts";
 import { activityChoices, cmdActivity } from "./actcmd.ts";
 import { playLinks } from "./gamecmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
@@ -114,6 +115,7 @@ async function command(ix: Ix): Promise<Response> {
     case "faq": return cmdFaq(ix, o.search ?? null);
     case "interview": return cmdInterview(ix, (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
     case "github": return cmdGithub(ix);
+    case "vscode": return cmdVscode(ix, sub ?? "status");
     case "brief": return cmdBrief(ix, sub ?? "list", o);
     case "activity": return cmdActivity(ix, sub ?? "list", o);
     case "play": return playLinks(ix, null);
@@ -796,6 +798,7 @@ async function component(ix: Ix): Promise<Response> {
   const id = Number(x);
   switch (kind) {
     case "help": return update(helpPage(ix, String(ix.raw.data.values?.[0] ?? "start")));
+    case "vsc": return vscButton(ix, x);
     case "sol": {
       const r = await ownAttempt(ix, id);
       if (r instanceof Response) return r;

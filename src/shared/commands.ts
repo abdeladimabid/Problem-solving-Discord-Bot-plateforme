@@ -154,6 +154,17 @@ export const COMMANDS: any[] = [
   },
   { name: "github", description: "Connect your GitHub: your briefs and your work count in your record", description_localizations: fr("Connecter ton GitHub : tes briefs et ton travail comptent dans ton suivi") },
   {
+    name: "vscode", description: "Your coding time in VS Code, with your consent (WakaTime extension)", description_localizations: fr("Ton temps de code dans VS Code, avec ton accord (extension WakaTime)"),
+    options: [
+      { type: SUB, name: "setup", description: "What is recorded, then your personal key and the setup", description_localizations: fr("Ce qui est enregistré, puis ta clé personnelle et la configuration") },
+      { type: SUB, name: "status", description: "Connected? Your time today and this week", description_localizations: fr("Connecté ? Ton temps aujourd'hui et cette semaine") },
+      { type: SUB, name: "pause", description: "Stop recording for now", description_localizations: fr("Arrêter l'enregistrement pour l'instant") },
+      { type: SUB, name: "resume", description: "Record again", description_localizations: fr("Reprendre l'enregistrement") },
+      { type: SUB, name: "newkey", description: "A new key (the old one stops working)", description_localizations: fr("Une nouvelle clé (l'ancienne ne marche plus)") },
+      { type: SUB, name: "delete", description: "Delete all my VS Code data", description_localizations: fr("Supprimer toutes mes données VS Code") },
+    ],
+  },
+  {
     name: "brief", description: "Your project briefs: dates, hand-in, your debrief", description_localizations: fr("Tes briefs : dates, rendu, ton débriefing"),
     options: [
       { type: SUB, name: "list", description: "Your briefs and your results", description_localizations: fr("Tes briefs et tes résultats") },

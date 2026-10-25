@@ -1261,6 +1261,35 @@ function memberLevelHtml(gid, final) {
     <div class="toolbar" style="margin:0">${LV.map(([v, l]) => `<button class="btn small w-lv pgc-${v} ${cur === v ? "on" : !cur && p === v ? "prop" : ""}" data-mlv="${v}" data-gid="${esc(gid)}" ${final ? "disabled" : ""}>${l}</button>`).join("")}</div></div>`;
 }
 
+// Suivi VS Code: each member's coding time between the brief's dates, on the squad's repo, and their most worked files.
+// Facts only: copy them, or add them to the member's note (their comment uses it once you save the members).
+async function loadMemberVsc() {
+  const boxes = $$("[data-vsc]");
+  if (!boxes.length) return;
+  let V;
+  try { V = await api(`/vscode/brief/${DB.bid}?who=${encodeURIComponent(DB.who)}`); } catch { return; }
+  const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${m} min`; };
+  const frDay = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
+  for (const box of boxes) {
+    const x = V.members[box.dataset.vsc];
+    if (!x) continue;
+    if (!x.connected && !x.active) { box.innerHTML = `<span class="muted">🧑‍💻 VS Code: not connected, no data</span>`; continue; }
+    const repo = V.repo ? V.repo.split("/").pop() : "";
+    const facts = `Temps VS Code pendant le brief (du ${frDay(V.from)} au ${frDay(V.to)}) : ${dur(x.active)} actif, dont ${dur(x.write)} d’écriture${repo ? ` ; ${dur(x.onProject.write)} d’écriture sur le dépôt ${repo}` : ""}.${x.files.length ? ` Fichiers les plus travaillés : ${x.files.slice(0, 3).map((f) => `${f.file} (${dur(f.active)})`).join(", ")}.` : ""}`;
+    box.innerHTML = `<div>🧑‍💻 <b>VS Code during the brief</b>: <b>${esc(dur(x.active))}</b> active · <b>${esc(dur(x.write))}</b> writing${repo ? ` · on the repo <b>${esc(dur(x.onProject.write))}</b> writing` : ""}</div>
+      ${x.files.length ? `<div class="muted m-vsc-files">${x.files.map((f) => `<code>${esc(f.file)}</code> ${esc(dur(f.active))}`).join(" · ")}</div>` : ""}
+      <div class="toolbar" style="margin:4px 0 0"><button class="btn small" data-vcp>Copy</button>${box.dataset.final ? "" : `<button class="btn small" data-vadd title="Facts only: their comment uses the note once you save the members">Add to the note</button>`}</div>`;
+    $("[data-vcp]", box).onclick = () => copyText(facts, "Copied");
+    const add = $("[data-vadd]", box);
+    if (add) add.onclick = () => {
+      const n = box.closest(".member")?.querySelector("[data-mn]");
+      if (!n) return;
+      if (!n.value.includes("Temps VS Code")) n.value = `${n.value ? n.value.replace(/\s*$/, " ") : ""}${facts}`;
+      toast("Added to the note: Save members to keep it");
+    };
+  }
+}
+
 function squadMembersHtml(rec, st, final) {
   const comps = Object.keys(st.co);
   return `<section class="panel"><div class="panel-head"><h2>Squad members</h2>${final ? "" : `<button class="btn small primary" id="db-msave">Save members</button>`}</div>
@@ -1276,6 +1305,7 @@ function squadMembersHtml(rec, st, final) {
           <div><label>Mise en situation</label><select data-mr ${final ? "disabled" : ""}><option value="">—</option>${MES.map(([v, l]) => `<option value="${v}" ${ms.mes?.r === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
         <div class="db-rows" style="margin-top:8px">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span></div></div>`).join("")}</div>
         ${memberLevelHtml(m.gid, final)}
+        <div class="m-vsc small" data-vsc="${esc(m.gid)}" ${final ? 'data-final="1"' : ""}></div>
         <label>Note</label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${final ? "disabled" : ""}>
         <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div>
         ${ms.comment ? `<details class="small"><summary>Their comment</summary><pre class="code-view" style="white-space:pre-wrap">${esc(ms.comment)}</pre></details>` : ""}
@@ -1366,6 +1396,7 @@ function wireDebrief() {
     DB.R = { ...DB.R, ...R };
   };
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
+  loadMemberVsc();
   // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data (saved first)
   $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
     const cur = (DB.R.memberLevels || {})[b.dataset.gid]?.lvl || "";

@@ -398,6 +398,63 @@ env.ASSETS = {
     JSON.stringify([sq("Unicode", [0, 1, 2, 3]), sq("SegFault", [4, 5, 6]), sq("Leaders", [7, 8, 9, 10]), sq("PixelForce", [11, 12, 13])]), now - 30 * DAY, now - 30 * DAY);
 }
 
+// ---------------------------------------------------------- VS Code tracking: two weeks of coding time
+// computed by the real code from generated heartbeats; a squad brief; keys printed for `npm run vscode:simulate`
+const vscKeys: string[] = [];
+{
+  const V = await import("../src/shared/vscode.ts");
+  const today = V.dayOf(now);
+  const FILES = ["index.html", "src/styles.css", "src/main.js", "src/components/navbar.js", "src/pages/contact.html", "tailwind.config.js", "README.md"];
+  const LANGS: Record<string, string> = { html: "HTML", css: "CSS", js: "JavaScript", md: "Markdown" };
+  // 0–8 track, 9 and 10 got their key but nothing yet, 11 paused, 12 and 13 never ran /vscode setup
+  const plan = names.map((_, i) => (i >= 12 ? "none" : i === 9 || i === 10 ? "waiting" : i === 11 ? "paused" : "on"));
+  const insL = db.prepare("INSERT INTO vsc_learners (guild_id, discord_id, key_hash, key_hint, consent_at, consent_v, paused, first_seen, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)");
+  const insD = db.prepare("INSERT INTO vsc_days (guild_id, discord_id, day, active_s, write_s, first_t, last_t, n, ai_lines, human_lines, agg, raw, rev, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)");
+  for (let i = 0; i < names.length; i++) {
+    if (plan[i] === "none") continue;
+    const id = String(100 + i), key = V.newKey();
+    insL.run(G, id, await V.hashKey(key), key.slice(-4), now - 13 * DAY, plan[i] === "paused" ? 1 : 0, plan[i] === "waiting" ? null : now - 13 * DAY, now - 13 * DAY, now);
+    if (i < 3) vscKeys.push(`${names[i]} ${key}`);
+    if (plan[i] === "waiting") continue;
+    for (let d = 13; d >= 0; d--) {
+      const day = V.addDays(today, -d), clk = V.dayClock(day);
+      if (V.weekday(day) > 4 && rnd() > 0.12) continue;
+      if (rnd() < 0.08 + (i === 3 ? 0.35 : 0)) continue;             // absent (Mehdi often)
+      if (plan[i] === "paused" && d < 4) continue;                  // paused since 4 days
+      const project = d > 11 ? "hammam-andalous" : "tailwind-landing";
+      const writeRate = 0.25 + skill[i] * 0.55;
+      const hbs: any[] = [];
+      const lines: Record<string, number> = {};
+      let f = FILES[Math.floor(rnd() * 3)];
+      for (const [from, to] of [[9 * 60 + Math.floor(rnd() * 40), 12 * 60 + 30 - Math.floor(rnd() * 50)], [14 * 60 + Math.floor(rnd() * 30), 17 * 60 + 30 - Math.floor(rnd() * 90)]]) {
+        let t = V.localTime(day, from);
+        const end = Math.min(V.localTime(day, to), d === 0 ? now - (i < 3 ? 40 + i * 50 : 1500 + i * 400) : Infinity);
+        while (t < end) {
+          if (rnd() > 0.72) f = FILES[Math.floor(rnd() * FILES.length)];
+          const ext = f.split(".").pop() ?? "";
+          const before = lines[f] ?? 40 + Math.floor(rnd() * 120);
+          const ai = i === 4 && rnd() < 0.3, writes = ai || rnd() < writeRate;
+          let add = writes ? 1 + Math.floor(rnd() * (ai ? 30 : 6)) : 0;
+          if (i === 6 && d === 2 && t > V.localTime(day, 10 * 60) && !hbs.some((h) => h.big)) add = 220;   // one big paste
+          lines[f] = before + add;
+          hbs.push({ t, p: project, f, lang: LANGS[ext] ?? "", cat: ai ? "ai coding" : "coding", w: writes && rnd() < 0.3 ? 1 : 0, lines: lines[f], ai: ai ? add : 0, hu: ai ? 0 : add, lc: 1, ed: i === 5 ? "Cursor" : "VS Code", big: add === 220 });
+          t += rnd() < 0.05 ? 480 + rnd() * 900 : 50 + rnd() * 120;   // now and then a break (counts 0)
+        }
+      }
+      if (!hbs.length) continue;
+      hbs.forEach((h) => delete h.big);
+      const a = V.computeDay(hbs, clk, { idle: 5 });
+      insD.run(G, id, day, a.active, a.write, a.first, a.last, a.n, a.ai, a.hu, JSON.stringify(a), V.packRaw(hbs, clk.start), now);
+    }
+  }
+  // a squad brief (Unicode, SegFault, Leaders) on tailwind-landing: who worked on which file
+  const sq = (id: string, n: string, ids: number[]) => ({ id, name: n, members: ids.map((i) => String(100 + i)), sm: String(100 + ids[0]) });
+  const bid = Number(db.prepare("INSERT INTO briefs (guild_id, title, status, data, kind, squads, start_at, due_at, created_at) VALUES (?, 'Landing page Tailwind (squads)', 'assigned', '{}', 'squad', ?, ?, ?, ?)")
+    .run(G, JSON.stringify([sq("a0c001", "Unicode", [0, 1, 2, 3]), sq("a0c002", "SegFault", [4, 5, 6]), sq("a0c003", "Leaders", [7, 8, 11])]), now - 11 * DAY, now + 2 * DAY, now - 12 * DAY).lastInsertRowid);
+  for (const [s, repo] of [["a0c001", "yasmine-dev/tailwind-landing"], ["a0c002", "sara-codes/tailwind-landing"], ["a0c003", "rayan-x/tailwind-landing"]])
+    db.prepare("INSERT INTO brief_handins (brief_id, guild_id, who, repo, at) VALUES (?, ?, ?, ?, ?)").run(bid, G, `s:${s}`, repo, now - DAY);
+}
+
 createServer(async (req, res) => {
   // public pages of the bot Worker (shared profile, certificates)
   const chunks: Buffer[] = [];
@@ -413,7 +470,7 @@ createServer(async (req, res) => {
     res.end(gm ? (await GM.playLink(env, gm, pm[2])).replace(/^https?:\/\/[^/]+/, "") : "");
     return;
   }
-  if (/^\/(u|cert|quiz|battle|league|game|play)\//.test(req.url ?? "")) {
+  if (/^\/(u|cert|quiz|battle|league|game|play|wakatime)\//.test(req.url ?? "")) {
     const r = await bot.fetch(new Request("http://localhost" + req.url, { method: req.method, headers: req.headers as any, body }), env, { waitUntil() {} } as any);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });
     res.end(await r.text());
@@ -425,4 +482,7 @@ createServer(async (req, res) => {
   response.headers.forEach((v, k) => (headers[k] = v));
   res.writeHead(response.status, headers);
   res.end(Buffer.from(await response.arrayBuffer()));
-}).listen(PORT, () => console.log(`Dashboard preview with a demo class: http://localhost:${PORT}`));
+}).listen(PORT, () => {
+  console.log(`Dashboard preview with a demo class: http://localhost:${PORT}`);
+  console.log(`VS Code tracking (api_url http://localhost:${PORT}/wakatime/api/v1), demo keys:\n  ${vscKeys.join("\n  ")}`);
+});
