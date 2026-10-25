@@ -158,10 +158,7 @@ export const COMMANDS: any[] = [
     options: [
       { type: SUB, name: "setup", description: "What is recorded, then your personal key and the setup", description_localizations: fr("Ce qui est enregistré, puis ta clé personnelle et la configuration") },
       { type: SUB, name: "status", description: "Connected? Your time today and this week", description_localizations: fr("Connecté ? Ton temps aujourd'hui et cette semaine") },
-      { type: SUB, name: "pause", description: "Stop recording for now", description_localizations: fr("Arrêter l'enregistrement pour l'instant") },
-      { type: SUB, name: "resume", description: "Record again", description_localizations: fr("Reprendre l'enregistrement") },
       { type: SUB, name: "newkey", description: "A new key (the old one stops working)", description_localizations: fr("Une nouvelle clé (l'ancienne ne marche plus)") },
-      { type: SUB, name: "delete", description: "Delete all my VS Code data", description_localizations: fr("Supprimer toutes mes données VS Code") },
     ],
   },
   {
