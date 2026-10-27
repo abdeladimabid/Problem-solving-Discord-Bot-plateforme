@@ -498,7 +498,7 @@ createServer(async (req, res) => {
     res.end(gm ? (await GM.playLink(env, gm, pm[2])).replace(/^https?:\/\/[^/]+/, "") : "");
     return;
   }
-  if (/^\/(u|cert|quiz|battle|league|game|play|wakatime)\//.test(req.url ?? "")) {
+  if (/^\/(u|cert|quiz|wp|battle|league|game|play|wakatime)\//.test(req.url ?? "")) {
     const r = await bot.fetch(new Request("http://localhost" + req.url, { method: req.method, headers: req.headers as any, body }), env, { waitUntil() {} } as any);
     res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "text/html" });
     res.end(await r.text());

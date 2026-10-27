@@ -6153,6 +6153,90 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   run1("DELETE FROM briefs WHERE id = ?", id);
 }
 
+section("plan d'action for one student: diagnosis, actions (challenge, code, question, QCM, mini brief), send, their page, follow-up");
+{
+  const B = U.bob.id;
+  // what ClassBot knows: a graded assessment with a question missed
+  run1("INSERT INTO assessments (guild_id, title, status, questions, settings, created_at) VALUES (?, 'Quiz Flexbox', 'closed', ?, '{}', ?)", G,
+    JSON.stringify([{ id: "q1", type: "explain", prompt: "Différence entre justify-content et align-items ?", expected: "axes", points: 1 }]), clock.now());
+  const aid = q1("SELECT MAX(id) AS id FROM assessments").id as number;
+  run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades, summary) VALUES (?, ?, ?, 'graded', 1, 20, ?, '')", aid, G, B, JSON.stringify({ q1: { verdict: "wrong", score: 0, comment: "Axes inversés." } }));
+  const created = await api("POST", `/api/wplans?g=${G}`, { student: B });
+  const id = created.data.id;
+  check(created.status === 200 && created.data.status === "draft" && /Plan d'action/.test(created.data.title), `a draft plan for one student (${created.status} ${created.data.error ?? ""})`);
+  const u0 = ai.users.length;
+  const D = await api("POST", `/api/wplans/${id}/diagnose?g=${G}`, {});
+  const d = D.data.plan?.diag;
+  check(D.status === 200 && d.summary && d.lacunes[0].priority === 1 && d.lacunes[0].evidence.length && d.lacunes[0].comps[0] === "C3", `the diagnosis: their lacunes, most urgent first, with evidence (${D.status} ${D.data.error ?? ""})`);
+  check(ai.users.slice(u0).join("\n").includes("Différence entre justify-content et align-items") && ai.users.slice(u0).join("\n").includes("Axes inversés"), "…read from their assessments (the questions missed and the corrections)");
+  const kinds = d.proposals.map((x: any) => x.kind);
+  check(["code", "answer", "mcq", "brief"].every((k) => kinds.includes(k)) && !d.proposals.some((x: any) => x.challenge_id === 999999), "proposed actions of every kind; a challenge not in the library is dropped");
+  const ch = d.proposals.find((x: any) => x.kind === "challenge");
+  check(!!ch && ch.challenge?.title && ch.challenge_id > 0, "a proposed challenge comes from the library, with its name");
+  // an action made by the AI on a notion, and the assessments' ✨ on a question
+  const mk = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "make", kind: "brief", notion: "Axes de Flexbox" });
+  check(mk.status === 200 && mk.data.step.kind === "brief" && mk.data.step.brief.tasks.length === 3, "✨ a mini brief made for them");
+  // the teacher keeps some, edits, sends
+  const steps = [...d.proposals.filter((x: any) => x.kind !== "brief"), mk.data.step];
+  const sv = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps, title: "Reprendre Flexbox", message: "Fais-les dans l'ordre." });
+  check(sv.status === 200 && sv.data.plan.steps.length === steps.length && sv.data.plan.title === "Reprendre Flexbox", "saved as the teacher edits");
+  const bad = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps: [...steps, { kind: "mcq", prompt: "Une question sans choix ?", choices: ["a"], answer: [] }] });
+  const badSend = await api("POST", `/api/wplans/${id}/send?g=${G}`, {});
+  check(bad.status === 200 && badSend.status === 400 && /choices/.test(badSend.data.error), "not sent while an action is incomplete (a QCM without its right answer)");
+  await api("PUT", `/api/wplans/${id}?g=${G}`, { steps });
+  const c0 = discordCalls.length, a0 = q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id = ?", B).n;
+  const S2 = await api("POST", `/api/wplans/${id}/send?g=${G}`, {});
+  const dmCall = discordCalls.slice(c0).find((c) => JSON.stringify(c.body ?? {}).includes("/wp/"));
+  check(S2.status === 200 && S2.data.plan.status === "sent" && S2.data.dm === true && !!dmCall && JSON.stringify(dmCall.body).includes("Ton plan d'action"), `sent: their private page by DM (${S2.status} ${S2.data.error ?? ""})`);
+  check(q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id = ?", B).n === a0 + 1, "its challenge becomes an assignment (solved in Discord as usual)");
+  const locked = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps: [] });
+  check(locked.status === 400, "a sent plan's actions don't change anymore");
+  // their page
+  const tok = S2.data.url.split("/wp/")[1];
+  const wp = async (action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/wp/${tok}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const pg = await wp();
+  check(pg.status === 200 && /Mon plan d'action/.test(pg.data) && !/\$\{/.test(pg.data), "their page opens");
+  const forged = await bot.fetch(new Request(`https://bot.example.workers.dev/wp/${G}.${id}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/data`), env, makeCtx());
+  check(forged.status === 404, "a forged link is refused");
+  const v = (await wp("data")).data;
+  check(v.steps.length === steps.length && !JSON.stringify(v).includes("space-evenly; }") && !v.steps.some((x: any) => "expected" in x || "answer" in x), "they see the actions, never the expected answers nor the right choices");
+  const code = v.steps.find((x: any) => x.kind === "code"), mcq = v.steps.find((x: any) => x.kind === "mcq"), br = v.steps.find((x: any) => x.kind === "brief");
+  const w1 = await wp("answer", { step: code.id, answer: "nav ul { display: flex; }" });
+  check(w1.status === 200 && w1.data.work.verdict === "wrong" && /axe principal/.test(w1.data.work.comment), "a code answer, corrected by the AI at once");
+  const w2 = await wp("answer", { step: code.id, answer: "nav ul { display: flex; justify-content: space-evenly; }" });
+  check(w2.data.work.verdict === "correct" && w2.data.work.tries === 2, "…they try again until it's right");
+  const w3 = await wp("answer", { step: code.id, answer: "x" });
+  check(w3.status === 400, "…and a right answer stays right");
+  const m1 = await wp("answer", { step: mcq.id, answer: [0] }), m2 = await wp("answer", { step: mcq.id, answer: [1] });
+  check(m1.data.work.verdict === "wrong" && m2.data.work.verdict === "correct", "a QCM, corrected without the AI");
+  const b0 = await wp("answer", { step: br.id, link: "pas un lien" });
+  const b1 = await wp("answer", { step: br.id, link: "https://github.com/bob/nav", note: "Fait avec gap" });
+  check(b0.status === 400 && b1.data.work.verdict === "submitted", "the mini brief is handed in as a link");
+  // the teacher follows and validates
+  const T1 = await api("GET", `/api/wplans/${id}?g=${G}`);
+  const st = (sid: string) => T1.data.status.steps.find((x: any) => x.id === sid).state;
+  check(st(code.id) === "done" && st(mcq.id) === "done" && st(br.id) === "submitted" && T1.data.status.done === 2, "the teacher sees each action's state");
+  const L = await api("GET", `/api/wplans?g=${G}`);
+  check(L.data.some((x: any) => x.id === id && x.toReview === 1 && x.done === 2), "…and the plans list says a mini brief waits for them");
+  const rv = await api("POST", `/api/wplans/${id}/review?g=${G}`, { step: br.id, ok: true, comment: "Propre." });
+  check(rv.status === 200 && rv.data.status.steps.find((x: any) => x.id === br.id).state === "done", "validated by the teacher");
+  // everything done (the challenge solved in Discord) → the plan is done
+  run1("UPDATE assignments SET status = 'done', completed_at = ? WHERE discord_id = ? AND note LIKE 'Plan d''action%'", clock.now(), B);
+  const ans = v.steps.find((x: any) => x.kind === "answer");
+  if (ans) await wp("answer", { step: ans.id, answer: "justify-content agit sur l'axe principal, align-items sur l'axe secondaire" });
+  const T2 = await api("GET", `/api/wplans/${id}?g=${G}`);
+  check(T2.data.plan.status === "done" && T2.data.status.pct === 100, `all done: the plan is done (${T2.data.status.done}/${T2.data.status.total})`);
+  const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
+  check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
+  run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);
+  run1("DELETE FROM assignments WHERE discord_id = ? AND note LIKE 'Plan d''action%'", B);
+}
+
 section("Export grades: level, briefs validated (over half the technical competencies), competencies to work on, recurring problems, plan d'action");
 {
   const sid = "770000000000000001";

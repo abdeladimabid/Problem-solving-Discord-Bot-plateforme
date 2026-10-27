@@ -5,7 +5,7 @@ import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow }
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
-import { btn, dapi, dm, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
+import { btn, dapi, dm, linkBtn, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
 import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
 import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite, whyWriteFailed } from "../shared/ai.ts";
@@ -30,6 +30,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
+import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
 import type { SessionRow } from "../shared/sessions.ts";
@@ -421,6 +422,24 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
 
     // -------------------------------------------------------- plan d'action (the students who need help)
     if (path === "/plan" && method === "GET") { const g = await guild(); return ok(await planView(env, g, await students(env, g))); }
+    // a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)
+    if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
+    if (path === "/wplans" && method === "POST") return ok(await createPlan(env, await guild(), String(body.student ?? "")));
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review))?$/);
+    if (m) {
+      const g = await guild(), pid = Number(m[1]);
+      if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
+      if (!m[2] && method === "PUT") { await savePlanEdits(env, g, pid, body); return ok(await workPlanView(env, g, pid)); }
+      if (!m[2] && method === "DELETE") return ok(await deletePlan(env, g, pid));
+      if (m[2] === "diagnose" && method === "POST") { await diagnose(env, g, pid); return ok(await workPlanView(env, g, pid)); }
+      if (m[2] === "ai" && method === "POST") return ok(await stepAi(env, g, pid, body));
+      if (m[2] === "review" && method === "POST") { await reviewStep(env, g, pid, String(body.step ?? ""), body); return ok(await workPlanView(env, g, pid)); }
+      if (m[2] === "send" && method === "POST") {
+        if (body.edits) await savePlanEdits(env, g, pid, body.edits);
+        const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
+        return ok({ ...(await workPlanView(env, g, pid)), dm: r.dm });
+      }
+    }
     m = path.match(/^\/plan\/(\d+)$/);
     if (m && method === "PUT") return ok(await savePlan(env, await guild(), m[1], body));
     m = path.match(/^\/plan\/(\d+)\/gaps$/);
@@ -916,7 +935,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof HandError || e instanceof PlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof HandError || e instanceof PlanError || e instanceof WorkPlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });

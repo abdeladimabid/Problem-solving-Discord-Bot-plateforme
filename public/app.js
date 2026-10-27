@@ -370,7 +370,7 @@ const routes = {
 async function route() {
   const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const fn = routes[name] || viewOverview;
-  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", assessment: "assessments", battle: "games", battles: "games", game: "games" }[name] || name;
+  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", wplan: "assignments", assessment: "assessments", battle: "games", battles: "games", game: "games" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
@@ -1194,7 +1194,7 @@ const AP_LV = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Fai
 const AP_TREND = { up: ["up", "↑", "Improving"], down: ["down", "↓", "Slipping"], flat: ["flat", "→", "Steady"], unknown: ["unknown", "·", "Not enough data yet"] };
 const AP_ENG = { engaged: ["up", "Engaged"], partial: ["warn", "Partly engaged"], not: ["down", "Not engaged"], waiting: ["flat", "Work in progress"], none: ["flat", "No work given yet"] };
 const AP = { filter: "all" };
-function apCard(r) {
+function apCard(r, wplans = []) {
   const tr = AP_TREND[r.trend] || AP_TREND.unknown, en = AP_ENG[r.engagement.state] || AP_ENG.none, e = r.engagement;
   const seg = (n, c, t) => (n ? `<span style="flex:${n};background:${c}" title="${n} ${t}"></span>` : "");
   const hist = [...r.sprints.map((x) => ({ k: `S${x.sprint}`, lv: x.lv, t: `Sprint ${x.sprint}` })), ...r.debriefs.map((d) => ({ k: `B${d.b}`, lv: d.lv, t: d.title, href: `#/debrief/${d.bid}~u:${r.discord_id}` }))];
@@ -1214,6 +1214,7 @@ function apCard(r) {
     <div class="ap-ms3">${progress}${engage}${work}</div>
     ${e.total ? `<div class="ap-bar" aria-hidden="true">${seg(e.done, "var(--up)", "done") + seg(e.late, "var(--warn)", "late") + seg(e.failed + e.missed, "var(--down)", "not solved / missed") + seg(e.open, "var(--line-strong)", "open")}</div>` : ""}
     ${hist.length ? `<div class="ap-hist"><span class="ap-ml">Levels</span>${hist.map((h) => `<${h.href ? `a href="${h.href}"` : "span"} class="ap-h pgc-${esc(h.lv)}" data-tip="${esc(h.k)} · ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}" aria-label="${esc(h.k)} ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}">${esc(h.k)}</${h.href ? "a" : "span"}>`).join("")}</div>` : ""}
+    ${typeof wpCardLine === "function" ? wpCardLine(wplans) : ""}
     ${r.note ? `<blockquote class="ap-note"><p>${esc(r.note.text)}</p><footer>${r.note.by === "ai" ? "✨ AI" : "You"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}
         <button class="ap-link" data-ap-edit="${id}">Edit</button><button class="ap-link" data-ap-ai="${id}">${r.note.by === "ai" ? "Rewrite" : "✨ AI version"}</button></footer></blockquote>`
       : `<div class="ap-note empty"><button class="ap-link" data-ap-edit="${id}">${icon("plus")}Write a comment</button><span class="muted">or</span><button class="ap-link" data-ap-ai="${id}">✨ let the AI sum up</button></div>`}
@@ -1239,7 +1240,7 @@ async function gapsDialog(r) {
   dlg.classList.add("wide");
 }
 async function viewAssignments() {
-  const [P, rows] = await Promise.all([api("/plan"), api("/assignments")]);
+  const [P, rows, wplans] = await Promise.all([api("/plan"), api("/assignments"), api("/wplans").catch(() => [])]);
   const S2 = P.summary;
   const FILTERS = [["all", "In the plan", S2.total, ""], ["critique", "Critique", S2.critique, "down"], ["faible", "Faible", S2.faible, "warn"], ["down", "Slipping", S2.slipping, "down"], ["up", "Improving", S2.improving, "up"], ["not", "Not engaged", S2.notEngaged, "down"], ["none", "No work yet", S2.noWork, "flat"]];
   const pass = (r) => AP.filter === "all" || (AP.filter === "critique" || AP.filter === "faible" ? r.current === AP.filter : AP.filter === "down" || AP.filter === "up" ? r.trend === AP.filter : AP.filter === "not" ? r.engagement.state === "not" : r.engagement.state === "none");
@@ -1256,10 +1257,11 @@ async function viewAssignments() {
       <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
     <div class="ap-stats" role="group" aria-label="Show">${FILTERS.map(([v, l, n, c]) => `<button class="ap-stat ${c} ${n ? "" : "zero"}" data-apf="${v}" aria-pressed="${AP.filter === v}"><b>${n}</b><span>${l}</span></button>`).join("")}</div>
     <section class="panel ap-panel"><div class="panel-head"><h2>${AP.filter === "all" ? "Students who need help" : `${esc(FILTERS.find((f) => f[0] === AP.filter)[1])} <span class="muted">· ${shown.length}</span> <button class="ap-link" data-apf="all">show all</button>`}</h2></div>
-      ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map(apCard).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
+      ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map((r) => apCard(r, wplans.filter((w) => w.sid === r.discord_id))).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
         : `<div class="empty-state"><p><b>Nobody needs help right now.</b></p><p class="muted">Students land here by themselves when their last debrief is Faible or Critique. You can also add a student by hand.</p></div>`}
       <p class="muted small" style="margin:12px 0 0">Progress compares the last levels (debriefs B1, B2… and sprints) with the ones before; with fewer than two levels, the points of the last two weeks. Engagement is the share of the work given that was done (late counts).</p>
     </section>
+    ${typeof wpListHtml === "function" ? wpListHtml(wplans) : ""}
     <section class="panel"><div class="panel-head"><h2>Work given</h2><span class="muted small">${groups.size} assignment(s)</span></div>
       ${groups.size ? [...groups.values()].map((g) => {
         const n = g.items.length, c = (st) => g.items.filter((i) => i.status === st).length;
@@ -1274,8 +1276,9 @@ async function viewAssignments() {
     </section>`;
   const byId = new Map([...P.plan, ...P.others].map((r) => [r.discord_id, r]));
   $$("[data-apf]").forEach((b) => b.onclick = () => { AP.filter = b.dataset.apf; viewAssignments(); });
-  $("#ap-new").onclick = () => assignDialog(P.plan.map((r) => r.discord_id));
-  $$("[data-ap-give]").forEach((b) => b.onclick = () => assignDialog([b.dataset.apGive]));
+  const giveRows = [...P.plan, ...P.others].map((r) => ({ discord_id: r.discord_id, name: r.name }));
+  $("#ap-new").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog(P.plan.map((r) => r.discord_id), giveRows));
+  $$("[data-ap-give]").forEach((b) => b.onclick = () => busy(b, () => giveWorkDialog([b.dataset.apGive], giveRows)));
   $$("[data-ap-gaps]").forEach((b) => b.onclick = () => busy(b, () => gapsDialog(byId.get(b.dataset.apGaps))));
   $$("[data-ap-edit]").forEach((b) => b.onclick = () => {
     const r = byId.get(b.dataset.apEdit);

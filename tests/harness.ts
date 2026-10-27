@@ -486,6 +486,24 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      // plan d'action: the diagnosis (lacunes and proposed actions), one action, the correction of an answer
+      if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("Écris UNE action de type")) {
+        const ch = Number((user.match(/^(\d+) · /m) || [])[1] || 0);
+        const acts = [
+          { type: "code", notion: "Flexbox : axe principal", titre: "Centrer une barre de navigation", why: "Tu sauras aligner les liens sans marges bricolées.", prompt: "Écris le CSS qui fait de `nav ul` une barre flex dont les liens sont espacés uniformément.", starter: "nav ul {\n  /* à compléter */\n}", expected: "nav ul { display: flex; justify-content: space-evenly; }", lang: "css" },
+          { type: "answer", notion: "Flexbox : axes", titre: "justify-content ou align-items ?", why: "C'est la confusion qui revient dans tes réponses.", prompt: "Quelle est la différence entre `justify-content` et `align-items` ?", expected: "justify-content : axe principal\nalign-items : axe secondaire" },
+          { type: "mcq", notion: "Sémantique HTML", titre: "La bonne balise", why: "Pour structurer tes pages.", prompt: "Quelle balise contient le menu principal d'un site ?", choices: ["<div>", "<nav>", "<section>", "<span>"], answer: [1] },
+          ...(ch ? [{ type: "challenge", notion: "Boucles", titre: "", why: "Pour t'entraîner sur les boucles.", challenge_id: ch }] : []),
+          { type: "challenge", notion: "Inventé", challenge_id: 999999 },
+          { type: "brief", notion: "Flexbox en pratique", titre: "Mini-projet : la barre de navigation", why: "Tout mettre ensemble sur un vrai livrable.", brief: { context: "Tu refais la barre de navigation de ton projet.", tasks: ["Une nav sémantique", "Les liens en flex", "Responsive sous 768px"], deliverable: "Le lien du dépôt GitHub", hours: 3 } },
+        ];
+        if (sys.includes("Écris UNE action de type")) { const k = (sys.match(/de type "(\w+)"/) || [])[1]; return { response: JSON.stringify(acts.find((x) => x.type === k) || acts[0]) }; }
+        return { response: JSON.stringify({ resume: "Il connaît la syntaxe mais confond les axes de Flexbox.", lacunes: [{ notion: "Axes de Flexbox", priorite: 1, pourquoi: "Il inverse justify-content et align-items.", preuves: ["Évaluation Q2 fausse"], competences: ["C3"] }, { notion: "Sémantique HTML", priorite: 3, pourquoi: "Des div partout.", preuves: ["B1 : exigence non faite"], competences: [] }], actions: acts }) };
+      }
+      if (sys.includes("à un exercice de son plan d'action")) {
+        const good = /space-evenly|axe principal/i.test(user.split("RÉPONSE DE L'APPRENANT")[1] || "");
+        return { response: JSON.stringify({ verdict: good ? "correct" : "wrong", score: good ? 100 : 10, comment: good ? "C'est juste : bien vu." : "Pas encore : relis l'axe principal." }) };
+      }
       if (sys.includes("Tu prépares l'oral d'un apprenant")) {
         // precise questions: one item per missed question, on the notions behind it
         const ns = [...user.matchAll(/=== Question (\d+)/g)].map((m) => Number(m[1]));
