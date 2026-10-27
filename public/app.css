@@ -2213,3 +2213,10 @@ button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); tr
 .wp-feat { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); } .wp-feat input { flex: 1; }
 .wp-merged { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
 @media (max-width: 640px) { .wp-askbox, .wp-feat, .wp-wishrow { flex-direction: column; align-items: stretch; } }
+.wp-objs { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.wp-objs li { display: flex; gap: 8px; align-items: center; }
+.wp-objs li::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--kc, var(--blue)); flex: none; }
+.wp-objs input { flex: 1; }
+.wp-step textarea[data-bf="context"] { font-size: 14px; line-height: 1.55; }
+.wp-ctx { font-size: 14px; line-height: 1.55; } .wp-ctx h4 { margin: 12px 0 4px; font-size: 14px; } .wp-ctx p { margin: 4px 0; } .wp-ctx ul { margin: 4px 0; padding-left: 20px; }
+.wp-objl { margin: 4px 0 10px; padding-left: 20px; } .wp-objl li { margin: 3px 0; }

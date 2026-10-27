@@ -6176,6 +6176,7 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   // an action made by the AI on a notion, and the assessments' ✨ on a question
   const mk = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "make", kind: "brief", notion: "Axes de Flexbox" });
   check(mk.status === 200 && mk.data.step.kind === "brief" && mk.data.step.brief.tasks.length === 3, "✨ a mini brief made for them");
+  check(ai.prompts.concat(ai.users).join("\n").includes("🏢 Le client") && ai.prompts.concat(ai.users).join("\n").includes("OBJECTIFS clairs"), "…written like the class's briefs: a cahier des charges, then clear objectives");
   // the teacher says what they want: the AI follows it first
   const u1 = ai.users.length;
   await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "make", kind: "code", step: { kind: "code", ask: "Une fonction JavaScript qui filtre des produits par prix" } });

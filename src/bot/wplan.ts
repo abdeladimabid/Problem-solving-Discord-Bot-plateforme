@@ -72,6 +72,7 @@ textarea:focus,input:focus{outline:2px solid var(--blue);outline-offset:1px}
 .full{min-height:80vh;display:grid;place-items:center;text-align:center}.full .big{font-size:52px}
 details.mine summary{cursor:pointer;color:var(--soft);font-size:14px;margin-top:10px}details.mine pre{white-space:pre-wrap;background:var(--bg);border-radius:12px;padding:12px;margin:8px 0 0;font-size:14px}
 .k-challenge{--kc:var(--k-challenge)}.k-code{--kc:var(--k-code)}.k-answer{--kc:var(--k-answer)}.k-mcq{--kc:var(--k-mcq)}.k-brief{--kc:var(--k-brief)}
+.ctx{margin:10px 0 6px;padding:14px 16px;border-radius:14px;background:var(--bg);font-size:15.5px}.ctx h3{font-size:15px;margin:14px 0 6px}.ctx h3:first-child{margin-top:0}.ctx p{margin:4px 0}.ctx ul{margin:4px 0;padding-left:20px}.ctx li{margin:3px 0}
 .confetti{font-size:15px;margin-top:10px;font-weight:700}
 </style></head><body><div class="wrap" id="app"><div class="full"><div><div class="big">🧭</div><p class="muted">Chargement…</p></div></div></div>
 <script>
@@ -90,6 +91,18 @@ function load() {
   if (!TOKEN) { app.innerHTML = '<div class="full"><div><div class="big">🔒</div><h1>Lien expiré</h1><p class="muted">Demande à ton formateur de te renvoyer ton plan d\\'action.</p></div></div>'; return; }
   api("/data").then(function (d) { P = d; draw(); }).catch(function (e) { app.innerHTML = '<div class="full"><div><div class="big">😕</div><p>' + esc(e.message) + '</p></div></div>'; });
 }
+// the brief's context: its parts (a line starting with an emoji) as headings, "- " lines as lists
+function ctxHtml(text) {
+  var out = "", list = false;
+  String(text).split("\\n").forEach(function (raw) {
+    var l = raw.trim(), m = l.match(/^[-•*]\\s+(.*)$/);
+    if (m) { if (!list) { out += "<ul>"; list = true; } out += "<li>" + rich(m[1]) + "</li>"; return; }
+    if (list) { out += "</ul>"; list = false; }
+    if (!l) return;
+    out += /^\\p{Extended_Pictographic}/u.test(l) && l.length < 60 ? "<h3>" + esc(l) + "</h3>" : "<p>" + rich(l) + "</p>";
+  });
+  return out + (list ? "</ul>" : "");
+}
 function stepHtml(s, i) {
   var done = s.state === "done", h = "";
   h += '<article class="step k-' + s.kind + (done ? " done" : "") + '" id="s-' + s.id + '"><div class="sh"><span class="num">' + (done ? "✓" : i + 1) + '</span><span class="kind">' + esc(s.kindLabel) + '</span>'
@@ -100,7 +113,7 @@ function stepHtml(s, i) {
     h += '<div class="hint">Ce défi' + (c.difficulty ? ' (' + esc({ easy: "facile", medium: "moyen", hard: "difficile" }[c.difficulty] || c.difficulty) + ')' : "") + ' se fait dans <b>Discord</b> : tape <code>/assignments</code> sur le serveur de la classe, ou appuie sur <b>Start</b> dans le message que ClassBot t\\'a envoyé. Il est validé ici tout seul quand tu le réussis.</div>';
   } else if (s.kind === "brief") {
     var b = s.brief || {};
-    h += (b.context ? '<p class="prompt">' + rich(b.context) + '</p>' : "") + '<div class="lbl">Ce que tu dois faire</div><ul class="tasks">' + (b.tasks || []).map(function (t) { return "<li>" + rich(t) + "</li>"; }).join("") + '</ul>'
+    h += (b.context ? '<div class="ctx">' + ctxHtml(b.context) + '</div>' : "") + '<div class="lbl">Tes objectifs</div><ul class="tasks">' + (b.tasks || []).map(function (t) { return "<li>" + rich(t) + "</li>"; }).join("") + '</ul>'
       + '<div class="meta">' + (b.deliverable ? '<span>📦 À rendre : ' + rich(b.deliverable) + '</span>' : "") + (b.hours ? '<span>⏱️ Environ ' + b.hours + ' h</span>' : "") + '</div>';
     if (!done) h += '<div class="lbl">Rendre ton travail</div><input type="url" data-link placeholder="https://github.com/…" value="' + esc(s.work && s.work.link || "") + '">'
       + '<textarea class="prose" data-note style="min-height:80px;margin-top:8px" placeholder="Un mot pour ton formateur (facultatif) : ce que tu as fait, ce qui t\\'a bloqué…">' + esc(s.work && s.work.note || "") + '</textarea>'

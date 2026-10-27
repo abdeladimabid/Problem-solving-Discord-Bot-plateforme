@@ -3733,5 +3733,10 @@ window.CB_FR = {
 "The code and the challenges become features of the mini brief; the questions stay quick checks": "Le code et les défis deviennent des fonctionnalités du mini-brief ; les questions restent des vérifications rapides",
 "turns an action into a feature of {s}: the AI writes it into the project's story and tasks.": "transforme une action en fonctionnalité de {s} : l’IA l’écrit dans l’histoire et les tâches du projet.",
 "Ask for something else, e.g. a mini brief on forms, no challenge": "Demandez autre chose, ex. un mini-brief sur les formulaires, sans défi",
-"Add a feature, e.g. a dark mode button in JavaScript": "Ajouter une fonctionnalité, ex. un bouton mode sombre en JavaScript"
+"Add a feature, e.g. a dark mode button in JavaScript": "Ajouter une fonctionnalité, ex. un bouton mode sombre en JavaScript",
+"the cahier des charges: client, objective, pages and content, features, style, responsive, constraints)": "le cahier des charges : client, objectif, pages et contenu, fonctionnalités, charte, responsive, contraintes)",
+"Objectives": "Objectifs",
+"one clear, verifiable result each)": "un résultat clair et vérifiable chacun)",
+"An objective": "Un objectif",
+"e.g. Refuse the form if the email is invalid": "ex. Refuser le formulaire si l’email est invalide"
 };

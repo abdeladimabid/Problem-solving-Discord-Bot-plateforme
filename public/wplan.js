@@ -139,8 +139,10 @@ function editorHtml(s) {
   if (s.kind === "brief") {
     const b = s.brief || { context: "", tasks: [], deliverable: "", hours: 3 };
     return `${head}<div class="wp-fields">
-      <label class="wp-f wide"><span>Context</span><textarea data-bf="context" rows="3" placeholder="What they build, in 2 or 3 sentences">${esc(b.context)}</textarea></label>
-      <label class="wp-f wide"><span>Tasks <span class="muted">(one per line)</span></span><textarea data-bf="tasks" rows="${Math.max(5, (b.tasks || []).length + 1)}" placeholder="Make the navbar a flex container&#10;Space the links with gap…">${esc((b.tasks || []).join("\n"))}</textarea></label>
+      <label class="wp-f wide"><span>Context <span class="muted">(the cahier des charges: client, objective, pages and content, features, style, responsive, constraints)</span></span><textarea data-bf="context" rows="${Math.min(22, Math.max(8, String(b.context || "").split("\n").length + 2))}" placeholder="🏢 Le client&#10;…&#10;&#10;🎯 Objectif du projet&#10;…&#10;&#10;🗂️ Pages et contenu&#10;- …">${esc(b.context)}</textarea></label>
+      <div class="wp-f wide"><span>Objectives <span class="muted">(one clear, verifiable result each)</span></span>
+        <ul class="wp-objs">${(b.tasks.length ? b.tasks : [""]).map((t, k) => `<li><input type="text" data-task="${k}" value="${esc(t)}" placeholder="e.g. Refuse the form if the email is invalid"><button class="wp-ib danger" data-trm="${k}" title="Remove">✕</button></li>`).join("")}</ul>
+        <button class="ap-link" data-tadd>+ An objective</button></div>
       <label class="wp-f"><span>Deliverable</span><input type="text" data-bf="deliverable" value="${esc(b.deliverable)}" placeholder="The link of the GitHub repo"></label>
       <label class="wp-f"><span>Hours</span><input type="number" data-bf="hours" min="1" max="40" value="${Number(b.hours) || 3}"></label></div>
       ${(s.merged || []).length ? `<div class="wp-merged"><span class="muted small">Folded in:</span>${s.merged.map((m) => `<span class="wp-chip k-brief">${esc(m)}</span>`).join("")}</div>` : ""}
@@ -170,7 +172,7 @@ function trackHtml(s, st, short = false) {
   let h = "";
   if (!short) {
     if (s.kind === "challenge") h += `<p><b>${esc(s.challenge?.title || "")}</b> ${s.challenge ? diffTag(s.challenge.difficulty) : ""} <span class="muted small">· assignment ${esc(st?.asg || "")}</span></p>`;
-    else if (s.kind === "brief") h += `<p class="small">${esc(s.brief?.context || "")}</p><ul class="small">${(s.brief?.tasks || []).map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`;
+    else if (s.kind === "brief") h += `<div class="wp-ctx">${wpCtx(s.brief?.context || "")}</div><div class="wp-h">Objectives</div><ul class="wp-objl">${(s.brief?.tasks || []).map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`;
     else h += `<p class="wp-q">${esc(s.prompt)}</p>`;
   }
   if (w) {
@@ -183,6 +185,19 @@ function trackHtml(s, st, short = false) {
   if (s.review) h += `<div class="wp-rev ${s.review.ok ? "ok" : "ko"}"><b>${s.review.ok ? "✓ You validated it" : "↻ You asked to redo it"}</b>${s.review.comment ? ` · ${esc(s.review.comment)}` : ""}</div>`;
   if (!short && s.kind !== "challenge" && (w || s.kind === "brief")) h += `<div class="wp-revf"><input type="text" data-rvc="${esc(s.id)}" placeholder="A word for ${wpFirst()} (optional)"><button class="btn small primary" data-rv="${esc(s.id)}" data-ok="1">✓ Validate</button><button class="btn small" data-rv="${esc(s.id)}" data-ok="0">↻ Ask to redo</button></div>`;
   return h;
+}
+// a brief's context: its parts (a line starting with an emoji) as headings, « - » lines as lists
+function wpCtx(text) {
+  let out = "", list = false;
+  for (const raw of String(text).split("\n")) {
+    const l = raw.trim();
+    const item = l.match(/^[-•*]\s+(.*)$/);
+    if (item) { if (!list) { out += "<ul>"; list = true; } out += `<li>${esc(item[1])}</li>`; continue; }
+    if (list) { out += "</ul>"; list = false; }
+    if (!l) continue;
+    out += /^\p{Extended_Pictographic}/u.test(l) && l.length < 60 ? `<h4>${esc(l)}</h4>` : `<p>${esc(l)}</p>`;
+  }
+  return out + (list ? "</ul>" : "");
 }
 function sendPanelHtml(count) {
   const p = WPS.plan;
@@ -328,8 +343,17 @@ function wireWorkPlan() {
     $$("[data-f]", card).forEach((el) => el.addEventListener("input", () => { s[el.dataset.f] = el.value; if (el.dataset.f === "title") $(".wp-st b", card).textContent = el.value || "Untitled"; wpSaveSoon(); }));
     $$("[data-bf]", card).forEach((el) => el.addEventListener("input", () => {
       s.brief = s.brief || { context: "", tasks: [], deliverable: "", hours: 3 };
-      const k = el.dataset.bf; s.brief[k] = k === "tasks" ? el.value.split("\n").map((x) => x.trim()).filter(Boolean) : k === "hours" ? Number(el.value) || 3 : el.value; wpSaveSoon();
+      const k = el.dataset.bf; s.brief[k] = k === "hours" ? Number(el.value) || 3 : el.value; wpSaveSoon();
     }));
+    // the brief's objectives: one line each
+    const tasksNow = () => $$("[data-task]", card).map((i) => i.value.trim()).filter(Boolean);
+    $$("[data-task]", card).forEach((el) => {
+      el.addEventListener("input", () => { s.brief.tasks = tasksNow(); wpSaveSoon(); });
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); s.brief.tasks = tasksNow(); s.brief.tasks.splice(Number(el.dataset.task) + 1, 0, ""); WPS.focusTask = Number(el.dataset.task) + 1; drawWorkPlan(); } });
+    });
+    $$("[data-trm]", card).forEach((el) => el.onclick = () => { s.brief.tasks = tasksNow().filter((_, k) => k !== Number(el.dataset.trm)); drawWorkPlan(); wpSaveSoon(); });
+    if ($("[data-tadd]", card)) $("[data-tadd]", card).onclick = () => { s.brief.tasks = [...tasksNow(), ""]; WPS.focusTask = s.brief.tasks.length - 1; drawWorkPlan(); };
+    if (WPS.focusTask != null && $(`[data-task="${WPS.focusTask}"]`, card)) { $(`[data-task="${WPS.focusTask}"]`, card).focus(); WPS.focusTask = null; }
     $$("[data-c]", card).forEach((el) => el.addEventListener("input", () => { s.choices[Number(el.dataset.c)] = el.value; wpSaveSoon(); }));
     $$("[data-ok]", card).forEach((el) => el.addEventListener("change", () => { const k = Number(el.dataset.ok); s.answer = el.checked ? [...new Set([...s.answer, k])].sort() : s.answer.filter((x) => x !== k); wpSaveSoon(); }));
     $$("[data-crm]", card).forEach((el) => el.onclick = () => { const k = Number(el.dataset.crm); s.choices.splice(k, 1); s.answer = s.answer.filter((x) => x !== k).map((x) => (x > k ? x - 1 : x)); drawWorkPlan(); wpSaveSoon(); });
