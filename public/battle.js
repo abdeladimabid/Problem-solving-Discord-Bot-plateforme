@@ -170,11 +170,11 @@ async function viewBattle(id) {
     </div>
     <section class="panel"><div class="panel-head"><h2>Questions <span class="muted">${B.questions.length}</span></h2>
       <div class="toolbar" style="margin:0"><button class="btn small" id="bt-addq">+ Add a question</button><button class="btn small" id="bt-more">✨ 10 more</button></div></div>
-      <p class="small muted" style="margin-top:-6px">They come in a random order; the judge sees the answer. Remove the ones you don't like (not while a game is running).</p>
+      <p class="small muted" style="margin-top:-6px">They come in a random order; the judge sees the answer. Edit or remove the ones you don't like (not while a game is running).</p>
       <div class="bt-qs">${B.questions.map((q, i) => `<div class="bt-q"><span class="bt-k" title="${esc(K[q.kind]?.en || q.kind)}">${K[q.kind]?.emoji || "❓"}</span>
         <div><div><b>${esc(q.prompt)}</b> <span class="tag">${esc(q.topic)}</span></div>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}${q.options ? `<div class="small muted">${q.options.map((o, k) => `${"ABCD"[k]}. ${esc(o)}`).join(" · ")}</div>` : ""}
         <div class="small">✅ <b>${esc(q.answer)}</b>${q.explain ? ` <span class="muted">· ${esc(q.explain)}</span>` : ""}</div></div>
-        <button class="icon-x" data-rmq="${i}" title="Remove" aria-label="Remove">✕</button></div>`).join("")}</div>
+        <span class="gq-tools"><button class="btn small" data-edq="${i}">✏️ Edit</button><button class="icon-x" data-rmq="${i}" title="Remove" aria-label="Remove">✕</button></span></div>`).join("")}</div>
     </section>`;
   $("#bt-cptv").onclick = () => copyText(B.tv, "TV link copied");
   $("#bt-cpj").onclick = () => copyText(B.judge, "Judge link copied");
@@ -187,19 +187,27 @@ async function viewBattle(id) {
     const g = await api("/battles/generate", { method: "POST", body: { ...B.settings, count: 10, battle: id } });
     await saveQs([...B.questions, ...g.questions]); toast(g.questions.length ? `${g.questions.length} new question(s) added` : "No new question found: try other topics", !g.questions.length);
   });
-  $("#bt-addq").onclick = () => {
-    openDialog("Add a question", `
-      <label for="aq-k">Kind</label><select id="aq-k">${Object.entries(K).map(([k, v]) => `<option value="${k}">${v.emoji} ${esc(v.en)}</option>`).join("")}</select>
-      <label for="aq-t">Topic</label><input type="text" id="aq-t" value="${esc(B.settings.topics[0] || "")}" style="width:100%">
-      <label for="aq-p">Question</label><input type="text" id="aq-p" style="width:100%" maxlength="240" placeholder="e.g. What does this code print?">
-      <label for="aq-c">Code <span class="muted">(optional, ___ for a blank)</span></label><textarea id="aq-c" style="min-height:90px;font-family:var(--mono,monospace)"></textarea>
-      <label for="aq-a">Answer <span class="muted">(only the judge sees it)</span></label><input type="text" id="aq-a" style="width:100%" maxlength="160">`,
-    [{ label: "Add", primary: true, action: async () => {
-      const q = { kind: $("#aq-k").value, topic: $("#aq-t").value, prompt: $("#aq-p").value, code: $("#aq-c").value, answer: $("#aq-a").value };
+  // ✍️ a question written or ✏️ changed by the teacher
+  const qDialog = (i = -1) => {
+    const q0 = i >= 0 ? B.questions[i] : { kind: Object.keys(K)[0], topic: B.settings.topics[0] || "", prompt: "", code: "", answer: "", options: null, explain: "" };
+    openDialog(i >= 0 ? `Question ${i + 1}` : "Add a question", `
+      <label for="aq-k">Kind</label><select id="aq-k">${Object.entries(K).map(([k, v]) => `<option value="${k}" ${k === q0.kind ? "selected" : ""}>${v.emoji} ${esc(v.en)}</option>`).join("")}</select>
+      <label for="aq-t">Topic</label><input type="text" id="aq-t" value="${esc(q0.topic || "")}" style="width:100%">
+      <label for="aq-p">Question</label><input type="text" id="aq-p" style="width:100%" maxlength="240" value="${esc(q0.prompt)}" placeholder="e.g. What does this code print?">
+      <label for="aq-c">Code <span class="muted">(optional, ___ for a blank)</span></label><textarea id="aq-c" style="min-height:90px;font-family:var(--mono,monospace)">${esc(q0.code || "")}</textarea>
+      <label for="aq-o">Choices <span class="muted">(optional: one per line, for a multiple choice)</span></label><textarea id="aq-o" style="min-height:70px">${esc((q0.options || []).join("\n"))}</textarea>
+      <label for="aq-a">Answer <span class="muted">(only the judge sees it)</span></label><input type="text" id="aq-a" style="width:100%" maxlength="160" value="${esc(q0.answer)}">
+      <label for="aq-e">Explanation <span class="muted">(optional, after the answer)</span></label><input type="text" id="aq-e" style="width:100%" maxlength="240" value="${esc(q0.explain || "")}">`,
+    [{ label: i >= 0 ? "Save" : "Add", primary: true, action: async () => {
+      const options = $("#aq-o").value.split("\n").map((x) => x.trim()).filter(Boolean).slice(0, 4);
+      const q = { ...q0, kind: $("#aq-k").value, topic: $("#aq-t").value, prompt: $("#aq-p").value, code: $("#aq-c").value, answer: $("#aq-a").value, explain: $("#aq-e").value, options: options.length >= 2 ? options : null };
       if (!q.prompt.trim() || !q.answer.trim()) throw new Error("Write the question and its answer");
-      dlg.close(); await saveQs([...B.questions, q]);
+      const qs = B.questions.slice(); if (i >= 0) qs[i] = q; else qs.push(q);
+      dlg.close(); await saveQs(qs); toast(i >= 0 ? "Question saved" : "Question added");
     } }]);
   };
+  $("#bt-addq").onclick = () => qDialog();
+  $$("[data-edq]").forEach((b) => b.onclick = () => qDialog(Number(b.dataset.edq)));
   // the live state while the page is open
   clearInterval(btTimer);
   btTimer = setInterval(async () => {

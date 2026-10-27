@@ -43,7 +43,7 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setRoyaleQuestions, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
 import { SQL_CASES } from "../shared/sqlcases.ts";
 import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
@@ -673,6 +673,12 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (gm) {
           const id = Number(gm[1]);
           if (method === "GET") return ok(await gview(id));
+          if (method === "PUT") {
+            const x = await getGame(env, id, g.id);
+            if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
+            await setRoyaleQuestions(env, x, body.questions);
+            return ok(await gview(id));
+          }
           if (method === "DELETE") {
             if (!(await getGame(env, id, g.id))) throw new HttpError(404, "This game doesn't exist anymore.");
             for (const t of ["game_players", "game_moves", "game_teams"]) await run(env, `DELETE FROM ${t} WHERE game_id = ?`, id);

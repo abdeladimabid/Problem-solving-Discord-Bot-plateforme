@@ -5306,6 +5306,16 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   const qs = [0, 1, 2, 3, 4].map((i) => ({ prompt: "Question " + i, options: ["a" + i, "b" + i, "c" + i, "d" + i], answer: 0 }));
   const R = await api("POST", `/api/games?g=${G}`, { kind: "royale", mode: "squads", squads: [{ name: "Les Requins", members: [U.alice.id, U.bob.id] }, { name: "Les Flammes", members: [U.carol.id] }], questions: qs, settings: { seconds: 20, reviveCost: 1, reward: 15 } });
   check(R.status === 200 && R.data.tv.includes("/game/") && R.data.join.includes("/play/") && R.data.qr.startsWith("<svg") && R.data.live.phase === "lobby", "royale created: TV link, join link + QR");
+  {
+    // ✏️ the teacher changes the questions before the game starts
+    const edited = [...qs.slice(1), { prompt: "Ma question", code: "let a = 1;", options: ["Vrai", "Faux"], answer: 1 }];
+    const E = await api("PUT", `/api/games/${R.data.id}?g=${G}`, { questions: edited });
+    check(E.status === 200 && E.data.content.questions.length === 5 && E.data.content.questions[4].prompt === "Ma question" && E.data.content.questions[4].answer === 1 && E.data.content.questions[0].prompt === "Question 1",
+      `royale: questions edited, removed, added, in the teacher's order (${E.status} ${E.data.error ?? ""})`);
+    const bad = await api("PUT", `/api/games/${R.data.id}?g=${G}`, { questions: [{ prompt: "x", options: ["a"], answer: 0 }] });
+    check(bad.status === 400, "…never fewer than 3 usable questions");
+    await api("PUT", `/api/games/${R.data.id}?g=${G}`, { questions: qs });
+  }
   const r = game(R.data);
   const tvHtml = await (await bot.fetch(new Request(R.data.tv), env, makeCtx())).text();
   {

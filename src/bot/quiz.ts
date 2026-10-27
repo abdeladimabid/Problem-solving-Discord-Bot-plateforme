@@ -283,8 +283,10 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     const clear = () => { if (box) box.innerHTML = ""; app.querySelectorAll("[data-ct]").forEach((x) => (x.textContent = "")); };
     if (!trTo) return clear();
     const to = trTo, k = q.id + "|" + to;
-    // choices that are code (<nav>, push(), 42) stay as they are: only sentences are translated
-    const words = (t) => /[A-Za-zÀ-ÿ]{2,}[\s'’][A-Za-zÀ-ÿ]{2,}/.test(t) && !/^\s*[<{\[(]/.test(t);
+    // every choice with words is translated (shown under it, the original stays); code stays as it is: <nav>, push(),
+    // a = 1, 42, justify-content, getElementById, .card, #id
+    const code = (t) => /^\\s*[<{\\[(.#$@0-9-]/.test(t) || /[;{}=<>]|\\(\\)|=>/.test(t) || /^[a-z]+(-[a-z]+)+$/.test(t.trim()) || /^[a-z]+[A-Z]\\w*$/.test(t.trim()) || /^\\w+\\.\\w+/.test(t.trim());
+    const words = (t) => /[A-Za-zÀ-ÿ]{2,}/.test(t) && !code(t);
     const texts = [q.prompt, ...(q.type === "mcq" ? q.choices.map((c) => (words(c.text) ? c.text : "")) : [])];
     if (box) box.innerHTML = '<div class="trans muted">…</div>';
     if (!trCache[k]) trCache[k] = await post("/translate", { to, texts }).then((r) => r.texts || null).catch(() => null);

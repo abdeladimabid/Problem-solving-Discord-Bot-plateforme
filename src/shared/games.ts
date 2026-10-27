@@ -295,6 +295,15 @@ export async function removePlayer(env: Env, gm: Game, pid: string) {
   await bump(env, gm);
 }
 /** Other squads (before the game starts, or after it ends): the players already in are put in their new squad. */
+/** Battle Royale: the teacher's questions (edited, removed, added), before the game starts or once it's over. */
+export async function setRoyaleQuestions(env: Env, gm: Game, v: unknown) {
+  if (gm.kind !== "royale") throw new GameError("Only a Battle Royale has questions to edit.");
+  if (!["lobby", "over"].includes(gm.state.phase)) throw new GameError("Change the questions before the game starts (or once it's over).");
+  const qs = (Array.isArray(v) ? v : []).map(cleanRQ).filter(Boolean) as RQ[];
+  if (qs.length < 3) throw new GameError("Keep at least 3 questions, each with a prompt, 2 to 4 choices and the right one ticked.");
+  gm.content.questions = qs.slice(0, 80);
+  await run(env, "UPDATE games SET content = ? WHERE id = ?", JSON.stringify(gm.content), gm.id);
+}
 export async function setSquads(env: Env, gm: Game, v: unknown) {
   if (gm.mode !== "squads") throw new GameError("This game isn't played with the class's squads.");
   if (!["lobby", "over"].includes(gm.state.phase)) throw new GameError("Change the squads before the game starts (or once it's over).");

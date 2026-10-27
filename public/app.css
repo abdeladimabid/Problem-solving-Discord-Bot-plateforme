@@ -2220,3 +2220,17 @@ button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); tr
 .wp-step textarea[data-bf="context"] { font-size: 14px; line-height: 1.55; }
 .wp-ctx { font-size: 14px; line-height: 1.55; } .wp-ctx h4 { margin: 12px 0 4px; font-size: 14px; } .wp-ctx p { margin: 4px 0; } .wp-ctx ul { margin: 4px 0; padding-left: 20px; }
 .wp-objl { margin: 4px 0 10px; padding-left: 20px; } .wp-objl li { margin: 3px 0; }
+
+/* ---------- Battle Royale: editable questions ---------- */
+.gq-list { display: grid; gap: 8px; }
+.gq { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface); }
+.gq:hover { border-color: var(--blue-100); }
+.gq-n { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: var(--blue-50); color: var(--blue); }
+.gq-b { flex: 1; min-width: 0; } .gq-b pre { margin: 6px 0 0; }
+.gq-opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.gq-o { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--surface-2); }
+.gq-o.ok { background: var(--up-bg); color: var(--up); font-weight: 650; }
+.gq-tools { display: flex; gap: 4px; align-items: center; flex: none; }
+.gq-form { display: grid; gap: 8px; }
+.gq-row { display: flex; gap: 10px; align-items: center; } .gq-row input[type=text] { flex: 1; } .gq-row input[type=radio] { width: 18px; height: 18px; accent-color: var(--up); }
+@media (max-width: 640px) { .gq { flex-wrap: wrap; } .gq-tools { width: 100%; justify-content: flex-end; } }

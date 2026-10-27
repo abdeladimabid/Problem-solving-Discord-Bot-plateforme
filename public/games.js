@@ -236,12 +236,26 @@ function gameDialog(d, kind, pre = {}) {
   if (kind === "sql") {
     const prevCase = (c, dropped) => `<div class="gm-prev"><b>🕵️ ${esc(c.title)}</b> <span class="tag">${c.steps.length} clues</span><p class="small">${esc(c.story)}</p>
       <ol class="small">${c.steps.map((s) => `<li><b>${esc(s.title)}</b> · ${esc(s.clue)} <span class="muted">(${s.expect.rows} row${s.expect.rows > 1 ? "s" : ""})</span></li>`).join("")}</ol>
-      <p class="small">🎯 ${esc(c.question)} <span class="gm-spoil" title="Hover to see">${esc(c.culprit[0])}</span></p>${dropped?.length ? `<p class="small muted">Steps left out (their query didn't work): ${dropped.map(esc).join(" · ")}</p>` : ""}</div>`;
-    $("#gm-mc").onchange = () => { const c = d.myCases[Number($("#gm-mc").value)]; $("#gm-cprev").innerHTML = c ? prevCase(c) : ""; };
+      <p class="small">🎯 ${esc(c.question)} <span class="gm-spoil" title="Hover to see">${esc(c.culprit[0])}</span></p>${dropped?.length ? `<p class="small muted">Steps left out (their query didn't work): ${dropped.map(esc).join(" · ")}</p>` : ""}
+      ${c.schema ? `<button type="button" class="btn small" data-cedit>✏️ Edit it</button> <span class="small muted">change the story, the data, the clues or the queries; ClassBot checks it again</span>` : ""}</div>`;
+    let shownCase = null;
+    // ✏️ an AI case (or one made before) opened in « Write my own », to change anything
+    dlg.addEventListener("click", (ev) => {
+      if (!ev.target.closest("[data-cedit]") || !shownCase) return;
+      const c = shownCase;
+      $('[data-csrc="own"]', dlg).click();
+      $("#gm-ot").value = c.title || ""; $("#gm-ocu").value = Array.isArray(c.culprit) ? c.culprit[0] || "" : c.culprit || "";
+      $("#gm-ost").value = c.story || ""; $("#gm-osc").value = c.schema || ""; $("#gm-oend").value = c.ending || "";
+      $("#gm-osteps").innerHTML = "";
+      c.steps.forEach((st, i) => { addStep(); const r = $$("[data-ostep]", dlg)[i];
+        for (const [k, v] of Object.entries({ title: st.title, keys: (st.keys || []).join(", "), clue: st.clue, ref: st.ref, hint: st.hint, found: st.found })) { const x = $(`[data-o="${k}"]`, r); if (x) x.value = v || ""; } });
+      toast("The case is in « Write my own »: change it, then check it");
+    });
+    $("#gm-mc").onchange = () => { const c = d.myCases[Number($("#gm-mc").value)]; shownCase = c || null; $("#gm-cprev").innerHTML = c ? prevCase(c) : ""; };
     wireSrc("csrc", "cpane", "#gm-cprev", pre.myCase != null ? "mine" : "built");
     $("#gm-cgen").onclick = (e) => busy(e.currentTarget, async () => {
       $("#gm-cprev").innerHTML = `<p class="small muted">⏳ The AI writes the case, then ClassBot runs every query on its database… (up to a minute)</p>`;
-      try { const r = await api("/games/case", { method: "POST", body: { prompt: $("#gm-cp").value, level: $("#gm-cl").value, lang: $("#gm-lang").value, avoid: [...d.cases, ...(d.myCases || [])].map((c) => c.title) } }); picked = r.case; $("#gm-cprev").innerHTML = prevCase(r.case, r.dropped) + `<p class="small muted">Not great? Click “Generate a case” again.</p>`; }
+      try { const r = await api("/games/case", { method: "POST", body: { prompt: $("#gm-cp").value, level: $("#gm-cl").value, lang: $("#gm-lang").value, avoid: [...d.cases, ...(d.myCases || [])].map((c) => c.title) } }); picked = r.case; shownCase = r.case; $("#gm-cprev").innerHTML = prevCase(r.case, r.dropped) + `<p class="small muted">Not great? Click “Generate a case” again, or ✏️ Edit it.</p>`; }
       catch (x) { $("#gm-cprev").innerHTML = `<div class="notice">${esc(x.message)}</div>`; }
     });
     const stepRow = (i) => `<div class="gm-ostep" data-ostep><b class="small">Step ${i + 1}</b>
@@ -261,14 +275,24 @@ function gameDialog(d, kind, pre = {}) {
   }
   if (kind === "relay") {
     const prevTask = (t) => `<div class="gm-prev"><b>🏃 ${esc(t.title)}</b> <span class="tag">${GM_LEVEL[t.level] || ""}</span>${t.by === "ai" ? ` <span class="tag">✨ checked by running the AI's solution</span>` : ""}<p class="small">${esc(t.text)}</p>
-      <div class="small">${t.tests.map((x, i) => `${i < 2 ? "👁" : "🔒"} <code>${esc(t.fn)}(${x.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(x.expect))}</code>`).join("<br>")}</div></div>`;
+      <div class="small">${t.tests.map((x, i) => `${i < 2 ? "👁" : "🔒"} <code>${esc(t.fn)}(${x.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(x.expect))}</code>`).join("<br>")}</div>
+      <p style="margin:8px 0 0"><button type="button" class="btn small" data-tedit>✏️ Edit it</button> <span class="small muted">change the statement, the function or the tests</span></p></div>`;
+    let shownTask = null;
+    dlg.addEventListener("click", (ev) => {
+      if (!ev.target.closest("[data-tedit]") || !shownTask) return;
+      const t = shownTask;
+      $('[data-tsrc="own"]', dlg).click();
+      $("#gm-ott").value = t.text || ""; $("#gm-ott").dataset.title = t.title || ""; $("#gm-of").value = t.fn || ""; $("#gm-op").value = (t.params || []).join(", ");
+      $("#gm-ots").value = t.tests.map((x) => `${JSON.stringify(x.args)} => ${JSON.stringify(x.expect)}`).join("\n");
+      toast("The challenge is in « Write my own »: change it as you like");
+    });
     const tx = () => { const t = d.tasks.find((x) => String(x.i) === $("#gm-task").value); $("#gm-tasktxt").textContent = t ? t.text : ""; };
     $("#gm-task").onchange = tx; tx();
-    $("#gm-mt").onchange = () => { const t = d.myTasks[Number($("#gm-mt").value)]; $("#gm-tprev").innerHTML = t ? prevTask(t) : ""; };
+    $("#gm-mt").onchange = () => { const t = d.myTasks[Number($("#gm-mt").value)]; shownTask = t || null; $("#gm-tprev").innerHTML = t ? prevTask(t) : ""; };
     wireSrc("tsrc", "tpane", "#gm-tprev", pre.myTask != null ? "mine" : "built");
     $("#gm-tgen").onclick = (e) => busy(e.currentTarget, async () => {
       $("#gm-tprev").innerHTML = `<p class="small muted">⏳ The AI writes the challenge, then ClassBot runs its solution on its tests…</p>`;
-      try { const r = await api("/games/task", { method: "POST", body: { prompt: $("#gm-tp").value, level: $("#gm-tl").value, lang: $("#gm-lang").value, avoid: [...d.tasks, ...(d.myTasks || [])].map((t) => t.title) } }); picked = r.task; $("#gm-tprev").innerHTML = prevTask(r.task) + `<p class="small muted">Not great? Click “Generate a challenge” again.</p>`; }
+      try { const r = await api("/games/task", { method: "POST", body: { prompt: $("#gm-tp").value, level: $("#gm-tl").value, lang: $("#gm-lang").value, avoid: [...d.tasks, ...(d.myTasks || [])].map((t) => t.title) } }); picked = r.task; shownTask = r.task; $("#gm-tprev").innerHTML = prevTask(r.task) + `<p class="small muted">Not great? Click “Generate a challenge” again, or ✏️ Edit it.</p>`; }
       catch (x) { $("#gm-tprev").innerHTML = `<div class="notice">${esc(x.message)}</div>`; }
     });
     $("#gm-noise").onchange = () => {
@@ -294,7 +318,69 @@ function ownTask() {
   }
   if (tests.length < 2) throw new Error("Write at least 2 tests");
   const params = $("#gm-op").value.split(",").map((x) => x.trim()).filter(Boolean);
-  return { title: fn, text: $("#gm-ott").value.trim(), fn, params, tests, by: "teacher" };
+  return { title: $("#gm-ott").dataset.title || fn, text: $("#gm-ott").value.trim(), fn, params, tests, by: "teacher" };
+}
+
+// ------------------------------------------------------------------ Battle Royale: the questions, editable before the game
+function royaleQsHtml(G) {
+  const edit = ["lobby", "over"].includes(G.live?.phase), qs = G.content.questions;
+  return `<div class="panel-head"><h2>Questions <span class="muted">${qs.length}</span></h2>
+      ${edit ? `<span class="toolbar" style="margin:0"><button class="btn small" data-qnew>✍️ Write a question</button><button class="btn small" data-qai>✨ Add some with AI</button></span>` : `<span class="small muted">You can change them before the game starts or once it's over.</span>`}</div>
+    <div class="gq-list">${qs.map((q, i) => `<div class="gq"><span class="gq-n">${i + 1}</span><div class="gq-b"><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}
+      <div class="gq-opts">${q.options.map((o, k) => `<span class="gq-o ${k === q.answer ? "ok" : ""}">${k === q.answer ? "✅" : "ABCD"[k] + "."} ${esc(o)}</span>`).join("")}</div></div>
+      ${edit ? `<span class="gq-tools"><button class="wp-ib" data-qup="${i}" title="Move up" ${i ? "" : "disabled"}>↑</button><button class="wp-ib" data-qdown="${i}" title="Move down" ${i < qs.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-qedit="${i}">✏️ Edit</button><button class="wp-ib danger" data-qrm="${i}" title="Remove">✕</button></span>` : ""}</div>`).join("")}</div>`;
+}
+function royaleQForm(q = { prompt: "", code: "", options: ["", "", "", ""], answer: 0 }) {
+  const opts = [...q.options, "", "", "", ""].slice(0, 4);
+  return `<label for="gq-p">Question</label><textarea id="gq-p" rows="3" style="width:100%" maxlength="300" placeholder="Short and direct, e.g. Quelle propriété CSS aligne les éléments sur l'axe principal ?">${esc(q.prompt)}</textarea>
+    <label for="gq-c">Code shown with it <span class="muted">(optional, 12 lines max)</span></label><textarea id="gq-c" rows="3" style="width:100%;font-family:var(--mono)" maxlength="700">${esc(q.code || "")}</textarea>
+    <label>Choices <span class="muted">(2 to 4; pick the right one)</span></label>
+    <div class="gq-form">${opts.map((o, k) => `<label class="gq-row"><input type="radio" name="gq-ok" value="${k}" ${k === q.answer ? "checked" : ""} aria-label="Right answer"><b>${"ABCD"[k]}</b><input type="text" data-gqo="${k}" value="${esc(o)}" maxlength="120" placeholder="${k < 2 ? "Choice" : "Choice (optional)"}"></label>`).join("")}</div>`;
+}
+function readRoyaleQ() {
+  const all = $$("[data-gqo]", dlg).map((i) => i.value.trim());
+  const ok = Number($("input[name=gq-ok]:checked", dlg)?.value ?? -1);
+  if (!$("#gq-p", dlg).value.trim()) throw new Error("Write the question");
+  if (!all[ok]) throw new Error("The right answer must be one of the filled choices");
+  // empty choices are dropped: the right one keeps its place among the others
+  const keep = all.map((o, k) => [o, k]).filter(([o]) => o);
+  if (keep.length < 2) throw new Error("Give at least 2 choices");
+  return { prompt: $("#gq-p", dlg).value.trim(), code: $("#gq-c", dlg).value.replace(/\s+$/, ""), options: keep.map(([o]) => o), answer: keep.findIndex(([, k]) => k === ok) };
+}
+function wireRoyaleQs(G, id) {
+  const box = $("#gm-qs");
+  if (!box) return;
+  const save = async (qs, msg) => { const x = await api(`/games/${id}`, { method: "PUT", body: { questions: qs } }); G.content = x.content; G.live = x.live; box.innerHTML = royaleQsHtml(G); if (msg) toast(msg); };
+  box.onclick = (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const qs = G.content.questions.slice();
+    if (b.dataset.qup) { const i = Number(b.dataset.qup); [qs[i - 1], qs[i]] = [qs[i], qs[i - 1]]; return busy(b, () => save(qs)); }
+    if (b.dataset.qdown) { const i = Number(b.dataset.qdown); [qs[i + 1], qs[i]] = [qs[i], qs[i + 1]]; return busy(b, () => save(qs)); }
+    if (b.dataset.qrm) { qs.splice(Number(b.dataset.qrm), 1); return busy(b, () => save(qs, "Question removed")); }
+    if (b.dataset.qedit || b.hasAttribute("data-qnew")) {
+      const i = b.dataset.qedit != null ? Number(b.dataset.qedit) : -1;
+      openDialog(i >= 0 ? `Question ${i + 1}` : "A new question", royaleQForm(i >= 0 ? qs[i] : undefined), [{ label: i >= 0 ? "Save" : "Add it", primary: true, action: async () => {
+        const q = readRoyaleQ();
+        if (i >= 0) qs[i] = { ...q, ...(qs[i].topic ? { topic: qs[i].topic } : {}) }; else qs.push(q);
+        await save(qs, i >= 0 ? "Question saved" : "Question added"); dlg.close();
+      } }]);
+      return;
+    }
+    if (b.hasAttribute("data-qai")) {
+      openDialog("Add questions with AI", `<label for="gq-t">Topics</label><input type="text" id="gq-t" style="width:100%" placeholder="e.g. Flexbox, SQL joins" value="${esc([...new Set(qs.map((q) => q.topic).filter(Boolean))].slice(0, 4).join(", "))}">
+        <div class="field-row"><div><label for="gq-n">How many</label><select id="gq-n">${[3, 5, 10, 15].map((n) => `<option ${n === 5 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <div><label for="gq-l">Level</label><select id="gq-l"><option value="easy">Easy</option><option value="medium">Medium</option></select></div></div>
+        <p class="small muted">They are added at the end; edit or remove any of them afterwards.</p>`, [{ label: "✨ Add them", primary: true, action: async () => {
+        const topics = $("#gq-t", dlg).value.split(",").map((t) => t.trim()).filter(Boolean);
+        if (!topics.length) throw new Error("Give at least one topic");
+        const r = await api("/games/questions", { method: "POST", body: { topics, count: Number($("#gq-n", dlg).value), level: $("#gq-l", dlg).value, lang: G.settings.lang } });
+        const have = new Set(qs.map((q) => q.prompt.toLowerCase()));
+        const add = r.questions.filter((q) => !have.has(q.prompt.toLowerCase()));
+        await save([...qs, ...add].slice(0, 80), `${add.length} question(s) added${r.ai ? "" : " (built-in: the AI wasn't available)"}`); dlg.close();
+      } }]);
+    }
+  };
 }
 
 async function viewGame(id) {
@@ -320,7 +406,7 @@ async function viewGame(id) {
         <div class="toolbar" style="margin:0"><button class="btn" id="gm-post">📣 Post the Join button in Discord</button></div></div></section>
     </div>
     <section class="panel gm-livep"><div class="panel-head" style="margin-bottom:6px"><h2 style="margin:0">🎮 Live</h2><span class="small muted">Updates by itself</span></div><div id="gm-live">${gameLive(G, L)}</div></section>
-    ${G.kind === "royale" ? `<section class="panel"><h2>Questions <span class="muted">${G.content.questions.length}</span></h2><div class="bt-qs">${G.content.questions.map((q) => `<div class="bt-q"><span class="bt-k">❓</span><div><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}<div class="small">${q.options.map((o, k) => `${k === q.answer ? "✅ <b>" : ""}${"ABCD"[k]}. ${esc(o)}${k === q.answer ? "</b>" : ""}`).join(" · ")}</div></div></div>`).join("")}</div></section>` : ""}
+    ${G.kind === "royale" ? `<section class="panel" id="gm-qs">${royaleQsHtml(G)}</section>` : ""}
     ${G.kind === "sql" && G.content.case ? `<section class="panel"><h2>🕵️ The case <span class="muted">(your answer key)</span></h2><p>${esc(G.content.case.story)}</p>
       <ol>${G.content.case.steps.map((s) => `<li><b>${esc(s.title)}</b> · ${esc(s.clue)}<pre class="code small">${esc(s.ref)}</pre></li>`).join("")}</ol>
       <p>🎯 ${esc(G.content.case.question)} <b>${esc(G.content.case.culprit[0].replace(/\b\w/g, (c) => c.toUpperCase()))}</b></p></section>` : ""}
@@ -328,6 +414,7 @@ async function viewGame(id) {
       <div class="small">${G.content.task.tests.map((t, i) => `${i < 2 ? "👁 " : "🔒 "}<code>${esc(G.content.task.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div>
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
   $("#gm-cptv").onclick = () => copyText(G.tv, "Teacher's TV link copied: it controls the game, don't share it");
+  wireRoyaleQs(G, id);
   $("#gm-post").onclick = (e) => busy(e.currentTarget, async () => { await api(`/games/${id}/announce`, { method: "POST" }); toast("🎮 Join button posted in #arena: the students can join"); });
   $("#gm-del").onclick = () => confirmDialog("Delete this game?", "The TV and the join links stop working.", "Delete", async () => { await api(`/games/${id}`, { method: "DELETE" }); location.hash = `#/games/${G.kind}`; }, true);
   // reuse the game: free the players, remove one, other squads (the TV and the phones follow by themselves)
