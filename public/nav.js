@@ -1,13 +1,17 @@
 // The side menu in sections: each section opens and closes (remembered in this browser), shows the waiting counts
 // of its pages when closed, and opens by itself on the page you're on. Simple mode: one section open at a time.
 /* global $, $$ */
+// one theme per section: who the learners are, how you support them, their projects, how they're assessed, what
+// they do on their computer and GitHub, their practice, the games, and the setup
 const NAV_GROUPS = [
-  { key: "class", icon: "🏫", label: "Class", items: ["#/students", "#/teams", "#/vscode", "#/hands", "#/questions", "#/assignments"] },
-  { key: "projects", icon: "📄", label: "Projects", items: ["#/briefs", "#/activities", "#/presentations", "#/github"] },
-  { key: "eval", icon: "🎓", label: "Evaluation", items: ["#/sprints", "#/progress", "#/assessments", "#/competencies", "#/integrity", "#/interviews"] },
-  { key: "practice", icon: "🧩", label: "Practice", items: ["#/challenges", "#/daily", "#/path", "#/sessions"] },
-  { key: "games", icon: "🎮", label: "Games & rewards", items: ["#/games", "#/contests", "#/events", "#/points", "#/coins", "#/skills"] },
-  { key: "setup", icon: "⚙️", label: "Setup", items: ["#/classes", "#/settings"] },
+  { key: "learners", icon: "👥", label: "Learners", hint: "Who's in the class: the students and their teams", items: ["#/students", "#/teams"] },
+  { key: "support", icon: "🤝", label: "Support", hint: "Help the students: their requests, their questions, the ones who need a plan, interviews", items: ["#/assignments", "#/hands", "#/questions", "#/interviews"] },
+  { key: "projects", icon: "📁", label: "Projects", hint: "The work in class: briefs, sprints, daily activities, presentations", items: ["#/briefs", "#/sprints", "#/activities", "#/presentations"] },
+  { key: "eval", icon: "🎓", label: "Evaluation", hint: "How they're assessed: assessments, debriefs and levels, competencies", items: ["#/assessments", "#/progress", "#/competencies"] },
+  { key: "monitor", icon: "👀", label: "Monitoring", hint: "What they really do: GitHub, VS Code, integrity checks", items: ["#/github", "#/vscode", "#/integrity"] },
+  { key: "practice", icon: "🧩", label: "Practice", hint: "Coding practice: challenges, daily challenge, path, sessions, skills", items: ["#/challenges", "#/daily", "#/path", "#/sessions", "#/skills"] },
+  { key: "games", icon: "🎮", label: "Games & rewards", hint: "Games, contests, events, points and coins", items: ["#/games", "#/contests", "#/events", "#/points", "#/coins"] },
+  { key: "setup", icon: "⚙️", label: "Setup", hint: "Your classes and the settings", items: ["#/classes", "#/settings"] },
 ];
 const navSimple = () => { try { return localStorage.getItem("cb-simple") === "1"; } catch { return false; } };
 const navState = () => { try { return JSON.parse(localStorage.getItem("cb-nav") || "{}") || {}; } catch { return {}; } };
@@ -28,7 +32,7 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
     const box = document.createElement("div");
     box.className = "nav-grp";
     box.dataset.g = g.key;
-    box.innerHTML = `<button type="button" class="nav-gh" aria-expanded="true"><span class="nav-gi" aria-hidden="true">${g.icon}</span><span class="nav-gl">${g.label}</span><span class="nav-gp" hidden></span><svg class="nav-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><div class="nav-gb"></div>`;
+    box.innerHTML = `<button type="button" class="nav-gh" aria-expanded="true" title="${g.hint || ""}"><span class="nav-gi" aria-hidden="true">${g.icon}</span><span class="nav-gl">${g.label}</span><span class="nav-gp" hidden></span><svg class="nav-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><div class="nav-gb"></div>`;
     items.forEach((a) => $(".nav-gb", box).append(a));
     frag.append(box);
   }
@@ -46,7 +50,7 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
 
   const setOpen = (box, open) => { $(".nav-gh", box).setAttribute("aria-expanded", String(open)); box.classList.toggle("closed", !open); };
   // detail pages belong to their list's section (#/student/… → Students)
-  const ALSO = { "#/students": "#/student/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/games": ["#/game/", "#/battle"] };
+  const ALSO = { "#/students": "#/student/", "#/assignments": "#/wplan/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/games": ["#/game/", "#/battle"] };
   const isHere = (href) => { const h = location.hash.split("?")[0]; return h === href || h.startsWith(href + "/") || (ALSO[href] && [].concat(ALSO[href]).some((p) => h.startsWith(p))); };
   const current = () => $$(".nav-grp", nav).find((b) => $$("a", b).some((a) => isHere(a.getAttribute("href"))));
   const apply = () => {
@@ -54,7 +58,7 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
     for (const box of $$(".nav-grp", nav)) {
       const k = box.dataset.g;
       // simple mode: only the section of the page you're on (and the one you opened)
-      const open = simple ? box === cur || st._simple === k : box === cur || (k in st ? !!st[k] : k === "class" || k === "projects");
+      const open = simple ? box === cur || st._simple === k : box === cur || (k in st ? !!st[k] : k === "learners" || k === "support" || k === "projects");
       setOpen(box, open);
     }
     badges();

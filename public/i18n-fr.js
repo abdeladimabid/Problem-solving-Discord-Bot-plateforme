@@ -3767,5 +3767,16 @@ window.CB_FR = {
 "optional: one per line, for a multiple choice)": "facultatif : un par ligne, pour un choix multiple)",
 "Explanation": "Explication",
 "optional, after the answer)": "facultatif, après la réponse)",
-"They come in a random order; the judge sees the answer. Edit or remove the ones you don't like (not while a game is running).": "Elles arrivent dans un ordre aléatoire ; le juge voit la réponse. Modifiez ou supprimez celles qui ne vous plaisent pas (pas pendant une partie)."
+"They come in a random order; the judge sees the answer. Edit or remove the ones you don't like (not while a game is running).": "Elles arrivent dans un ordre aléatoire ; le juge voit la réponse. Modifiez ou supprimez celles qui ne vous plaisent pas (pas pendant une partie).",
+"Learners": "Apprenants",
+"Support": "Accompagnement",
+"Monitoring": "Suivi de l’activité",
+"Who's in the class: the students and their teams": "Qui est dans la classe : les apprenants et leurs équipes",
+"Help the students: their requests, their questions, the ones who need a plan, interviews": "Aider les apprenants : leurs demandes, leurs questions, ceux qui ont besoin d’un plan, les entretiens",
+"The work in class: briefs, sprints, daily activities, presentations": "Le travail en classe : briefs, sprints, activités du jour, présentations",
+"How they're assessed: assessments, debriefs and levels, competencies": "Comment ils sont évalués : évaluations, débriefs et niveaux, compétences",
+"What they really do: GitHub, VS Code, integrity checks": "Ce qu’ils font vraiment : GitHub, VS Code, contrôles d’intégrité",
+"Coding practice: challenges, daily challenge, path, sessions, skills": "L’entraînement au code : défis, défi du jour, parcours, sessions, compétences",
+"Games, contests, events, points and coins": "Jeux, concours, événements, points et pièces",
+"Your classes and the settings": "Vos classes et les paramètres"
 };
