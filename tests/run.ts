@@ -6176,6 +6176,22 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   // an action made by the AI on a notion, and the assessments' ✨ on a question
   const mk = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "make", kind: "brief", notion: "Axes de Flexbox" });
   check(mk.status === 200 && mk.data.step.kind === "brief" && mk.data.step.brief.tasks.length === 3, "✨ a mini brief made for them");
+  // the teacher says what they want: the AI follows it first
+  const u1 = ai.users.length;
+  await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "make", kind: "code", step: { kind: "code", ask: "Une fonction JavaScript qui filtre des produits par prix" } });
+  check(ai.users.slice(u1).join("\n").includes("CONSIGNE DU FORMATEUR (prioritaire)") && ai.users.slice(u1).join("\n").includes("filtre des produits par prix"), "✨ Generate follows what the teacher wrote");
+  const u2 = ai.users.length;
+  await api("POST", `/api/wplans/${id}/diagnose?g=${G}`, { ask: "Un mini brief sur les formulaires, pas de défi" });
+  check(ai.users.slice(u2).join("\n").includes("pas de défi"), "…and so does the diagnosis");
+  // folded into the mini brief: features of the same project, not separate challenges
+  const fold = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "integrate", step: mk.data.step, adds: [d.proposals.find((x: any) => x.kind === "code"), ch] });
+  const fb = fold.data.step;
+  check(fold.status === 200 && fb.kind === "brief" && fb.brief.tasks.length === mk.data.step.brief.tasks.length + 2 && mk.data.step.brief.tasks.every((t: string) => fb.brief.tasks.includes(t)) && fb.merged.length === 2,
+    `📦 into the brief: each action becomes a task of the same project, the old tasks kept (${fold.status} ${fold.data.error ?? ""})`);
+  const feat = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "integrate", step: fb, adds: [{ title: "un bouton mode sombre", kind: "feature" }], ask: "un bouton mode sombre" });
+  check(feat.data.step.brief.tasks.some((t: string) => /mode sombre/.test(t)) && feat.data.step.brief.tasks.length === fb.brief.tasks.length + 1, "…and a feature the teacher types");
+  const none = await api("POST", `/api/wplans/${id}/ai?g=${G}`, { action: "integrate", step: d.proposals.find((x: any) => x.kind === "code"), adds: [ch] });
+  check(none.status === 400, "…only into a mini brief");
   // the teacher keeps some, edits, sends
   const steps = [...d.proposals.filter((x: any) => x.kind !== "brief"), mk.data.step];
   const sv = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps, title: "Reprendre Flexbox", message: "Fais-les dans l'ordre." });

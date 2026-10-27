@@ -487,6 +487,14 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       // plan d'action: the diagnosis (lacunes and proposed actions), one action, the correction of an answer
+      if (sys.includes("Tu fais évoluer le MINI-PROJET")) {
+        // folds each element into the brief: the old tasks kept, one task per element, in the project's story
+        const cur = JSON.parse((user.split("LE MINI-PROJET ACTUEL :\n<<<\n")[1] || "{}").split("\n>>>")[0] || "{}");
+        const items = ((user.split("À INTÉGRER :\n<<<\n")[1] || "").split("\n>>>")[0] || "").split("\n").filter(Boolean).map((l) => l.replace(/^\d+\. /, "").split(" · ")[0]);
+        const wish = ((user.split("CONSIGNE DU FORMATEUR (prioritaire) :\n<<<\n")[1] || "").split("\n>>>")[0] || "");
+        return { response: JSON.stringify({ titre: cur.titre || "Mini-projet : portfolio", notion: "Flexbox, Grid", context: (cur.contexte || "Ton portfolio.") + " Il grandit.",
+          tasks: [...(cur.taches || []), ...items.map((x) => `Dans la page, ${x.toLowerCase()}`), ...(wish && !items.length ? [`Ajouter : ${wish}`] : [])], deliverable: cur.livrable || "Le lien du dépôt GitHub", hours: (cur.heures || 3) + 1, ajoute: items }) };
+      }
       if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("Écris UNE action de type")) {
         const ch = Number((user.match(/^(\d+) · /m) || [])[1] || 0);
         const acts = [

@@ -82,20 +82,27 @@ function diagHtml() {
   if (WPS.busy.has("diag")) return `<div class="wp-diag-load"><div class="wp-spin"></div><div><b>The AI reads ${name}'s debriefs, assessments and practice…</b><p class="muted small">About 20 seconds. It explains their lacunes, then proposes actions.</p></div></div>`;
   if (!d) return `<div class="wp-diag-empty"><div class="wp-diag-ico">🔎</div><div><h2>Understand ${name}'s lacunes first</h2>
       <p class="muted">The AI reads their debriefs (requirements missed, competencies not validated, oral questions), their assessments (the questions missed and why) and their practice, then explains what they don't master and proposes actions for it.</p>
+      <label class="wp-f wide wp-wish"><span>What do you want in this plan? <span class="muted">(optional: the AI follows it first)</span></span><textarea id="wp-ask" rows="2" placeholder="e.g. A mini brief: a portfolio page in HTML/CSS with a flex navbar and a CSS Grid gallery, plus 2 questions on Flexbox. 4 hours max.">${esc(WPS.wish || "")}</textarea></label>
       <p class="toolbar" style="margin:12px 0 0"><button class="btn primary" id="wp-diagnose">✨ Diagnose ${name}</button></p></div></div>`;
   const added = new Set(p.steps.map((s) => s.kind + "|" + (s.prompt || s.title)));
-  return `<div class="panel-head"><h2>✨ Diagnosis</h2><span class="toolbar" style="margin:0"><span class="muted small">${fmtAgo(d.at)}</span>${wpDraft() ? `<button class="btn small" id="wp-diagnose">↻ Again</button>` : ""}</span></div>
+  const brief = p.steps.find((s) => s.kind === "brief"), merged = new Set(brief?.merged || []);
+  return `<div class="panel-head"><h2>✨ Diagnosis</h2><span class="toolbar" style="margin:0"><span class="muted small">${fmtAgo(d.at)}</span></span></div>
     ${d.summary ? `<p class="wp-sum">${esc(d.summary)}</p>` : ""}
+    ${wpDraft() ? `<div class="wp-wishrow"><input type="text" id="wp-ask" value="${esc(WPS.wish ?? d.wish ?? "")}" placeholder="Ask for something else, e.g. a mini brief on forms, no challenge"><button class="btn small" id="wp-diagnose2">✨ Propose again</button></div>` : ""}
     ${d.lacunes.length ? `<h3 class="wp-h">Lacunes <span class="muted small">most urgent first</span></h3><div class="wp-lacs">${d.lacunes.map((l, i) => { const pr = WP_PRIO[l.priority] || WP_PRIO[2];
       return `<article class="wp-lac ${pr[0]}"><header><span class="wp-prio ${pr[0]}">${pr[1]}</span>${l.comps.map((c) => `<span class="tag">${esc(c)}</span>`).join("")}</header>
         <b class="wp-lac-t">${esc(l.notion)}</b><p class="small">${esc(l.why)}</p>
         ${l.evidence.length ? `<ul class="wp-ev">${l.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
-        ${wpDraft() ? `<footer><span class="muted small">✨ An action for it:</span>${["code", "answer", "mcq", "challenge", "brief"].map((k) => `<button class="wp-mini k-${k}" data-mk="${k}" data-lac="${i}" title="${esc(WK[k].sub)}">${WK[k].ico}</button>`).join("")}</footer>` : ""}</article>`; }).join("")}</div>` : ""}
-    ${d.proposals.length ? `<h3 class="wp-h">Proposed actions <span class="muted small">${wpDraft() ? `<button class="ap-link" id="wp-addall">+ Add them all</button>` : ""}</span></h3>
+        ${wpDraft() ? `<footer><span class="muted small">✨ An action for it:</span>${["code", "answer", "mcq", "challenge", "brief"].map((k) => `<button class="wp-mini k-${k}" data-mk="${k}" data-lac="${i}" title="${esc(WK[k].sub)}">${WK[k].ico}</button>`).join("")}
+          ${brief ? `<button class="wp-into" data-intolac="${i}" title="It becomes a feature of the mini brief">${merged.has(l.notion) ? "✓ In the brief" : "📦 Into the brief"}</button>` : ""}</footer>` : ""}</article>`; }).join("")}</div>` : ""}
+    ${d.proposals.length ? `<h3 class="wp-h">Proposed actions <span class="muted small">${wpDraft() ? `<button class="ap-link" id="wp-addall" title="${brief || d.proposals.some((x) => x.kind === "brief") ? "The code and the challenges become features of the mini brief; the questions stay quick checks" : ""}">+ Add them all</button>` : ""}</span></h3>
+      ${wpDraft() && brief ? `<p class="small muted" style="margin:-4px 0 10px">📦 <b>Into the brief</b> turns an action into a feature of ${esc(brief.title || "the mini brief")}: the AI writes it into the project's story and tasks.</p>` : ""}
       <div class="wp-props">${d.proposals.map((s, i) => { const isIn = added.has(s.kind + "|" + (s.prompt || s.title));
         return `<div class="wp-prop k-${s.kind}"><span class="wp-kico">${WK[s.kind].ico}</span><div class="wp-prop-b"><b>${esc(s.title)}</b>
           <div class="small muted"><span class="wp-kind">${esc(WK[s.kind].label)}</span>${s.notion ? ` · ${esc(s.notion)}` : ""}</div>${s.why ? `<div class="small">${esc(s.why)}</div>` : ""}</div>
-          ${wpDraft() ? (isIn ? `<span class="wp-in">✓ Added</span>` : `<button class="btn small" data-prop="${i}">+ Add</button>`) : ""}</div>`; }).join("")}</div>` : ""}`;
+          ${!wpDraft() ? "" : merged.has(s.title) ? `<span class="wp-in">✓ In the brief</span>` : isIn ? `<span class="wp-in">✓ Added</span>`
+            : brief && s.kind !== "brief" ? `<span class="wp-pb"><button class="btn small primary" data-into="${i}">📦 Into the brief</button><button class="btn small" data-prop="${i}" title="As its own action">+ Alone</button></span>`
+            : `<button class="btn small" data-prop="${i}">+ Add</button>`}</div>`; }).join("")}</div>` : ""}`;
 }
 
 function stepCardHtml(s, i) {
@@ -120,27 +127,31 @@ const wpField = (s, key, label, o = {}) => {
 };
 function editorHtml(s) {
   const ai = (action, label, title) => `<button class="btn small wp-ai" data-ai="${action}" data-sid="${esc(s.id)}" title="${esc(title)}">✨ ${label}</button>`;
-  const head = `<div class="wp-fields">${wpField(s, "title", "Title", { ph: "Short title the student sees" })}${wpField(s, "notion", "Notion", { ph: "e.g. Flexbox: justify-content" })}${wpField(s, "why", "Why (the student sees it)", { ph: "What it helps with", wide: true })}</div>`;
+  const PH = { brief: "e.g. A one-page portfolio in HTML/CSS: a flex navbar, a project gallery in CSS Grid, a contact form. 4 hours.", code: "e.g. A JavaScript function that filters an array of products by price", answer: "e.g. Ask the difference between let, const and var", mcq: "e.g. A QCM on the HTTP methods (GET, POST, PUT, DELETE)", challenge: "e.g. An easy challenge on loops" };
+  const askBox = `<div class="wp-askbox"><label class="wp-f wide"><span>✨ Tell the AI what you want</span><textarea data-f="ask" rows="2" placeholder="${esc(PH[s.kind])}">${esc(s.ask || "")}</textarea></label>
+    <button class="btn small primary" data-ai="make" data-sid="${esc(s.id)}">✨ ${s.kind === "challenge" ? "Find it" : s.prompt || s.brief?.tasks?.length ? "Generate again" : "Generate"}</button></div>`;
+  const head = askBox + `<div class="wp-fields">${wpField(s, "title", "Title", { ph: "Short title the student sees" })}${wpField(s, "notion", "Notion", { ph: "e.g. Flexbox: justify-content" })}${wpField(s, "why", "Why (the student sees it)", { ph: "What it helps with", wide: true })}</div>`;
   if (s.kind === "challenge") {
     return `${head}<div class="wp-pick"><label class="wp-f wide"><span>Challenge</span><input type="search" data-chq placeholder="Type to filter the library"></label>
       <div class="wp-chl" data-chl>${chListHtml(s, "")}</div></div>
-      <p class="toolbar">${ai("make", "Pick one for this notion", "The AI picks the challenge of your library that fits the notion")}</p>`;
+`;
   }
   if (s.kind === "brief") {
     const b = s.brief || { context: "", tasks: [], deliverable: "", hours: 3 };
     return `${head}<div class="wp-fields">
       <label class="wp-f wide"><span>Context</span><textarea data-bf="context" rows="3" placeholder="What they build, in 2 or 3 sentences">${esc(b.context)}</textarea></label>
-      <label class="wp-f wide"><span>Tasks <span class="muted">(one per line)</span></span><textarea data-bf="tasks" rows="5" placeholder="Make the navbar a flex container&#10;Space the links with gap…">${esc((b.tasks || []).join("\n"))}</textarea></label>
+      <label class="wp-f wide"><span>Tasks <span class="muted">(one per line)</span></span><textarea data-bf="tasks" rows="${Math.max(5, (b.tasks || []).length + 1)}" placeholder="Make the navbar a flex container&#10;Space the links with gap…">${esc((b.tasks || []).join("\n"))}</textarea></label>
       <label class="wp-f"><span>Deliverable</span><input type="text" data-bf="deliverable" value="${esc(b.deliverable)}" placeholder="The link of the GitHub repo"></label>
       <label class="wp-f"><span>Hours</span><input type="number" data-bf="hours" min="1" max="40" value="${Number(b.hours) || 3}"></label></div>
-      <p class="toolbar">${ai("make", `Write it for ${wpFirst()}`, "The AI writes (or completes) a small brief that practises this notion")}</p>`;
+      ${(s.merged || []).length ? `<div class="wp-merged"><span class="muted small">Folded in:</span>${s.merged.map((m) => `<span class="wp-chip k-brief">${esc(m)}</span>`).join("")}</div>` : ""}
+      <div class="wp-feat"><input type="text" data-feat placeholder="Add a feature, e.g. a dark mode button in JavaScript"><button class="btn small" data-featadd="${esc(s.id)}">📦 Add to the brief</button></div>`;
   }
   const lang = s.kind === "code" ? `<label class="wp-f"><span>Language</span><select data-f="lang">${WP_LANGS.map((l) => `<option ${l === (s.lang || "javascript") ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : "";
   let body = `${head}<div class="wp-fields">${wpField(s, "prompt", s.kind === "code" ? "What to code" : "Question", { area: true, rows: 3, wide: true, ph: "Short and direct, like a quiz question" })}${lang}`;
   if (s.kind === "code") body += wpField(s, "starter", "Starter code <span class='muted'>(optional, never the answer)</span>", { area: true, mono: true, rows: 4, wide: true }) + wpField(s, "expected", "Expected answer / key points <span class='muted'>(the AI corrects with it; never shown)</span>", { area: true, mono: true, rows: 5, wide: true });
   if (s.kind === "answer") body += wpField(s, "expected", "Key points expected <span class='muted'>(one per line; never shown)</span>", { area: true, rows: 4, wide: true });
   if (s.kind === "mcq") body += `<div class="wp-f wide"><span>Choices <span class="muted">(tick the right ones)</span></span><div class="wp-ch">${(s.choices.length ? s.choices : ["", "", "", ""]).map((c, k) => `<div class="wp-chr"><input type="checkbox" data-ok="${k}" ${s.answer.includes(k) ? "checked" : ""} aria-label="Right answer"><input type="text" data-c="${k}" value="${esc(c)}" placeholder="Choice ${k + 1}"><button class="wp-ib" data-crm="${k}" title="Remove">✕</button></div>`).join("")}</div><button class="ap-link" data-cadd>+ A choice</button></div>`;
-  body += `</div><p class="toolbar">${ai("rephrase", "Improve the wording", "Clear, short, direct; always in French")}${ai("fill", s.kind === "mcq" ? "Write the choices" : s.kind === "code" ? "Write the starter and the answer" : "Write the key points", "From the question")}${ai("make", "Rewrite it", "A new one on the same notion")}</p>`;
+  body += `</div><p class="toolbar">${ai("rephrase", "Improve the wording", "Clear, short, direct; always in French")}${ai("fill", s.kind === "mcq" ? "Write the choices" : s.kind === "code" ? "Write the starter and the answer" : "Write the key points", "From the question")}</p>`;
   return body;
 }
 function chListHtml(s, q) {
@@ -235,6 +246,22 @@ async function wpStepAi(s, action, notion) {
   WPS.busy.delete(s.id); drawWorkPlan(); wpSaveSoon();
 }
 
+// folds actions (or a feature the teacher typed) into the mini brief: features of the same project, not separate exercises
+async function wpIntegrate(adds, wish = "") {
+  const p = WPS.plan;
+  let brief = p.steps.find((s) => s.kind === "brief");
+  if (!brief) { brief = wpNewStep("brief"); p.steps.push(brief); }
+  WPS.busy.add(brief.id); WPS.open.add(brief.id); drawWorkPlan();
+  try {
+    if (WPS.saving) await WPS.saving;
+    const r = await api(`/wplans/${p.id}/ai`, { method: "POST", body: { action: "integrate", step: brief, adds, ask: wish } });
+    const k = p.steps.findIndex((x) => x.id === brief.id);
+    if (k >= 0) p.steps[k] = { ...r.step, id: brief.id };
+    toast(adds.length > 1 ? `${adds.length} actions folded into the mini brief` : "Folded into the mini brief: check its tasks");
+  } catch (e) { toast(e.message, true); }
+  WPS.busy.delete(brief.id); drawWorkPlan(); wpSaveSoon();
+}
+
 function wireWorkPlan() {
   const p = WPS.plan, draft = wpDraft();
   $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
@@ -243,17 +270,35 @@ function wireWorkPlan() {
   $$("[data-toggle]").forEach((b) => b.onclick = () => { const id = b.dataset.toggle; WPS.open.has(id) ? WPS.open.delete(id) : WPS.open.add(id); drawWorkPlan(); });
   if ($("#wp-copy")) $("#wp-copy").onclick = () => { navigator.clipboard?.writeText(WPS.url); toast("Link copied"); };
   // the diagnosis
-  if ($("#wp-diagnose")) $("#wp-diagnose").onclick = async () => {
+  if ($("#wp-ask")) $("#wp-ask").addEventListener("input", (e) => { WPS.wish = e.target.value; });
+  const diagnose = async () => {
+    WPS.wish = $("#wp-ask")?.value ?? WPS.wish ?? "";
     WPS.busy.add("diag"); $("#wp-diag").innerHTML = diagHtml();
-    try { if (WPS.saving) await WPS.saving; const r = await api(`/wplans/${p.id}/diagnose`, { method: "POST", body: {} }); WPS.plan.diag = r.plan.diag; }
+    try { if (WPS.saving) await WPS.saving; const r = await api(`/wplans/${p.id}/diagnose`, { method: "POST", body: { ask: WPS.wish } }); WPS.plan.diag = r.plan.diag; }
     catch (e) { toast(e.message, true); }
     WPS.busy.delete("diag"); drawWorkPlan();
   };
+  if ($("#wp-diagnose")) $("#wp-diagnose").onclick = diagnose;
+  if ($("#wp-diagnose2")) $("#wp-diagnose2").onclick = diagnose;
+  $$("[data-into]").forEach((b) => b.onclick = () => wpIntegrate([p.diag.proposals[Number(b.dataset.into)]]));
+  $$("[data-intolac]").forEach((b) => b.onclick = () => { const l = p.diag.lacunes[Number(b.dataset.intolac)]; wpIntegrate([{ title: l.notion, notion: l.notion, why: l.why, kind: "notion" }]); });
+  $$("[data-featadd]").forEach((b) => b.onclick = () => {
+    const inp = $("[data-feat]", b.closest(".wp-step")), v = inp.value.trim();
+    if (!v) { inp.focus(); return toast("Write the feature to add first", true); }
+    wpIntegrate([{ title: v, kind: "feature" }], v);
+  });
   $$("[data-prop]").forEach((b) => b.onclick = () => { const s = { ...p.diag.proposals[Number(b.dataset.prop)], id: Math.random().toString(36).slice(2, 8) }; p.steps.push(s); drawWorkPlan(); wpSaveSoon(); });
   if ($("#wp-addall")) $("#wp-addall").onclick = () => {
     const have = new Set(p.steps.map((s) => s.kind + "|" + (s.prompt || s.title)));
-    for (const s of p.diag.proposals) if (!have.has(s.kind + "|" + (s.prompt || s.title))) p.steps.push({ ...s, id: Math.random().toString(36).slice(2, 8) });
-    drawWorkPlan(); wpSaveSoon(); toast("Every proposed action is in the plan: open one to edit it");
+    const merged = new Set(p.steps.find((s) => s.kind === "brief")?.merged || []);
+    const todo = p.diag.proposals.filter((s) => !have.has(s.kind + "|" + (s.prompt || s.title)) && !merged.has(s.title));
+    const briefIn = p.steps.some((s) => s.kind === "brief"), briefProp = todo.find((s) => s.kind === "brief");
+    // with a mini brief: the code and the challenges become its features; the questions stay quick checks
+    if (!briefIn && briefProp) p.steps.push({ ...briefProp, id: Math.random().toString(36).slice(2, 8) });
+    const fold = briefIn || briefProp ? todo.filter((s) => s.kind === "code" || s.kind === "challenge") : [];
+    for (const s of todo) if (s !== briefProp && !fold.includes(s)) p.steps.push({ ...s, id: Math.random().toString(36).slice(2, 8) });
+    drawWorkPlan(); wpSaveSoon();
+    if (fold.length) wpIntegrate(fold); else toast("Every proposed action is in the plan: open one to edit it");
   };
   $$("[data-mk]").forEach((b) => b.onclick = () => {
     const l = p.diag.lacunes[Number(b.dataset.lac)];

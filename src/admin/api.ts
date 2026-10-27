@@ -431,7 +431,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
       if (!m[2] && method === "PUT") { await savePlanEdits(env, g, pid, body); return ok(await workPlanView(env, g, pid)); }
       if (!m[2] && method === "DELETE") return ok(await deletePlan(env, g, pid));
-      if (m[2] === "diagnose" && method === "POST") { await diagnose(env, g, pid); return ok(await workPlanView(env, g, pid)); }
+      if (m[2] === "diagnose" && method === "POST") { await diagnose(env, g, pid, String(body.ask ?? "")); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "ai" && method === "POST") return ok(await stepAi(env, g, pid, body));
       if (m[2] === "review" && method === "POST") { await reviewStep(env, g, pid, String(body.step ?? ""), body); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "send" && method === "POST") {

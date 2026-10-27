@@ -26,9 +26,13 @@ export interface Step {
   work?: StepWork | null;
   /** the teacher's word on a brief (or any action): validated or to redo */
   review?: { ok: boolean; comment: string; at: number } | null;
+  /** what the teacher asked the AI for this action (never shown to the student) */
+  ask?: string;
+  /** a brief: what was integrated into it (titles of the actions folded in as features) */
+  merged?: string[];
 }
 export interface Lacune { notion: string; priority: 1 | 2 | 3; why: string; evidence: string[]; comps: string[] }
-export interface Diagnosis { at: number; model: string; summary: string; lacunes: Lacune[]; proposals: Step[] }
+export interface Diagnosis { at: number; model: string; summary: string; lacunes: Lacune[]; proposals: Step[]; wish?: string }
 export interface WorkPlan {
   id: number; gid: string; sid: string; name: string; title: string; message: string; status: "draft" | "sent" | "done";
   due_at: number | null; created_at: number; updated_at: number; sent_at: number | null; done_at: number | null;
@@ -62,6 +66,8 @@ export function cleanStep(x: any): Step | null {
     } : null,
     work: x.work && typeof x.work === "object" ? x.work : null,
     review: x.review && typeof x.review === "object" ? { ok: !!x.review.ok, comment: str(x.review.comment, 1000), at: Number(x.review.at) || now() } : null,
+    ask: str(x.ask, 1500),
+    merged: kind === "brief" && Array.isArray(x.merged) ? x.merged.map((m: unknown) => str(m, 160)).filter(Boolean).slice(0, 30) : [],
   };
 }
 
@@ -149,6 +155,8 @@ const STEP_RULES = [
   "Les consignes sont claires, courtes et directes comme une question de quiz : aucun thème inventé, aucune entreprise, aucun personnage (sauf le contexte d'un brief). Une action vise UNE notion précise (\"notion\") et dit en une phrase pourquoi elle l'aide (\"why\").",
   "Au niveau de l'apprenant : d'abord les bases qui lui manquent, puis un peu plus loin. Jamais la réponse dans la consigne.",
 ];
+const TEACHER_FIRST = "Si le formateur dit ce qu'il veut (CONSIGNE DU FORMATEUR), suis-le EN PRIORITÉ et exactement : sujet, technologies, difficulté, nombre d'éléments, contexte du projet. Le reste (lacunes, diagnostic) ne sert qu'à compléter ce qu'il n'a pas précisé.";
+const teacherAsk = (a: unknown) => { const t = str(a, 1500); return t ? `CONSIGNE DU FORMATEUR (prioritaire) :\n<<<\n${fence(t)}\n>>>` : ""; };
 const STEP_JSON = '{"type":"code","notion":"…","titre":"titre court","why":"…","prompt":"…","starter":"","expected":"…","lang":"css","choices":[],"answer":[],"challenge_id":null,"brief":null}';
 
 /** A step from the AI's JSON (its French keys), checked against the challenges it was given. */
@@ -196,7 +204,7 @@ async function libraryFor(env: Env, g: GuildRow) {
 }
 
 /** The diagnosis: their lacunes explained (priority, evidence), and the actions the AI proposes for them. */
-export async function diagnose(env: Env, g: GuildRow, id: number): Promise<WorkPlan> {
+export async function diagnose(env: Env, g: GuildRow, id: number, wish = ""): Promise<WorkPlan> {
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   const facts = await studentFacts(env, g, p.sid);
@@ -207,9 +215,9 @@ export async function diagnose(env: Env, g: GuildRow, id: number): Promise<WorkP
     "- \"resume\" : 3 à 5 phrases pour le formateur : où il en est, ce qu'il ne maîtrise pas vraiment et pourquoi ça le bloque, ce qui va bien ;",
     "- \"lacunes\" : 3 à 6 notions précises qu'il ne maîtrise pas (pas « CSS » mais « axes de Flexbox : justify-content / align-items »), de la plus urgente à la moins urgente, avec \"priorite\" (1 = bloque tout le reste, 2 = important, 3 = à consolider), \"pourquoi\" (1 ou 2 phrases : ce qu'il fait de travers), \"preuves\" (où on le voit : « B2 : exigence non faite … », « Évaluation Flexbox Q3 fausse ») et \"competences\" (codes C1…, CT1…) ;",
     "- \"actions\" : 4 à 7 actions proposées pour combler ces lacunes, des bases vers le plus difficile, dont au moins une question ou un code, et au plus un \"brief\".",
-    ...STEP_RULES,
+    ...STEP_RULES, TEACHER_FIRST,
     `Réponds UNIQUEMENT avec ce JSON : {"resume":"…","lacunes":[{"notion":"…","priorite":1,"pourquoi":"…","preuves":["…"],"competences":["C3"]}],"actions":[${STEP_JSON}]}`].join("\n");
-  const user = (compact: boolean) => [`APPRENANT : ${p.name}`, `CE QU'ON SAIT :\n<<<\n${fence(compact ? facts.text.slice(0, 3500) : facts.text.slice(0, 9000))}\n>>>`,
+  const user = (compact: boolean) => [`APPRENANT : ${p.name}`, teacherAsk(wish), `CE QU'ON SAIT :\n<<<\n${fence(compact ? facts.text.slice(0, 3500) : facts.text.slice(0, 9000))}\n>>>`,
     lib.length ? `DÉFIS DE LA BIBLIOTHÈQUE (id · titre · difficulté · type) :\n${lib.slice(0, compact ? 50 : 120).map((c) => `${c.id} · ${c.title} · ${c.difficulty} · ${c.kind}`).join("\n")}` : "Pas de défi dans la bibliothèque : n'utilise pas le type challenge."].join("\n\n");
   const ask = await askReview(env, system, user, 2, { maxTokens: 5000 });
   if (!ask.ok) throw new WorkPlanError(ask.msg);
@@ -222,8 +230,9 @@ export async function diagnose(env: Env, g: GuildRow, id: number): Promise<WorkP
   })).filter((l: Lacune) => l.notion).slice(0, 6);
   const proposals = (Array.isArray(d.actions) ? d.actions : []).map((x: any) => stepFromAi(x, okC)).filter(Boolean).slice(0, 8) as Step[];
   if (!lacunes.length && !proposals.length) throw new WorkPlanError("The AI's answer wasn't usable: try again.");
+  for (const x of proposals) if (x.kind === "brief" && wish) x.ask = str(wish, 1500);   // the brief keeps what the teacher asked
   await fillChallenges(env, g, proposals);
-  p.diag = { at: now(), model: ask.model, summary: str(d.resume, 2000), lacunes, proposals };
+  p.diag = { at: now(), model: ask.model, summary: str(d.resume, 2000), lacunes, proposals, wish: str(wish, 1500) } as Diagnosis;
   await putPlan(env, p);
   return p;
 }
@@ -233,10 +242,12 @@ export async function stepAi(env: Env, g: GuildRow, id: number, b: any): Promise
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   const cur = cleanStep(b.step || {});
-  const action = ["make", "rephrase", "fill"].includes(b.action) ? b.action : "make";
+  const action = ["make", "rephrase", "fill", "integrate"].includes(b.action) ? b.action : "make";
+  const wish = str(b.ask ?? cur?.ask, 1500);
+  if (action === "integrate") return integrateIntoBrief(env, p, cur, b.adds, wish);
   const kind = cur?.kind || (STEP_KINDS.includes(b.kind) ? b.kind : "code");
   // improving or completing a question / code: the same AI as the assessments
-  if (cur && action !== "make" && kind !== "brief" && kind !== "challenge") {
+  if (cur && action !== "make" && kind !== "brief" && kind !== "challenge" && !(action === "rephrase" && wish)) {
     const q = { type: kind === "answer" ? "explain" : kind, prompt: cur.prompt, expected: cur.expected, choices: cur.choices, lang: cur.lang };
     const r: any = await questionAi(env, { action, q, lang: "fr", techs: [], level: 1 }).catch((e) => { throw new WorkPlanError(String((e as Error).message)); });
     return { step: { ...cur, ...("prompt" in r ? { prompt: r.prompt } : {}), ...(r.starter != null ? { starter: r.starter } : {}), ...(r.expected != null ? { expected: r.expected } : {}),
@@ -249,8 +260,8 @@ export async function stepAi(env: Env, g: GuildRow, id: number, b: any): Promise
   if (kind === "challenge" && !lib.length) throw new WorkPlanError("The library has no challenge yet.");
   const system = [...BASE,
     `Écris UNE action de type "${kind}" pour cet apprenant${notion ? `, sur la notion « ${notion} »` : ""}${cur?.prompt || cur?.brief?.context ? ", en améliorant et en complétant ce que le formateur a déjà écrit (garde son intention)" : ""}.`,
-    ...STEP_RULES, `Réponds UNIQUEMENT avec ce JSON (une action) : ${STEP_JSON}`].join("\n");
-  const user = [notion ? `NOTION : ${notion}` : "", facts ? `SA LACUNE :\n<<<\n${fence(facts)}\n>>>` : "",
+    ...STEP_RULES, TEACHER_FIRST, `Réponds UNIQUEMENT avec ce JSON (une action) : ${STEP_JSON}`].join("\n");
+  const user = [teacherAsk(wish), notion ? `NOTION : ${notion}` : "", facts ? `SA LACUNE :\n<<<\n${fence(facts)}\n>>>` : "",
     cur && (cur.prompt || cur.brief) ? `DÉJÀ ÉCRIT PAR LE FORMATEUR :\n<<<\n${fence(JSON.stringify({ titre: cur.title, prompt: cur.prompt, expected: cur.expected, brief: cur.brief }))}\n>>>` : "",
     !notion && p.diag?.summary ? `DIAGNOSTIC :\n<<<\n${fence(p.diag.summary)}\n>>>` : "",
     lib.length ? `DÉFIS DE LA BIBLIOTHÈQUE (id · titre · difficulté · type) :\n${lib.map((c) => `${c.id} · ${c.title} · ${c.difficulty} · ${c.kind}`).join("\n")}` : ""].filter(Boolean).join("\n\n");
@@ -259,9 +270,42 @@ export async function stepAi(env: Env, g: GuildRow, id: number, b: any): Promise
   const raw = Array.isArray(ask.data?.actions) ? ask.data.actions[0] : ask.data;
   const s = stepFromAi({ ...raw, type: kind, notion: raw?.notion || notion }, new Set(lib.map((c) => c.id)));
   if (!s) throw new WorkPlanError("The AI's answer wasn't usable: try again.");
-  if (cur) s.id = cur.id;
+  if (cur) { s.id = cur.id; s.merged = cur.merged; }
+  s.ask = wish;
   await fillChallenges(env, g, [s]);
   return { step: s };
+}
+
+/** Folds actions (a code to write, a challenge's skill, a notion, a feature the teacher typed) into the mini brief:
+ *  each one becomes a feature of the same project, its tasks written in the brief's story, not a separate exercise. */
+async function integrateIntoBrief(env: Env, p: WorkPlan, cur: Step | null, adds: unknown, wish: string): Promise<{ step: Step }> {
+  if (!cur || cur.kind !== "brief") throw new WorkPlanError("Choose the mini brief to add it to.");
+  const items = (Array.isArray(adds) ? adds : []).map((a: any) => ({
+    titre: str(a?.title, 160), type: str(a?.kind, 20), notion: str(a?.notion, 100), consigne: str(a?.prompt || a?.brief?.context, 1200),
+    defi: a?.challenge?.title ? str(a.challenge.title, 160) : "", pourquoi: str(a?.why, 300),
+  })).filter((a) => a.titre || a.notion || a.consigne).slice(0, 8);
+  if (!items.length && !wish) throw new WorkPlanError("Nothing to add: write the feature you want.");
+  const b0 = cur.brief || { context: "", tasks: [], deliverable: "", hours: 3 };
+  const system = [...BASE,
+    "Tu fais évoluer le MINI-PROJET (brief) d'un apprenant : tu y INTÈGRES de nouveaux éléments (une fonctionnalité, une notion à pratiquer, un exercice proposé) de façon naturelle.",
+    "Chaque élément devient une FONCTIONNALITÉ du même projet, dans son histoire (son contexte), avec 1 ou 2 tâches précises et vérifiables. Jamais un exercice séparé, jamais « fais le défi X » : un défi de la bibliothèque devient la fonctionnalité du projet qui demande la même compétence.",
+    "Garde TOUTES les tâches existantes (tu peux les reformuler légèrement pour qu'elles s'enchaînent), ajoute les nouvelles là où elles ont du sens, dans un ordre logique de réalisation. Mets à jour le contexte en 2 ou 3 phrases s'il faut, et la durée (\"hours\").",
+    "Si le projet est vide, crée-le autour de ces éléments.", TEACHER_FIRST,
+    'Réponds UNIQUEMENT avec ce JSON : {"titre":"…","notion":"les notions pratiquées, courtes","context":"…","tasks":["…"],"deliverable":"…","hours":4,"ajoute":["le titre court de chaque élément intégré"]}'].join("\n");
+  const user = [teacherAsk(wish),
+    `LE MINI-PROJET ACTUEL :\n<<<\n${fence(JSON.stringify({ titre: cur.title, contexte: b0.context, taches: b0.tasks, livrable: b0.deliverable, heures: b0.hours }))}\n>>>`,
+    items.length ? `À INTÉGRER :\n<<<\n${fence(items.map((a, i) => `${i + 1}. ${[a.titre, a.notion && `notion : ${a.notion}`, a.defi && `défi : ${a.defi}`, a.consigne && `consigne : ${a.consigne}`, a.pourquoi && `pourquoi : ${a.pourquoi}`].filter(Boolean).join(" · ")}`).join("\n"))}\n>>>` : "",
+    p.diag?.summary ? `DIAGNOSTIC DE L'APPRENANT :\n<<<\n${fence(p.diag.summary)}\n>>>` : ""].filter(Boolean).join("\n\n");
+  const ask = await askReview(env, system, user, 1, { maxTokens: 3000 });
+  if (!ask.ok) throw new WorkPlanError(ask.msg);
+  const d = ask.data || {};
+  const tasks = (Array.isArray(d.tasks) ? d.tasks : []).map((t: unknown) => str(t, 400)).filter(Boolean).slice(0, 16);
+  if (tasks.length < Math.max(1, b0.tasks.length)) throw new WorkPlanError("The AI's answer lost some tasks: try again.");
+  const added = items.map((a) => a.titre || a.notion).filter(Boolean);
+  const step: Step = { ...cur, title: str(d.titre, 120) || cur.title || "Mini-projet", notion: str(d.notion, 80) || cur.notion,
+    brief: { context: str(d.context, 3000) || b0.context, tasks, deliverable: str(d.deliverable, 400) || b0.deliverable || "Le lien du dépôt GitHub", hours: Math.max(1, Math.min(40, Math.round(Number(d.hours) || b0.hours || 3))) },
+    merged: [...new Set([...(cur.merged || []), ...added, ...(!items.length && wish ? [wish.slice(0, 160)] : [])])].slice(0, 30) };
+  return { step };
 }
 
 // ------------------------------------------------------------------ sending, the student's page

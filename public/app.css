@@ -2205,3 +2205,11 @@ button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); tr
 @media (max-width: 1100px) { .wp-grid { grid-template-columns: 1fr; } .wp-side { position: static; } }
 @media (max-width: 640px) { .gw { grid-template-columns: 1fr; } .wp-fields { grid-template-columns: 1fr; } .wp-sb { padding-left: 14px; } .wp-diag-empty { flex-direction: column; } }
 .wp-fold > summary { cursor: pointer; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; } .wp-fold[open] > summary { margin-bottom: 10px; }
+.wp-askbox { display: flex; gap: 10px; align-items: flex-end; padding: 12px; margin: 8px 0 12px; border-radius: var(--radius-m); background: linear-gradient(135deg, var(--blue-50), transparent); border: 1px solid var(--blue-100); }
+.wp-askbox .wp-f { flex: 1; } .wp-askbox .wp-f > span { color: var(--blue-700); } .wp-askbox .btn { white-space: nowrap; }
+.wp-wish { margin-top: 12px; } .wp-wishrow { display: flex; gap: 8px; margin: 8px 0 2px; } .wp-wishrow input { flex: 1; }
+.wp-into { border: 1px solid var(--k-brief, #ea580c); color: #c2410c; background: #ea580c14; border-radius: 9px; padding: 4px 9px; font: inherit; font-size: 12.5px; font-weight: 650; cursor: pointer; margin-left: auto; }
+.wp-pb { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.wp-feat { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); } .wp-feat input { flex: 1; }
+.wp-merged { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+@media (max-width: 640px) { .wp-askbox, .wp-feat, .wp-wishrow { flex-direction: column; align-items: stretch; } }
