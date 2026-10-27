@@ -385,6 +385,19 @@ env.ASSETS = {
   db.prepare("INSERT INTO guilds (id, name, lang, season, code_lang, daily_hour, league, created_at) VALUES (?, 'CS 2nd year · Group A', 'fr', 'Autumn 2026', 'javascript,php', 9, ?, ?)").run(G2, JSON.stringify({ on: true, name: "Group A" }), now - 60 * DAY);
   db.prepare("UPDATE guilds SET league = ? WHERE id = ?").run(JSON.stringify({ on: true, name: "Group B" }), G);
   db.prepare("UPDATE players SET share_key = 'demoprofile1' WHERE guild_id = ? AND discord_id = '100'").run(G);
+  // her portfolio: what she wrote with /portfolio, her GitHub, months of commits
+  db.prepare("UPDATE players SET github_login = 'yasmine-dev' WHERE guild_id = ? AND discord_id = '100'").run(G);
+  db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`pf:${G}:100`, JSON.stringify({
+    headline: "Développeuse web junior · HTML, CSS, JavaScript", bio: "J'aime transformer une maquette Figma en une page rapide, accessible et agréable sur mobile. En ce moment : JavaScript, l'API Fetch et mes premiers pas avec React.",
+    city: "Rabat, Maroc", email: "yasmine.dev@example.com", linkedin: "https://www.linkedin.com/in/yasmine-dev", website: "https://yasmine-dev.github.io", cv: "", open: "stage", hide: [], hiddenBriefs: [], updated_at: now,
+    projects: [
+      { id: "p1", url: "https://github.com/yasmine-dev/atlas-trek", repo: "yasmine-dev/atlas-trek", title: "Atlas Trek", desc: "Landing page responsive d'une agence de randonnée dans l'Atlas : Tailwind CSS, carrousel en JavaScript, formulaire de réservation validé côté client.", tags: ["HTML", "Tailwind CSS", "JavaScript"], lang: "HTML", stars: 12, forks: 3, demo: "https://yasmine-dev.github.io/atlas-trek", pushed: "2026-10-16", featured: true, added_at: now },
+      { id: "p2", url: "https://github.com/yasmine-dev/darija-quiz", repo: "yasmine-dev/darija-quiz", title: "Darija Quiz", desc: "Un quiz pour apprendre la darija : questions chargées en JSON, score, minuteur et meilleurs scores dans le localStorage.", tags: ["JavaScript", "CSS", "localStorage"], lang: "JavaScript", stars: 7, forks: 1, demo: "https://yasmine-dev.github.io/darija-quiz", pushed: "2026-10-24", featured: false, added_at: now },
+      { id: "p3", url: "https://github.com/yasmine-dev/hammam", repo: "yasmine-dev/hammam", title: "Hammam Al Andalous", desc: "Site vitrine multi-pages pour un hammam traditionnel : HTML sémantique, Flexbox et Grid, accessible (WCAG AA).", tags: ["HTML", "CSS"], lang: "CSS", stars: 4, forks: 0, demo: null, pushed: "2026-09-30", featured: false, added_at: now },
+      { id: "p4", url: "https://www.figma.com/community/file/yasmine-ui-kit", repo: null, title: "UI Kit Figma", desc: "Mon kit de composants : boutons, cartes, formulaires, en clair et en sombre.", tags: ["Figma", "Design system"], lang: null, stars: 0, forks: 0, demo: null, pushed: null, featured: false, added_at: now },
+    ] }), now);
+  const ghc = db.prepare("INSERT OR IGNORE INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files, url) VALUES (?, ?, '100', 'commit', ?, ?, ?, 'real', ?, ?, 2, '')");
+  for (let d = 0; d < 170; d++) { if (rnd() < (d % 7 >= 5 ? 0.25 : 0.62)) { const k = 1 + Math.floor(rnd() * 4); for (let i = 0; i < k; i++) ghc.run(G, `demo${d}x${i}`.padEnd(40, "0"), ["yasmine-dev/atlas-trek", "yasmine-dev/darija-quiz", "yasmine-dev/hammam"][(d + i) % 3], now - d * DAY - i * 3600, "feat: section " + i, 20 + Math.floor(rnd() * 60), 5); } }
   db.prepare("INSERT OR IGNORE INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, '100', 'first_solve', ?), (?, '100', 'solves_10', ?), (?, '100', 'duel_win', ?)").run(G, now, G, now, G, now);
   for (let i = 0; i < 9; i++) {
     db.prepare("INSERT INTO players (guild_id, discord_id, name, last_active, created_at) VALUES (?, ?, ?, ?, ?)").run(G2, String(500 + i), "Student " + (i + 1), now - DAY, now - 50 * DAY);

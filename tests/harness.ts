@@ -80,7 +80,7 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
   trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
-export const github = { commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
+export const github = { userRepos: {} as Record<string, any[]>, repoMeta: {} as Record<string, any>, repoLangs: {} as Record<string, any>, commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -343,6 +343,13 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       return url.pathname.includes("/bad-") ? Response.json({ message: "Not Found" }, { status: 404 })
         : Response.json({ id: 424242, slug: "classbot-cs-class", client_id: "Iv23made", client_secret: "made_secret", webhook_secret: "made_whsec", pem: "-----BEGIN RSA PRIVATE KEY-----\nmade\n-----END RSA PRIVATE KEY-----" }, { status: 201 });
     }
+    // a user's public repos, a repo's details and its languages (the portfolio)
+    const ur = url.pathname.match(/^\/users\/([^/]+)\/repos$/);
+    if (ur) { github.calls++; return Response.json(github.userRepos[ur[1]] ?? []); }
+    const rl = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/languages$/);
+    if (rl && github.repoLangs[rl[1]]) return Response.json(github.repoLangs[rl[1]]);
+    const rm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)$/);
+    if (rm) { github.calls++; return github.repoMeta[rm[1]] ? Response.json(github.repoMeta[rm[1]]) : Response.json({ message: "Not Found" }, { status: 404 }); }
     let gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/branches$/);
     if (gm && github.branches[gm[1]]) return Response.json(github.branches[gm[1]].map((name) => ({ name })));
     gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits$/);

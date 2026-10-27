@@ -2,6 +2,7 @@
 // A value can be a list: one entry is picked at random, for variety.
 import { EN_MORE, FR_MORE } from "./i18n_more.ts";
 import { EN_VSC, FR_VSC } from "./i18n_vscode.ts";
+import { EN_PF, FR_PF } from "./i18n_portfolio.ts";
 import type { Lang } from "./types.ts";
 
 type Dict = Record<string, string | string[]>;
@@ -1372,8 +1373,8 @@ const fr: Dict = {
   "help.teacher": "• `/teacher setup arena:#arena language:<en|fr> daily_hour:<UTC> code_language:<…>`\n• `/teacher track link:<URL du concours>` : suivre un concours HackerRank (commentaires, podium, prix).\n• `/teacher stop` : arrêter un concours (révèle les résultats par défaut).\n• `/teacher season name:<…>` : nouvelle saison (points remis à zéro, champion annoncé).\n• `/teacher verify member:@élève` : confirmer toi-même un lien HackerRank.\n• `/teacher dashboard` : lien vers le tableau de bord.\n• `/teacher notify` : 🔔 recevoir un MP quand un élève utilise /help-me ou /ask (avec un bouton pour répondre dans le tableau de bord).\n\n**Tableau de bord :** progression des élèves et code soumis, devoirs, défi du jour (langage, salon, choix du défi), contrôle des points, problèmes « écrire du code » et générateur IA, barème.\n**Anti-triche :** éditeur de code (pas de collage, sorties de page enregistrées, replay de la frappe), étape « explique ton code », similarité entre élèves, défis rapides en image avec limite de temps (Settings → Anti-cheat ; à revoir dans **Integrity**).\n**Sessions de classe :** une série de défis chronométrée faite en classe, avec une grille de résultats en direct.\n**Nouveau :** ✋ **file d'aide** (/help-me des élèves, en direct, réponse en message privé) · ❓ **Questions** (brouillon IA, tu valides, ça devient la FAQ) · 🐙 **Projets** (dépôts GitHub corrigés à chaque push) · 🎤 entretiens · 🏆 **Classes** (comparer tes groupes, ligue des classes) · 🎓 certificats envoyés en message privé quand tu lances une nouvelle saison (`/teacher season`).",
 };
 
-Object.assign(en, EN_MORE, EN_VSC);
-Object.assign(fr, FR_MORE, FR_VSC);
+Object.assign(en, EN_MORE, EN_VSC, EN_PF);
+Object.assign(fr, FR_MORE, FR_VSC, FR_PF);
 export const DICTS: Record<Lang, Dict> = { en, fr };
 
 export function t(lang: string, key: string, vars: Record<string, string | number> = {}): string {

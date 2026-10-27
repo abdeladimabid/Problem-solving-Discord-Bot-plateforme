@@ -152,6 +152,52 @@ export const COMMANDS: any[] = [
     name: "interview", description: "Mock coding interview: solve a problem and explain it to an interviewer", description_localizations: fr("Entretien technique blanc : résous un problème et explique-le"),
     options: [diff(false)],
   },
+  {
+    name: "portfolio", description: "Your portfolio for companies: your projects, GitHub, skills, coding activity", description_localizations: fr("Ton portfolio pour les entreprises : projets, GitHub, compétences, activité de code"),
+    options: [
+      { type: SUB, name: "link", description: "Your portfolio's link, to share (turns sharing on)", description_localizations: fr("Le lien de ton portfolio, à partager (active le partage)") },
+      {
+        type: SUB, name: "add", description: "Add a project: one of your GitHub repos, or any link", description_localizations: fr("Ajouter un projet : un de tes dépôts GitHub, ou n'importe quel lien"),
+        options: [
+          { type: STRING, name: "url", description: "Your repo (pick it) or a link", description_localizations: fr("Ton dépôt (choisis-le) ou un lien"), required: true, autocomplete: true, max_length: 300 },
+          { type: STRING, name: "title", description: "Its name (default: the repo's)", description_localizations: fr("Son nom (par défaut : celui du dépôt)"), max_length: 80 },
+          { type: STRING, name: "description", description: "What it is, in one or two sentences", description_localizations: fr("Ce que c'est, en une ou deux phrases"), max_length: 400 },
+          { type: STRING, name: "demo", description: "Its live link (GitHub Pages, Vercel…)", description_localizations: fr("Son lien en ligne (GitHub Pages, Vercel…)"), max_length: 300 },
+          { type: BOOLEAN, name: "featured", description: "Show it first, in large", description_localizations: fr("L'afficher en premier, en grand") },
+        ],
+      },
+      { type: SUB, name: "remove", description: "Remove a project", description_localizations: fr("Retirer un projet"), options: [{ type: STRING, name: "project", description: "Which one", description_localizations: fr("Lequel"), required: true, autocomplete: true }] },
+      { type: SUB, name: "feature", description: "Show a project first, in large", description_localizations: fr("Mettre un projet en avant"), options: [{ type: STRING, name: "project", description: "Which one", description_localizations: fr("Lequel"), required: true, autocomplete: true }] },
+      { type: SUB, name: "about", description: "Your headline, a few words about you, your city", description_localizations: fr("Ton titre, quelques mots sur toi, ta ville") },
+      { type: SUB, name: "contact", description: "Your email, LinkedIn, website, CV", description_localizations: fr("Ton email, LinkedIn, site web, CV") },
+      {
+        type: SUB, name: "available", description: "Say what you're looking for (shown on top)", description_localizations: fr("Dire ce que tu cherches (affiché en haut)"),
+        options: [{
+          type: STRING, name: "for", description: "What you're looking for", description_localizations: fr("Ce que tu cherches"), required: true,
+          choices: [
+            { name: "An internship", name_localizations: fr("Un stage"), value: "stage" }, { name: "A work-study contract", name_localizations: fr("Une alternance"), value: "alternance" },
+            { name: "A job", name_localizations: fr("Un emploi"), value: "emploi" }, { name: "Freelance missions", name_localizations: fr("Des missions freelance"), value: "freelance" },
+            { name: "Nothing right now", name_localizations: fr("Rien pour le moment"), value: "none" },
+          ],
+        }],
+      },
+      {
+        type: SUB, name: "show", description: "Show or hide a part of your portfolio", description_localizations: fr("Afficher ou masquer une partie de ton portfolio"),
+        options: [
+          {
+            type: STRING, name: "part", description: "Which part", description_localizations: fr("Quelle partie"), required: true,
+            choices: [
+              { name: "My projects", name_localizations: fr("Mes projets"), value: "projects" }, { name: "Training projects (briefs)", name_localizations: fr("Projets de formation (briefs)"), value: "training" },
+              { name: "Validated competencies", name_localizations: fr("Compétences validées"), value: "skills" }, { name: "GitHub activity", name_localizations: fr("Activité GitHub"), value: "activity" },
+              { name: "Coding hours (VS Code)", name_localizations: fr("Heures de code (VS Code)"), value: "hours" }, { name: "Challenges and practice", name_localizations: fr("Défis et entraînement"), value: "practice" },
+              { name: "Badges", name_localizations: fr("Badges"), value: "badges" },
+            ],
+          },
+          { type: BOOLEAN, name: "visible", description: "Shown on your portfolio", description_localizations: fr("Affichée sur ton portfolio"), required: true },
+        ],
+      },
+    ],
+  },
   { name: "github", description: "Connect your GitHub: your briefs and your work count in your record", description_localizations: fr("Connecter ton GitHub : tes briefs et ton travail comptent dans ton suivi") },
   {
     name: "vscode", description: "Your coding time in VS Code, with your consent (WakaTime extension)", description_localizations: fr("Ton temps de code dans VS Code, avec ton accord (extension WakaTime)"),

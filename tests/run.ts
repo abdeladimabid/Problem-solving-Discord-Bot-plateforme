@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { intranetFake } from "./harness.ts";
+import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
 import { backfillSkills } from "../src/shared/skills.ts";
@@ -2195,7 +2196,7 @@ section("shop: boosts and profile extras");
   // the public profile page
   run1("UPDATE players SET share_key = 'shopkey1234' WHERE guild_id = ? AND discord_id = ?", G, A);
   const page = await (await bot.fetch(new Request("https://bot.example/u/shopkey1234"), env, makeCtx())).text();
-  check(page.includes("#0ea5e9") && page.includes("🦊") && page.includes("chip star"), "shared page uses the theme, emoji and showcase");
+  check(page.includes("#0ea5e9") && page.includes("🦊") && page.includes("badge star"), "shared page (the portfolio) uses the theme, emoji and showcase");
 
   // settings from the dashboard
   v = await api("PUT", `/api/shop?g=${G}`, { items: { double: { on: true, price: 99, hours: 2 }, contract: { on: true, price: 40, hours: 12, reward: 300 } }, custom: [] });
@@ -2314,7 +2315,7 @@ section("profiles you can share, certificates, class league, all classes");
   check(key && text(lastPatch()).includes(`/u/${key}`), "sharing gives a public link");
   const page = await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx());
   const html = await page.text();
-  check(page.status === 200 && html.includes("Kai") && html.includes("noindex") && html.includes("Skills") && !html.includes("print(a + b)"), "profile page shows level/skills, never code");
+  check(page.status === 200 && html.includes("Kai") && html.includes("noindex") && html.includes("challenges solved") && !html.includes("print(a + b)"), "profile page (the portfolio) shows the practice, never code");
   await click(kai, "share:off");
   check((await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).status === 404, "stop sharing: the link dies");
   await click(kai, "cert:0");
@@ -6262,6 +6263,49 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);
   run1("DELETE FROM assignments WHERE discord_id = ? AND note LIKE 'Plan d''action%'", B);
+}
+
+section("💼 portfolio: /portfolio (projects from GitHub or links, about me, contact, available, show), the public page for companies");
+{
+  const B = U.bob.id;
+  run1("UPDATE players SET github_login = 'bob-gh', gh_inst = NULL WHERE guild_id = ? AND discord_id = ?", G, B);
+  github.userRepos["bob-gh"] = [{ full_name: "bob-gh/portfolio-site", description: "Mon site perso", language: "HTML", private: false, fork: false }, { full_name: "bob-gh/forked", description: "", language: "JS", private: false, fork: true }];
+  github.repoMeta["bob-gh/portfolio-site"] = { name: "portfolio-site", full_name: "bob-gh/portfolio-site", html_url: "https://github.com/bob-gh/portfolio-site", description: "Mon site perso en HTML et CSS", language: "HTML", stargazers_count: 4, forks_count: 1, homepage: "https://bob-gh.github.io/portfolio-site", topics: ["portfolio"], pushed_at: "2026-10-20T10:00:00Z", private: false };
+  github.repoLangs["bob-gh/portfolio-site"] = { HTML: 3000, CSS: 2000, JavaScript: 500 };
+  const pf = (sub: string, opts: Record<string, any> = {}) => slash(U.bob, "portfolio", opts, sub);
+  await pf("link");
+  const key = q1("SELECT share_key FROM players WHERE guild_id = ? AND discord_id = ?", G, B).share_key;
+  check(!!key && text(lastPatch()).includes(`/u/${key}`) && /portfolio about/.test(text(lastPatch())) && /portfolio add/.test(text(lastPatch())), "/portfolio link: the link (sharing on), and what's missing");
+  const ac = await call(raw(4, U.bob, { name: "portfolio", type: 1, options: [{ type: 1, name: "add", options: [{ type: 3, name: "url", value: "port", focused: true }] }] }));
+  check(ac.data?.choices?.some((c: any) => c.value === "https://github.com/bob-gh/portfolio-site") && !ac.data.choices.some((c: any) => /forked/.test(c.value)), "add: their own GitHub repos are suggested (not the forks)");
+  await pf("add", { url: "https://github.com/bob-gh/portfolio-site", featured: true });
+  check(/Portfolio site/.test(text(lastPatch())) && /HTML/.test(text(lastPatch())), "a GitHub repo added: its name, language and stars from GitHub");
+  await pf("add", { url: "bob-blog.dev", title: "Mon blog", description: "Mes articles sur le web" });
+  await pf("add", { url: "https://github.com/bob-gh/portfolio-site" });
+  check(/already/.test(text(lastPatch())), "…never twice");
+  await pf("add", { url: "https://github.com/bob-gh/secret" });
+  check(/private|privé/.test(text(lastPatch())), "…a repo GitHub can't show is refused");
+  const form = (id: string, vals: Record<string, string>) => call(raw(5, U.bob, { custom_id: id, components: Object.entries(vals).map(([k, v]) => ({ type: 1, components: [{ type: 4, custom_id: k, value: v }] })) }));
+  const about = await click(U.bob, "pf:about");
+  check(about.type === 9 && text(about).includes("headline"), "« About me »: a form");
+  await form("mpfa:0", { headline: "Développeur web junior", bio: "J'aime construire des interfaces accessibles.", city: "Rabat" });
+  const badMail = await form("mpfc:0", { email: "pas-un-email", linkedin: "", website: "", cv: "" });
+  check(/email/i.test(text(badMail)), "contact: a wrong email is refused");
+  await form("mpfc:0", { email: "bob@example.com", linkedin: "linkedin.com/in/bob", website: "", cv: "" });
+  await pf("available", { for: "stage" });
+  await pf("show", { part: "badges", visible: false });
+  const P = await getPortfolio(env, G, B);
+  check(P.headline === "Développeur web junior" && P.linkedin === "https://linkedin.com/in/bob" && P.open === "stage" && P.hide.includes("badges") && P.projects.length === 2 && P.projects.find((x) => x.repo)?.featured, "everything saved");
+  // the page
+  const page = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+  check(page.includes("Développeur web junior") && page.includes("Rabat") && page.includes("opengraph.githubassets.com/1/bob-gh/portfolio-site") && page.includes("https://bob-gh.github.io/portfolio-site")
+    && page.includes("Mon blog") && page.includes("mailto:bob@example.com") && page.includes("linkedin.com/in/bob") && page.includes("avatars.githubusercontent.com/bob-gh"), "the portfolio: headline, city, projects with their image and demo, contacts, GitHub avatar");
+  check(/internship|stage/.test(page) && !page.includes('class="badges"'), "…what they look for; a hidden part isn't there");
+  check(!/<script/i.test(page), "no script on the page");
+  const rm = P.projects.find((x) => !x.repo)!;
+  await pf("remove", { project: rm.id });
+  check((await getPortfolio(env, G, B)).projects.length === 1, "remove a project");
+  check(_pf.repoOf("https://github.com/a-b/c.d.git") === "a-b/c.d" && _pf.repoOf("x/y") === "x/y" && _pf.repoOf("https://gitlab.com/a/b") === null, "repo links are read");
 }
 
 section("Export grades: level, briefs validated (over half the technical competencies), competencies to work on, recurring problems, plan d'action");

@@ -1,10 +1,12 @@
 // Public pages served by the bot Worker:
-//   /u/:key      a student's shared profile (only if they chose to share it)
+//   /u/:key      a student's portfolio (only if they chose to share it: /portfolio link)
 //   /cert/:token an end-of-season certificate (signed link; print or save as PDF)
 import type { Env, GuildRow } from "../shared/types.ts";
 import { one } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
-import { certData, profileData, readCert } from "../shared/share.ts";
+import { certData, profileUrl, readCert } from "../shared/share.ts";
+import { portfolioData } from "../shared/portfolio.ts";
+import { portfolioHtml } from "./portfoliopage.ts";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 const html = (body: string, status = 200) => new Response(body, {
@@ -44,34 +46,10 @@ export async function profilePage(env: Env, key: string): Promise<Response> {
   const p = await one<{ guild_id: string; discord_id: string }>(env, "SELECT guild_id, discord_id FROM players WHERE share_key = ?", key);
   if (!p) return notFound("This profile isn't shared (anymore).");
   const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", p.guild_id);
-  const d = g ? await profileData(env, g, p.discord_id) : null;
-  if (!d) return notFound("This profile isn't shared.");
-  const L = d.L, T = (k: string, v: Record<string, string | number> = {}) => esc(t(L, k, v));
-  const DIFF: Record<string, string> = { easy: "🟢", medium: "🟡", hard: "🔴" };
-  return html(`<!doctype html><html lang="${L}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex"><title>${esc(d.name)} · ClassBot</title>
-<meta property="og:title" content="${esc(d.name)} · ${T("page.level", { level: d.level })} ${esc(d.levelTitle)}"><meta property="og:description" content="${T("page.og", { n: d.solved.total, streak: d.streak })}">
-<style>${CSS}</style></head><body><div class="wrap">
-<section class="hero"${d.look.theme ? ` style="background:linear-gradient(135deg,${esc(d.look.theme.color)},${esc(d.look.theme.to)})"` : ""}><div class="av" aria-hidden="true"${d.look.frame ? ` style="box-shadow:0 0 0 4px ${esc(d.look.frame.css)},0 0 18px ${esc(d.look.frame.css)};position:relative"` : ""}>${esc(initials(d.name))}${d.look.frame ? `<span style="position:absolute;right:-6px;bottom:-6px;font-size:22px">${esc(d.look.frame.emoji)}</span>` : ""}</div><div>
-<h1>${d.look.emoji ? `${esc(d.look.emoji)} ` : ""}${esc(d.name)}${d.title ? ` <small style="font-size:15px;opacity:.9">· 🏷️ ${esc(d.title)}</small>` : ""}</h1>
-${d.look.motto ? `<p class="motto">“${esc(d.look.motto)}”</p>` : ""}
-<p>${T("page.level", { level: d.level })} · ${esc(d.levelTitle)} · ${esc(d.total)} pts${d.className ? ` · ${esc(d.className)}` : ""}</p>
-<div class="bar" role="img" aria-label="${Math.round(d.progress * 100)}%"><i style="width:${Math.round(d.progress * 100)}%"></i></div></div></section>
-<div class="grid">
-<div class="stat"><b>${esc(d.solved.total)}</b><span>${T("page.solved")} · 🟢 ${esc(d.solved.easy)} 🟡 ${esc(d.solved.medium)} 🔴 ${esc(d.solved.hard)}</span></div>
-<div class="stat"><b>${d.accuracy == null ? "—" : esc(d.accuracy) + "%"}</b><span>${T("page.accuracy")}</span></div>
-<div class="stat"><b>🔥 ${esc(d.streak)}</b><span>${T("page.streak")}</span></div>
-<div class="stat"><b>${d.seasonRank ? `#${esc(d.seasonRank)}` : "—"}</b><span>${T("page.season", { season: d.season, n: d.seasonSize })}</span></div>
-<div class="stat"><b>⚔️ ${esc(d.duels.w)}</b><span>${T("page.duels", { r: d.rating })}</span></div>
-${d.contests.played ? `<div class="stat"><b>🏁 ${esc(d.contests.played)}</b><span>${T("page.contests", { w: d.contests.wins, p: d.contests.podiums })}</span></div>` : ""}
-</div>
-${d.skills.length ? `<section class="card"><h2>${T("page.skills")}</h2>${d.skills.map((s) => `<div class="sk"><span>${esc(s.name)}</span><span class="t ${esc(s.status)}"><i style="width:${s.mastery}%"></i></span><span class="muted">${s.mastery}%</span></div>`).join("")}</section>` : ""}
-${d.look.pin ? `<section class="card"><h2>${T("page.pin")}</h2><div class="pin">${DIFF[d.look.pin.difficulty] ?? ""} <b>${esc(d.look.pin.title)}</b> <span class="muted">· ${esc(d.look.pin.kind)}</span></div></section>` : ""}
-${d.badges.length ? `<section class="card"><h2>${T("page.badges")}</h2><div class="chips">${d.badges.map((b, i) => `<span class="chip${i < d.showcased ? " star" : ""}">${esc(b)}</span>`).join("")}</div></section>` : ""}
-${d.look.lang || d.langs.length || d.kinds.length ? `<section class="card"><h2>${T("page.languages")}</h2><div class="chips">${d.look.lang ? `<span class="chip star">💻 ${esc(d.look.lang)} ❤️</span>` : ""}${d.langs.map((x) => `<span class="chip">💻 ${esc(x.name)} · ${esc(x.n)}</span>`).join("")}${d.kinds.map((x) => `<span class="chip">${esc(x.name)} · ${esc(x.n)}</span>`).join("")}</div></section>` : ""}
-${d.recent.length ? `<section class="card"><h2>${T("page.recent")}</h2><ul class="r">${d.recent.map((r) => `<li><span>${DIFF[r.difficulty] ?? ""} ${esc(r.title)} <span class="muted">· ${esc(r.kind)}</span></span><span class="muted" style="white-space:nowrap">${new Date(r.finished_at * 1000).toISOString().slice(0, 10)}</span></li>`).join("")}</ul></section>` : ""}
-${d.hr ? `<p class="muted" style="margin-top:14px">HackerRank: <a href="https://www.hackerrank.com/profile/${encodeURIComponent(d.hr)}" rel="noopener nofollow">${esc(d.hr)}</a></p>` : ""}
-<footer>${T("page.footer")}</footer></div></body></html>`);
+  const d = g ? await portfolioData(env, g, p.discord_id) : null;
+  if (!d || !g) return notFound("This profile isn't shared.");
+  // the student's portfolio: what they show companies
+  return html(portfolioHtml(d, g, profileUrl(env, key)));
 }
 
 export async function certPage(env: Env, token: string): Promise<Response> {

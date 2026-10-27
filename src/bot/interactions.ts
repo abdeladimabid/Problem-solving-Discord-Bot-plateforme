@@ -29,6 +29,7 @@ import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
 import { cmdVscode, vscButton } from "./vscodecmd.ts";
+import { cmdPortfolio, portfolioButton, portfolioChoices, portfolioSubmit } from "./portfoliocmd.ts";
 import { activityChoices, cmdActivity } from "./actcmd.ts";
 import { playLinks } from "./gamecmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
@@ -115,6 +116,7 @@ async function command(ix: Ix): Promise<Response> {
     case "faq": return cmdFaq(ix, o.search ?? null);
     case "interview": return cmdInterview(ix, (["easy", "medium", "hard"].includes(o.difficulty) ? o.difficulty : "easy") as Difficulty);
     case "github": return cmdGithub(ix);
+    case "portfolio": return cmdPortfolio(ix, sub, o);
     case "vscode": return cmdVscode(ix, sub ?? "status");
     case "brief": return cmdBrief(ix, sub ?? "list", o);
     case "activity": return cmdActivity(ix, sub ?? "list", o);
@@ -834,6 +836,7 @@ async function component(ix: Ix): Promise<Response> {
     case "ivr": case "ive": return interviewButton(ix, kind, id);
     case "ivnew": return cmdInterview(ix, (["easy", "medium", "hard"].includes(x) ? x : "easy") as Difficulty);
     case "share": return shareButton(ix, x);
+    case "pf": return portfolioButton(ix, x);
     case "cert": return certButton(ix);
     case "plan": return planButton(ix, x, !ix.raw.guild_id);
     case "path": return pathButton(ix, x, y);
@@ -1034,6 +1037,7 @@ async function modalSubmit(ix: Ix): Promise<Response> {
   if (kind === "mcreate") return createSubmit(ix, x, ix.raw.data.components ?? []);
   if (kind === "mshop") return doBuy(ix, x, value);
   if (kind === "mhand") return handSubmit(ix, ix.raw.data.components ?? []);
+  if (kind === "mpfa" || kind === "mpfc") return portfolioSubmit(ix, kind, ix.raw.data.components ?? []);
   if (kind === "miv") return interviewSubmit(ix, id, value);
   if (kind === "mhelp") return explainSubmit(ix, id, value);
   if (kind === "mans") {
@@ -1110,6 +1114,8 @@ async function autocomplete(ix: Ix): Promise<Response> {
     names = [...set];
   } else if (ix.raw.data.name === "brief") {
     return json({ type: 8, data: { choices: await briefChoices(ix, cur) } });
+  } else if (ix.raw.data.name === "portfolio") {
+    return json({ type: 8, data: { choices: await portfolioChoices(ix, String(focused?.name ?? ""), cur) } });
   } else if (ix.raw.data.name === "activity") {
     return json({ type: 8, data: { choices: await activityChoices(ix, cur) } });
   } else if (ix.raw.data.name === "contest" || ix.raw.data.name === "teacher") {
