@@ -335,6 +335,34 @@ env.ASSETS = {
     situation: { title: "", need: "" }, competencies: ["C1N2", "C2N2", "C3N2", "T2N1"], resources: [] } });
   db.prepare("UPDATE briefs SET kind = 'squad', squads = ? WHERE id = ?").run(JSON.stringify([
     { id: "a1b2c3", name: "Toubkal", members: ["100", "101", "102", "103"], sm: "100" }, { id: "d4e5f6", name: "Ifrane", members: ["104", "105", "106", "107"], sm: "105" }, { id: "0a0b0c", name: "Ouzoud", members: ["108", "109", "110", "111"], sm: "108" }]), b2);
+  // the Toubkal squad's debrief, analyzed: each member with their assessment, an AI flag, links shared on Discord
+  {
+    const mem = [["100", "yasmine-dev", "Yasmine", 34, 6, 5, 4, 3], ["101", "omar-b", "Omar", 9, 3, 1, 1, 0], ["102", "lina-k", "Lina", 2, 1, 0, 0, 0], ["103", "karim-z", "Karim", 14, 4, 2, 2, 2]] as const;
+    const recS = { at: now * 1000, first: "", model: "demo", brief: "Atlas Trek", repos: ["toubkal/atlas-trek"], count: 59, files: true, skills: ["C1", "C2", "C3", "T2"], checks: [],
+      squad: { id: "a1b2c3", name: "Toubkal", members: mem.map((m) => ({ gid: m[0] })) },
+      contrib: mem.map(([gid, login, name, commits, days, prs, merged, reviews]) => ({ gid, login, name, commits, days, prs, merged, reviews, cards: 6, cardsDone: gid === "102" ? 0 : 4, sm: gid === "100" })),
+      result: { resume: "Une landing page complète et responsive ; l’accessibilité reste à finir.", commits: [], forts: ["Mise en page Tailwind propre"], ameliorer: ["Contrastes du pied de page"], feedback: "",
+        exigences: [{ type: "story", texte: "Voir les circuits", statut: "fait", preuve: "index.html" }, { type: "story", texte: "Lire les avis", statut: "partiel", preuve: "avis.html" }],
+        competences: [{ code: "C1", avis: "validable" }, { code: "C2", avis: "validable" }, { code: "C3", avis: "a_revoir" }, { code: "T2", avis: "validable" }] },
+      challenge: null, members: {},
+      links: { at: now, from: now - 15 * DAY, to: now, scanned: 120, hidden: false, byMember: { "100": [{ url: "https://tailwindcss.com/docs/flex", at: now - 12 * DAY, ch: "ressources" }, { url: "https://web.dev/articles/color-and-contrast-accessibility", at: now - 11 * DAY, ch: "ressources" }], "103": [{ url: "https://developer.mozilla.org/fr/docs/Web/CSS/gap", at: now - 12 * DAY, ch: "toubkal" }] } } };
+    putRev.run(b2, G, "s:a1b2c3", JSON.stringify(recS), now);
+    const qa = [{ id: "t1", type: "mcq", prompt: "Quelle classe Tailwind affiche un élément en flex ?", choices: ["block", "flex", "grid", "inline"], answer: [1], points: 1, comp: "C1", level: 2 },
+      { id: "t2", type: "code", prompt: "Écris le HTML d’une image accessible d’un sommet de l’Atlas.", lang: "html", expected: "<img src=\"toubkal.jpg\" alt=\"Le sommet du Toubkal\">", points: 2, comp: "C2", level: 2 },
+      { id: "t3", type: "explain", prompt: "Explique à quoi sert le préfixe md: dans Tailwind.", expected: "Appliquer la classe à partir de la largeur md (768px).", points: 2, comp: "C3", level: 2 }];
+    const a2 = Number(db.prepare("INSERT INTO assessments (guild_id, title, brief_id, status, settings, questions, created_at, opened_at, closes_at) VALUES (?, 'Tailwind et accessibilité', ?, 'closed', ?, ?, ?, ?, ?)")
+      .run(G, b2, JSON.stringify({ minutes: 30, lang: "fr", showResults: true, points: 20, passAt: 60 }), JSON.stringify(qa), now - 9 * DAY, now - 8 * DAY, now - 8 * DAY + 3600).lastInsertRowid);
+    const g = (a: string, b: string, c: string) => JSON.stringify({ t1: { verdict: a, score: a === "correct" ? 100 : 0 }, t2: { verdict: b, score: b === "correct" ? 100 : b === "partial" ? 50 : 0 }, t3: { verdict: c, score: c === "correct" ? 100 : c === "partial" ? 50 : 0 } });
+    const tk2 = db.prepare("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, answers, grades, score, summary, started_at, submitted_at, invited_at) VALUES (?, ?, ?, 'graded', ?, '{}', ?, ?, ?, ?, ?, ?)");
+    tk2.run(a2, G, "100", 1, g("correct", "correct", "correct"), 95, "Très solide : Tailwind et l’accessibilité des images sont maîtrisés.", now - 8 * DAY, now - 8 * DAY + 1500, now - 9 * DAY);
+    tk2.run(a2, G, "101", 2, g("correct", "partial", "wrong"), 52, "Les classes de base sont connues ; les préfixes responsive sont à revoir.", now - 8 * DAY, now - 8 * DAY + 1700, now - 9 * DAY);
+    tk2.run(a2, G, "102", 3, g("wrong", "wrong", "partial"), 25, "Les bases de Tailwind et l’attribut alt sont à reprendre.", now - 8 * DAY, now - 8 * DAY + 900, now - 9 * DAY);
+    tk2.run(a2, G, "103", 4, g("correct", "correct", "partial"), 78, "Bon travail ; précise le rôle des points de rupture.", now - 8 * DAY, now - 8 * DAY + 1600, now - 9 * DAY);
+    const cra = db.prepare("INSERT OR IGNORE INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, ?, 2, ?, 'assessment', ?, '', ?)");
+    for (const [u, c1, c2, c3] of [["100", 1, 1, 1], ["101", 1, 0, 0], ["102", 0, 0, 0], ["103", 1, 1, 0]] as const) { cra.run(G, u, "C1", c1, String(a2), now - 8 * DAY); cra.run(G, u, "C2", c2, String(a2), now - 8 * DAY); cra.run(G, u, "C3", c3, String(a2), now - 8 * DAY); }
+    const big = "e3".repeat(20);
+    db.prepare("INSERT OR IGNORE INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files, url) VALUES (?, ?, '102', 'commit', 'toubkal/atlas-trek', ?, 'final version', 'real', 512, 3, 4, ?)").run(G, big, now - 11 * DAY, `https://github.com/toubkal/atlas-trek/commit/${big}`);
+  }
   await saveBrief(env as any, gRow, null, { program: "builtin:dwwm-2026", week: 3, source: "ai", data: { title: "Quiz Darija : application JavaScript interactive", summary: "Un quiz pour apprendre la darija, en JavaScript natif.", competencies: ["C3N1", "C4N1"], modalities: { days: 5, mode: "individuel", start: "2026-10-19", due: "2026-10-23" } } });
   // an assessment in progress
   const qs = [

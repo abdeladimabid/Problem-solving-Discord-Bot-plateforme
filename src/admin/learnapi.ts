@@ -10,7 +10,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
@@ -19,6 +19,7 @@ import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_disco
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
+import { aiLines, makeProbes, memberInsights, scanLinks } from "../shared/review/insights.ts";
 import { AssessError, generateQuestions, gradeTaker, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
@@ -286,7 +287,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck|insights|links|ailines|probes))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -332,6 +333,39 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
+    // a squad, member by member: their assessment, AI flags, questions to ask, suggested switches; the Discord links (CT5)
+    // and the AI lines of their commits on demand
+    if (act === "insights" && method === "GET") {
+      const r = await getReview(env, id, who);
+      return ok({ members: r?.rec ? await memberInsights(env, g, b, r.rec) : {}, links: r?.rec?.links ? { at: r.rec.links.at, scanned: r.rec.links.scanned, hidden: r.rec.links.hidden, error: r.rec.links.error ?? null } : null });
+    }
+    if (act === "links" && method === "POST") {
+      const r = await getReview(env, id, who);
+      if (!r?.rec?.contrib?.length) bad("Analyze the squad's repo first.");
+      const rec = r!.rec;
+      rec.links = await scanLinks(env, g, rec.contrib.map((x: any) => String(x.gid)), b.start - 86400, (b.due || now()) + 86400);
+      await putReview(env, g, id, who, rec);
+      return ok({ members: await memberInsights(env, g, b, rec), links: { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null } });
+    }
+    // precise oral questions on the notions behind what each member missed (the AI, once; again with force)
+    if (act === "probes" && method === "POST") {
+      const r = await getReview(env, id, who);
+      if (!r?.rec?.contrib?.length) bad("Analyze the squad's repo first.");
+      const only = body.member != null ? [String(body.member)] : null;
+      const made = await makeProbes(env, b, r!.rec, only, !!body.force);
+      const now2 = await getReview(env, id, who); // their fields may have been saved meanwhile: keep them
+      const rec = now2?.rec ?? r!.rec;
+      rec.probes = made.probes;
+      await putReview(env, g, id, who, rec);
+      return ok({ members: await memberInsights(env, g, b, rec), errors: made.errors, links: rec.links ? { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null } : null });
+    }
+    if (act === "ailines" && method === "GET") {
+      const r = await getReview(env, id, who);
+      if (!r?.rec) bad("Analyze the work first.");
+      const member = String(url.searchParams.get("member") || (who.startsWith("u:") ? who.slice(2) : ""));
+      if (!/^\d+$/.test(member)) bad("Which member?");
+      return ok(await aiLines(env, g, b, r!.rec, member));
+    }
     if (act === "aicheck" && method === "POST") { await checkAi(env, g, b, who); return ok(await reviewView(env, g, id, who)); }
     if (act === "oral" && method === "POST") {
       if (body.del != null) await delOral(env, g, id, who, Number(body.del), body.states?.oral);
@@ -349,7 +383,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       else await setReviewLevel(env, g, id, who, String(body.level || ""));
       return ok(await reviewView(env, g, id, who));
     }
-    if (act === "members") { await saveMembers(env, g, id, who, body.members ?? {}); return ok(await reviewView(env, g, id, who)); }
+    if (act === "members") { const w = await saveMembers(env, g, id, who, body.members ?? {}); return ok({ ...(await reviewView(env, g, id, who)), comments: w.comments }); }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);
       if (typeof body.comment === "string" && body.comment.trim()) await saveCommentText(env, g, id, who, body.comment);

@@ -80,7 +80,7 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
   trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
-export const github = { files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
+export const github = { commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -353,6 +353,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     const cm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/contents\/(.+)$/);
     if (cm) { github.calls++; const f = github.files[`${cm[1]}/HEAD/${decodeURIComponent(cm[2])}`]; return f === undefined ? new Response("Not Found", { status: 404 }) : new Response(f, { status: 200 }); }
     const one = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/commits\/([0-9a-f]{7,40})$/);
+    if (one && github.commitFiles[one[2]]) return Response.json({ sha: one[2], stats: {}, files: github.commitFiles[one[2]] });
     if (one && github.sizes[one[2]]) return Response.json({ sha: one[2], stats: { additions: github.sizes[one[2]].additions, deletions: github.sizes[one[2]].deletions }, files: [] });
     gm = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/git\/trees\/([^/]+)$/);
     if (gm && github.trees[gm[1] + "@" + gm[2]]) return Response.json({ tree: github.trees[gm[1] + "@" + gm[2]].map((path) => ({ type: "blob", path })) });
@@ -485,6 +486,13 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      if (sys.includes("Tu prépares l'oral d'un apprenant")) {
+        // precise questions: one item per missed question, on the notions behind it
+        const ns = [...user.matchAll(/=== Question (\d+)/g)].map((m) => Number(m[1]));
+        // more than asked (6 notions, 3 questions each, one repeated): ClassBot keeps 4 notions, 2 questions each
+        const q = (k: number) => [`Sur quel élément applique-t-on \`display: flex\` ? (${k})`, "Que fait `justify-content: space-evenly` ? En quoi est-ce différent de `space-between` ?", `Question de trop ${k}`];
+        return { response: JSON.stringify({ items: [{ notion: "Flexbox : alignement", ns, qs: q(0) }, ...[1, 2, 3, 4, 5].map((k) => ({ notion: `Notion ${k}`, ns: [ns[0]], qs: q(k) }))] }) };
+      }
       if (sys.includes("jury d'un relais de code")) {
         // the fake jury: the team whose code has "presque" is the closest
         const teams = [...user.matchAll(/ÉQUIPE ([A-Z]) :\n<<<\n([\s\S]*?)\n>>>/g)].map((m) => ({ l: m[1], c: m[2] }));

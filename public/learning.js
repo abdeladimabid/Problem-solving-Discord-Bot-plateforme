@@ -1056,6 +1056,14 @@ function debriefOrder() {
 }
 
 function renderDebrief() {
+  // a squad's member fields typed a moment ago (their save may not have run yet): drawn again as they are
+  if ($(".mc") && DB.R.review) {
+    const p = membersPayload(), mem = (DB.R.review.members ||= {});
+    for (const [gid, x] of Object.entries(p)) {
+      const q = x.quiz === "" ? null : Number(x.quiz);
+      mem[gid] = { ...(mem[gid] || {}), quiz: Number.isFinite(q) ? q : null, mes: { ...(mem[gid]?.mes || {}), r: x.mes.r }, note: x.note, co: x.co, coSet: x.coSet, ...(x.text !== undefined ? { text: x.text } : {}) };
+    }
+  }
   const { B, R, who, bid } = DB;
   const T = debriefTarget();
   const rec = R.review, st = R.states, final = R.status === "final";
@@ -1102,9 +1110,10 @@ function renderDebrief() {
   const otherChecks = checks.filter((c) => !shown.has(c.id));
   const ckDetail = Object.fromEntries(checks.map((c) => [c.id, c.detail || ""]));
   const aV = assessVerdicts(rec.assess);
-  body.innerHTML = `<div class="db-grid">
+  const sq = !!rec.squad;
+  body.innerHTML = `<div class="db-grid${sq ? " db-sq" : ""}">
     <div class="stack">
-      ${assessPanelHtml(rec.assess)}
+      ${sq ? "" : assessPanelHtml(rec.assess)}
       <section class="panel"><div class="panel-head"><h2>2 · Project (GitHub)</h2><span id="db-pct"></span></div>
         <div id="db-meter"></div>
         ${r.resume ? `<p>${esc(r.resume)}</p>` : ""}
@@ -1132,20 +1141,19 @@ function renderDebrief() {
       ${(r.commits || []).length ? `<section class="panel"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
         <div class="db-rows" style="margin-top:10px">${r.commits.map((c) => `<div class="db-row"><span class="db-i">${c.ok === true ? "✅" : c.ok === false ? "⚠️" : "·"}</span>
           <div><code>${esc(c.sha)}</code> ${esc(c.msg)}<div class="small muted">${esc(c.note || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
-      ${rec.squad ? squadMembersHtml(rec, st, final) : ""}
     </div>
     <aside class="stack db-side">
       <section class="panel" id="db-ai"></section>
       ${(R.steps || []).length ? `<section class="panel" id="db-steps"></section>` : ""}
-      <section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
+      ${sq ? "" : `<section class="panel" id="db-mes">${mesHtml(rec.challenge, st.mes, final)}</section>
       <section class="panel" id="db-oral"></section>
       <section class="panel" id="db-rem"><div class="panel-head" style="margin:0"><h2>One-to-one remarks</h2>${rec.remarks?.at ? `<span class="muted small">saved ${fmtAgo(Math.floor(rec.remarks.at / 1000))}</span>` : ""}</div>
         <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
         <p class="muted small" style="margin:-4px 0 8px">With ✨, what went well goes in the comment's strengths, what to review in its notions, and the oral questions your remarks say were answered are switched on.</p>
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
-        ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>
-      <section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+        ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
+      ${sq ? "" : `<section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
@@ -1156,18 +1164,22 @@ function renderDebrief() {
             ${compAdvice(c.avis, aV[base])}
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
-      </section>
-      <section class="panel"><div class="panel-head"><h2>Comment</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
+      </section>`}
+      <section class="panel" id="db-cpanel"><div class="panel-head"><h2>${sq ? "Squad comment" : "Comment"}</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
-      <section class="panel" id="db-level"></section>
-      <section class="panel">${final ? `<h2>✅ Finalized</h2>
+      ${sq ? "" : `<section class="panel" id="db-level"></section>`}
+      <section class="panel" id="db-fpanel">${final ? `<h2>✅ Finalized</h2>
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
         : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
           <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
-    </aside></div>`;
+    </aside></div>
+    ${sq ? squadMembersHtml(rec, st, final) : ""}`;
+  // a squad: the squad comment and Finalize come last, after each member's debrief
+  if (sq) { const end = document.createElement("div"); end.className = "db-end"; end.append($("#db-cpanel", body), $("#db-fpanel", body)); body.append(end);
+    const side = $(".db-side", body), inner = document.createElement("div"); inner.className = "db-side-in"; inner.append(...side.children); side.append(inner); }
   wireAssessLink(body);
   const saveRm = (ai) => async () => {
     toast(ai ? "⏳ The AI reads your remarks…" : "Saving…");
@@ -1290,27 +1302,223 @@ async function loadMemberVsc() {
   }
 }
 
+// A squad: one card per member, their own debrief. Their part of the work, their assessment (and its paper), the AI
+// flags of their VS Code days and commits, the questions to ask them, their competencies (suggested from their
+// assessment, their part of the project and the links they shared on Discord, each with its reason), their mise en
+// situation, their level and their own comment (it starts from the assessment's comment). Everything saves as you type.
 function squadMembersHtml(rec, st, final) {
   const comps = Object.keys(st.co);
-  return `<section class="panel"><div class="panel-head"><h2>Squad members</h2>${final ? "" : `<button class="btn small primary" id="db-msave">Save members</button>`}</div>
-    <p class="muted small" style="margin-top:0">The squad's work is judged above. Here, what each member did, and their own result: it's what goes on their record.</p>
-    <div class="members">${(rec.contrib || []).map((m) => {
-      const ms = rec.members?.[m.gid] || {};
-      const co = ms.co || st.co;
-      return `<article class="member" data-gid="${esc(m.gid)}">
-        <header>${avatar(m.name || m.login, m.gid)} <b>${esc(m.name || m.login)}</b> ${m.sm ? `<span class="tag">SM</span>` : ""} <span class="muted small">${esc(m.login || "")}</span></header>
-        <p class="small mstats"><span>${m.commits ?? 0} commits</span><span>${m.days ?? 0} days</span><span>${m.prs ?? 0} PRs (${m.merged ?? 0} merged)</span><span>${m.reviews ?? 0} reviews</span>${m.cards != null ? `<span>${m.cardsDone ?? 0}/${m.cards} cards done</span>` : ""}
-          ${m.collaborator === false ? `<span class="lvl bad">not a collaborator</span>` : ""}${!m.commits ? `<span class="lvl bad">no commit</span>` : ""}</p>
-        <div class="field-row"><div><label>Quiz / oral (%)</label><input type="number" min="0" max="100" data-q value="${ms.quiz ?? ""}" ${final ? "disabled" : ""}></div>
-          <div><label>Mise en situation</label><select data-mr ${final ? "disabled" : ""}><option value="">—</option>${MES.map(([v, l]) => `<option value="${v}" ${ms.mes?.r === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
-        <div class="db-rows" style="margin-top:8px">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span></div></div>`).join("")}</div>
+  return `<section class="panel sq-debrief"><div class="panel-head"><h2>👥 Each member</h2><span class="small muted" id="db-mst">${final ? "" : "Saved as you type"}</span></div>
+    <p class="muted small" style="margin-top:0">The squad's project is judged above. Here, each member's own debrief: what goes on their record (competencies, level, comment).</p>
+    ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links each member shared on Discord during the brief</span><button class="btn small" id="db-lk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
+    <div class="mcards">${(rec.contrib || []).map((m) => memberCardHtml(rec, st, m, comps, final)).join("")}</div></section>`;
+}
+const mcStat = (v, l) => `<span class="mc-stat"><b>${esc(String(v))}</b> ${esc(l)}</span>`;
+function memberCardHtml(rec, st, m, comps, final) {
+  const ms = rec.members?.[m.gid] || {};
+  const co = ms.co || st.co;
+  const name = m.name || m.login || m.gid;
+  const dis = final ? "disabled" : "";
+  return `<article class="member mc" data-gid="${esc(m.gid)}" data-coset="${ms.coSet ? 1 : 0}">
+    <header class="mc-head">${avatar(name, m.gid)}<div class="mc-who"><b>${esc(name)}${m.sm ? ` <span class="tag">SM</span>` : ""}</b><span class="small muted">${esc(m.login || "")}</span></div>
+      <div class="mc-stats">${mcStat(m.commits ?? 0, "commits")}${mcStat(m.days ?? 0, "days")}${mcStat(m.prs ?? 0, "PRs")}${mcStat(m.reviews ?? 0, "reviews")}${m.cards != null ? mcStat(`${m.cardsDone ?? 0}/${m.cards}`, "cards") : ""}
+        ${m.collaborator === false ? `<span class="lvl bad">not a collaborator</span>` : ""}${!m.commits ? `<span class="lvl bad">no commit</span>` : ""}</div></header>
+    <div class="mc-facts">
+      <div class="mc-box" data-box="assess"><h4>📝 Assessment</h4><div class="small muted">Loading…</div></div>
+      <div class="mc-box" data-box="ai"><h4>🤖 AI flags</h4><div class="small muted">Loading…</div></div>
+      <div class="mc-box m-vsc small" data-vsc="${esc(m.gid)}" ${final ? 'data-final="1"' : ""}></div>
+    </div>
+    <div class="mc-cols">
+      <div><h4>Competencies <span class="muted small">suggested · your switch decides</span></h4>
+        <div class="db-rows mc-comps">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span><div class="small mc-hint" data-hint="${esc(c)}"></div></div></div>`).join("")}</div>
+        ${final ? "" : `<button class="ap-link small" data-mhints hidden>↻ Use the suggestions</button>`}</div>
+      <div><h4>Questions to ask ${esc(firstNameOf(name))}</h4><ol class="mc-q small" data-box="q"><li class="muted">Loading…</li></ol></div>
+    </div>
+    <div class="mc-cols">
+      <div><div class="field-row"><div><label>Quiz / oral (%)</label><input type="number" min="0" max="100" data-q value="${ms.quiz ?? ""}" ${dis}></div>
+        <div><label>Mise en situation</label><select data-mr ${dis}><option value="">—</option>${MES.map(([v, l]) => `<option value="${v}" ${ms.mes?.r === v ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
         ${memberLevelHtml(m.gid, final)}
-        <div class="m-vsc small" data-vsc="${esc(m.gid)}" ${final ? 'data-final="1"' : ""}></div>
-        <label>Note</label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${final ? "disabled" : ""}>
-        <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div>
-        ${ms.comment ? `<details class="small"><summary>Their comment</summary><pre class="code-view" style="white-space:pre-wrap">${esc(ms.comment)}</pre></details>` : ""}
-      </article>`;
-    }).join("")}</div></section>`;
+        <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div></div>
+      <div><div class="panel-head" style="margin:0 0 4px"><h4 style="margin:0">Comment for ${esc(firstNameOf(name))}</h4>
+          ${final ? "" : `<span class="toolbar" style="margin:0"><button class="btn small" data-mfill="assess" title="Start again from their assessment's comment">↻ Assessment</button><button class="btn small" data-mfill="switches" title="Write it from their switches and note">↻ Switches</button></span>`}</div>
+        <textarea data-mtext rows="9" ${final ? "readonly" : ""} data-set="${ms.text ? 1 : 0}" placeholder="Their own comment: it goes on their record and by DM">${esc(ms.text || ms.comment || "")}</textarea>
+        <p class="small muted" data-mtst style="margin:4px 0 0">${ms.text ? "Your text: kept as it is." : "From their switches: it follows them until you edit it."}</p>
+        <label class="small" style="margin-top:6px">Note <span class="muted">(used by ↻ Switches)</span></label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${dis}></div>
+    </div>
+  </article>`;
+}
+const firstNameOf = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+
+// what ClassBot knows about each member (assessment, AI flags, questions, suggestions): kept for this debrief
+async function loadMemberInsights(fresh = false) {
+  const cards = $$(".mc");
+  if (!cards.length) return;
+  const key = `${DB.bid}~${DB.who}`;
+  if (fresh || !DB.ins || DB.ins.key !== key) {
+    try { DB.ins = { key, ...(await api(`/briefs/${DB.bid}/review/insights?who=${encodeURIComponent(DB.who)}`)) }; }
+    catch (e) { cards.forEach((c) => $$("[data-box] .muted", c).forEach((x) => (x.textContent = e.message))); return; }
+  }
+  drawInsights();
+}
+function drawInsights() {
+  const I = DB.ins, final = DB.R.status === "final";
+  if (!I) return;
+  const lk = I.links;
+  if ($("#db-lkst")) $("#db-lkst").innerHTML = !lk ? "Not checked yet" : lk.error ? `<span style="color:var(--down)">${esc(lk.error)}</span>`
+    : lk.hidden ? `<span style="color:var(--down)">Discord hides the text of the messages: turn on the bot's <b>Message Content Intent</b> (Discord Developer Portal → your app → Bot), then check again.</span>`
+    : `Checked ${fmtAgo(lk.at)} · ${lk.scanned} message(s) read`;
+  for (const card of $$(".mc")) {
+    const gid = card.dataset.gid, x = I.members?.[gid];
+    if (!x) continue;
+    // 📝 their assessment
+    const ab = $("[data-box=assess]", card);
+    ab.innerHTML = `<h4>📝 Assessment</h4>` + (x.assess.length ? x.assess.map((a) => `<div class="mc-as">
+        ${a.taker && ["graded", "submitted"].includes(a.status) ? `<a href="#/assessment/${a.aid}~${esc(gid)}" data-paper="${a.aid}~${esc(gid)}" title="Open their paper: answers, grades and comments"><b>${esc(a.title)}</b> ↗</a>` : `<b>${esc(a.title)}</b>`}
+        ${a.score != null ? `<span class="lvl ${a.score >= 75 ? "good" : a.score >= 55 ? "warn" : "bad"}">${a.score}%</span>` : `<span class="lvl">${esc(a.status === "submitted" ? "to grade" : a.status === "not invited" ? "not invited" : "not handed in")}</span>`}
+        ${a.score != null ? `<div class="small muted">${a.missed.length ? `${a.missed.length} of ${a.total} questions missed` : "Every question right"}</div>` : ""}</div>`).join("")
+      : `<div class="small muted">No assessment linked to this brief.</div>`);
+    // 🤖 AI flags
+    const ai = $("[data-box=ai]", card);
+    ai.innerHTML = `<h4>🤖 AI flags</h4>${x.flags.length ? `<ul class="mc-fl small">${x.flags.slice(0, 6).map((f) => `<li><b>${esc(f.label)}</b> <span class="muted">${esc(f.detail)}</span></li>`).join("")}</ul>`
+      : `<div class="small muted">${x.vscode ? "No flag: nothing points to generated code." : "No flag from their commits. No VS Code data (not connected)."}</div>`}
+      <button class="ap-link small" data-ailines="${esc(gid)}">🔍 Which lines did an AI write?</button>`;
+    // questions to ask
+    $("[data-box=q]", card).innerHTML = questionsHtml(x, gid, final);
+    // suggestions: shown with their reason; applied while you haven't touched their switches
+    for (const h of $$("[data-hint]", card)) {
+      const s = x.hints[h.dataset.hint];
+      const links = h.dataset.hint.replace(/^C?T/, "T").startsWith("T5") && x.links?.length ? ` <details class="mc-lk"><summary>${x.links.length} link(s)</summary>${x.links.map((l) => `<div><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, "").slice(0, 60))}</a> <span class="muted">#${esc(l.channel)}</span></div>`).join("")}</details>` : "";
+      h.innerHTML = s ? `<span class="${s.on ? "mc-yes" : "mc-no"}">${s.on ? "✓" : "✗"} ${esc(s.why)}</span>${links}` : "";
+    }
+    const hasHints = Object.keys(x.hints).length > 0;
+    const hb = $("[data-mhints]", card);
+    if (hb) hb.hidden = !hasHints;
+    if (!final && hasHints && card.dataset.coset !== "1" && !card.dataset.applied) { applyHints(card, x.hints); card.dataset.applied = "1"; }
+    // their comment starts from the assessment's comment (until you write your own)
+    const ta = $("[data-mtext]", card), sum = x.assess.map((a) => a.summary).filter(Boolean).join("\n\n");
+    if (!final && ta.dataset.set !== "1" && sum && !card.dataset.prefilled) { ta.value = sum; ta.dataset.set = "1"; card.dataset.prefilled = "1"; $("[data-mtst]", card).textContent = "From their assessment's comment: add to it or change it."; membersSoon(); }
+    // their quiz %: the assessment's score when you left it empty
+    const q = $("[data-q]", card), sc = x.assess.find((a) => a.score != null)?.score;
+    if (!final && q.value === "" && sc != null) { q.value = sc; membersSoon(); }
+  }
+  if (!final && !I.probeTried && Object.values(I.members || {}).some((x) => !x.probes && x.assess.some((a) => a.missed.length))) { I.probeTried = true; loadProbes(); }
+}
+// what to ask a member: for each question missed in the assessment, short direct questions on the notions behind it
+// (written by the AI once, kept with the debrief), then what the AI flags point at
+const VERDICT_L = { partial: "Partly right", wrong: "Wrong", empty: "Not answered", unanswered: "Not answered" };
+function questionsHtml(x, gid, final) {
+  const missed = x.assess.flatMap((a) => a.missed.map((m) => ({ ...m, aid: a.aid })));
+  const fromAi = x.questions.filter((q) => q.from === "ai");
+  const busy = DB.ins?.probing && !x.probes && missed.length;
+  const err = DB.ins?.probeErr?.[gid];
+  let h = "";
+  if (x.probes) {
+    h += x.probes.map((p) => `<li class="mc-pr"><div class="mc-pn"><b>${esc(p.notion || "Question " + (p.ns || [p.n])[0])}</b> <span class="muted">📝 ${(p.ns || [p.n]).length > 1 ? `Missed in questions ${(p.ns || []).join(", ")}` : `${esc(VERDICT_L[p.verdict] || "Wrong")} in the assessment (question ${(p.ns || [p.n])[0]})`}</span></div>
+      <ul>${p.qs.map((q) => `<li data-notr>${esc(q).replace(/`([^`]+)`/g, "<code>$1</code>")}</li>`).join("")}</ul></li>`).join("");
+  } else if (missed.length) {
+    h += missed.slice(0, 4).map((m) => `<li><span data-notr>${esc(m.prompt)}</span><div class="muted">📝 ${esc(VERDICT_L[m.verdict] || "Wrong")} in the assessment (question ${m.n})</div></li>`).join("");
+  }
+  h += fromAi.map((q) => `<li><span data-notr>${esc(q.q)}</span><div class="muted">🤖 ${esc(q.why)}</div></li>`).join("");
+  if (!h) return `<li class="muted">Nothing particular: they did well in the assessment and no AI flag.</li>`;
+  const foot = !missed.length || final ? ""
+    : busy ? `<p class="small muted mc-pf">✨ Writing precise questions on what they missed…</p>`
+    : `<p class="small mc-pf">${err ? `<span style="color:var(--down)">${esc(err)}</span> ` : ""}<button class="ap-link small" data-probe="${esc(gid)}">${x.probes ? "↻ Other questions" : "✨ Precise questions on what they missed"}</button></p>`;
+  return h + foot;
+}
+async function loadProbes(member) {
+  const I = DB.ins;
+  if (!I || I.probing) return;
+  I.probing = true; drawInsights();
+  try {
+    const r = await api(`/briefs/${DB.bid}/review/probes?who=${encodeURIComponent(DB.who)}`, { method: "POST", body: member ? { member, force: true } : {} });
+    if (DB.ins === I) { I.members = r.members; I.probeErr = { ...(I.probeErr || {}), ...(member ? { [member]: r.errors?.[member] || "" } : r.errors || {}) }; }
+  } catch (e) { if (DB.ins === I) I.probeErr = Object.fromEntries(Object.keys(I.members || {}).map((k) => [k, e.message])); }
+  I.probing = false;
+  if (DB.ins === I) drawInsights();
+}
+function applyHints(card, hints) {
+  let changed = false;
+  for (const [code, h] of Object.entries(hints)) { const c = $(`[data-mco="${CSS.escape(code)}"]`, card); if (c && c.checked !== h.on) { c.checked = h.on; changed = true; } }
+  if (changed) membersSoon();
+}
+// every member's fields, saved a moment after you stop typing (nothing is lost when the page is drawn again)
+function membersPayload() {
+  return Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
+    quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
+    co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])), coSet: m.dataset.coset === "1",
+    ...($("[data-mtext]", m)?.dataset.set === "1" ? { text: $("[data-mtext]", m).value } : {}) }]));
+}
+async function saveMembersNow() {
+  if (!$(".member") || DB.R.status === "final") return;
+  clearTimeout(DB.mtimer);
+  const st = $("#db-mst");
+  if (st) st.textContent = "Saving…";
+  const R = await api(`/briefs/${DB.bid}/review/members`, { method: "POST", body: { who: DB.who, members: membersPayload() } });
+  DB.R = { ...DB.R, ...R };
+  if (st) st.textContent = "✓ Saved";
+  // a comment still written from the switches follows them
+  for (const card of $$(".mc")) { const ta = $("[data-mtext]", card); if (ta && ta.dataset.set !== "1") ta.value = R.comments?.[card.dataset.gid] ?? ta.value; }
+}
+function membersSoon() { clearTimeout(DB.mtimer); if ($("#db-mst")) $("#db-mst").textContent = "Unsaved…"; DB.mtimer = setTimeout(() => saveMembersNow().catch((e) => toast(e.message, true)), 900); }
+function wireMembers() {
+  const box = $(".sq-debrief");
+  if (!box || DB.R.status === "final") return;
+  box.addEventListener("input", (e) => {
+    const card = e.target.closest(".mc");
+    if (!card) return;
+    if (e.target.matches("[data-mco]")) card.dataset.coset = "1";
+    if (e.target.matches("[data-mtext]")) { e.target.dataset.set = "1"; $("[data-mtst]", card).textContent = "Your text: kept as it is."; }
+    membersSoon();
+  });
+  box.addEventListener("change", (e) => { if (e.target.matches("[data-mco], [data-mr], [data-q], [data-mn]")) { const card = e.target.closest(".mc"); if (e.target.matches("[data-mco]") && card) card.dataset.coset = "1"; membersSoon(); } });
+  $$("[data-mhints]", box).forEach((b) => b.onclick = () => { const card = b.closest(".mc"), x = DB.ins?.members?.[card.dataset.gid]; if (!x) return; card.dataset.coset = "0"; applyHints(card, x.hints); toast("Switches set from the suggestions"); });
+  $$("[data-mfill]", box).forEach((b) => b.onclick = () => busy(b, async () => {
+    const card = b.closest(".mc"), ta = $("[data-mtext]", card), gid = card.dataset.gid;
+    if (b.dataset.mfill === "assess") {
+      const sum = (DB.ins?.members?.[gid]?.assess || []).map((a) => a.summary).filter(Boolean).join("\n\n");
+      if (!sum) return toast("Their assessment has no comment yet (not graded?)", true);
+      ta.value = sum; ta.dataset.set = "1"; $("[data-mtst]", card).textContent = "From their assessment's comment: add to it or change it.";
+      await saveMembersNow();
+    } else {
+      ta.dataset.set = "0";
+      await saveMembersNow();
+      ta.value = DB.R.review?.members?.[gid]?.comment || ta.value;
+      $("[data-mtst]", card).textContent = "From their switches: it follows them until you edit it.";
+    }
+  }));
+  if ($("#db-lk")) $("#db-lk").onclick = (e) => busy(e.currentTarget, async () => {
+    toast("⏳ Reading the Discord channels of the brief's dates…");
+    await saveMembersNow();
+    const r = await api(`/briefs/${DB.bid}/review/links`, { method: "POST", body: { who: DB.who } });
+    DB.ins = { key: `${DB.bid}~${DB.who}`, ...r };
+    $$(".mc").forEach((c) => { delete c.dataset.applied; });
+    drawInsights();
+  });
+}
+// ✨ precise questions for one member, written again
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-probe]");
+  if (b) loadProbes(b.dataset.probe);
+});
+// 🔍 the lines of their commits an AI wrote: each file of each commit against their VS Code heartbeats since the commit before
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-ailines]");
+  if (!b) return;
+  aiLinesDialog(b.dataset.ailines).catch((x) => toast(x.message, true));
+});
+const AIL = { ai: ["🤖 AI", "bad"], typed: ["✍️ typed", "good"], mixed: ["partly AI", "warn"], unknown: ["no VS Code data", ""] };
+async function aiLinesDialog(gid) {
+  const name = (DB.R.review?.contrib || []).find((m) => String(m.gid) === String(gid))?.name || "";
+  openDialog(`🔍 Lines written by AI${name ? ` · ${name}` : ""}`, `<p class="muted">⏳ Reading their commits on GitHub and their VS Code days…</p>`);
+  const r = await api(`/briefs/${DB.bid}/review/ailines?who=${encodeURIComponent(DB.who)}&member=${encodeURIComponent(gid)}`);
+  if (!dlg.open) return;
+  dlg.classList.add("wide");
+  const body = $(".dlg-body", dlg);
+  body.innerHTML = `<p class="small muted" style="margin-top:0">For each commit, each file is compared with their VS Code activity on it since their commit before: when the AI made the changes, the lines are 🤖; when they typed them, ✍️. WakaTime only sees AI tools inside the editor (Copilot, Cursor, Claude Code…): code pasted from a website counts as typed. A hint, never a proof.</p>
+    ${r.note ? `<div class="notice">${esc(r.note)}</div>` : ""}
+    ${r.commits.map((c) => `<div class="ail-c"><div class="ail-h"><a href="${esc(c.url)}" target="_blank" rel="noopener"><code>${esc(c.sha.slice(0, 7))}</code> ${esc(c.title)} ↗</a><span class="small muted">${fmtDateTime(c.t)}</span></div>
+      ${c.files.map((f) => { const L = AIL[f.label]; return `<details class="ail-f" ${f.label === "ai" || f.label === "mixed" ? "open" : ""}><summary><code>${esc(f.file)}</code> <span class="lvl ${L[1]}">${esc(L[0])}${f.pct != null && f.label === "mixed" ? ` ${f.pct}%` : ""}</span> <span class="small muted">+${f.adds} lines${f.ai + f.hu ? ` · VS Code: ${f.ai} by AI, ${f.hu} typed` : ""}</span></summary>
+        <pre class="ail-code ${esc(f.label)}">${f.lines.map((l) => esc(l)).join("\n")}${f.more ? `\n… ${f.more} more line(s)` : ""}</pre></details>`; }).join("")}</div>`).join("") || (r.note ? "" : `<p class="empty">No commit to show.</p>`)}`;
 }
 
 function currentStates() {
@@ -1388,17 +1596,15 @@ function wireDebrief() {
       <p class="small muted">The AI follows it within the brief, the programme week and their files. Empty: another task on another point.</p>`,
     [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: async () => { const p = $("#ms-p", dlg).value; dlg.close(); await drawTask(b.dataset.mm || "", p); } }]);
   });
-  const saveMembers = async () => {
-    const members = Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
-      quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
-      co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])) }]));
-    const R = await api(`/briefs/${bid}/review/members`, { method: "POST", body: { who, members } });
-    DB.R = { ...DB.R, ...R };
-  };
+  const saveMembers = () => saveMembersNow();
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
   loadMemberVsc();
-  // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data (saved first)
+  wireMembers();
+  loadMemberInsights();
+  // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data. Their fields are saved
+  // first: the page is drawn again after, and nothing you typed may be lost.
   $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
+    await saveMembers();
     const cur = (DB.R.memberLevels || {})[b.dataset.gid]?.lvl || "";
     const next = cur === b.dataset.mlv ? "" : b.dataset.mlv;
     const R = await api(`/briefs/${bid}/review/level`, { method: "POST", body: { who, member: b.dataset.gid, level: next } });

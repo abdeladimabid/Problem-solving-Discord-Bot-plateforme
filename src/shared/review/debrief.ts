@@ -235,7 +235,7 @@ export function assessForAi(assess: any[] | null | undefined): string {
     return `« ${oneLine(a.title, 80)} » : ${a.score} %${ok.length ? ` ; compétences validées : ${ok.join(", ")}` : ""}${ko.length ? ` ; non validées : ${ko.join(", ")}` : ""}`;
   }).join("\n");
 }
-async function putReview(env: Env, g: GuildRow, briefId: number, who: string, rec: any, status: string | null = null) {
+export async function putReview(env: Env, g: GuildRow, briefId: number, who: string, rec: any, status: string | null = null) {
   await run(env, `INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (brief_id, who) DO UPDATE SET record = excluded.record, updated_at = excluded.updated_at${status ? ", status = excluded.status" : ""}`,
     briefId, g.id, who, JSON.stringify(rec), status ?? "draft", now());
@@ -1018,9 +1018,12 @@ export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: s
       co: Object.fromEntries(Object.keys(base).map((code) => [code, typeof xc[code] === "boolean" ? xc[code] : typeof pc[code] === "boolean" ? pc[code] : base[code]])),
       mes: { r: CH_RESULTS.includes(x.mes?.r) ? x.mes.r : "", note: oneLine(x.mes?.note, 500) },
       note: oneLine(x.note, 600), ch: prev.ch || null, level: prev.level,
+      // the switches were set by the teacher (else the card shows the suggestions); their own comment, kept as written
+      coSet: x.coSet === true || prev.coSet === true,
+      text: typeof x.text === "string" ? (x.text.trim() ? String(x.text).slice(0, 6000) : undefined) : prev.text,
     };
     rec.members[m.gid] = ms;
-    comments[m.gid] = ms.comment = memberComment(m, rec, ms);
+    comments[m.gid] = ms.comment = ms.text || memberComment(m, rec, ms);
   }
   await putReview(env, g, briefId, who, rec);
   return { comments, members: rec.members };

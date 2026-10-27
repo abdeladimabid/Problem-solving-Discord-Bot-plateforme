@@ -5037,7 +5037,7 @@ section("VS Code activity: /vscode setup, the WakaTime API (heartbeats.bulk, sta
   const dmMsg = discordCalls.find((c) => c.method === "POST" && c.path === `/channels/dm-${U.alice.id}/messages`)?.body;
   const key = (text(dmMsg).match(/waka_[a-f0-9-]{36}/) ?? [""])[0];
   check(!!key && V.KEY_RE.test(key), "the setup DM carries the learner's own key");
-  check(text(dmMsg).includes("api_url = https://bot.example.workers.dev/wakatime/api/v1") && text(dmMsg).includes("hide_project_folder = true") && text(dmMsg).includes("powershell") && text(dmMsg).includes("bash") && text(dmMsg).includes(".wakatime-project") && text(dmMsg).includes("hide_file_names"), "…with ~/.wakatime.cfg, the PowerShell and bash lines, and the privacy options");
+  check(text(dmMsg).includes("api_url = https://bot.example.workers.dev/wakatime/api/v1") && text(dmMsg).includes("hide_project_folder = true") && text(dmMsg).includes("powershell") && text(dmMsg).includes("bash") && text(dmMsg).includes("Your key is personal"), "…with ~/.wakatime.cfg, the PowerShell and bash lines, and the privacy note");
   check(text(lastPatch()).includes("DMs"), "the setup message says the key is in the DMs");
   const lr = q1("SELECT * FROM vsc_learners WHERE guild_id = ? AND discord_id = ?", G, U.alice.id);
   check(lr.key_hash === await V.hashKey(key) && !JSON.stringify(lr).includes(key.slice(5)) && lr.consent_at && lr.consent_v === 1 && lr.key_hint === key.slice(-4), "only the key's hash is stored, with the consent and its version");
@@ -6050,6 +6050,105 @@ section("squad debriefs: each member's own level (chips, ✨, finalize, Progress
   const ma = (await api("GET", `/api/students/${A}?g=${G}`)).data.learning?.briefs?.find((x: any) => x.id === id);
   check(mb?.review?.level === "faible" && ma?.review?.level === "excellent", "the student page: each member sees their own level");
   await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", id);
+  run1("DELETE FROM briefs WHERE id = ?", id);
+}
+
+section("squad debriefs, member by member: assessment, AI flags, questions, suggested switches, Discord links (CT5), AI lines");
+{
+  const A = U.alice.id, B = U.bob.id, sq = "def456", who = `s:${sq}`;
+  const t0 = clock.now() - 3 * 86400;
+  run1("INSERT INTO briefs (guild_id, title, status, data, kind, squads, start_at, due_at, created_at) VALUES (?, 'Squad insights', 'assigned', '{}', 'squad', ?, ?, ?, ?)", G, JSON.stringify([{ id: sq, name: "Squad 2", members: [A, B], sm: A }]), t0, clock.now() + 86400, t0);
+  const id = q1("SELECT MAX(id) AS id FROM briefs").id as number;
+  const rec = {
+    at: Date.now(), first: "", model: "test", brief: "Hammam", repos: ["sq/hammam"], count: 30, files: true, skills: ["C3"], checks: [],
+    squad: { id: sq, name: "Squad 2", members: [{ gid: A }, { gid: B }] },
+    contrib: [{ gid: A, login: "alice-gh", name: "Alice Martin", commits: 12, days: 3, prs: 2, merged: 2, reviews: 1 }, { gid: B, login: "bob-gh", name: "Bob", commits: 1, days: 1, prs: 0, merged: 0, reviews: 0 }],
+    result: { resume: "Bien.", commits: [], forts: [], ameliorer: [], feedback: "", exigences: [{ type: "story", texte: "Page des soins", statut: "fait", preuve: "soins.html" }],
+      competences: [{ code: "C3", avis: "validable", raison: "ok" }, { code: "T1", avis: "validable" }, { code: "T2", avis: "validable" }, { code: "T5", avis: "validable" }] },
+    challenge: null, members: {},
+  };
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", id, G, who, JSON.stringify(rec), clock.now());
+  // their assessment: Alice right on C3 (one question missed), Bob not
+  const qs = [{ id: "q1", type: "mcq", prompt: "Quel sélecteur cible les <p> enfants directs ?", choices: ["a", "b"], answer: [1], points: 1, comps: [{ code: "C3", level: 1 }] },
+    { id: "q2", type: "explain", prompt: "Explique la différence entre margin et padding.", expected: "dehors / dedans", points: 2, comps: [{ code: "C3", level: 1 }] }];
+  run1("INSERT INTO assessments (guild_id, title, brief_id, status, questions, settings, created_at) VALUES (?, 'Quiz CSS', ?, 'open', ?, '{}', ?)", G, id, JSON.stringify(qs), clock.now());
+  const aid = q1("SELECT MAX(id) AS id FROM assessments").id as number;
+  run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades, summary) VALUES (?, ?, ?, 'graded', 1, 80, ?, ?)", aid, G, A, JSON.stringify({ q1: { verdict: "correct", score: 100 }, q2: { verdict: "partial", score: 50 } }), "Bon travail sur les sélecteurs, revois le modèle de boîte.");
+  run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades, summary) VALUES (?, ?, ?, 'graded', 2, 30, ?, ?)", aid, G, B, JSON.stringify({ q1: { verdict: "wrong", score: 0 } }), "Les sélecteurs et le modèle de boîte sont à revoir.");
+  run1("INSERT INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, 'C3', 1, 1, 'assessment', ?, '', ?)", G, A, String(aid), clock.now());
+  run1("INSERT INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, 'C3', 1, 0, 'assessment', ?, '', ?)", G, B, String(aid), clock.now());
+  // Bob: one very big commit on the squad's repo; his VS Code day says an AI wrote it
+  const sha = "f".repeat(40), tc = clock.now() - 3600;
+  run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files, url) VALUES (?, ?, ?, 'commit', 'sq/hammam', ?, 'add everything', 'real', 420, 0, 2, ?)", G, sha, B, tc, `https://github.com/sq/hammam/commit/${sha}`);
+  const V = await import("../src/shared/vscode.ts");
+  const day = V.dayOf(tc), start = V.dayClock(day).start;
+  const hb = (t: number, f: string, ai: number, hu: number) => ({ t, p: "hammam", f, lang: "HTML", cat: ai ? "ai coding" : "coding", w: 1, lines: 100, ai, hu, lc: 1, ed: "VS Code" });
+  const raw = V.packRaw([hb(tc - 1500, "index.html", 300, 0), hb(tc - 1200, "style.css", 0, 40)], start);
+  const agg = { ...V.emptyAgg(), active: 1800, ai: 300, hu: 40, lineData: true, projects: [["hammam", 1800, 0]] };
+  run1("INSERT INTO vsc_days (guild_id, discord_id, day, active_s, write_s, n, ai_lines, human_lines, agg, raw, rev, updated_at) VALUES (?, ?, ?, 1800, 0, 2, 300, 40, ?, ?, 0, ?)", G, B, day, JSON.stringify(agg), raw, clock.now());
+  const I = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${who}`);
+  const ia = I.data.members?.[A], ib = I.data.members?.[B];
+  check(I.status === 200 && ia.assess[0].score === 80 && ia.assess[0].taker && ia.assess[0].missed.length === 1 && ia.assess[0].missed[0].verdict === "partial" && /revois le modèle de boîte/.test(ia.assess[0].summary) && ib.assess[0].score === 30,
+    `each member: their own assessment, its paper, the questions missed and its comment (${I.status} ${I.data.error ?? ""})`);
+  check(ib.flags.some((f: any) => f.kind === "commits" && /420|one commit/.test(f.detail)) && ib.flags.some((f: any) => f.label === "AI in VS Code") && !ia.flags.length,
+    "AI flags: their own big commit and their VS Code day (none for the other)");
+  check(ia.questions.some((q: any) => /margin et padding/.test(q.q) && q.from === "assessment") && ib.questions.some((q: any) => q.from === "ai"), "questions to ask: what they missed, and what the flags point at");
+  {
+    check(ia.probes === null && !!ia.probeKey, "precise questions: none yet (the page asks the AI for them)");
+    const u0 = ai.users.length;
+    const P = await api("POST", `/api/briefs/${id}/review/probes?g=${G}&who=${who}`, {});
+    const pa = P.data.members?.[A], sent = ai.users.slice(u0).join("\n");
+    check(P.status === 200 && pa.probes?.length === 4 && pa.probes.every((p: any) => p.qs.length <= 2) && pa.probes[0].ns.join() === "2" && pa.probes[0].verdict === "partial" && /space-evenly/.test(pa.probes[0].qs[1]) && pa.probes.flatMap((p: any) => p.qs).filter((q: string) => /space-evenly/.test(q)).length === 1 && P.data.members[B].probes?.length,
+      `precise questions: at most 4 key notions, 2 questions each, never the same question twice (${P.status} ${P.data.error ?? ""})`);
+    check(/Explique la différence entre margin et padding/.test(sent) && /Attendu : dehors \/ dedans/.test(sent) && /Sa réponse :/.test(sent), "…from the question, the expected answer and their own answer");
+    const n1 = ai.users.length;
+    const P2 = await api("POST", `/api/briefs/${id}/review/probes?g=${G}&who=${who}`, {});
+    check(ai.users.length === n1 && P2.data.members[A].probes?.length === 4, "kept with the debrief: not asked again");
+    const P3 = await api("POST", `/api/briefs/${id}/review/probes?g=${G}&who=${who}`, { member: A, force: true });
+    check(ai.users.length === n1 + 1 && P3.data.members[A].probes?.length === 4, "↻ Other questions: only that member, asked again");
+    const again = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${who}`);
+    check(again.data.members[A].probes?.[0]?.notion === "Flexbox : alignement", "…and shown next time the page opens");
+  }
+  check(ia.hints.C3?.on === true && ib.hints.C3?.on === false && ia.hints.T1?.on === true && ib.hints.T1?.on === false && ia.hints.T2?.on === true && ib.hints.T2?.on === false && !ia.hints.T5,
+    "suggested switches: C3 from their assessment, CT1 from their days, CT2 from PRs and reviews (CT5 waits for the Discord check)");
+  // CT5: the links they shared in Discord during the brief
+  const ts = (dt: number) => new Date((clock.now() - dt) * 1000).toISOString();
+  discordFake.chan["/channels/c1/messages"] = [
+    { id: "9003", timestamp: ts(600), author: { id: A }, content: "Une super ressource sur flexbox https://css-tricks.com/snippets/css/a-guide-to-flexbox/", embeds: [] },
+    { id: "9002", timestamp: ts(900), author: { id: B }, content: "on se voit à 14h", embeds: [] },
+    { id: "9001", timestamp: ts(30 * 86400), author: { id: B }, content: "https://old.example.com (before the brief)", embeds: [] }];
+  const L = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who });
+  check(L.status === 200 && L.data.members[A].links.length === 1 && /css-tricks/.test(L.data.members[A].links[0].url) && L.data.members[A].links[0].channel === "general" && !L.data.members[B].links.length
+    && L.data.members[A].hints.T5.on === true && L.data.members[B].hints.T5.on === false && !L.data.links.hidden, `CT5: the links each member shared on Discord during the brief (${L.status} ${L.data.error ?? ""})`);
+  discordFake.chan["/channels/c1/messages"] = [1, 2, 3].map((i) => ({ id: String(9010 + i), timestamp: ts(600 + i), author: { id: A }, content: "", embeds: [] }));
+  const Lh = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who });
+  check(Lh.data.links.hidden === true && !Lh.data.members[A].hints.T5, "…Discord hides the messages' text (Message Content intent off): said, and CT5 isn't guessed");
+  delete discordFake.chan["/channels/c1/messages"];
+  // 🔍 the lines an AI wrote: index.html (AI in VS Code) and style.css (typed)
+  const pemK = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";
+  await api("PUT", "/api/github/app", { g: G, appId: "99", slug: "classbot-b", clientId: "Iv23abc", clientSecret: "cs", webhookSecret: "own_secret", privateKey: pemK });
+  const bobGh = q1("SELECT gh_inst FROM players WHERE guild_id = ? AND discord_id = ?", G, B).gh_inst;
+  run1("UPDATE players SET gh_inst = '777' WHERE guild_id = ? AND discord_id = ?", G, B);
+  run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", Math.floor(Date.now() / 1000) + 3000);
+  github.commitFiles[sha] = [{ filename: "index.html", additions: 2, patch: "@@ -0,0 +1,2 @@\n+<main>\n+</main>" }, { filename: "style.css", additions: 1, patch: "@@ -1 +1 @@\n-a{}\n+a{color:red}" }];
+  const al = await api("GET", `/api/briefs/${id}/review/ailines?g=${G}&who=${who}&member=${B}`);
+  const files = al.data.commits?.[0]?.files || [];
+  check(al.status === 200 && files.find((f: any) => f.file === "index.html")?.label === "ai" && files.find((f: any) => f.file === "index.html")?.lines.join("|") === "<main>|</main>"
+    && files.find((f: any) => f.file === "style.css")?.label === "typed" && al.data.vscode === true, `AI lines: each file of their commit, its lines marked AI or typed from their VS Code activity (${al.status} ${al.data.error ?? al.data.note ?? ""})`);
+  const { attribute } = await import("../src/shared/review/insights.ts");
+  check(attribute(0, 0).label === "unknown" && attribute(50, 50).label === "mixed" && attribute(50, 50).pct === 50 && attribute(9, 1).label === "ai" && attribute(1, 9).label === "typed", "…a mix is « partly AI » with its share; no VS Code data: unknown");
+  // the member's own comment: kept as written, it's what goes on their record
+  const sv = await api("POST", `/api/briefs/${id}/review/members?g=${G}`, { who, members: { [A]: { quiz: 80, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !", coSet: true, co: { C3: true } }, [B]: { quiz: 30 } } });
+  check(sv.status === 200 && sv.data.comments[A].endsWith("Bravo pour ta veille !") && sv.data.review.members[A].coSet === true && sv.data.review.members[B].text === undefined && sv.data.comments[B].length > 20, "a member's comment you wrote is kept as their comment; the other's is written from their switches");
+  delete github.commitFiles[sha];
+  run1("UPDATE players SET gh_inst = ? WHERE guild_id = ? AND discord_id = ?", bobGh, G, B);
+  await api("DELETE", `/api/github/app?g=${G}`);
+  run1("DELETE FROM vsc_days WHERE discord_id = ? AND day = ?", B, day);
+  run1("DELETE FROM gh_log WHERE id = ?", sha);
+  run1("DELETE FROM competency_results WHERE ref = ? AND source = 'assessment'", String(aid));
+  run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid);
+  run1("DELETE FROM assessments WHERE id = ?", aid);
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", id);
   run1("DELETE FROM briefs WHERE id = ?", id);
 }
