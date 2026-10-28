@@ -6154,6 +6154,13 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   // the member's own comment: kept as written, it's what goes on their record
   const sv = await api("POST", `/api/briefs/${id}/review/members?g=${G}`, { who, members: { [A]: { quiz: 80, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !", coSet: true, co: { C3: true } }, [B]: { quiz: 30 } } });
   check(sv.status === 200 && sv.data.comments[A].endsWith("Bravo pour ta veille !") && sv.data.review.members[A].coSet === true && sv.data.review.members[B].text === undefined && sv.data.comments[B].length > 20, "a member's comment you wrote is kept as their comment; the other's is written from their switches");
+  // ↻ Switches: the comment written again from their switches and the one-to-one note (the text that was there goes)
+  const note = "Il a su répondre aux questions sur flex, mais il doit revoir grid";
+  const rw = await api("POST", `/api/briefs/${id}/review/membercomment?g=${G}`, { who, gid: A, members: { [A]: { quiz: 80, note, coSet: true, co: { C3: true }, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !" } } });
+  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/.test(rw.data.comment) && rw.data.review.members[A].note === note && rw.data.review.members[A].text === rw.data.comment,
+    `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
+  const { remarkNotions } = await import("../src/shared/review/comment.ts");
+  check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
   delete github.commitFiles[sha];
   run1("UPDATE players SET gh_inst = ? WHERE guild_id = ? AND discord_id = ?", bobGh, G, B);
   await api("DELETE", `/api/github/app?g=${G}`);

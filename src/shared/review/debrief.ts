@@ -24,7 +24,7 @@ import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
 import { memberLevel, memberLevelOf } from "./members.ts";
-import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment } from "./comment.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData } from "./comment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -1027,6 +1027,29 @@ export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: s
   }
   await putReview(env, g, briefId, who, rec);
   return { comments, members: rec.members };
+}
+
+/**
+ * ↻ Switches on a squad member: their comment written again from their switches, level and one-to-one note (the
+ * gaps in the note become the notions to review). The AI phrases it like the teacher; the template when it can't.
+ * Whatever was written before (their assessment's comment, an older version) is replaced.
+ */
+export async function writeMemberComment(env: Env, g: GuildRow, briefId: number, who: string, gid: string, data: any) {
+  const members = data && typeof data === "object" ? { ...data } : {};
+  members[gid] = { ...(members[gid] || {}), text: "" };
+  await saveMembers(env, g, briefId, who, members);
+  const r = await getReview(env, briefId, who);
+  const rec = r!.rec, m = (rec.contrib || []).find((x: any) => String(x.gid) === String(gid)), ms = rec.members?.[gid];
+  if (!m || !ms) throw new DebriefError("This member isn't in the squad's work.");
+  const d = memberCommentData(m, rec, ms);
+  const ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
+  const text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  // the AI's text is kept like one written by hand (switches changed later don't rewrite it); the template follows them
+  ms.text = text ?? undefined;
+  ms.by = text ? "ai" : "template";
+  ms.comment = text ?? commentText(d);
+  await putReview(env, g, briefId, who, rec);
+  return { comment: ms.comment as string, by: ms.by as string, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
 }
 
 export const statesOf = (rec: any) => (rec && rec.result ? reviewStates(rec) : null);

@@ -79,8 +79,12 @@ export function actionOf(t: unknown): string {
 const NEGATIVE = /\b(ne|n['’])\s*\S+(?:\s+\S+)?\s+(?:pas|plus|jamais|gu[èe]re)\b|confond|difficult|lacune|[àa] revoir|revoir|fragile|h[ée]sit|oubli|erreur|du mal|incomplet|flou|approximati/i;
 export function remarkNotions(text: unknown): string[] {
   const parts = String(text ?? "").split(/(?<=[.!?;])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
-  return parts.filter((s) => NEGATIVE.test(s)).map((s) => clean(s
+  // one sentence can hold a positive and a gap (« elle a su X, mais elle doit revoir Y »): only the gap is a notion
+  const gaps = parts.flatMap((s) => s.split(/,?\s+(?:mais|par contre|cependant|en revanche|toutefois)\s+/i)).map((s) => s.trim()).filter(Boolean);
+  return gaps.filter((s) => NEGATIVE.test(s)).map((s) => clean(s
+    .replace(/^(?:mais|et|par contre|cependant|en revanche|toutefois|par ailleurs)\s*,?\s+/i, "")
     .replace(/^(il|elle|l['’]apprenante?|tu|vous)\s+/i, "")
+    .replace(/^(?:doit|dois|devez|devra|devras|faut|il faut|a besoin de|as besoin de)\s+(?:encore\s+|bien\s+|absolument\s+)?(?:revoir|retravailler|reprendre|approfondir|consolider|travailler(?: sur)?|réviser)\s+/i, "")
     .replace(/^(?:ne|n['’])\s*(?:sait|sais|savez|a|as|avez|ma[iî]trise|ma[iî]trises|ma[iî]trisez|comprend|comprends|comprenez|conna[iî]t|connais|connaissez|peut|peux|pouvez|est|es|êtes)\s+(?:pas|plus)\s+(?:bien\s+|encore\s+|vraiment\s+)?(?:expliquer|faire|utiliser|compris|capable d['e]\s*|à l['’]aise avec|clair sur)?\s*/i, "")
     .replace(/^(?:a|as|avez)\s+du mal (?:à|avec)\s+/i, "")
     .replace(/^confond(?:s|ez)?\s+(.+?)\s+et\s+(.+)$/i, "la différence entre $1 et $2")
@@ -210,9 +214,12 @@ export function buildComment(firstName: string, rec: any, states?: any): string 
   return commentText(commentData({ first: firstName, group: rec && rec.squad ? rec.squad.name : "", project: String((rec && rec.brief) || ""), rec, states }));
 }
 /** A squad member's own comment: the squad's work, their own competencies and note (else the squad's remarks). */
+export function memberCommentData(m: any, rec: any, ms: any): CommentData {
+  return commentData({ first: firstNameOf(m.name, m.login), project: String((rec && rec.brief) || ""), rec,
+    member: { co: ms && ms.co, note: ms && ms.note, level: (() => { const l = memberLevelOf(rec, String(m.gid)); return l.lvl || l.prop; })() } });
+}
 export function memberComment(m: any, rec: any, ms: any): string {
-  return commentText(commentData({ first: firstNameOf(m.name, m.login), project: String((rec && rec.brief) || ""), rec,
-    member: { co: ms && ms.co, note: ms && ms.note, level: (() => { const l = memberLevelOf(rec, String(m.gid)); return l.lvl || l.prop; })() } }));
+  return commentText(memberCommentData(m, rec, ms));
 }
 export const wordCount = (t: string) => (String(t).match(/[A-Za-zÀ-ÿ0-9’'-]+/g) || []).length;
 

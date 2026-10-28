@@ -1340,7 +1340,7 @@ function memberCardHtml(rec, st, m, comps, final) {
         ${memberLevelHtml(m.gid, final)}
         <div class="mch">${mesHtml(ms.ch, ms.mes || {}, final, m.gid)}</div></div>
       <div><div class="panel-head" style="margin:0 0 4px"><h4 style="margin:0">Comment for ${esc(firstNameOf(name))}</h4>
-          ${final ? "" : `<span class="toolbar" style="margin:0"><button class="btn small" data-mfill="assess" title="Start again from their assessment's comment">↻ Assessment</button><button class="btn small" data-mfill="switches" title="Write it from their switches and note">↻ Switches</button></span>`}</div>
+          ${final ? "" : `<span class="toolbar" style="margin:0"><button class="btn small" data-mfill="assess" title="Start again from their assessment's comment">↻ Assessment</button><button class="btn small" data-mfill="switches" title="Write it again from their switches, level and note (the gaps in your note become what to review)">↻ Switches</button></span>`}</div>
         <textarea data-mtext rows="9" ${final ? "readonly" : ""} data-set="${ms.text ? 1 : 0}" placeholder="Their own comment: it goes on their record and by DM">${esc(ms.text || ms.comment || "")}</textarea>
         <p class="small muted" data-mtst style="margin:4px 0 0">${ms.text ? "Your text: kept as it is." : "From their switches: it follows them until you edit it."}</p>
         <label class="small" style="margin-top:6px">Note <span class="muted">(used by ↻ Switches)</span></label><input type="text" data-mn value="${esc(ms.note || "")}" style="width:100%" ${dis}></div>
@@ -1480,10 +1480,17 @@ function wireMembers() {
       ta.value = sum; ta.dataset.set = "1"; $("[data-mtst]", card).textContent = "From their assessment's comment: add to it or change it.";
       await saveMembersNow();
     } else {
-      ta.dataset.set = "0";
-      await saveMembersNow();
-      ta.value = DB.R.review?.members?.[gid]?.comment || ta.value;
-      $("[data-mtst]", card).textContent = "From their switches: it follows them until you edit it.";
+      // written again from their switches, level and note (the gaps in the note are the notions to review): the
+      // text that was there (their assessment's comment, an older version) is replaced
+      clearTimeout(DB.mtimer);
+      toast("⏳ Writing the comment from their switches and your note…");
+      const R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
+      DB.R = { ...DB.R, ...R };
+      ta.value = R.comment || ta.value;
+      ta.dataset.set = R.by === "ai" ? "1" : "0";
+      $("[data-mtst]", card).textContent = R.by === "ai" ? "✨ Written from their switches and your note: edit it as you like." : "From their switches and your note: it follows them until you edit it.";
+      if (R.msg) toast(R.msg, true);
+      if ($("#db-mst")) $("#db-mst").textContent = "✓ Saved";
     }
   }));
   if ($("#db-lk")) $("#db-lk").onclick = (e) => busy(e.currentTarget, async () => {

@@ -3810,4 +3810,8 @@ window.CB_FR = {
   "until you lift it": "jusqu'à ce que tu le lèves",
   "every level": "tous les niveaux",
   "e.g. Too many hard bugs in a row: work on your brief first, then come back to it": "ex. Trop de bugs difficiles d'affilée : avance d'abord ton brief, puis reviens-y",
+  "⏳ Writing the comment from their switches and your note…": "⏳ Rédaction du commentaire à partir de ses interrupteurs et de ta note…",
+  "✨ Written from their switches and your note: edit it as you like.": "✨ Rédigé à partir de ses interrupteurs et de ta note : modifie-le comme tu veux.",
+  "From their switches and your note: it follows them until you edit it.": "À partir de ses interrupteurs et de ta note : il les suit jusqu’à ce que tu le modifies.",
+  "Write it again from their switches, level and note (the gaps in your note become what to review)": "Le réécrire à partir de ses interrupteurs, de son niveau et de ta note (les lacunes de ta note deviennent les points à revoir)",
 };
