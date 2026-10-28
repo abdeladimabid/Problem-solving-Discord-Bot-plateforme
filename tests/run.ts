@@ -6161,6 +6161,20 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
+  // what each comment talks about: a member → their assessment (what they mastered); the squad → the project
+  {
+    const { getReview } = await import("../src/shared/review/debrief.ts");
+    const { memberCommentData, commentData, aiCommentPrompt, commentText } = await import("../src/shared/review/comment.ts");
+    const R = (await getReview(env, id, who))!.rec;
+    const mA = R.contrib.find((x: any) => x.gid === A), dA = memberCommentData(mA, R, R.members[A]);
+    const pA = aiCommentPrompt(dA);
+    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n- /.test(pA)
+      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Lors de l’évaluation, tu as montré que tu maîtrises/.test(commentText(dA)),
+      `a member's comment: what goes well comes from their assessment (what they mastered, the grader's comment), never the project's features (${dA.mode} ${JSON.stringify(dA.assess)})`);
+    const dS = commentData({ first: R.squad.name, group: R.squad.name, project: R.brief, rec: R }), pS = aiCommentPrompt(dS);
+    check(dS.mode === "group" && !dS.assess && /TYPE DE COMMENTAIRE : ÉQUIPE/.test(pS) && /CE QUI EST RÉUSSI DANS LE PROJET|CE QUI EST À AMÉLIORER DANS LE PROJET/.test(pS) && /CONTRIBUTION DE CHAQUE MEMBRE :?[\s\S]*commits/.test(pS) && !/MAÎTRISÉ À L’ÉVALUATION/.test(pS),
+      "the squad's comment: the project (interface, planning, README, commits, team), not the assessment");
+  }
   // Finalize + DM: each member gets their own comment, not the squad's
   await api("POST", `/api/briefs/${id}/review/comment?g=${G}`, { who, text: "SQUAD-COMMENT pour toute l'équipe." });
   discordCalls.length = 0;
@@ -6421,6 +6435,21 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   await slash(U.prof, "teacher", { member: D.id }, "unblock");
   check(!(await getBlocks(env, G, D.id)).length, "/teacher unblock without a type lifts them all");
   check(text(await slash(U.prof, "teacher", { member: D.id }, "unblock")).includes("no practice block"), "…nothing left to lift: said so");
+}
+
+section("debrief requirements: the AI reads only the start of each file; a page or feature that is in the repo is done");
+{
+  const { foundInRepo, pageOutline, rescueFound } = await import("../src/shared/review/gh.ts");
+  const paths = ["index.html", "pages/services.html", "about-us.html", "js/gallery.js", "css/style.css"];
+  const texts: Record<string, string> = { "index.html": "<html>" + "x".repeat(3000) + '<section id="temoignages"><h2>Ce que disent nos clients</h2></section><form id="contact-form"><input><textarea></textarea></form>', "pages/services.html": "<h1>Nos services</h1>" };
+  check(foundInRepo("En tant que visiteur, je veux consulter la page Services afin de connaître l'offre", paths, texts) === "fichier pages/services.html"
+    && /temoignage/.test(foundInRepo("En tant que visiteur, je veux lire les témoignages des clients", paths, texts) || "")
+    && foundInRepo("En tant que visiteur, je veux voir la galerie photos", paths, texts) === "fichier js/gallery.js"
+    && foundInRepo("En tant que visiteur, je veux en savoir plus (page À propos)", paths, texts) === "fichier about-us.html"
+    && foundInRepo("En tant que visiteur, je veux réserver une visite en ligne", paths, texts) === null, "a page or a feature is found by its file, a section far down the page, a heading (English names too); one that isn't there is not");
+  const ex = rescueFound([{ type: "story", texte: "En tant que visiteur, je veux voir la galerie", statut: "absent" }, { type: "story", texte: "je veux réserver une visite", statut: "absent" }, { type: "story", texte: "voir les services", statut: "absent", bound: true, check: "pages" }], { paths, texts });
+  check(ex[0].statut === "fait" && /js\/gallery\.js.*à confirmer/.test(ex[0].preuve) && ex[1].statut === "absent" && ex[2].statut === "absent", "the AI's « absent » on what is in the repo becomes done (with where it is, to confirm); a sure automatic check is never overruled");
+  check(/temoignages, contact-form/.test(pageOutline(texts)) && /1 formulaire/.test(pageOutline(texts)), "the AI gets the outline of every page read in full (headings, sections, forms, links)");
 }
 
 section("slash command definitions are valid for Discord");

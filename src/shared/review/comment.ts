@@ -29,7 +29,17 @@ export interface CommentData {
   remarks: string;           // the teacher's one-to-one remarks, as written (the AI rewrites them as notions)
   positive: string;          // what went well in the one-to-one, one sentence in « vous » (from ✨ on the remarks)
   oralMissed: string[];      // the notions of the oral questions not answered
+  // which comment: a squad's (about the PROJECT), one learner's from their assessment (a squad member, or a learner
+  // whose assessment is graded), or one learner's from the project only (no graded assessment)
+  mode: "group" | "assess" | "project";
+  memberOnly: boolean;       // a squad member: the project's features are in the squad's comment, not here
+  assess: AssessFacts | null;
+  proj: ProjectFacts | null; // a squad: what the project shows (interface, planning, README, commits, team)
 }
+/** One learner's graded assessment(s) of the brief: what they mastered, what they missed, the grader's comment. */
+export interface AssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
+/** A squad's project beyond the features: interface and UX, planning, README, commits, team work. */
+export interface ProjectFacts { good: string[]; bad: string[]; team: string[] }
 
 // requirements that show what was done (strengths), and those that say what to do (never the performance criteria)
 const STRONG = ["story", "technique", "livrable", "critere"];
@@ -91,11 +101,60 @@ export function remarkNotions(text: unknown): string[] {
     .replace(/^(?:à revoir|revoir)\s*:?\s*/i, ""), 140)).filter((x) => x.length > 2).map(low);
 }
 
+const compName = (c: string) => low(String((REF_NAMES as any)[String(c).toUpperCase().replace(/N\d$/, "").replace(/^CT/, "T")] || ""));
+/** The learner's own graded assessment(s) of the brief (debrief.ts briefAssessments: members). A learner alone: their uid
+ *  is the only one there. */
+export function assessFacts(rec: any, uid?: string | null): AssessFacts | null {
+  const list = (rec?.assess || []).filter((a: any) => a && a.members);
+  let id = uid ? String(uid) : "";
+  if (!id) { const keys = uniq(list.flatMap((a: any) => Object.keys(a.members))); if (keys.length !== 1) return null; id = keys[0]; }
+  const mine = list.map((a: any) => a.members[id]).filter(Boolean);
+  if (!mine.length) return null;
+  const ko = uniq(mine.flatMap((m: any) => m.ko || []));
+  const scores = mine.map((m: any) => m.score).filter((x: any) => typeof x === "number");
+  return {
+    score: scores.length ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null,
+    ok: uniq(mine.flatMap((m: any) => m.ok || [])).filter((c) => !ko.includes(c)).slice(0, 6), ko: ko.slice(0, 6),
+    summary: mine.map((m: any) => String(m.summary || "").trim()).filter(Boolean).join(" ").slice(0, 900),
+    comps: uniq(mine.flatMap((m: any) => (m.comps || []).map(compName))).filter(Boolean).slice(0, 4),
+    compsKo: uniq(mine.flatMap((m: any) => (m.compsKo || []).map(compName))).filter(Boolean).slice(0, 4),
+  };
+}
+// the automatic checks of the repo, by what the squad comment talks about (the features are the requirements)
+const PROJECT_PARTS: [RegExp, string][] = [
+  [/^(responsive|breakpoints|layout|anim|semantic|nav|active|h1|alt|seo|w3c|map|page404|figma|contrast|aria|form)$/, "Interface et expérience utilisateur"],
+  [/^(planning)$/, "Planification"],
+  [/^(docs|api_docs|pages_site|uml|postman)$/, "README, documentation et mise en ligne"],
+  [/^(commits|git|branches?|prs?|reviews?|members_commit)$/, "Commits et Git"],
+];
+/** A squad's project beyond its features, from the repo (the teacher's switches on the checks win). */
+export function projectFacts(rec: any, st: any): ProjectFacts {
+  const good: string[] = [], bad: string[] = [], team: string[] = [];
+  for (const [rx, part] of PROJECT_PARTS) {
+    const cs = (rec.checks || []).filter((c: any) => !c.info && rx.test(String(c.id)));
+    const ok = (c: any) => (typeof st.ck?.[c.id] === "boolean" ? st.ck[c.id] : c.ok);
+    const yes = cs.filter((c: any) => ok(c) === true).map((c: any) => clean(c.label, 80)), no = cs.filter((c: any) => ok(c) === false).map((c: any) => `${clean(c.label, 80)}${c.detail ? ` (${clean(c.detail, 120)})` : ""}`);
+    if (yes.length) good.push(`${part} : ${yes.join(", ")}`);
+    if (no.length) bad.push(`${part} : ${no.join(" ; ")}`);
+  }
+  const cm: any[] = rec.result?.commits || [];
+  const vague = cm.filter((c) => c && c.ok === false).length;
+  if (cm.length) (vague > cm.length / 3 ? bad : good).push(`Messages de commit : ${vague ? `${vague} sur ${cm.length} trop vagues ou sans rapport avec le code` : "clairs et en rapport avec le code"}`);
+  const contrib: any[] = rec.contrib || [];
+  if (contrib.length) {
+    for (const m of contrib) team.push(`${firstNameOf(m.name, m.login) || m.login || "membre"} : ${m.commits ?? 0} commits${m.prs ? `, ${m.prs} pull requests` : ""}${m.reviews ? `, ${m.reviews} revues` : ""}${m.cards != null ? `, ${m.cardsDone ?? 0}/${m.cards} cartes de planification terminées` : ""}`);
+    const n = contrib.map((m) => m.commits || 0), total = n.reduce((a, b) => a + b, 0);
+    if (total) (Math.min(...n) < total / contrib.length / 3 ? bad : good).push(`Répartition du travail : ${Math.min(...n) < total / contrib.length / 3 ? "très inégale entre les membres" : "équilibrée entre les membres"}`);
+    if (contrib.some((m) => m.prs) || contrib.some((m) => m.reviews)) good.push("Travail en équipe avec Git : pull requests et revues de code");
+  }
+  return { good: good.slice(0, 6), bad: bad.slice(0, 6), team: team.slice(0, 8) };
+}
+
 /**
  * The sections of the comment, from the teacher's decisions only. `states`: the switches (saved or on the screen);
  * `member`: in a squad, a member's own competencies and note (their one-to-one), when the teacher set them.
  */
-export function commentData(o: { first?: string; group?: string; project: string; rec: any; states?: any; member?: { co?: Record<string, boolean>; note?: string; level?: string } | null }): CommentData {
+export function commentData(o: { first?: string; group?: string; project: string; rec: any; states?: any; uid?: string | null; member?: { uid?: string; co?: Record<string, boolean>; note?: string; level?: string } | null }): CommentData {
   const rec = o.rec || {};
   const st = reviewStates({ ...rec, final: o.states ?? rec.final });
   const ex: any[] = (rec.result && rec.result.exigences) || [];
@@ -115,7 +174,12 @@ export function commentData(o: { first?: string; group?: string; project: string
   const oral: any[] = rec.oral || [];
   const oralMissed = uniq(oral.filter((q, i) => !st.oral[i]).map((q) => clean(q.notion || q.q, 140)));
   const fromRemarks = Array.isArray(R.toReview) && R.positive !== undefined ? R.toReview.map((x: unknown) => low(clean(x, 140))).filter(Boolean) : remarkNotions(remarks);
-  const notions = uniq([...fromRemarks, ...oralMissed.filter((n) => !saidIn(n, remarks)).map(low)]).slice(0, MAX.notions);
+  // one learner (a squad member, or alone): their assessment says what they mastered; a squad: the project only
+  const assess = o.group ? null : assessFacts(rec, o.member?.uid ?? o.uid ?? null);
+  const memberOnly = !o.group && !!o.member;
+  const mode: CommentData["mode"] = o.group ? "group" : assess ? "assess" : "project";
+  const notions = uniq([...fromRemarks, ...oralMissed.filter((n) => !saidIn(n, remarks)).map(low),
+    ...(assess ? assess.ko.filter((n) => !saidIn(n, remarks)).map(low) : [])]).slice(0, MAX.notions);
   // a squad member: their own level (members.ts), else the debrief's
   const lv = o.member?.level || (rec.level && (rec.level.lvl || rec.level.prop)) || debriefLevel(rec, st) || "";
   return {
@@ -126,9 +190,9 @@ export function commentData(o: { first?: string; group?: string; project: string
     themes: themesOf(items.filter((x) => STRONG.includes(x.type) && x.ok).map((x) => x.texte)),
     strengths: uniq(strong).slice(0, 12),
     comps,
-    bonus: uniq(items.filter((x) => x.type === "bonus" && x.ok).map((x) => low(storyCore(x.texte)))).slice(0, MAX.bonus),
-    improve: uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => clean(x.texte, 400))).slice(0, MAX.improve),
-    notions, remarks, oralMissed,
+    bonus: memberOnly ? [] : uniq(items.filter((x) => x.type === "bonus" && x.ok).map((x) => low(storyCore(x.texte)))).slice(0, MAX.bonus),
+    improve: memberOnly ? [] : uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => clean(x.texte, 400))).slice(0, MAX.improve),
+    notions, remarks, oralMissed, mode, memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null,
     positive: (o.group ? /\b(tu|ton|ta|tes|toi)\b/i : /\b(vous|votre|vos)\b/i).test(String(R.positive || "")) ? "" : clean(R.positive, 300).replace(/([^.!?])$/, "$1.").replace(/^\.$/, ""),
   };
 }
@@ -182,6 +246,39 @@ function opening(d: CommentData): string {
   if (d.bonus.length) s.push(Y(d, `Tu as aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`, `Vous avez aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`));
   return s.join(" ");
 }
+/** One learner's opening from their assessment: the verdict, then what they showed they master (never the project's features). */
+function openingAssess(d: CommentData): string {
+  const a = d.assess!, lv = levelOf(d), s: string[] = [];
+  s.push({ excellent: "Excellent travail.", bon: "Ton travail est globalement bien réalisé.", moyen: "Ton travail est correct dans l’ensemble, mais certains points restent à consolider.",
+    faible: "Ton travail est encore fragile : plusieurs aspects importants restent à renforcer.", critique: "Ton travail est encore loin de ce qui est attendu dans ce brief." }[lv]);
+  const ok = a.ok.slice(0, 3);
+  if (ok.length) s.push(`Lors de l’évaluation, tu as montré que tu maîtrises ${andList(ok)}${a.comps.length ? `, et tu as validé ${a.comps.length > 1 ? "les compétences" : "la compétence"} ${andList(a.comps.slice(0, 3).map((c) => `« ${c} »`))}` : ""}.`);
+  else if (a.comps.length) s.push(`Lors de l’évaluation, tu as validé ${a.comps.length > 1 ? "les compétences" : "la compétence"} ${andList(a.comps.slice(0, 3).map((c) => `« ${c} »`))}.`);
+  if (d.positive) s.push(`Lors de notre échange, ${low(d.positive)}`);
+  if (d.bonus.length) s.push(`Tu as aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`);
+  return s.join(" ");
+}
+/** A squad: the project beyond its features (interface, planning, README, commits, team). */
+function projectPara(d: CommentData): string {
+  const p = d.proj;
+  if (!p || (!p.good.length && !p.bad.length)) return "";
+  // each part said as French says it, praised or to improve
+  const SAY: [RegExp, string, string][] = [
+    [/^Interface/, "l’interface et l’expérience utilisateur", "l’interface et l’expérience utilisateur"],
+    [/^Planification/, "la planification", "la planification du projet"],
+    [/^README/, "la documentation (README)", "la documentation du projet (README)"],
+    [/^Commits et Git/, "l’utilisation de Git", "la régularité des commits"],
+    [/^Messages de commit/, "des messages de commit clairs", "les messages de commit"],
+    [/^Répartition/, "une bonne répartition du travail", "la répartition du travail entre les membres"],
+    [/^Travail en équipe/, "le travail en équipe avec Git (pull requests, revues)", "le travail en équipe avec Git"],
+  ];
+  const say = (x: string, good: boolean) => { const m = SAY.find(([rx]) => rx.test(x)); return m ? m[good ? 1 : 2] : low(x.split(" : ")[0]); };
+  const s: string[] = [];
+  const g = uniq(p.good.map((x) => say(x, true))).slice(0, 3), b = uniq(p.bad.map((x) => say(x, false))).slice(0, 3);
+  if (g.length) s.push(`Sur la réalisation du projet, plusieurs points sont réussis : ${andList(g)}.`);
+  if (b.length) s.push(`Il faut en revanche améliorer ${andList(b)}.`);
+  return s.join(" ");
+}
 function missingPara(d: CommentData): string {
   const m = d.improve.map(missingOf).filter((x): x is { kind: "thing" | "todo"; text: string } => !!x);
   const things = m.filter((x) => x.kind === "thing").map((x) => x.text), todos = m.filter((x) => x.kind === "todo").map((x) => x.text);
@@ -193,6 +290,9 @@ function missingPara(d: CommentData): string {
 function notionsPara(d: CommentData): string {
   if (!d.notions.length) return "";
   const one = d.notions.length === 1;
+  // one learner with a graded assessment: their notions come from it too, not only from the exchange
+  if (d.mode === "assess") return `${one ? "Une notion n’est pas encore maîtrisée" : "Certaines notions ne sont pas encore maîtrisées"} : ${andList(d.notions.map(low))}. ` +
+    `Prends le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`;
   return `${d.positive ? "Pendant l’échange, " : "Lors de notre échange, "}${one ? "une notion n’était pas encore claire" : "certaines notions n’étaient pas encore claires"} : ${andList(d.notions.map(low))}. ` +
     Y(d, `Prends le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`, `Prenez le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`);
 }
@@ -207,7 +307,7 @@ function closingOf(d: CommentData): string {
 const greetingOf = (d: CommentData) => (d.group && d.team ? `${d.team},` : d.first && !d.group ? `${d.first},` : "Bonjour,");
 /** The comment as a template: always available (and the fallback when the AI can't write it). */
 export function commentText(d: CommentData): string {
-  return [greetingOf(d), opening(d), missingPara(d), notionsPara(d), closingOf(d)].filter(Boolean).join("\n\n");
+  return [greetingOf(d), d.mode === "assess" ? openingAssess(d) : opening(d), d.mode === "group" ? projectPara(d) : "", missingPara(d), notionsPara(d), closingOf(d)].filter(Boolean).join("\n\n");
 }
 /** The debrief's comment from the switches: one student, or a squad (« vous » for everyone). */
 export function buildComment(firstName: string, rec: any, states?: any): string {
@@ -216,7 +316,7 @@ export function buildComment(firstName: string, rec: any, states?: any): string 
 /** A squad member's own comment: the squad's work, their own competencies and note (else the squad's remarks). */
 export function memberCommentData(m: any, rec: any, ms: any): CommentData {
   return commentData({ first: firstNameOf(m.name, m.login), project: String((rec && rec.brief) || ""), rec,
-    member: { co: ms && ms.co, note: ms && ms.note, level: (() => { const l = memberLevelOf(rec, String(m.gid)); return l.lvl || l.prop; })() } });
+    member: { uid: String(m.gid), co: ms && ms.co, note: ms && ms.note, level: (() => { const l = memberLevelOf(rec, String(m.gid)); return l.lvl || l.prop; })() } });
 }
 export function memberComment(m: any, rec: any, ms: any): string {
   return commentText(memberCommentData(m, rec, ms));
@@ -239,7 +339,9 @@ export const AI_COMMENT_SYSTEM = [
   "- Tutoiement (« tu », « ton », « tes »), sauf si le commentaire est pour toute une équipe : alors « vous ».",
   "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces, pas de mise en forme (**, #, `), pas d’emoji.",
   "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → travail insuffisant. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
-  "- Parle de ce qui a été réalisé en regroupant les points validés en quelques thèmes, sans les énumérer un par un. Ne cite pas les compétences du référentiel.",
+  "- Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions, compétences validées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
+  "- Regroupe ce qui va bien en quelques thèmes, sans énumérer un par un. Ne cite pas les codes des compétences du référentiel.",
+  "- ÉQUIPE : dis aussi ce qui est à améliorer dans le projet (interface, planification, README, commits, répartition du travail) quand c’est donné.",
   "- Bonus : s’il y en a, dis simplement qu’il a réalisé des bonus et que c’est une bonne initiative, SANS les lister. S’il n’y en a pas, ne parle pas de bonus.",
   "- Points non validés : dis naturellement ce qui manque encore (« il manque encore… »), dans une phrase, sans recopier la grille et sans « Compléter le point du brief ».",
   "- Notions à revoir : c’est le cœur du commentaire quand il y en a. Appuie-toi sur les REMARQUES DU FORMATEUR et les questions orales non réussies : explique précisément ce qui n’est pas compris ou ce qui est confondu, et pourquoi c’est important, comme dans l’exemple. N’ajoute aucune notion qui n’y est pas.",
@@ -253,16 +355,51 @@ export const AI_COMMENT_SYSTEM = [
 export function aiCommentPrompt(d: CommentData): string {
   const list = (a: string[]) => (a.length ? a.map((x) => `- ${x}`).join("\n") : "(aucun)");
   const missing = d.improve.map(missingOf).filter(Boolean).map((x) => x!.text);
+  const remarks = `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`;
+  const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`];
+  if (d.mode === "assess") {
+    const a = d.assess!;
+    return [
+      ...head,
+      `TYPE DE COMMENTAIRE : INDIVIDUEL. Ce qui va bien vient UNIQUEMENT de son ÉVALUATION (faite en classe, sans aide) : ce qu’il a maîtrisé. ${d.memberOnly ? "Les fonctionnalités du projet de groupe sont dans le commentaire de l’équipe : n’en parle pas." : "Ne cite pas les fonctionnalités du projet comme des réussites."}`,
+      `SCORE À L’ÉVALUATION : ${a.score != null ? `${a.score} %` : "(non noté)"}`,
+      `CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n${list(a.ok)}`,
+      `COMPÉTENCES VALIDÉES À L’ÉVALUATION :\n${list(a.comps)}`,
+      `COMMENTAIRE DU CORRECTEUR DE L’ÉVALUATION :\n${a.summary ? `<<<\n${a.summary}\n>>>` : "(aucun)"}`,
+      `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
+      `BONUS RÉALISÉS : ${d.bonus.length ? `oui (${d.bonus.length})` : "aucun"}`,
+      `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
+      remarks,
+      `NOTIONS À REVOIR :\n${list(d.notions)}`,
+    ].join("\n\n");
+  }
+  if (d.mode === "group") {
+    const p = d.proj || { good: [], bad: [], team: [] };
+    return [
+      ...head,
+      "TYPE DE COMMENTAIRE : ÉQUIPE. Parle du PROJET : fonctionnalités, interface et expérience utilisateur, planification, README et documentation, commits et travail en équipe. Ne parle pas de l’évaluation individuelle.",
+      `FONCTIONNALITÉS : ${d.allDone ? "toutes réalisées" : d.partDone ? "la plupart réalisées" : "en partie seulement"}`,
+      `FONCTIONNALITÉS DU BRIEF VALIDÉES :\n${list(d.strengths)}`,
+      `THÈMES DE CES POINTS : ${d.themes.join(" ; ") || "(aucun)"}`,
+      `BONUS RÉALISÉS : ${d.bonus.length ? `oui (${d.bonus.length})` : "aucun"}`,
+      `CE QUI EST RÉUSSI DANS LE PROJET (interface, planification, README, commits) :\n${list(p.good)}`,
+      `CE QUI EST À AMÉLIORER DANS LE PROJET (interface, planification, README, commits) :\n${list(p.bad)}`,
+      `CONTRIBUTION DE CHAQUE MEMBRE (pour juger le travail en équipe, ne cite pas les chiffres) :\n${list(p.team)}`,
+      `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
+      `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
+      remarks,
+      `NOTIONS À REVOIR :\n${list(d.notions)}`,
+    ].join("\n\n");
+  }
   return [
-    `PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`,
-    `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`,
+    ...head,
     `FONCTIONNALITÉS : ${d.allDone ? "toutes réalisées" : d.partDone ? "la plupart réalisées" : "en partie seulement"}`,
     `POINTS DU BRIEF VALIDÉS :\n${list(d.strengths)}`,
     `THÈMES DE CES POINTS : ${d.themes.join(" ; ") || "(aucun)"}`,
     `BONUS RÉALISÉS : ${d.bonus.length ? `oui (${d.bonus.length})` : "aucun"}`,
     `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
     `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
-    `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`,
+    remarks,
     `NOTIONS À REVOIR :\n${list(d.notions)}`,
   ].join("\n\n");
 }

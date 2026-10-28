@@ -202,7 +202,69 @@ export async function repoSnapshot(token, repo, budget, commits, brief = '', opt
     contents += `\n--- ${f}${texts[f].length > room ? ' (début)' : ''} ---\n${texts[f].slice(0, room)}\n`;
   }
   const list = paths.slice(0, 120).join('\n') + (paths.length > 120 ? `\n… et ${paths.length - 120} autres` : '');
-  return { repo, checks, files: list, contents, backlog };
+  return { repo, checks, files: list, contents, backlog, paths, texts, outline: pageOutline(texts) };
+}
+
+const plainTxt = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+const tagText = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
+/** Every HTML page read in full (the AI only sees the start of each file): its headings, sections, forms, links. */
+export function pageOutline(texts) {
+  const out = [];
+  for (const [f, t] of Object.entries(texts || {})) {
+    if (!/\.(html?|php|vue|jsx|tsx)$/i.test(f) || !t) continue;
+    const heads = [...t.matchAll(/<h([1-3])[^>]*>([\s\S]{1,200}?)<\/h\1>/gi)].map((m) => tagText(m[2])).filter(Boolean).slice(0, 12);
+    const ids = [...t.matchAll(/\bid=["']([\w-]{2,40})["']/gi)].map((m) => m[1]).slice(0, 15);
+    const links = [...new Set([...t.matchAll(/href=["']([^"'#?]{1,60}\.html?)["']/gi)].map((m) => m[1]))].slice(0, 12);
+    const forms = (t.match(/<form\b/gi) || []).length, inputs = (t.match(/<(input|textarea|select)\b/gi) || []).length, imgs = (t.match(/<img\b/gi) || []).length;
+    out.push(`${f} : ${heads.length ? `titres « ${heads.join(' » « ')} »` : 'pas de titre'}${ids.length ? ` ; sections/id ${ids.join(', ')}` : ''}${forms ? ` ; ${forms} formulaire(s), ${inputs} champ(s)` : ''}${imgs ? ` ; ${imgs} image(s)` : ''}${links.length ? ` ; liens vers ${links.join(', ')}` : ''}`);
+  }
+  return out.join('\n').slice(0, 6000);
+}
+
+// words of a requirement that don't name a page or a feature
+const STOP = new Set(('visiteur visiteurs utilisateur utilisateurs client clients internaute administrateur afin pour avec dans sans page pages site section sections trouver lire avoir savoir voir consulter acceder '
+  + 'pouvoir permettre etre faire toutes tous leurs leur plus liste informations information chaque cette celle elles peux veux vais dois souhaite simple facilement rapidement '
+  + 'differentes differents principales principaux ensemble autres autre bien contenant contient presente presenter afficher affichee affiche doit doivent web veux possible acces '
+  + 'qu elle elles nous vous ils mon mes ses son notre votre entre etc lien liens bouton boutons cliquer clic menu navigation responsive ecran ecrans mobile').split(' '));
+// the same page or feature said in English or otherwise in a repo
+const SYN = { accueil: ['index', 'home', 'accueil'], contact: ['contact'], connexion: ['login', 'signin', 'connexion'], inscription: ['register', 'signup', 'inscription'],
+  panier: ['cart', 'panier', 'basket'], galerie: ['gallery', 'galerie'], equipe: ['team', 'equipe'], tarif: ['pricing', 'tarif', 'prix', 'price'], tarifs: ['pricing', 'tarif', 'prix', 'price'],
+  propos: ['about', 'propos'], formulaire: ['form'], recherche: ['search', 'recherche'], filtre: ['filter', 'filtre'], filtrer: ['filter', 'filtre'], avis: ['avis', 'review', 'testimonial', 'temoignage'],
+  temoignages: ['testimonial', 'temoignage', 'avis'], produits: ['product', 'produit'], produit: ['product', 'produit'], reservation: ['booking', 'reservation', 'reserv'], reserver: ['booking', 'reservation', 'reserv'],
+  evenements: ['event', 'evenement'], blog: ['blog', 'article'], articles: ['article', 'blog'], services: ['service'], service: ['service'], projets: ['project', 'projet'], competences: ['skill', 'competence'],
+  carte: ['map', 'carte'], plan: ['map', 'plan'], horaires: ['horaire', 'hours', 'schedule'], newsletter: ['newsletter'], faq: ['faq'], footer: ['footer'], header: ['header'], carrousel: ['carousel', 'carrousel', 'slider', 'swiper'], carousel: ['carousel', 'slider', 'swiper'] };
+/**
+ * Is a page or a feature of the brief in the repo? A file, a section (id), a heading or a link of the WHOLE files that
+ * matches a distinctive word of the requirement. The AI only reads the beginning of each file: what it marks missing
+ * is often there. Returns where it was found, or null.
+ */
+export function foundInRepo(texte, paths, texts) {
+  const core = plainTxt(texte).replace(/^en tant qu[e'’][^,]*,\s*/, '').replace(/\b(afin|pour que|pour qu)\b.*$/, '');
+  const words = [...new Set(core.split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOP.has(w)))];
+  if (!words.length) return null;
+  const keys = [...new Set(words.flatMap((w) => SYN[w] || SYN[w.replace(/s$/, '')] || [w.replace(/s$/, '')]))].filter((k) => k.length >= 4 || ['faq', 'map', 'cart', 'form', 'blog', 'team'].includes(k));
+  const names = (paths || []).map((p) => [p, plainTxt(p.split('/').pop())]);
+  for (const k of keys) {
+    const f = names.find(([, n]) => n.replace(/\.[a-z0-9]+$/, '').split(/[^a-z0-9]+/).some((part) => part === k || (k.length >= 5 && part.startsWith(k))));
+    if (f) return `fichier ${f[0]}`;
+  }
+  for (const [file, t] of Object.entries(texts || {})) {
+    if (!/\.(html?|php|vue|jsx|tsx|js|ts)$/i.test(file) || !t) continue;
+    const low = plainTxt(t);
+    for (const k of keys) {
+      const rx = new RegExp(`(id|class)=["'][^"']*\\b${k}|href=["'][^"']*${k}|<h[1-4][^>]*>[^<]{0,80}\\b${k}|<(section|form|nav|footer|header)[^>]*${k}`);
+      if (rx.test(low)) return `« ${k} » dans ${file}`;
+    }
+  }
+  return null;
+}
+/** The AI's « absent » or « partiel » on a page or a feature that is in the repo: done (the evidence says where). */
+export function rescueFound(exigences, snap) {
+  return (exigences || []).map((e) => {
+    if (!e || (e.statut !== 'absent' && e.statut !== 'partiel') || e.bound || !['story', 'bonus', 'technique'].includes(e.type)) return e;
+    const where = foundInRepo(e.texte, snap.paths, snap.texts);
+    return where ? { ...e, statut: 'fait', preuve: `Trouvé dans le dépôt : ${where} (à confirmer)`.slice(0, 220), found: true } : e;
+  });
 }
 
 // ---------- Squad review: each member's part in the squad repo ----------

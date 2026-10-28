@@ -19,7 +19,7 @@ import {
   DEBRIEF_LEVELS, capByAssess, cleanAi, debriefLevel, firstNameOf, gridToText, gridWanted, noUrl, oneLine, randomHex, reconcile, reviewStates, skillText, trimDiff, verifHint,
   backlogMember, parseGrid,
 } from "./engine.ts";
-import { commitSizes, githubGet, githubText, installationToken, repoFiles, repoSnapshot, squadContribution } from "./gh.ts";
+import { commitSizes, githubGet, githubText, installationToken, repoFiles, repoSnapshot, rescueFound, squadContribution } from "./gh.ts";
 import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
@@ -184,10 +184,10 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
   }
   if (!ids.length) return [];
-  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[] }[] = [];
+  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[]; members?: Record<string, MemberAssessFacts> }[] = [];
   for (const a of list) {
-    const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null }>(env,
-      `SELECT discord_id, score, status, grades, answers FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
+    const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null; summary: string | null }>(env,
+      `SELECT discord_id, score, status, grades, answers, summary FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const graded = takers.filter((t) => t.status === "graded");
     if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
     const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
@@ -198,37 +198,55 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
       // a squad: validated only if every member who took it validated it
       comps[r.code] = c ? { ok: c.ok && !!r.ok, level: Math.min(c.level ?? 1, r.level ?? 1), note: c.note } : { ok: !!r.ok, level: r.level, note: r.note };
     }
-    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(a.questions, graded) });
+    // each learner's own result: what they mastered (the notions of the questions they got right), what they missed,
+    // the grader's comment, the competencies validated: their individual comment starts from it
+    const qs = parseQuestions(a.questions);
+    const members: Record<string, MemberAssessFacts> = {};
+    const papers = graded.map(readPaper);
+    graded.forEach((t, i) => {
+      const f = paperFacts(qs, papers[i]);
+      members[t.discord_id] = { score: t.score ?? null, ok: f.ok, ko: f.ko, summary: String(t.summary || "").trim().slice(0, 700),
+        comps: rows.filter((r) => r.discord_id === t.discord_id && r.ok).map((r) => r.code), compsKo: rows.filter((r) => r.discord_id === t.discord_id && !r.ok).map((r) => r.code) };
+    });
+    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(qs, papers), members });
   }
   return out;
 }
+/** One learner's assessment, for their own comment. */
+export interface MemberAssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
+const parseQuestions = (q: string | null): any[] => { try { const a = JSON.parse(q || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } };
+// each paper read once (not once per question: a 30-question assessment re-read 30 times went over Cloudflare's CPU limit)
+function readPaper(t: { grades: string | null; answers: string | null }) {
+  let g: any = {}, an: any = {};
+  try { g = JSON.parse(t.grades || "{}") || {}; } catch { /* old row */ }
+  try { an = JSON.parse(t.answers || "{}") || {}; } catch { /* old row */ }
+  return { g, an };
+}
+const verdictOf = (q: any, p: { g: any; an: any }) => {
+  const a = p.an?.[q.id];
+  const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
+  return p.g?.[q.id]?.verdict || (empty ? "empty" : "");
+};
+// the question's own notion first (its prompt), then its expected answer when the prompt says nothing
+const notionsOfQ = (q: any) => { const cs = conceptsOf(String(q.prompt || "")); return (cs.length ? cs : conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`)).slice(0, 3); };
+/** A learner's notions: mastered (every question on it right) and missed (at least one wrong, partly right or empty). */
+function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
+  const good = new Map<string, number>(), bad = new Map<string, number>();
+  for (const q of qs) {
+    const v = verdictOf(q, p);
+    if (!v) continue;
+    for (const c of notionsOfQ(q)) (v === "correct" ? good : bad).set(c, ((v === "correct" ? good : bad).get(c) || 0) + 1);
+  }
+  const top = (m: Map<string, number>) => [...m.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c);
+  return { ok: top(good).filter((c) => !bad.has(c)).slice(0, 6), ko: top(bad).slice(0, 6) };
+}
 /** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
  *  what to study, grouped (the most missed first), never the list of questions. */
-function gapsOf(questions: string | null, takers: { grades: string | null; answers: string | null }[]): string[] {
-  let qs: any[] = [];
-  try { qs = JSON.parse(questions || "[]"); } catch { return []; }
+function gapsOf(qs: any[], papers: { g: any; an: any }[]): string[] {
   const count = new Map<string, number>();
-  // each paper read once (not once per question: a 30-question assessment re-read 30 times went over Cloudflare's CPU limit)
-  const papers = takers.map((t) => {
-    let g: any = {}, an: any = {};
-    try { g = JSON.parse(t.grades || "{}") || {}; } catch { /* old row */ }
-    try { an = JSON.parse(t.answers || "{}") || {}; } catch { /* old row */ }
-    return { g, an };
-  });
   for (const q of qs) {
-    let missed = false;
-    for (const { g: gs, an } of papers) {
-      const g = gs?.[q.id];
-      const a = an?.[q.id];
-      const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
-      const v = g?.verdict || (empty ? "empty" : "");
-      if (v && v !== "correct") missed = true;
-    }
-    if (!missed) continue;
-    // the question's own notion first (its prompt), then its expected answer when the prompt says nothing
-    let cs = conceptsOf(String(q.prompt || ""));
-    if (!cs.length) cs = conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`);
-    for (const c of cs.slice(0, 3)) count.set(c, (count.get(c) || 0) + 1);
+    if (!papers.some((p) => { const v = verdictOf(q, p); return v && v !== "correct"; })) continue;
+    for (const c of notionsOfQ(q)) count.set(c, (count.get(c) || 0) + 1);
   }
   return [...count.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c).slice(0, 8);
 }
@@ -434,6 +452,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     "- Les vérifications automatiques sont EXACTES : ne les contredis jamais.",
     "- Juge sur des preuves visibles dans le code (fichier, balise, règle CSS) et cite-les en quelques mots.",
     "- Juge l’état actuel du projet : une page créée il y a longtemps est faite si son fichier existe.",
+    "- Tu ne vois que le DÉBUT de chaque fichier : le PLAN COMPLET DES PAGES montre tout le reste. Une page ou une fonctionnalité est \"fait\" dès qu’un fichier, une section (id, titre), un formulaire ou un lien du dépôt y correspond. \"absent\" seulement si RIEN ne s’y rapporte dans la liste des fichiers, le plan et le contenu ; en cas de doute, \"fait\" avec la preuve « à confirmer ».",
     "- Les bonus et les critères de performance sont facultatifs : non faits, ce n’est pas un défaut (ils comptent seulement en plus quand ils sont faits).",
     "- Ce que le code ne peut pas montrer (analyse, réunion, maquette sans lien, oral, présentation) : \"non_verifiable\".",
     "- Compétences transversales (codes CT…) : sans preuve claire dans le dépôt, \"a_verifier\" (jamais \"non_visible\").",
@@ -459,7 +478,8 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     `VÉRIFICATIONS AUTOMATIQUES (exactes) :\n${checks.map((c: any) => `${sign(c)} ${c.label} : ${safe(c.detail)}`).join("\n")}`,
     problems.length ? `\nPOINTS À CORRIGER :\n${problems.map((c: any) => `- ${c.label} : ${safe(c.detail)}`).join("\n")}` : "\nPOINTS À CORRIGER : aucun problème détecté automatiquement.",
     `\nTOUS LES FICHIERS :\n${fence(compact ? snap.files.split("\n").slice(0, 40).join("\n") : snap.files)}`,
-    `\nCONTENU DES FICHIERS PRINCIPAUX :\n<<<${fence(compact ? snap.contents.slice(0, 3000) : snap.contents)}\n>>>`,
+    `\nCONTENU DES FICHIERS PRINCIPAUX (le début de chaque fichier) :\n<<<${fence(compact ? snap.contents.slice(0, 3000) : snap.contents)}\n>>>`,
+    snap.outline ? `\nPLAN COMPLET DES PAGES (lu sur TOUT le fichier : titres, sections, formulaires, liens) :\n<<<${fence(compact ? snap.outline.slice(0, 1500) : snap.outline)}\n>>>` : "",
     squad ? `\nPROJET DE GROUPE : squad « ${squad.name} » (${squad.members.length} membres). Juge le projet du squad dans son ensemble.` : "",
     commits.length ? `\n##### DERNIERS COMMITS ${squad ? "DU SQUAD" : "DE " + login}\n<<<${commitBlock(compact)}\n>>>` : `\nAucun commit depuis le début du brief : "commits" doit être [].`,
   ].filter(Boolean).join("\n");
@@ -468,7 +488,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   if (!ask.ok) return ask;
   let result: any;
   try { result = cleanAi(ask.data, commits, skills, items); } catch { return { ok: false, msg: "The AI answer could not be read. Click Analyze again." }; }
-  result.exigences = reconcile(result.exigences, snap.checks);
+  result.exigences = rescueFound(reconcile(result.exigences, snap.checks), snap);
   const first = squad ? squad.name : firstNameOf(lead.name, login);
   const prev = await getReview(env, b.id, who);
   const rec: any = {
