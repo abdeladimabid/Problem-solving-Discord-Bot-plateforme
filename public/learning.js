@@ -1485,7 +1485,9 @@ function wireMembers() {
       clearTimeout(DB.mtimer);
       toast("⏳ Writing the comment from their switches and your note…");
       const R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
-      DB.R = { ...DB.R, ...R };
+      if (DB.R.review) DB.R.review.members = R.members;
+      // the other members' comments still written from their switches follow them (like a save)
+      for (const c of $$(".mc")) { const t = $("[data-mtext]", c); if (t && c !== card && t.dataset.set !== "1") t.value = R.comments?.[c.dataset.gid] ?? t.value; }
       ta.value = R.comment || ta.value;
       ta.dataset.set = R.by === "ai" ? "1" : "0";
       $("[data-mtst]", card).textContent = R.by === "ai" ? "✨ Written from their switches and your note: edit it as you like." : "From their switches and your note: it follows them until you edit it.";

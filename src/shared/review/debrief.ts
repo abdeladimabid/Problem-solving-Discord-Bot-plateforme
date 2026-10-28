@@ -1003,7 +1003,12 @@ async function repoForTask(env: Env, g: GuildRow, rec: any, who: string, member:
 export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: string, data: any) {
   const r = await getReview(env, briefId, who);
   if (!r || !r.rec.squad || !Array.isArray(r.rec.contrib)) throw new DebriefError("Analyze the squad repo first.");
-  const rec = r.rec;
+  const comments = applyMembers(r.rec, data);
+  await putReview(env, g, briefId, who, r.rec);
+  return { comments, members: r.rec.members };
+}
+/** The members' fields from the page, into the record (no database): one comment per member. */
+function applyMembers(rec: any, data: any): Record<string, string> {
   const base = reviewStates(rec).co;
   rec.members = rec.members || {};
   const comments: Record<string, string> = {};
@@ -1025,8 +1030,7 @@ export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: s
     rec.members[m.gid] = ms;
     comments[m.gid] = ms.comment = ms.text || memberComment(m, rec, ms);
   }
-  await putReview(env, g, briefId, who, rec);
-  return { comments, members: rec.members };
+  return comments;
 }
 
 /**
@@ -1035,11 +1039,13 @@ export async function saveMembers(env: Env, g: GuildRow, briefId: number, who: s
  * Whatever was written before (their assessment's comment, an older version) is replaced.
  */
 export async function writeMemberComment(env: Env, g: GuildRow, briefId: number, who: string, gid: string, data: any) {
+  // one read and one write of the debrief (a squad's record is big: Cloudflare's CPU limit per request)
   const members = data && typeof data === "object" ? { ...data } : {};
   members[gid] = { ...(members[gid] || {}), text: "" };
-  await saveMembers(env, g, briefId, who, members);
   const r = await getReview(env, briefId, who);
-  const rec = r!.rec, m = (rec.contrib || []).find((x: any) => String(x.gid) === String(gid)), ms = rec.members?.[gid];
+  if (!r || !r.rec.squad || !Array.isArray(r.rec.contrib)) throw new DebriefError("Analyze the squad repo first.");
+  const comments = applyMembers(r.rec, members);
+  const rec = r.rec, m = (rec.contrib || []).find((x: any) => String(x.gid) === String(gid)), ms = rec.members?.[gid];
   if (!m || !ms) throw new DebriefError("This member isn't in the squad's work.");
   const d = memberCommentData(m, rec, ms);
   const ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
@@ -1047,9 +1053,9 @@ export async function writeMemberComment(env: Env, g: GuildRow, briefId: number,
   // the AI's text is kept like one written by hand (switches changed later don't rewrite it); the template follows them
   ms.text = text ?? undefined;
   ms.by = text ? "ai" : "template";
-  ms.comment = text ?? commentText(d);
+  ms.comment = comments[gid] = text ?? commentText(d);
   await putReview(env, g, briefId, who, rec);
-  return { comment: ms.comment as string, by: ms.by as string, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+  return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
 }
 
 export const statesOf = (rec: any) => (rec && rec.result ? reviewStates(rec) : null);

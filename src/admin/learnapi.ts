@@ -384,7 +384,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok(await reviewView(env, g, id, who));
     }
     // ↻ Switches on one member: their comment written again from their switches and note (AI, else the template)
-    if (act === "membercomment" && method === "POST") { const w = await writeMemberComment(env, g, id, who, String(body.gid ?? ""), body.members ?? {}); return ok({ ...(await reviewView(env, g, id, who)), ...w }); }
+    if (act === "membercomment" && method === "POST") return ok(await writeMemberComment(env, g, id, who, String(body.gid ?? ""), body.members ?? {}));
     if (act === "members") { const w = await saveMembers(env, g, id, who, body.members ?? {}); return ok({ ...(await reviewView(env, g, id, who)), comments: w.comments }); }
     if (act === "finalize") {
       if (body.states) await saveStates(env, g, id, who, body.states);

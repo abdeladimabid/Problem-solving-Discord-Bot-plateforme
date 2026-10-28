@@ -6157,7 +6157,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   // ↻ Switches: the comment written again from their switches and the one-to-one note (the text that was there goes)
   const note = "Il a su répondre aux questions sur flex, mais il doit revoir grid";
   const rw = await api("POST", `/api/briefs/${id}/review/membercomment?g=${G}`, { who, gid: A, members: { [A]: { quiz: 80, note, coSet: true, co: { C3: true }, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !" } } });
-  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/.test(rw.data.comment) && rw.data.review.members[A].note === note && rw.data.review.members[A].text === rw.data.comment,
+  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/.test(rw.data.comment) && rw.data.members[A].note === note && rw.data.members[A].text === rw.data.comment && rw.data.comments[A] === rw.data.comment,
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
