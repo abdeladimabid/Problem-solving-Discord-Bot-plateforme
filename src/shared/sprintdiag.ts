@@ -13,6 +13,7 @@ import { all, now, one, run } from "./db.ts";
 import { compLabel, parseComp, programOf } from "./program.ts";
 import { sprintsOf } from "./sprints.ts";
 import { getBrief, rewriteSection, saveBrief } from "./briefs.ts";
+import { withoutStaff } from "./staff.ts";
 import { askReview, paperFacts, parseQuestions, readPaper } from "./review/debrief.ts";
 import { remarkNotions, storyCore } from "./review/comment.ts";
 import { memberLevelOf } from "./review/members.ts";
@@ -77,7 +78,7 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
   if (!sp) throw new DiagError("Unknown sprint.");
   const ps = p.sprints.find((s) => s.n === n);
   const names = Object.fromEntries(p.referential.map((c) => [c.code, c.name]));
-  const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
+  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
   // the sprint's briefs, the latest first
   const briefs = briefRows.filter((b) => sp.briefs.includes(b.id)).sort((a, b) => (b.due_at ?? 0) - (a.due_at ?? 0) || b.id - a.id);
   const ids = briefs.map((b) => b.id);

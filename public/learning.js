@@ -109,7 +109,7 @@ const compChip = (s, cls = "") => { const p = parseC(s); return `<span class="ta
 async function viewPlanning() {
   const pg = await api("/programs");
   const P = pg.current;
-  view.innerHTML = `<div class="page-head"><div><h1>Programme &amp; planning</h1>
+  view.innerHTML = `<div class="page-head"><div><h1>Programme</h1>
       <p class="sub"><b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}: the weeks, the sprints and the brief of each week.</p></div>
       <div class="toolbar" style="margin:0"><a class="btn" href="#/sprints">Sprints →</a><a class="btn" href="#/settings/programme">${icon("gear")} Change the programme</a></div></div>
     ${planningHtml(P, pg)}`;
@@ -117,10 +117,62 @@ async function viewPlanning() {
 }
 
 // ======================================================================= BRIEFS
+// The list: one card per brief, by where it stands — in progress, to debrief (the deadline passed, debriefs left),
+// debriefing finalized, drafts. Each card: dates, competencies, hand-ins, its debriefs (finalized / left), Simplonline.
+const BRF = { f: "all" };
+function briefStage(b) {
+  const now = Date.now() / 1000;
+  if (b.status === "draft") return "draft";
+  if (b.status === "archived") return "archived";
+  if (b.debrief && b.debrief.total && b.debrief.left === 0) return "done";
+  if (b.due_at && b.due_at < now) return "debrief";
+  return "running";
+}
+const BR_STAGE = { running: ["In progress", "br-run"], debrief: ["To debrief", "br-todo"], done: ["Debriefing finalized", "br-done"], draft: ["Draft", "br-draft"], archived: ["Archived", "br-draft"] };
+function briefCards(items) {
+  const st = items.map((b) => ({ b, s: briefStage(b) }));
+  const count = (k) => st.filter((x) => x.s === k).length;
+  const list = st.filter((x) => BRF.f === "all" || x.s === BRF.f);
+  const order = { debrief: 0, running: 1, done: 2, draft: 3, archived: 4 };
+  list.sort((a, b) => order[a.s] - order[b.s] || (b.b.due_at || 0) - (a.b.due_at || 0));
+  const card = ({ b, s }) => {
+    const d = b.debrief || { total: 0, final: 0, drafts: 0, left: 0 };
+    const [lab, cls] = BR_STAGE[s];
+    const pct = d.total ? Math.round((100 * d.final) / d.total) : 0;
+    const comps = (b.competencies || "").split(",").filter(Boolean);
+    return `<article class="br-card ${cls}" data-brief="${b.id}" tabindex="0" role="link" aria-label="${esc(b.title)}">
+      <div class="br-top"><span class="br-stage ${cls}">${s === "done" ? "✓ " : ""}${lab}</span>
+        <span class="small muted">${b.week ? `Week ${b.week}` : ""}${b.sprint ? ` · Sprint ${b.sprint}` : ""}${b.kind === "squad" ? " · 👥 squads" : ""}</span>
+        ${b.link ? `<a class="br-simplon" href="${esc(b.link)}" target="_blank" rel="noopener" title="Open on Simplonline" data-stop>📄 Simplonline ↗</a>` : ""}</div>
+      <h3>${esc(b.title)}</h3>
+      ${b.summary ? `<p class="br-sum">${esc(b.summary)}</p>` : ""}
+      ${comps.length ? `<div class="br-comps">${comps.map((c) => compChip(c)).join("")}</div>` : ""}
+      <div class="br-foot">
+        <div class="br-dates small">${b.start_at ? `${fmtDate(b.start_at)} → ` : ""}${b.due_at ? dueIn(b.due_at) : "No deadline"}</div>
+        ${s === "draft" ? `<span class="small muted">Not assigned yet</span>` : `<div class="br-deb">
+          <div class="br-deb-l small">${s === "done" ? `<b class="br-ok">✓ Debriefing finalized</b> · ${d.total} ${d.squads ? "squad" : "student"}${d.total > 1 ? "s" : ""}`
+            : d.total ? `<b>${d.final}/${d.total}</b> debriefs finalized · <b class="${s === "debrief" ? "br-left" : ""}">${d.left} left</b>${d.drafts ? ` <span class="muted">(${d.drafts} in progress)</span>` : ""}` : `<span class="muted">No student yet</span>`}
+            <span class="muted"> · ${b.handins} hand-in${b.handins === 1 ? "" : "s"}</span></div>
+          <span class="br-bar"><i style="width:${pct}%"></i></span></div>`}
+      </div></article>`;
+  };
+  return `<div class="toolbar br-filter" style="margin:0 0 12px"><div class="seg" role="group">${[["all", "All", items.length], ["debrief", "To debrief", count("debrief")], ["running", "In progress", count("running")], ["done", "Finalized", count("done")], ["draft", "Drafts", count("draft")]]
+      .map(([v, l, n]) => `<button type="button" data-brf="${v}" aria-pressed="${BRF.f === v}">${l} <span class="muted">${n}</span></button>`).join("")}</div></div>
+    ${list.length ? `<div class="br-cards">${list.map(card).join("")}</div>` : `<p class="empty">${items.length ? "None here." : "No brief yet: generate one from an idea, or import one from Simplonline."}</p>`}`;
+}
+function wireBriefCards() {
+  $$("[data-brf]").forEach((b) => b.onclick = () => { BRF.f = b.dataset.brf; $("#br-tab").innerHTML = briefCards(BRF.items || []); wireBriefCards(); });
+  $$("[data-brief]").forEach((c) => {
+    const go = () => { location.hash = `#/brief/${c.dataset.brief}`; };
+    c.onclick = (e) => { if (!e.target.closest("[data-stop]")) go(); };
+    c.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  });
+}
 async function viewBriefs(tab = "list") {
   const [r, pg] = await Promise.all([api("/briefs"), api("/programs")]);
   const P = pg.current;
   const items = r.items;
+  BRF.items = items;
   view.innerHTML = `
     <div class="page-head"><div><h1>Briefs</h1>
       <p class="sub">Projects of the class, following <b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}. Every debrief updates the competencies and skills of the student.</p></div>
@@ -132,18 +184,13 @@ async function viewBriefs(tab = "list") {
     </div>
     <div id="br-tab"></div>`;
   const tabs = {
-    list: () => table([
-      { label: "Brief", sort: "title", html: (b) => `<b>${esc(b.title)}</b>${b.source && b.source !== "manual" ? ` <span class="tag">${esc(b.source.startsWith("watcher") ? "from Watcher" : b.source === "ai" ? "✨ AI" : b.source)}</span>` : ""}` },
-      { label: "Week", sort: "week", num: true, html: (b) => (b.week ? `S${b.week}` : "—") },
-      { label: "Status", sort: "status", html: (b) => status(b.status === "assigned" ? "active" : b.status, STATUS[b.status]) },
-      { label: "Competencies", html: (b) => (b.competencies || "").split(",").filter(Boolean).map((c) => compChip(c)).join(" ") || `<span class="muted">—</span>` },
-      { label: "Due", sort: "due_at", html: (b) => dueIn(b.due_at) },
-    ], items, { onRow: (b) => (location.hash = `#/brief/${b.id}`), empty: "No brief yet: generate one from an idea, or import one from Simplonline." }),
+    list: () => briefCards(items),
     follow: () => `<div id="w-follow"><p class="muted">Loading…</p></div>`,
   };
   const show = (k) => {
     $$("[data-t]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.t === k)));
     $("#br-tab").innerHTML = tabs[k]();
+    if (k === "list") wireBriefCards();
     if (k === "follow") wFollow($("#w-follow")).catch((e) => toast(e.message, true));
   };
   $$("[data-t]").forEach((b) => b.onclick = () => show(b.dataset.t));
@@ -505,6 +552,9 @@ function briefEditorTab(root) {
   root.innerHTML = `<div class="brief-grid">
     <div class="bf-list">
       ${card("title", `<input type="text" data-f="title" value="${esc(d.title)}" style="width:100%">`)}
+      <section class="bf" data-sec="link"><header><b>🔗 Simplonline link</b>${d.link ? `<span class="bf-act"><a class="btn small" href="${esc(d.link)}" target="_blank" rel="noopener">Open ↗</a></span>` : ""}</header>
+        <input type="url" data-f="link" value="${esc(d.link || "")}" style="width:100%" placeholder="https://simplonline.co/briefs/…">
+        <p class="muted small" style="margin:6px 0 0">Shared with the students: a button in the Discord announcement, and the title opens it in <code>/brief</code>.</p></section>
       ${card("summary", ta("summary", d.summary, "", 60))}
       ${card("tags", `<input type="text" data-f="tags" data-k="csv" value="${esc(d.tags.join(", "))}" style="width:100%" placeholder="HTML, CSS, Tailwind, Figma">`)}
       ${card("context", ta("context", d.context, "", 420))}
@@ -595,6 +645,8 @@ function assignBriefDialog() {
     <p class="small muted" style="margin:4px 0 6px">Work: <b>${esc(WORK_MODES.find(([v]) => v === mode)[1])}</b> <span class="muted">(change it in the brief's modalities)</span></p>
     <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
     <div data-wsprint></div>
+    <label for="ab-l">🔗 Simplonline link <span class="muted">(the students get it in the announcement and in <code>/brief</code>)</span></label>
+    <input type="url" id="ab-l" value="${esc(d.link || "")}" placeholder="https://simplonline.co/briefs/…" style="width:100%">
     <label for="ab-h">Expected repo name <span class="muted">(optional: finds their repo when they didn't hand it in, e.g. <code>portfolio</code>)</span></label>
     <input type="text" id="ab-h" value="${esc(B.repo_hint || "")}" style="max-width:340px">
     ${grouped ? `<div class="ab-sq">
@@ -605,9 +657,10 @@ function assignBriefDialog() {
       <div id="ab-board" class="${mode === "binôme" ? "ab-pairs" : ""}"></div></div>` : ""}
     <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (in #general)</label>`,
     [{ label: b.status === "assigned" ? "Save" : "Assign", primary: true, action: async () => {
-      const keep = squads.filter((x) => x.members.length);
+      const keep = squads.filter((x) => x.members.length), link = $("#ab-l").value.trim();
+      if (link && !/^https:\/\/\S+$/.test(link)) throw new Error("The Simplonline link must start with https://");
       if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Balanced squads, or load the class squads).");
-      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...(live && live !== d.modalities.mode ? { data: { ...d, modalities: { ...d.modalities, mode: live } } } : {}) } });
+      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...((live && live !== d.modalities.mode) || link !== (d.link || "") ? { data: { ...d, link, modalities: { ...d.modalities, mode: live || d.modalities.mode } } } : {}) } });
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Assigned to the class"); renderBrief();
     } }]);
@@ -2752,7 +2805,7 @@ async function programmeSettings(root) {
       <div class="prog-figs"><div><b>${P.weeks.length}</b><span>weeks</span></div><div><b>${P.sprints.length}</b><span>sprints</span></div><div><b>${P.referential.filter((c) => c.kind === "tech").length}</b><span>technical comp.</span></div><div><b>${P.referential.filter((c) => c.kind === "soft").length}</b><span>transversal comp.</span></div><div><b>${first ? dayLabelOf(first) : "—"}</b><span>to ${last ? dayLabelOf(last) : "—"}</span></div></div>
       ${pg.list.length > 1 ? `<label>Programme of this class</label><div class="toolbar" style="margin:0"><select id="pg-pick" style="min-width:320px">${pg.list.map((p) => `<option value="${esc(p.id)}" ${p.id === P.id ? "selected" : ""}>${esc(p.name)}${p.builtin ? " (built-in)" : ""}</option>`).join("")}</select><button class="btn" id="pg-use">Use it</button>
         ${P.custom ? `<button class="btn danger" id="pg-del">Delete this one</button>` : ""}</div>` : ""}
-      <p class="muted small">See the weeks in <a href="#/planning">Evaluation → Programme &amp; planning</a>.</p>
+      <p class="muted small">See the weeks in <a href="#/planning">Evaluation → Programme</a>.</p>
     </div>
     <div class="panel set-card"><h3>Update it from Excel</h3>
       <div class="xl-steps">

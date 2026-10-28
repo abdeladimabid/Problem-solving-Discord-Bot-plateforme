@@ -4,7 +4,7 @@
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
 import { all, now, one, run } from "../shared/db.ts";
-import { send } from "../shared/discord.ts";
+import { linkBtn, row, send } from "../shared/discord.ts";
 import { t } from "../shared/i18n.ts";
 import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf, saveProgram, techFound, techOfWeek, weekAt } from "../shared/program.ts";
 import type { Program } from "../shared/program.ts";
@@ -17,6 +17,7 @@ import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf,
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { DiagError, carryToBrief, proposeActions, sprintDiagnosis } from "../shared/sprintdiag.ts";
+import { staffIds, withoutStaff } from "../shared/staff.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
@@ -105,7 +106,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const g = await guild();
     const p = await programOf(env, g);
     const app = await ghAppOf(env, g.id);
-    return ok({ items: await listBriefs(env, g), program: { id: p.id, name: p.name }, ai: !!(await aiStatus(env)), github: { ready: githubReady(app), read: githubCanRead(app) } });
+    return ok({ items: await briefsWithProgress(env, g, await listBriefs(env, g)), program: { id: p.id, name: p.name }, ai: !!(await aiStatus(env)), github: { ready: githubReady(app), read: githubCanRead(app) } });
   }
   if (path === "/briefs/brainstorm" && method === "POST") {
     const g = await guild();
@@ -269,7 +270,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
         description: [b.data.summary, b.due_at ? t(g.lang, "brief.due_line", { when: `<t:${b.due_at}:F>` }) : "",
           b.data.competencies.length ? `🎯 ${f.competencies.split("\n").map((l) => l.split(".")[0]).join(", ")}` : "",
           squads.length ? squads.map((s) => `• **${s.name}** : ${s.members.map((x: string) => `<@${x}>`).join(" ")}${s.sm ? ` (SM <@${s.sm}>)` : ""}`).join("\n") : "",
-          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }] }).then(() => true, () => false)) await run(env, "UPDATE briefs SET announced_at = ? WHERE id = ?", now(), id);
+          b.data.link ? t(g.lang, "brief.simplon_line", { url: b.data.link }) : "",
+          t(g.lang, "brief.handin_hint")].filter(Boolean).join("\n\n").slice(0, 4000) }],
+        ...(b.data.link ? { components: [row(linkBtn(t(g.lang, "brief.simplon_btn"), b.data.link, "📄"))] } : {}) }).then(() => true, () => false)) await run(env, "UPDATE briefs SET announced_at = ? WHERE id = ?", now(), id);
     }
     return ok(await briefView(env, g, id));
   }
@@ -425,7 +428,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
   if (path === "/competencies" && method === "GET") {
     const g = await guild();
     const p = await programOf(env, g);
-    const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
+    const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
     return ok({ referential: p.referential.map((c) => ({ ...c, label: compLabel(c.code) })), levels: p.levels, students, cells: await classCompetencies(env, g) });
   }
 
@@ -795,7 +798,7 @@ async function briefView(env: Env, g: GuildRow, id: number) {
   let grid: any = null;
   try { grid = row.grid ? JSON.parse(row.grid) : null; } catch { grid = null; }
   const squads = cleanSquads(row.squads || "[]");
-  const students = await all<{ discord_id: string; name: string | null; github_login: string | null }>(env, "SELECT discord_id, name, github_login FROM players WHERE guild_id = ? ORDER BY name", g.id);
+  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null; github_login: string | null }>(env, "SELECT discord_id, name, github_login FROM players WHERE guild_id = ? ORDER BY name", g.id));
   const handins = await all<{ who: string; repo: string; plan: string | null; at: number; by: string | null }>(env, "SELECT who, repo, plan, at, by FROM brief_handins WHERE brief_id = ?", id);
   const reviews = await all<{ who: string; status: string; final_at: number | null; sent_at: number | null; record: string }>(env, "SELECT who, status, final_at, sent_at, record FROM brief_reviews WHERE brief_id = ?", id);
   const push = b.status === "assigned" ? await pushStatus(env, g, b as any) : new Map();
@@ -847,7 +850,7 @@ async function assessView(env: Env, g: GuildRow, id: number) {
   const qs = questionsOf(a);
   const takers = await all<TakerRow & { name: string | null }>(env,
     `SELECT t.*, p.name FROM assessment_takers t LEFT JOIN players p ON p.guild_id = t.guild_id AND p.discord_id = t.discord_id WHERE t.assessment_id = ? ORDER BY p.name`, id);
-  const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
+  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
   return {
     assessment: { ...a, questions: qs, settings: settingsOf(a) }, students,
     takers: takers.map((tk) => {
@@ -861,4 +864,30 @@ async function assessView(env: Env, g: GuildRow, id: number) {
         score: tk.score, summary: tk.summary, answers, grades, events, order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id) };
     }),
   };
+}
+
+/**
+ * The list of briefs with where each one stands: hand-ins, and its debriefs — how many are finalized out of how many
+ * there are to do (a squad brief: one per squad; else one per student, never the teacher), how many are left.
+ */
+async function briefsWithProgress(env: Env, g: GuildRow, items: any[]) {
+  if (!items.length) return items;
+  const staff = await staffIds(env, g.id);
+  const students = (await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id)).filter((r) => !staff.has(r.discord_id));
+  const extra = new Map((await all<{ id: number; kind: string | null; squads: string | null; link: string | null; summary: string | null; tags: string | null }>(env,
+    "SELECT id, kind, squads, json_extract(data, '$.link') AS link, json_extract(data, '$.summary') AS summary, json_extract(data, '$.tags') AS tags FROM briefs WHERE guild_id = ?", g.id)).map((r) => [r.id, r]));
+  const reviews = await all<{ brief_id: number; who: string; status: string }>(env, "SELECT brief_id, who, status FROM brief_reviews WHERE guild_id = ?", g.id);
+  const hand = new Map((await all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_handins WHERE guild_id = ? GROUP BY brief_id", g.id).catch(() => [])).map((r) => [r.brief_id, r.n]));
+  const ids = new Set(students.map((r) => r.discord_id));
+  return items.map((b) => {
+    const x = extra.get(b.id);
+    const squads = x && x.kind === "squad" ? cleanSquads(x.squads || "[]") : [];
+    const units = squads.length ? new Set(squads.map((q) => `s:${q.id}`)) : new Set([...ids].map((u) => `u:${u}`));
+    const mine = reviews.filter((r) => r.brief_id === b.id && units.has(r.who));
+    const final = mine.filter((r) => r.status === "final").length;
+    let tags: string[] = [];
+    try { tags = JSON.parse(x?.tags || "[]"); } catch { tags = []; }
+    return { ...b, kind: x?.kind || "solo", link: x?.link || null, summary: x?.summary || "", tags: Array.isArray(tags) ? tags.slice(0, 6) : [],
+      debrief: { total: units.size, final, drafts: mine.length - final, left: Math.max(0, units.size - final), squads: squads.length > 0 }, handins: hand.get(b.id) || 0 };
+  });
 }

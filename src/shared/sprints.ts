@@ -12,6 +12,7 @@ import { askReview } from "./review/debrief.ts";
 import { memberLevelOf } from "./review/members.ts";
 import { debriefLevel, oneLine, reviewStates } from "./review/engine.ts";
 import { sprintDiagnosis } from "./sprintdiag.ts";
+import { withoutStaff } from "./staff.ts";
 
 export const SPRINT_LEVELS = ["excellent", "bon", "moyen", "faible", "critique"];
 const LEVEL_FR: Record<string, string> = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
@@ -52,7 +53,7 @@ async function load(env: Env, g: GuildRow) {
   const briefRows = await all<{ id: number; week: number | null; due_at: number | null; status: string; title: string; kind: string; squads: string | null; data: string; sprint: number | null }>(env,
     "SELECT id, week, due_at, status, title, kind, squads, data, sprint FROM briefs WHERE guild_id = ?", g.id);
   const sprints = sprintsOf(p, briefRows);
-  const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id);
+  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
   const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
     "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id);
   const reviews = await all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);

@@ -25,6 +25,7 @@ import { arenaChannel, strictArena } from "../shared/arena.ts";
 import { type Ix, deferReply, deferUpdate, errorText, guildFromButton, json, later, memberName, options, reply, say, update } from "./ix.ts";
 export { errorText } from "./ix.ts";
 import { pickForSkill } from "../shared/coach.ts";
+import { noteStaff } from "../shared/staff.ts";
 import { BLOCK_TYPES, LEVELS as BLOCK_LEVELS, allowedLevel, blockFor, blockVars, blockedText, getBlocks, quickBlockedText, quickKindFor, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
@@ -63,6 +64,8 @@ export async function handleInteraction(raw: any, env: Env, ctx: Ctx): Promise<R
     if (raw.type === 4) return await autocomplete(ix);
     // nobody gets the teacher DMs yet (classes set up before they existed): the first teacher who uses the bot does
     if (ix.teacher && !guild.teacher_id) ctx.waitUntil(setTeacher(env, guild, ix.userId).catch(() => {}));
+    // a teacher is never a student of the dashboard (lists, counts, debriefs)
+    if (ix.teacher) ctx.waitUntil(noteStaff(env, guild.id, ix.userId).catch(() => {}));
     await getPlayer(env, guild.id, ix.userId, ix.userName);
     if (raw.type === 2) return await keepInArena(ix, await command(ix));
     if (raw.type === 3) return await component(ix);

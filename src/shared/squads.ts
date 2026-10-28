@@ -1,5 +1,6 @@
 // The class's squads, by sprint, separate from the briefs: a brief (or a squad battle) loads them.
 import type { Env, GuildRow } from "./types.ts";
+import { staffIds } from "./staff.ts";
 import { all, now, one, run } from "./db.ts";
 import { COLORS, dm } from "./discord.ts";
 import { cleanSquads } from "./review/debrief.ts";
@@ -17,7 +18,8 @@ export async function currentSquads(env: Env, g: GuildRow): Promise<SquadSet | n
   return r ? parse(r) : null;
 }
 async function validIds(env: Env, g: GuildRow) {
-  return new Set((await all<{ id: string }>(env, "SELECT discord_id AS id FROM players WHERE guild_id = ?", g.id)).map((r) => r.id));
+  const staff = await staffIds(env, g.id);
+  return new Set((await all<{ id: string }>(env, "SELECT discord_id AS id FROM players WHERE guild_id = ?", g.id)).map((r) => r.id).filter((id) => !staff.has(id)));
 }
 /** A new set of squads (it becomes the current one): empty, or a copy of another set. */
 export async function createSquadSet(env: Env, g: GuildRow, b: { name?: string; squads?: unknown; copyFrom?: number }) {

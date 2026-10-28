@@ -6,6 +6,7 @@
 // (skills, competencies, what to work on).
 import { forClass } from "./aictx.ts";
 import type { Env, GuildRow } from "./types.ts";
+import { withoutStaff } from "./staff.ts";
 import { addPoints, aiBudgetOk, aiBudgetUse, all, now, one, run } from "./db.ts";
 import { dm, linkBtn, row } from "./discord.ts";
 import { signText } from "./integrity.ts";
@@ -135,7 +136,7 @@ export async function invite(env: Env, g: GuildRow, id: number, students: string
   const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
   if (!a) throw new AssessError("This assessment doesn't exist anymore.");
   if (!questionsOf(a).length) throw new AssessError("Add at least one question first.");
-  const ids = students === "all" ? (await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id)).map((r) => r.discord_id) : [...new Set(students.map(String))];
+  const ids = students === "all" ? (await withoutStaff(env, g.id, await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id))).map((r) => r.discord_id) : [...new Set(students.map(String))];
   if (!ids.length) throw new AssessError("Choose at least one student.");
   const t0 = now();
   const closes = a.closes_at ?? t0 + Math.max(1, Math.min(60, o.days ?? 7)) * 86400;

@@ -1010,10 +1010,14 @@ section("dashboard: points for everyone or selected students, resets");
 {
   const season = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ? AND season = (SELECT season FROM guilds WHERE id = ?)", id, G).s;
   const total = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ?", id).s;
-  const players = q("SELECT discord_id FROM players WHERE guild_id = ?", G).map((r: any) => r.discord_id);
+  // the teacher (who also uses the bot) is never a student: « everyone » is the class
+  const players = q("SELECT discord_id FROM players WHERE guild_id = ? AND discord_id != ?", G, U.prof.id).map((r: any) => r.discord_id);
   const before = Object.fromEntries(players.map((p: string) => [p, season(p)]));
+  const profBefore = season(U.prof.id);
   const a1 = await api("POST", "/api/points/bulk", { g: G, all: true, action: "add", amount: 10, reason: "Workshop" });
-  check(a1.status === 200 && players.every((p: string) => season(p) === before[p] + 10), "+10 for everyone");
+  check(a1.status === 200 && players.every((p: string) => season(p) === before[p] + 10) && season(U.prof.id) === profBefore, "+10 for everyone (the teacher isn't a student)");
+  const st = await api("GET", `/api/students?g=${G}`);
+  check(st.status === 200 && !st.data.some((x: any) => x.discord_id === U.prof.id) && st.data.some((x: any) => x.discord_id === U.alice.id), "the teacher is never in the students' list (a command with « Manage Server » marks them as staff)");
   const dmsBefore = discordCalls.filter((x) => x.path.startsWith("/channels/dm-")).length;
   await api("POST", "/api/points/bulk", { g: G, students: [U.bob.id], action: "remove", amount: 4, notify: true });
   check(season(U.bob.id) === before[U.bob.id] + 6, "−4 for one student");
@@ -1886,12 +1890,13 @@ section("teacher DMs: /help-me and /ask notify the teacher, /teacher notify, set
   check(t1.data.ok === true && toProf().length === n + 1 && JSON.stringify(toProf().at(-1).body).includes("Notifications are on"), "'Send me a test DM' works");
 
   // another teacher takes over with /teacher notify
-  const prof2 = { id: "101", name: "Prof2", teacher: true };
+  const prof2 = { id: "177", name: "Prof2", teacher: true };
   const r = await slash(prof2, "teacher", { help_me: true }, "notify");
   check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === prof2.id && text(r).includes("you"), "/teacher notify sends the DMs to whoever runs it");
   check(discordCalls.some((x) => x.path === `/channels/dm-${prof2.id}/messages` && JSON.stringify(x.body).includes("Notifications are on")), "/teacher notify sends a test DM");
   await slash(U.prof, "teacher", { language: "en" }, "setup");
   check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "/teacher setup also makes you the one who gets them");
+  run1("DELETE FROM players WHERE guild_id = ? AND discord_id = ?", G, prof2.id);
   run1("DELETE FROM faq WHERE guild_id = ? AND (question LIKE '%internet%' OR question LIKE '%lab open%')", G);
 }
 
@@ -6487,6 +6492,29 @@ section("🩺 sprint diagnosis: objectives on the last brief, shared lacunes cou
   check((await api("POST", `/api/sprints/${n}/carry?g=${G}`, { brief: bA, items: ["CSS Grid"] })).status === 400, "…a brief already started: never changed");
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aq); run1("DELETE FROM assessments WHERE id = ?", aq);
   run1("DELETE FROM brief_reviews WHERE brief_id IN (?, ?)", bA, bB); run1("DELETE FROM briefs WHERE id IN (?, ?, ?)", bA, bB, bN);
+}
+
+section("📁 briefs list: debriefs finalized / left (never the teacher), the Simplonline link in the announcement and /brief");
+{
+  const { saveBrief } = await import("../src/shared/briefs.ts");
+  const bid = await saveBrief(env, { id: G } as any, null, { status: "draft", data: { title: "Brief Simplon", summary: "Un site vitrine.", link: "https://simplonline.co/briefs/abc-123", competencies: ["C1N1"], modalities: { due: "2026-12-01" } } });
+  check(JSON.parse(q1("SELECT data FROM briefs WHERE id = ?", bid).data).link === "https://simplonline.co/briefs/abc-123", "a brief keeps its Simplonline link");
+  const bad = await saveBrief(env, { id: G } as any, null, { data: { title: "x", link: "javascript:alert(1)" } });
+  check(!JSON.parse(q1("SELECT data FROM briefs WHERE id = ?", bad).data).link, "…never anything but an https link");
+  discordCalls.length = 0;
+  const as = await api("POST", `/api/briefs/${bid}/assign?g=${G}`, { start: "2026-11-20", due: "2026-12-01", announce: true });
+  const ann = discordCalls.find((c) => c.method === "POST" && /\/messages$/.test(c.path) && JSON.stringify(c.body).includes("Brief Simplon"));
+  check(as.status === 200 && ann && JSON.stringify(ann.body).includes("https://simplonline.co/briefs/abc-123") && JSON.stringify(ann.body.components || []).includes("simplonline.co"), `the announcement shares the Simplonline link, with a button (${as.status})`);
+  // two students finalized out of the class (the teacher never counts)
+  const studs = q("SELECT discord_id FROM players WHERE guild_id = ? AND discord_id != ?", G, U.prof.id).map((r: any) => r.discord_id);
+  for (const u of studs.slice(0, 2)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${U.prof.id}`, clock.now());
+  const L = (await api("GET", `/api/briefs?g=${G}`)).data.items.find((x: any) => x.id === bid);
+  check(L && L.debrief.total === studs.length && L.debrief.final === 2 && L.debrief.left === studs.length - 2 && L.link === "https://simplonline.co/briefs/abc-123",
+    `the list: debriefs finalized and left, the teacher's own debrief not counted (${JSON.stringify(L?.debrief)})`);
+  const r = await slash(U.alice, "brief", {}, "list");
+  check(r.type === 5 && /\[Brief Simplon\]\(https:\/\/simplonline\.co\/briefs\/abc-123\)/.test(text(lastPatch())), "/brief: the title opens the brief on Simplonline");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id IN (?, ?)", bid, bad);
 }
 
 section("debrief requirements: the AI reads only the start of each file; a page or feature that is in the repo is done");

@@ -20,6 +20,7 @@ import {
   backlogMember, parseGrid,
 } from "./engine.ts";
 import { commitSizes, githubGet, githubText, installationToken, repoFiles, repoSnapshot, rescueFound, squadContribution } from "./gh.ts";
+import { withoutStaff } from "../staff.ts";
 import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
@@ -865,7 +866,7 @@ export async function progressView(env: Env, g: GuildRow, o: { finalOnly?: boole
   // a squad's record too: each member has their own level
   const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string; record: string | null }>(env,
     `SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?${o.finalOnly ? " AND status = 'final'" : ""}`, g.id);
-  const students = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
+  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id));
   const squadsOf = new Map(briefs.map((b) => [b.id, cleanSquads(b.squads || "[]")]));
   const cells: Record<string, { lv: string; plv: string; who: string; final: boolean }> = {};
   for (const r of rows.sort((a, b) => (a.who < b.who ? 1 : -1))) {

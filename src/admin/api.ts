@@ -34,6 +34,7 @@ import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../s
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
+import { staffIds, withoutStaff } from "../shared/staff.ts";
 import type { SessionRow } from "../shared/sessions.ts";
 import { DAILY_KINDS, dailyConfig, dailyOverview, pickDaily, postDaily } from "../shared/daily.ts";
 import type { DailyKind } from "../shared/daily.ts";
@@ -580,9 +581,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       // each student's last debrief level, so balanced squads mix the levels
       const sview = async () => {
-        const lv = await levelsOf(env, g);
+        const lv = await levelsOf(env, g), staff = await staffIds(env, g.id);
         const sets = await squadSets(env, g), sent = await sentAt(env, sets.map((x) => x.id));
-        return { sets: sets.map((x) => ({ ...x, sent_at: sent[x.id] ?? null })), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => x.id !== g.teacher_id || lv.has(x.id)).map((x) => ({ id: x.id, name: x.name || x.id, lv: lv.get(x.id) || null })) };
+        return { sets: sets.map((x) => ({ ...x, sent_at: sent[x.id] ?? null })), buddies: await pendingBuddies(env, g), students: (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => !staff.has(x.id)).map((x) => ({ id: x.id, name: x.name || x.id, lv: lv.get(x.id) || null })) };
       };
       try {
         if (path === "/squads" && method === "GET") return ok(await sview());
@@ -727,7 +728,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (path === "/battles" && method === "GET") {
           const p = await programOf(env, g);
           const squads = await squadSources(g);
-          const students = await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id);
+          const staffSet = await staffIds(env, g.id);
+          const students = (await all<{ id: string; name: string | null }>(env, "SELECT discord_id AS id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id)).filter((x) => !staffSet.has(x.id));
           return ok({ items: await listBattles(env, g), teams: await teams(env, g), squads, students: students.map((x) => ({ id: x.id, name: x.name || x.id })), kinds: QKINDS, topics: [...new Set([...BANK_TOPICS, ...TECHS.filter((t) => !t.tool).map((t) => t.name)])], lang: g.lang, program: p.name });
         }
         if (path === "/battles/generate" && method === "POST") {
@@ -1005,7 +1007,8 @@ async function discordInfo(env: Env, g: GuildRow) {
 async function students(env: Env, g: GuildRow) {
   // the trend: this week's points against last week's (a class only needs two weeks of history)
   const t0 = now(), d7 = t0 - 7 * 86400, d14 = t0 - 14 * 86400;
-  const rows = await all<any>(env,
+  // the class's students only: the teacher (who also uses the bot) is never one
+  const rows = await withoutStaff(env, g.id, await all<any>(env,
     `SELECT p.discord_id, p.name, p.hr_display, p.hr_verified, p.coins, p.rating, p.daily_streak, p.last_active, p.created_at,
        COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id AND l.season = ?), 0) AS season_pts,
        COALESCE((SELECT SUM(amount) FROM ledger l WHERE l.guild_id = p.guild_id AND l.discord_id = p.discord_id), 0) AS total_pts,
@@ -1018,7 +1021,7 @@ async function students(env: Env, g: GuildRow) {
        (SELECT COUNT(*) FROM assignments s WHERE s.guild_id = p.guild_id AND s.discord_id = p.discord_id AND s.status = 'missed') AS missed_asg,
        (SELECT t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = p.guild_id AND m.discord_id = p.discord_id) AS team
      FROM players p WHERE p.guild_id = ? ORDER BY season_pts DESC`,
-    g.season, d7, d14, d7, g.id);
+    g.season, d7, d14, d7, g.id));
   // VS Code: connected, and no writing time at all for the last 2 working days while a brief runs
   const quiet = new Set((await quietWriters(env, g).catch(() => ({ learners: [] as { id: string }[] }))).learners.map((l) => l.id));
   return rows.map((r) => {
@@ -1405,7 +1408,7 @@ async function assign(env: Env, g: GuildRow, b: any) {
   const c = await one<ChallengeRow>(env, "SELECT * FROM challenges WHERE id = ? AND (guild_id IS NULL OR guild_id = ?)", Number(b.challenge_id), g.id);
   if (!c) throw new HttpError(404, "unknown challenge");
   let targets: string[] = (b.students ?? []).map(String);
-  if (b.all) targets = (await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id)).map((r) => r.discord_id);
+  if (b.all) targets = (await withoutStaff(env, g.id, await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id))).map((r) => r.discord_id);
   if (b.team_id) targets.push(...(await all<{ discord_id: string }>(env, "SELECT discord_id FROM team_members WHERE team_id = ? AND guild_id = ?", Number(b.team_id), g.id)).map((r) => r.discord_id));
   targets = [...new Set(targets)];
   if (!targets.length) throw new HttpError(400, "choose at least one student");
@@ -1661,7 +1664,7 @@ async function bulkPoints(env: Env, g: GuildRow, b: any, ctx: Ctx) {
   if (!Number.isFinite(amount) || amount < 0 || amount > 100000) throw new HttpError(400, "amount must be a number between 0 and 100000");
   if (action !== "set" && !amount) throw new HttpError(400, "amount must be more than 0");
   const scope = b.scope === "all" ? "all" : "season";
-  let ids: string[] = b.all ? (await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id)).map((r) => r.discord_id)
+  let ids: string[] = b.all ? (await withoutStaff(env, g.id, await all<{ discord_id: string }>(env, "SELECT discord_id FROM players WHERE guild_id = ?", g.id))).map((r) => r.discord_id)
     : (Array.isArray(b.students) ? b.students.map(String) : []);
   ids = [...new Set(ids)];
   if (!ids.length) throw new HttpError(400, "choose at least one student");

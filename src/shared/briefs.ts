@@ -23,6 +23,7 @@ export interface BriefData {
   deliverables: string[]; criteria: string[];
   situation: { title: string; need: string };
   competencies: string[]; resources: string[];
+  link?: string;   // the brief on Simplonline: shared with the students (announcement, /brief)
 }
 export interface BriefInternal {
   learning: string[]; coverage: { concept: string; where: string }[];
@@ -76,7 +77,13 @@ export function cleanBrief(b: any): BriefData {
     situation: { title: s(b?.situation?.title, 200), need: s(b?.situation?.need, 1200) },
     competencies: cleanComps(b?.competencies),
     resources: list(b?.resources, 10, 300),
+    ...(simplonLink(b?.link) ? { link: simplonLink(b?.link) } : {}),
   };
+}
+/** The brief's page on Simplonline (any https link, e.g. https://simplonline.co/briefs/…): never anything else. */
+export function simplonLink(v: unknown): string {
+  const t = String(v ?? "").trim();
+  try { const u = new URL(t); return u.protocol === "https:" && t.length <= 400 ? u.toString() : ""; } catch { return ""; }
 }
 export function cleanInternal(i: any): BriefInternal {
   return {
