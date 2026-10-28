@@ -1170,9 +1170,9 @@ function renderDebrief() {
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
       ${sq ? "" : `<section class="panel" id="db-level"></section>`}
       <section class="panel" id="db-fpanel">${final ? `<h2>✅ Finalized</h2>
-          <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
+          <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
-        : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
+        : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the coins of the brief (no points).</p>
           <label class="check"><input type="checkbox" id="db-dm"> ${rec.squad ? "Send each member their own comment by Discord DM" : "Send the comment by Discord DM"}</label>
           ${rec.squad ? `<p class="small muted" style="margin:4px 0 0 24px">The comment on their card (yours, the AI's or the one from their switches), not the squad comment.</p>` : ""}
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
@@ -1447,7 +1447,7 @@ function membersPayload() {
   return Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
     quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
     co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])), coSet: m.dataset.coset === "1",
-    ...($("[data-mtext]", m)?.dataset.set === "1" ? { text: $("[data-mtext]", m).value } : {}) }]));
+    ...($("[data-mtext]", m)?.dataset.set === "1" ? { text: $("[data-mtext]", m).value } : m.dataset.clear === "1" ? { text: "" } : {}) }]));
 }
 async function saveMembersNow() {
   if (!$(".member") || DB.R.status === "final") return;
@@ -1485,7 +1485,19 @@ function wireMembers() {
       // text that was there (their assessment's comment, an older version) is replaced
       clearTimeout(DB.mtimer);
       toast("⏳ Writing the comment from their switches and your note…");
-      const R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
+      let R;
+      try {
+        R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
+      } catch (err) {
+        // the AI rewrite failed: the comment is written from their switches and note all the same (no AI)
+        const mem = card.closest(".member") || card;
+        ta.dataset.set = "0"; mem.dataset.clear = "1";
+        try { await saveMembersNow(); } finally { delete mem.dataset.clear; }
+        ta.value = DB.R.review?.members?.[gid]?.comment || ta.value;
+        $("[data-mtst]", card).textContent = "From their switches and your note: it follows them until you edit it.";
+        toast(`The AI couldn't rewrite it (${err.message}): written from the switches and your note instead.`, true);
+        return;
+      }
       if (DB.R.review) DB.R.review.members = R.members;
       // the other members' comments still written from their switches follow them (like a save)
       for (const c of $$(".mc")) { const t = $("[data-mtext]", c); if (t && c !== card && t.dataset.set !== "1") t.value = R.comments?.[c.dataset.gid] ?? t.value; }
@@ -1643,12 +1655,12 @@ function wireDebrief() {
     if ($(".member")) await saveMembers();
     const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
     const aw = Object.values(R.awarded || {});
-    toast(`Finalized: recorded for ${R.students} student(s)${aw.length ? ` · +${aw.reduce((s, x) => s + (x.pts || 0), 0)} pts` : ""}${R.sent ? " · comment sent" : ""}`);
+    toast(`Finalized: recorded for ${R.students} student(s)${aw.length ? ` · +${aw.reduce((s, x) => s + (x.coins || 0), 0)} 🪙` : ""}${R.sent ? " · comment sent" : ""}`);
     DB.R = { ...DB.R, ...R };
     DB.B = await api(`/briefs/${bid}`);
     renderDebrief();
   });
-  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).", "Reopen", async () => {
+  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies, skills and coins leave the student's record until you finalize it again: finalizing gives them back (once). Points an older debrief gave stay.", "Reopen", async () => {
     const R = await api(`/briefs/${bid}/review/reopen`, { method: "POST", body: { who } });
     DB.R = { ...DB.R, ...R }; DB.B = await api(`/briefs/${bid}`); renderDebrief();
   });

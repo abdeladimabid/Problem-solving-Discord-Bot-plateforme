@@ -16,6 +16,7 @@ import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
 import { ManifestError, finishManifest, githubManifest } from "../shared/github.ts";
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
+import { DiagError, carryToBrief, proposeActions, sprintDiagnosis } from "../shared/sprintdiag.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
@@ -45,7 +46,7 @@ export async function learningApi(env: Env, ctx: Ctx, path: string, method: stri
     return await route(env, ctx, path, method, body, url, guild);
   } catch (e) {
     if (e instanceof ApiError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError || e instanceof WatcherMsgError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof DiagError || e instanceof BriefError || e instanceof DebriefError || e instanceof AssessError || e instanceof StepError || e instanceof SprintError || e instanceof WatcherMsgError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
@@ -403,10 +404,14 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
 
   // ------------------------------------------------------------ sprints (the sprint review for the administration's report)
   if (path === "/sprints" && method === "GET") return ok(await sprintsOverview(env, await guild()));
-  if ((m = path.match(/^\/sprints\/(\d+)(?:\/(levels|decide|comment))?$/))) {
+  if ((m = path.match(/^\/sprints\/(\d+)(?:\/(levels|decide|comment|diag|actions|carry))?$/))) {
     const g = await guild();
     const n = Number(m[1]), act = m[2];
     if (!act && method === "GET") return ok(await sprintView(env, g, n));
+    // 🩺 the diagnosis: objectives reached, shared lacunes, features not done, students to follow, actions
+    if (act === "diag" && method === "GET") return ok(await sprintDiagnosis(env, g, n));
+    if (act === "actions" && method === "POST") return ok({ actions: await proposeActions(env, g, n) });
+    if (act === "carry" && method === "POST") return ok(await carryToBrief(env, g, n, Number(body.brief), Array.isArray(body.items) ? body.items.map(String) : [], String(body.wish ?? "")));
     if (act === "levels" && method === "POST") { const r = await proposeLevels(env, g, n); return ok({ ...r, ...(await sprintView(env, g, n)) }); }
     if (act === "decide" && method === "POST") {
       await saveDecision(env, g, n, String(body.discord_id || ""), { level: body.level, decision: body.decision, note: body.note });

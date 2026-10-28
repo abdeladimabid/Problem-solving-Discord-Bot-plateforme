@@ -317,13 +317,18 @@ async function viewSprints(arg) {
     view.innerHTML = `<div class="page-head"><div><h1>Sprints</h1></div></div><section class="panel"><p class="empty">The programme has no sprints. Settings → Programme.</p></section>`;
     return;
   }
-  const n = arg === "year" ? null : Number(arg) || O.current || O.sprints[0].n;
-  view.innerHTML = `<div class="page-head"><div><h1>Sprints</h1><p class="sub">Levels and decisions for the sprint review.</p></div>
-      <div class="toolbar" style="margin:0"><select id="sp-sel">${O.sprints.map((s) => `<option value="${s.n}" ${s.n === n ? "selected" : ""}>Sprint ${s.n} · ${esc(s.title)}</option>`).join("")}
+  // #/sprints/<n> the diagnosis · #/sprints/<n>/review the review for the administration · #/sprints/year
+  const [num, sub] = String(arg || "").split("/");
+  const n = num === "year" ? null : Number(num) || O.current || O.sprints[0].n;
+  const tab = sub === "review" ? "review" : "diag";
+  view.innerHTML = `<div class="page-head"><div><h1>Sprints</h1><p class="sub">${n === null ? "Every student, sprint by sprint." : tab === "diag" ? "What the class is missing in this sprint, and what to do about it." : "Levels and decisions for the administration's report."}</p></div>
+      <div class="toolbar" style="margin:0"><select id="sp-sel">${O.sprints.map((s) => `<option value="${s.n}" ${s.n === n ? "selected" : ""}>Sprint ${s.n} · ${esc(s.title)}${s.n === O.current ? " · now" : ""}</option>`).join("")}
         <option value="year" ${n === null ? "selected" : ""}>All sprints (the year)</option></select></div></div>
+    ${n === null ? "" : `<nav class="sp-tabs" role="tablist"><a role="tab" href="#/sprints/${n}" aria-selected="${tab === "diag"}">🩺 Diagnostic</a><a role="tab" href="#/sprints/${n}/review" aria-selected="${tab === "review"}">📋 Bilan administratif</a></nav>`}
     <div id="sp-body"></div>`;
-  $("#sp-sel").onchange = (e) => { location.hash = `#/sprints/${e.target.value}`; };
+  $("#sp-sel").onchange = (e) => { location.hash = `#/sprints/${e.target.value}${e.target.value !== "year" && tab === "review" ? "/review" : ""}`; };
   if (n === null) return sprintYear(O);
+  if (tab === "diag" && typeof renderDiag === "function") return renderDiag(n, $("#sp-body"));
   SPR = { D: await api(`/sprints/${n}`), n, filter: "all", sort: "name" };
   renderSprint();
 }
@@ -421,7 +426,7 @@ function wireSprint() {
 
 function sprintYear(O) {
   view.querySelector("#sp-body").innerHTML = `<section class="panel"><div class="table-wrap"><table class="grid-table sp-table">
-    <thead><tr><th>Student</th>${O.sprints.map((s) => `<th class="ctr"><a href="#/sprints/${s.n}">S${s.n}</a></th>`).join("")}<th class="num">Validated</th></tr></thead>
+    <thead><tr><th>Student</th>${O.sprints.map((s) => `<th class="ctr"><a href="#/sprints/${s.n}/review">S${s.n}</a></th>`).join("")}<th class="num">Validated</th></tr></thead>
     <tbody>${O.year.map((y) => `<tr><td>${avatar(y.name, y.discord_id)} ${esc(y.name)}</td>
       ${y.per.map((p) => `<td class="ctr">${p.v ? `<span class="lvl ${p.v === "valide" ? "ok" : "bad"}" style="${p.final ? "" : "opacity:.55"}" title="${p.final ? "Your decision" : "Proposed"}${p.level ? " · " + esc(SP_LVL_NAME[p.level] || p.level) : ""}">${p.v === "valide" ? "✓" : "✗"}</span>` : `<span class="muted">—</span>`}</td>`).join("")}
       <td class="num">${y.per.filter((p) => p.v === "valide").length}/${O.sprints.length}</td></tr>`).join("")}</tbody>

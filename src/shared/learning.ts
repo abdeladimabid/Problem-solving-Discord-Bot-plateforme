@@ -90,15 +90,14 @@ export async function finalizeReview(env: Env, g: GuildRow, brief: { id: number;
       }
     }
     await env.DB.batch(stmts);
-    // 4. points and coins: validated competencies (+ bonus done); a new finalize only adds or removes the difference
+    // 4. coins: validated competencies; a new finalize only adds or removes the difference. A debrief gives NO points
+    //    (the teacher's choice): the points an older debrief gave stay in the history as they are, untouched.
     const okComps = Object.values(comps).filter(Boolean).length;
-    const pts = okComps * rw.comp + bonusDone * rw.bonus, coins = okComps * rw.coins;
-    // what this debrief already gave: the points from the history itself (never twice), the coins from the record
+    const coins = okComps * rw.coins;
     const given = await one<{ s: number }>(env, "SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'brief' AND ref = ?", g.id, uid, String(brief.id));
-    const prev = { pts: given?.s ?? 0, coins: rec.awarded[uid]?.coins ?? 0 };
-    if (pts !== prev.pts) await addPoints(env, g, { discordId: uid, amount: pts - prev.pts, reason: "brief", ref: brief.id, note: brief.title.slice(0, 80) });
+    const prev = { coins: rec.awarded[uid]?.coins ?? 0 };
     if (coins !== prev.coins) await run(env, "UPDATE players SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND discord_id = ?", coins - prev.coins, g.id, uid);
-    rec.awarded[uid] = { pts, coins };
+    rec.awarded[uid] = { pts: given?.s ?? 0, coins };
   }
   // a squad: each member keeps their own level (the teacher's, else the one proposed from their data)
   for (const m of rec.squad ? rec.contrib || [] : []) {
@@ -147,7 +146,7 @@ export async function reopenReview(env: Env, g: GuildRow, briefId: number, who: 
     if (takeBack) {
       const prev = r.rec.awarded?.[uid];
       // the debrief's own lines leave the points history (the season total drops by what it gave)
-      await run(env, "DELETE FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'brief' AND ref = ?", g.id, uid, String(briefId));
+      // the points an older debrief gave stay (debriefs give no points anymore: finalizing again never gives them back)
       if (prev?.coins) await run(env, "UPDATE players SET coins = MAX(0, coins - ?) WHERE guild_id = ? AND discord_id = ?", prev.coins, g.id, uid);
     }
     await env.DB.batch([

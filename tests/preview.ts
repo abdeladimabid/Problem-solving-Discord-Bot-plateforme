@@ -325,6 +325,23 @@ env.ASSETS = {
   putRev.run(b1, G, "u:101", JSON.stringify(rec("Omar", false)), now);
   putRev.run(b1, G, "u:102", JSON.stringify(rec("Lina", true)), now);
   for (const uid of ["100", "102"]) await finalizeReview(env as any, gRow, { id: b1, title: "Hammam Al Andalous", competencies: "C1N1,C2N1,C3N1,T1N1,T5N1" }, `u:${uid}`, { notify: false });
+  // 🩺 the sprint diagnosis: more debriefs on the sprint's last brief, and its assessment graded for the class
+  ["Mehdi", "Sara", "Adam", "Imane", "Rayan", "Nora", "Ilyas"].forEach((nm, k) => {
+    const r: any = rec(nm, k % 3 !== 1);
+    if (k % 2 === 0) r.remarks = { text: k === 0 ? "Il ne sait pas expliquer la différence entre margin et padding. Il confond position absolute et relative." : "Elle a du mal avec les media queries. À revoir : les sélecteurs CSS." };
+    putRev.run(b1, G, `u:${103 + k}`, JSON.stringify(r), now);
+  });
+  const dq = [["Quelle propriété active Flexbox sur un conteneur ?", "display: flex"], ["Différence entre justify-content et align-items ?", "axes"], ["Écris une media query pour les écrans de moins de 768px.", "@media"],
+    ["À quoi sert l'attribut alt d'une image ?", "texte alternatif"], ["Quelle balise sémantique pour le pied de page ?", "<footer>"], ["Crée une grille CSS de 3 colonnes égales.", "grid-template-columns"],
+    ["Quelle est la différence entre margin et padding ?", "dehors / dedans"], ["Comment relier une feuille de style à une page HTML ?", "<link>"]].map(([prompt, expected], k) => ({ id: "d" + k, type: "explain", prompt, expected, points: 1 }));
+  db.prepare("INSERT INTO assessments (guild_id, title, brief_id, status, questions, settings, created_at) VALUES (?, 'Évaluation Hammam : HTML & CSS', ?, 'closed', ?, '{}', ?)").run(G, b1, JSON.stringify(dq), now - 2 * DAY);
+  const daid = Number((db.prepare("SELECT MAX(id) AS id FROM assessments").get() as any).id);
+  for (let i = 0; i < 12; i++) {
+    const weak = [1, 4, 7, 9, 10].includes(i);
+    const grades = Object.fromEntries(dq.map((q, k) => [q.id, { verdict: k === 5 ? (i % 3 === 0 ? "correct" : "wrong") : k === 1 ? (i < 6 ? "partial" : "correct") : k === 2 ? (weak || i % 4 === 0 ? "wrong" : "correct") : weak && k % 2 ? "wrong" : "correct", score: 0 }]));
+    const score = Math.round((100 * Object.values(grades).filter((x: any) => x.verdict === "correct").length) / dq.length);
+    db.prepare("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades, summary) VALUES (?, ?, ?, 'graded', ?, ?, ?, '')").run(daid, G, String(100 + i), i + 1, score, JSON.stringify(grades));
+  }
   // more results so the class view has something to show
   const cr = db.prepare("INSERT OR IGNORE INTO competency_results (guild_id, discord_id, code, level, ok, source, ref, note, at) VALUES (?, ?, ?, ?, ?, 'manual', 0, 'Diagnostic de rentrée', ?)");
   for (let i = 3; i < 12; i++) for (const c of ["C1", "C2", "C3", "T1", "T5"]) if (rnd() < 0.7) cr.run(G, String(100 + i), c, 1, rnd() < 0.7 ? 1 : 0, now - 10 * DAY);

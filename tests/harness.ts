@@ -537,6 +537,19 @@ function fakeAI() {
         const hit = /Here's the updated code|reduce\(/.test(user);
         return { response: JSON.stringify({ probabilite: hit ? 70 : 10, parties: hit ? [{ fichier: "app.js", ou: "function total", pourquoi: "Style très homogène et reduce() avant de l'avoir vu en cours." }] : [], resume: hit ? "Plusieurs parties ressemblent à du code généré." : "Rien de particulier." }) };
       }
+      if (/Réécris UNIQUEMENT la partie "groups"/.test(user)) {
+        const cur = (() => { try { return JSON.parse((user.match(/Le brief actuel \(JSON\) :\n(\{[\s\S]*?\})\n/) || [])[1] || "{}"); } catch { return {}; } })();
+        const groups = Array.isArray(cur.groups) && cur.groups.length ? cur.groups : [{ title: "Visiteur", emoji: "", stories: [] }];
+        groups[0] = { ...groups[0], stories: [...(groups[0].stories || []), "En tant que visiteur, je veux voir la galerie en grille de 3 colonnes afin de parcourir les photos."] };
+        return { response: JSON.stringify({ groups }) };
+      }
+      if (sys.includes("combler les lacunes de sa classe")) {
+        const ids = [...user.matchAll(/^([lof]:\S+) · /gm)].map((m) => m[1]);
+        return { response: JSON.stringify({ resume: "La moitié de la classe bloque sur CSS Grid : priorité au live coding.", actions: [
+          { type: "live", titre: "Live coding : CSS Grid pas à pas", pourquoi: "La majorité ne sait pas créer une grille.", contenu: "grid-template-columns sur une galerie de 6 cartes, puis responsive.", ids: ids.filter((x) => x.startsWith("l:")).slice(0, 2) },
+          { type: "plan", titre: "Plans d'action : texte alternatif", pourquoi: "Quelques apprenants seulement.", contenu: "alt sur chaque image.", ids: ids.slice(-1) },
+          { type: "brief", titre: "User story Grid dans le prochain brief", pourquoi: "À pratiquer en projet.", contenu: "Une page galerie en grille.", ids: [] }] }) };
+      }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
         const notions = ((user.match(/NOTIONS À REVOIR :\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));

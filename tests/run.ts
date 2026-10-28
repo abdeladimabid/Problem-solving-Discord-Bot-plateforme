@@ -2945,7 +2945,7 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   const ev = q("SELECT skill, ok, source FROM skill_evidence WHERE discord_id = ? AND source = ?", U.alice.id, `brief:${id}`);
   check(ev.some((e: any) => e.ok === 0) && ev.some((e: any) => e.ok === 1), "checks of the code become skill evidence (good and missed)");
   const pts = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore;
-  check(pts > 0, "points for the competencies validated");
+  check(pts === 0 && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).coins >= 0, "a finalized debrief gives no points (only coins)");
   check(discordCalls.slice(calls0).some((c) => JSON.stringify(c.body ?? {}).includes("mon commentaire")), "comment sent by DM");
   const det = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
   const c3 = det.data.learning.competencies.find((c: any) => c.code === "C3");
@@ -2961,7 +2961,7 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: false } } });
   await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
   const ledgerB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id));
-  check(ledgerB.reduce((s: number, r: any) => s + r.amount, 0) === pts && ledgerB.length === 1, "reopen, change, finalize again: the points once, one line in the history");
+  check(ledgerB.length === 0, "reopen, change, finalize again: still no points in the history");
   // reopened and finalized again (and again), even after analyzing again: always the points once
   const c0 = coinsOf();
   await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
@@ -6435,6 +6435,54 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   await slash(U.prof, "teacher", { member: D.id }, "unblock");
   check(!(await getBlocks(env, G, D.id)).length, "/teacher unblock without a type lifts them all");
   check(text(await slash(U.prof, "teacher", { member: D.id }, "unblock")).includes("no practice block"), "…nothing left to lift: said so");
+}
+
+section("🩺 sprint diagnosis: objectives on the last brief, shared lacunes counted, features not done, students to follow, actions");
+{
+  const { shareOf } = await import("../src/shared/sprintdiag.ts");
+  check(shareOf(8, 14) === "majority" && shareOf(4, 14) === "group" && shareOf(2, 14) === "few" && shareOf(2, 5) === "few" && shareOf(3, 5) === "majority", "how many share a problem: most of the class (≥ 50 %), a part, a few (≤ 20 % or 2 students)");
+  // a sprint of the programme with two briefs: the last one's debriefs and assessment decide
+  const ov = await api("GET", `/api/sprints?g=${G}`);
+  const n = ov.data.sprints?.[0]?.n;
+  // at the end of the sprint: these are its last briefs
+  const t1 = Math.floor(Date.parse(ov.data.sprints[0].end + "T09:00:00Z") / 1000) - 4 * 86400;
+  const S = [U.alice.id, U.bob.id, U.carol.id];
+  run1("INSERT INTO briefs (guild_id, title, status, data, competencies, sprint, start_at, due_at, created_at) VALUES (?, 'Diag A', 'assigned', '{}', 'C1N1,C3N1', ?, ?, ?, ?)", G, n, t1, t1 + 86400, t1);
+  const bA = q1("SELECT MAX(id) AS id FROM briefs").id;
+  run1("INSERT INTO briefs (guild_id, title, status, data, competencies, sprint, start_at, due_at, created_at) VALUES (?, 'Diag B', 'assigned', '{}', 'C3N1', ?, ?, ?, ?)", G, n, t1 + 2 * 86400, t1 + 3 * 86400, t1);
+  const bB = q1("SELECT MAX(id) AS id FROM briefs").id;
+  const recOf = (c3: boolean, extra: any = {}) => JSON.stringify({ result: { exigences: [{ type: "story", texte: "En tant que visiteur, je veux voir la galerie", statut: c3 ? "fait" : "absent" }], competences: [{ code: "C3N1", avis: c3 ? "validable" : "non_visible" }, { code: "C1N1", avis: "validable" }] }, ...extra });
+  // brief A: everyone validated C3; brief B (the last one): only Alice did → the objective is judged on B
+  for (const u of S) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bA, G, `u:${u}`, recOf(true), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bB, G, `u:${U.alice.id}`, recOf(true), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bB, G, `u:${U.bob.id}`, recOf(false, { remarks: { text: "Il ne sait pas expliquer la différence entre margin et padding." } }), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bB, G, `u:${U.carol.id}`, recOf(false), clock.now());
+  // brief B's assessment: Bob and Carol miss the grid question
+  const qs = [{ id: "g", type: "explain", prompt: "Crée une grille CSS de 3 colonnes (grid-template-columns).", expected: "grid", points: 1 }, { id: "f", type: "explain", prompt: "Différence entre justify-content et align-items en Flexbox ?", expected: "axes", points: 1 }];
+  run1("INSERT INTO assessments (guild_id, title, brief_id, status, questions, settings, created_at) VALUES (?, 'Quiz Diag', ?, 'closed', ?, '{}', ?)", G, bB, JSON.stringify(qs), clock.now());
+  const aq = q1("SELECT MAX(id) AS id FROM assessments").id;
+  S.forEach((u, i) => run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades) VALUES (?, ?, ?, 'graded', ?, 50, ?)", aq, G, u, i + 1, JSON.stringify({ g: { verdict: i ? "wrong" : "correct" }, f: { verdict: "correct" } })));
+  const D = (await api("GET", `/api/sprints/${n}/diag?g=${G}`)).data;
+  const c3 = D.objectives?.find((o: any) => o.label === "C3");
+  check(D.evaluated >= 3 && c3 && c3.reached + c3.low.length >= 1 && c3.missed.some((x: any) => x.uid === U.bob.id) && c3.missed.some((x: any) => x.uid === U.carol.id) && c3.from.includes("Diag B") && !c3.missed.some((x: any) => x.uid === U.alice.id),
+    `an objective is judged on the last brief of the sprint that covers it (C3 on « Diag B », not « Diag A ») (${JSON.stringify(c3 && { r: c3.reached, m: c3.missed.length, f: c3.from })})`);
+  const grid = D.lacunes.find((l: any) => /grid|grille/i.test(l.notion));
+  check(grid && grid.n === 2 && grid.sources.includes("assessment") && grid.students.map((x: any) => x.uid).sort().join() === [U.bob.id, U.carol.id].sort().join() && D.lacunes.some((l: any) => /margin/.test(l.notion) && l.sources.includes("debrief")),
+    "the lacunes: from the last brief's assessment and the debrief's remarks, with how many students and who");
+  check(D.features.some((f: any) => /galerie/.test(f.text) && f.n === 2) && D.follow.some((x: any) => x.uid === U.bob.id && x.missed.length && x.lacunes.length) && !D.follow.some((x: any) => x.uid === U.alice.id),
+    "the last brief's features not done, and the students to follow (objectives missed, lacunes)");
+  const A = await api("POST", `/api/sprints/${n}/actions?g=${G}`, {});
+  check(A.status === 200 && A.data.actions.actions.length === 3 && A.data.actions.actions[0].type === "live" && A.data.actions.actions[0].ids.length > 0 && (await api("GET", `/api/sprints/${n}/diag?g=${G}`)).data.actions?.resume,
+    `✨ the actions proposed (live coding, plans, the next brief), kept with the sprint (${A.status} ${A.data.error ?? ""})`);
+  // 📦 into a brief that hasn't started: user stories added, the rest kept; a started one never changes
+  run1("INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Next one', 'draft', ?, ?)", G, JSON.stringify({ title: "Next one", groups: [{ title: "Visiteur", emoji: "", stories: ["En tant que visiteur, je veux voir l'accueil."] }] }), clock.now());
+  const bN = q1("SELECT MAX(id) AS id FROM briefs").id;
+  const cy = await api("POST", `/api/sprints/${n}/carry?g=${G}`, { brief: bN, items: ["CSS Grid"] });
+  const nd = JSON.parse(q1("SELECT data, internal FROM briefs WHERE id = ?", bN).data), ni = JSON.parse(q1("SELECT internal FROM briefs WHERE id = ?", bN).internal || "{}");
+  check(cy.status === 200 && nd.groups.flatMap((x: any) => x.stories).length >= 1 && /CSS Grid/.test(ni.notes || "") && q1("SELECT status FROM briefs WHERE id = ?", bN).status === "draft", `📦 into the next brief: its user stories rewritten with it, the reason in its notes, its status kept (${cy.status} ${cy.data.error ?? ""})`);
+  check((await api("POST", `/api/sprints/${n}/carry?g=${G}`, { brief: bA, items: ["CSS Grid"] })).status === 400, "…a brief already started: never changed");
+  run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aq); run1("DELETE FROM assessments WHERE id = ?", aq);
+  run1("DELETE FROM brief_reviews WHERE brief_id IN (?, ?)", bA, bB); run1("DELETE FROM briefs WHERE id IN (?, ?, ?)", bA, bB, bN);
 }
 
 section("debrief requirements: the AI reads only the start of each file; a page or feature that is in the repo is done");

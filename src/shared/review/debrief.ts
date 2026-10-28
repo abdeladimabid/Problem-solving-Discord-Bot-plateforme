@@ -214,9 +214,9 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
 }
 /** One learner's assessment, for their own comment. */
 export interface MemberAssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
-const parseQuestions = (q: string | null): any[] => { try { const a = JSON.parse(q || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } };
+export const parseQuestions = (q: string | null): any[] => { try { const a = JSON.parse(q || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } };
 // each paper read once (not once per question: a 30-question assessment re-read 30 times went over Cloudflare's CPU limit)
-function readPaper(t: { grades: string | null; answers: string | null }) {
+export function readPaper(t: { grades: string | null; answers: string | null }) {
   let g: any = {}, an: any = {};
   try { g = JSON.parse(t.grades || "{}") || {}; } catch { /* old row */ }
   try { an = JSON.parse(t.answers || "{}") || {}; } catch { /* old row */ }
@@ -230,7 +230,7 @@ const verdictOf = (q: any, p: { g: any; an: any }) => {
 // the question's own notion first (its prompt), then its expected answer when the prompt says nothing
 const notionsOfQ = (q: any) => { const cs = conceptsOf(String(q.prompt || "")); return (cs.length ? cs : conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`)).slice(0, 3); };
 /** A learner's notions: mastered (every question on it right) and missed (at least one wrong, partly right or empty). */
-function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
+export function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
   const good = new Map<string, number>(), bad = new Map<string, number>();
   for (const q of qs) {
     const v = verdictOf(q, p);

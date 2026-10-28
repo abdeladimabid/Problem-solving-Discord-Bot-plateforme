@@ -252,8 +252,8 @@ function openingAssess(d: CommentData): string {
   s.push({ excellent: "Excellent travail.", bon: "Ton travail est globalement bien réalisé.", moyen: "Ton travail est correct dans l’ensemble, mais certains points restent à consolider.",
     faible: "Ton travail est encore fragile : plusieurs aspects importants restent à renforcer.", critique: "Ton travail est encore loin de ce qui est attendu dans ce brief." }[lv]);
   const ok = a.ok.slice(0, 3);
-  if (ok.length) s.push(`Lors de l’évaluation, tu as montré que tu maîtrises ${andList(ok)}${a.comps.length ? `, et tu as validé ${a.comps.length > 1 ? "les compétences" : "la compétence"} ${andList(a.comps.slice(0, 3).map((c) => `« ${c} »`))}` : ""}.`);
-  else if (a.comps.length) s.push(`Lors de l’évaluation, tu as validé ${a.comps.length > 1 ? "les compétences" : "la compétence"} ${andList(a.comps.slice(0, 3).map((c) => `« ${c} »`))}.`);
+  // never which competencies are validated: what they showed they master, in plain words
+  if (ok.length) s.push(`Lors de l’évaluation, tu as montré que tu maîtrises ${andList(ok)}.`);
   if (d.positive) s.push(`Lors de notre échange, ${low(d.positive)}`);
   if (d.bonus.length) s.push(`Tu as aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`);
   return s.join(" ");
@@ -339,8 +339,9 @@ export const AI_COMMENT_SYSTEM = [
   "- Tutoiement (« tu », « ton », « tes »), sauf si le commentaire est pour toute une équipe : alors « vous ».",
   "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces, pas de mise en forme (**, #, `), pas d’emoji.",
   "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → travail insuffisant. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
-  "- Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions, compétences validées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
-  "- Regroupe ce qui va bien en quelques thèmes, sans énumérer un par un. Ne cite pas les codes des compétences du référentiel.",
+  "- Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions maîtrisées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
+  "- Regroupe ce qui va bien en quelques thèmes, sans énumérer un par un. Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel, ni « tu as validé la compétence… ») : parle de ce qu’il sait faire, concrètement.",
+  "- INDIVIDUEL sans notion maîtrisée à l’évaluation : ce qui va bien vient du commentaire du correcteur ou de l’échange ; s’il n’y a rien, n’invente pas de réussite.",
   "- ÉQUIPE : dis aussi ce qui est à améliorer dans le projet (interface, planification, README, commits, répartition du travail) quand c’est donné.",
   "- Bonus : s’il y en a, dis simplement qu’il a réalisé des bonus et que c’est une bonne initiative, SANS les lister. S’il n’y en a pas, ne parle pas de bonus.",
   "- Points non validés : dis naturellement ce qui manque encore (« il manque encore… »), dans une phrase, sans recopier la grille et sans « Compléter le point du brief ».",
@@ -364,7 +365,6 @@ export function aiCommentPrompt(d: CommentData): string {
       `TYPE DE COMMENTAIRE : INDIVIDUEL. Ce qui va bien vient UNIQUEMENT de son ÉVALUATION (faite en classe, sans aide) : ce qu’il a maîtrisé. ${d.memberOnly ? "Les fonctionnalités du projet de groupe sont dans le commentaire de l’équipe : n’en parle pas." : "Ne cite pas les fonctionnalités du projet comme des réussites."}`,
       `SCORE À L’ÉVALUATION : ${a.score != null ? `${a.score} %` : "(non noté)"}`,
       `CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n${list(a.ok)}`,
-      `COMPÉTENCES VALIDÉES À L’ÉVALUATION :\n${list(a.comps)}`,
       `COMMENTAIRE DU CORRECTEUR DE L’ÉVALUATION :\n${a.summary ? `<<<\n${a.summary}\n>>>` : "(aucun)"}`,
       `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
       `BONUS RÉALISÉS : ${d.bonus.length ? `oui (${d.bonus.length})` : "aucun"}`,
@@ -420,6 +420,8 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   if (lv !== "excellent" && /excellent/i.test(body)) return null;
   if ((lv === "faible" || lv === "critique") && /\b(bon|très bon|beau) travail\b/i.test(body)) return null;
   if (!d.bonus.length && /bonus/i.test(body)) return null;
+  // never which competencies were validated
+  if (/(valid[ée]|acquis|atteint)[a-zé]*\s+(la |les |une |des |l['’]|ta |tes )?comp[ée]tence|comp[ée]tences?\s+(est |sont |a été |ont été |bien )?(valid|acquis)|\bC[T]?\d{1,2}(N\d)?\b/i.test(body)) return null;
   const words = wordCount(body), nothing = !d.improve.length && !d.notions.length;
   if (words < 15 || words > (nothing ? 140 : 520)) return null;
   return `${greetingOf(d)}\n\n${body}`;

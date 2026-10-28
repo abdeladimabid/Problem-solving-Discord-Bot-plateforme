@@ -42,8 +42,15 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify({ g: S.g, ...opts.body }) : undefined,
   });
   if (res.status === 401) { location.href = "/login"; throw new Error("Please sign in again."); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  const raw = await res.text().catch(() => "");
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+  if (!res.ok) {
+    // not ClassBot's answer (a Cloudflare error page): say which error, it tells what went wrong
+    const code = (raw.match(/error code:?\s*(\d{3,4})/i) || raw.match(/Error\s*(1\d{3})/) || [])[1];
+    const title = ((raw.match(/<title>([^<]{3,120})<\/title>/i) || [])[1] || "").replace(/\s*\|\s*.*$/, "").trim();
+    throw new Error(data.error || `Request failed (${res.status}${code ? ` · Cloudflare error ${code}` : ""}${title && !/^\d+$/.test(title) ? ` · ${title}` : ""})`);
+  }
   return data;
 }
 
@@ -368,7 +375,9 @@ const routes = {
   daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
 async function route() {
-  const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  const [name, ...more] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  // most pages take one segment; a page with tabs (#/sprints/3/review) gets the rest too
+  const arg = name === "sprints" ? more.join("/") : more[0];
   const fn = routes[name] || viewOverview;
   const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", wplan: "assignments", assessment: "assessments", battle: "games", battles: "games", game: "games" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));

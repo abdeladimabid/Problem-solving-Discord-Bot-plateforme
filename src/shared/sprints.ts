@@ -60,7 +60,9 @@ async function load(env: Env, g: GuildRow) {
   const dec = await all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
     "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id);
   const comments = await all<{ sprint: number; comment: string }>(env, "SELECT sprint, comment FROM sprint_comments WHERE guild_id = ? AND program = ?", g.id, p.id);
-  return { p, briefRows, sprints, students, results, reviews, drafts, steps, dec, comments };
+  // each debrief read once (the class's page reads them for every student: a squad's for each of its members)
+  const parsed = new Map<string, { rec: any; st: any } | null>();
+  return { p, briefRows, sprints, students, results, reviews, drafts, steps, dec, comments, parsed };
 }
 type Loaded = Awaited<ReturnType<typeof load>>;
 
@@ -96,7 +98,11 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
       const rv = L.reviews.find((r) => r.brief_id === bid && r.who === whoOf(bid, uid));
       if (!rv) continue;
       try {
-        const rec = JSON.parse(rv.record), st = reviewStates(rec);
+        const pk = `${rv.brief_id}|${rv.who}`;
+        if (!L.parsed.has(pk)) { try { const r0 = JSON.parse(rv.record); L.parsed.set(pk, { rec: r0, st: reviewStates(r0) }); } catch { L.parsed.set(pk, null); } }
+        const pr = L.parsed.get(pk);
+        if (!pr) continue;
+        const { rec, st } = pr;
         const own = rv.who.startsWith("s:") ? memberLevelOf(rec, uid, { lvl: rv.level, prop: rv.plevel }) : { lvl: rv.level || "", prop: rv.plevel || "" };
         // a finalized debrief with no level saved (older ones): the level its switches give
         const lv = own.lvl || own.prop || (rv.who.startsWith("u:") ? debriefLevel(rec, st) || "" : "");
