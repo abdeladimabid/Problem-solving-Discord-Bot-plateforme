@@ -1173,7 +1173,8 @@ function renderDebrief() {
           <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
         : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
-          <label class="check"><input type="checkbox" id="db-dm"> Send the comment by Discord DM</label>
+          <label class="check"><input type="checkbox" id="db-dm"> ${rec.squad ? "Send each member their own comment by Discord DM" : "Send the comment by Discord DM"}</label>
+          ${rec.squad ? `<p class="small muted" style="margin:4px 0 0 24px">The comment on their card (yours, the AI's or the one from their switches), not the squad comment.</p>` : ""}
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
     </aside></div>
     ${sq ? squadMembersHtml(rec, st, final) : ""}`;

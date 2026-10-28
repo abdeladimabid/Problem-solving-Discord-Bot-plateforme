@@ -11,6 +11,7 @@ import type { Program } from "./program.ts";
 import { compLabel, compName, parseComp } from "./program.ts";
 import { reviewStates, verifHint, checkLabel } from "./review/engine.ts";
 import { getReview } from "./review/debrief.ts";
+import { memberComment } from "./review/comment.ts";
 import { memberLevel, memberLevelOf } from "./review/members.ts";
 
 /** Which skills each automatic check of a debrief proves (or shows missing). */
@@ -112,12 +113,22 @@ export async function finalizeReview(env: Env, g: GuildRow, brief: { id: number;
   return { students: students.length, sent, awarded: rec.awarded };
 }
 
-/** DM the comment (and the competencies) to the student(s); squad members get their own comment when there is one. */
+/**
+ * DM the comment to the student(s). A squad: each member gets THEIR OWN comment (the one on their card: yours, the AI's,
+ * else written now from their switches, their final level and your note), never the squad's.
+ */
+export function memberDmText(rec: any, uid: string): string {
+  if (!rec.squad) return rec.result?.feedback || "";
+  const ms = rec.members?.[uid] || {};
+  if (ms.text && String(ms.text).trim()) return String(ms.text);
+  const m = (rec.contrib || []).find((x: any) => String(x.gid) === uid) || (rec.squad.members || []).find((x: any) => String(x.gid) === uid) || { gid: uid, name: "", login: "" };
+  return memberComment(m, rec, ms) || ms.comment || rec.result?.feedback || "";
+}
 async function sendResult(env: Env, g: GuildRow, brief: { id: number; title: string }, reviewId: number, students: string[], rec: any) {
   const L = g.lang;
   let n = 0;
   for (const uid of students) {
-    const text = rec.members?.[uid]?.comment || rec.result?.feedback || "";
+    const text = memberDmText(rec, uid);
     if (!text) continue;
     const ok = await dm(env, uid, { embeds: [{ title: t(L, "debrief.dm_title", { title: brief.title }), description: text.slice(0, 4000), color: 0x2563eb, footer: { text: t(L, "debrief.dm_footer") } }] });
     if (ok) n++;

@@ -3814,4 +3814,6 @@ window.CB_FR = {
   "✨ Written from their switches and your note: edit it as you like.": "✨ Rédigé à partir de ses interrupteurs et de ta note : modifie-le comme tu veux.",
   "From their switches and your note: it follows them until you edit it.": "À partir de ses interrupteurs et de ta note : il les suit jusqu’à ce que tu le modifies.",
   "Write it again from their switches, level and note (the gaps in your note become what to review)": "Le réécrire à partir de ses interrupteurs, de son niveau et de ta note (les lacunes de ta note deviennent les points à revoir)",
+  "Send each member their own comment by Discord DM": "Envoyer à chaque membre son propre commentaire en MP Discord",
+  "The comment on their card (yours, the AI's or the one from their switches), not the squad comment.": "Le commentaire de sa carte (le tien, celui de l’IA ou celui de ses interrupteurs), pas le commentaire du squad.",
 };

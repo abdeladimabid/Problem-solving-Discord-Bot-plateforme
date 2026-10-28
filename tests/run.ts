@@ -6161,6 +6161,13 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
+  // Finalize + DM: each member gets their own comment, not the squad's
+  await api("POST", `/api/briefs/${id}/review/comment?g=${G}`, { who, text: "SQUAD-COMMENT pour toute l'équipe." });
+  discordCalls.length = 0;
+  const fz = await api("POST", `/api/briefs/${id}/review/finalize?g=${G}`, { who, notify: true });
+  const dmA = text(discordCalls.find((c) => c.path === `/channels/dm-${A}/messages`)?.body), dmB = text(discordCalls.find((c) => c.path === `/channels/dm-${B}/messages`)?.body);
+  check(fz.status === 200 && fz.data.sent === 2 && dmA.includes("grid") && !dmA.includes("SQUAD-COMMENT") && dmB.length > 50 && !dmB.includes("SQUAD-COMMENT") && dmA !== dmB,
+    `Finalize with DM: each member gets their own comment (the one on their card, else from their switches), never the squad's (${fz.status} sent ${fz.data.sent})`);
   delete github.commitFiles[sha];
   run1("UPDATE players SET gh_inst = ? WHERE guild_id = ? AND discord_id = ?", bobGh, G, B);
   await api("DELETE", `/api/github/app?g=${G}`);
