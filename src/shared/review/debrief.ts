@@ -208,11 +208,17 @@ function gapsOf(questions: string | null, takers: { grades: string | null; answe
   let qs: any[] = [];
   try { qs = JSON.parse(questions || "[]"); } catch { return []; }
   const count = new Map<string, number>();
+  // each paper read once (not once per question: a 30-question assessment re-read 30 times went over Cloudflare's CPU limit)
+  const papers = takers.map((t) => {
+    let g: any = {}, an: any = {};
+    try { g = JSON.parse(t.grades || "{}") || {}; } catch { /* old row */ }
+    try { an = JSON.parse(t.answers || "{}") || {}; } catch { /* old row */ }
+    return { g, an };
+  });
   for (const q of qs) {
     let missed = false;
-    for (const t of takers) {
-      let g: any = {}, an: any = {};
-      try { g = JSON.parse(t.grades || "{}")[q.id]; an = JSON.parse(t.answers || "{}"); } catch { /* old row */ }
+    for (const { g: gs, an } of papers) {
+      const g = gs?.[q.id];
       const a = an?.[q.id];
       const empty = a == null || (Array.isArray(a) ? !a.length : !String(a).trim());
       const v = g?.verdict || (empty ? "empty" : "");
