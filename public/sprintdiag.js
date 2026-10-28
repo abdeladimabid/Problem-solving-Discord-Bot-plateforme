@@ -24,8 +24,9 @@ async function renderDiag(n, box) {
 
 function drawDiag(box) {
   const D = SD.D, S = D.sprint;
-  const objs = D.objectives.filter((o) => o.reached + o.low.length + o.missed.length);
-  const avg = objs.length ? Math.round(objs.reduce((a, o) => a + (o.pct ?? 0), 0) / objs.length) : null;
+  // the sprint's objectives (planning): the share of the class reaching each one evaluated
+  const gItems = (D.goals || []).flatMap((g) => g.items).filter((i) => i.covered);
+  const avg = gItems.length && D.evaluated ? Math.round(gItems.reduce((a, i) => a + 100 * (1 - i.n / D.evaluated), 0) / gItems.length) : null;
   const shared = D.lacunes.filter((l) => l.n >= 2);
   const st = { upcoming: ["Upcoming", "muted"], running: ["In progress", "sd-run"], done: ["Finished", "sd-done"] }[S.state];
   const days = (Date.parse(S.end) - Date.parse(S.start)) / 864e5 + 1, gone = Math.min(days, Math.max(0, (Date.now() - Date.parse(S.start)) / 864e5));
@@ -36,19 +37,22 @@ function drawDiag(box) {
         <p class="small muted">${dayLabelOf(S.start)} → ${dayLabelOf(S.end)}${S.technologies ? ` · ${esc(S.technologies)}` : ""}</p></div>
         <div class="toolbar" style="margin:0"><button class="btn primary" id="sd-ai">✨ ${D.actions ? "Propose again" : "Propose actions"}</button></div></div>
       <span class="sd-time" title="${Math.round(gone)} of ${Math.round(days)} days"><i style="width:${sdPct(gone, days)}%"></i></span>
-      ${S.objectives ? `<details class="small"><summary>Objectives of the sprint</summary><p class="muted" style="white-space:pre-wrap;margin:6px 0 0">${esc(S.objectives)}</p></details>` : ""}
+      ${S.objectives ? `<details class="small"><summary>Pedagogical objectives (planning)</summary><p class="muted" style="white-space:pre-wrap;margin:6px 0 0">${esc(S.objectives)}</p></details>` : ""}
       <div class="sd-briefs">${D.briefs.map((b, i) => `<a class="sd-brief" href="#/brief/${b.id}"><b>${esc(b.title)}</b><span class="small muted">${i === 0 ? "last brief · " : ""}due ${dayLabelOf(b.due)}</span>
         <span class="small">${b.debriefs} debrief${b.debriefs === 1 ? "" : "s"}${b.final < b.debriefs ? ` <span class="muted">(${b.final} finalized)</span>` : ""}${b.assessed ? ` · ${b.assessed} assessed` : ""}</span></a>`).join("") || `<span class="muted small">No brief in this sprint yet.</span>`}</div>
     </section>
     ${!D.evaluated ? `<section class="panel"><p class="empty">No debrief analyzed and no graded assessment in this sprint yet. Analyze the debriefs of its briefs (Progress) or grade their assessment: the diagnosis comes from them.</p></section>` : `
     <div class="sd-kpis">
-      <div class="sd-kpi"><b>${avg ?? "—"}${avg != null ? "<small>%</small>" : ""}</b><span>objectives reached on average</span></div>
+      <div class="sd-kpi"><b>${avg ?? "—"}${avg != null ? "<small>%</small>" : ""}</b><span>of the sprint's objectives reached (class average)</span></div>
       <div class="sd-kpi ${shared.length ? "warn" : ""}"><b>${shared.length}</b><span>lacunes shared by 2+ students</span></div>
       <div class="sd-kpi ${D.follow.length ? "bad" : ""}"><b>${D.follow.length}</b><span>students to follow</span></div>
       <div class="sd-kpi"><b>${D.evaluated}<small>/${D.students}</small></b><span>students with results</span></div>
     </div>
     ${D.actions ? actionsHtml(D.actions) : ""}
-    <section class="panel"><div class="panel-head"><h2>🎯 Objectives of the sprint</h2><span class="muted small">each one judged on the last brief that covers it</span></div>
+    <section class="panel"><div class="panel-head"><h2>🎯 Objectives of the sprint</h2><span class="muted small">planning · Technologies / concepts</span></div>
+      <p class="small muted" style="margin:-6px 0 10px">Who still has a lacune on each one in their last brief (assessment, debrief, oral). Not evaluated yet: no question and no lacune is about it.</p>
+      ${(D.goals || []).length ? `<div class="sd-goals">${goalsHtml(D.goals)}</div>` : `<p class="empty small">The programme's sprint has no « Technologies / concepts » (Settings → Programme: import the planning file).</p>`}</section>
+    <section class="panel"><div class="panel-head"><h2>✅ Competency validation</h2><span class="muted small">each one judged on the last brief that covers it</span></div>
       ${D.objectives.length ? `<div class="sd-objs">${D.objectives.map((o, i) => (o.kind === "tech" ? objHtml(o, i) : "")).join("")}</div>
         ${D.objectives.some((o) => o.kind === "soft") ? `<details class="sd-soft" ${D.objectives.some((o) => o.kind === "tech") ? "" : "open"}><summary><b>Transversal competencies</b> <span class="muted small">mostly seen at the oral: they don't put a student in « to follow »</span></summary>
           <div class="sd-objs">${D.objectives.map((o, i) => (o.kind === "soft" ? objHtml(o, i) : "")).join("")}</div></details>` : ""}` : `<p class="empty small">The programme gives no competency for this sprint.</p>`}</section>
@@ -57,17 +61,34 @@ function drawDiag(box) {
       <p class="small muted" style="margin:-6px 0 10px">The notions each student missed in their last brief: its assessment, your one-to-one note or the debrief's remarks, the oral questions.</p>
       ${lacList.length ? `<div class="sd-lacs">${lacList.map((l, i) => lacHtml(l, D.lacunes.indexOf(l))).join("")}</div>` : `<p class="empty small">${D.lacunes.length ? "None here." : "No lacune found: the assessments are right and the debriefs say nothing to review."}</p>`}</section>
     <div class="sd-two">
-      <section class="panel"><div class="panel-head"><h2>📋 Features not done</h2><span class="muted small">last brief</span></div>
-        ${D.features.length ? `<ul class="sd-feats">${D.features.map((f) => `<li><div><b>${esc(f.text)}</b><div class="small muted">${esc(f.brief)}</div></div>
-          <span class="sd-count ${SD_SHARE[f.share][1]}">${f.n}<small>/${D.evaluated}</small></span>${sdPeople(f.students, 5)}</li>`).join("")}</ul>` : `<p class="empty small">Every feature of the last brief is done.</p>`}</section>
-      <section class="panel"><div class="panel-head"><h2>👥 Students to follow</h2><span class="muted small">${D.follow.length}</span></div>
+      <section class="panel sd-cmt"><div class="panel-head"><h2>📝 Sprint comment</h2><span class="toolbar" style="margin:0"><button class="btn small primary" id="sd-cgen">✨ ${D.comment ? "Write again" : "Write it"}</button><button class="btn small" id="sd-csave">Save</button><button class="btn small" id="sd-ccopy">Copy</button></span></div>
+        <p class="small muted" style="margin:-6px 0 8px">For the administration's report: the objectives the class reached and the ones it hasn't yet, and the follow-up planned. The same as in the Bilan administratif.</p>
+        <textarea id="sd-c" rows="12" placeholder="✨ Write it: from the objectives of the sprint, the levels and the lacunes of the class.">${esc(D.comment || "")}</textarea></section>
+      <section class="panel"><div class="panel-head"><h2>👥 Students to follow</h2><span class="muted small">${D.follow.length} of ${D.evaluated}</span></div>
+        <p class="small muted" style="margin:-6px 0 8px">Only the ones who stand out: a weak level, several competencies missed, or far more lacunes than the rest of the class.</p>
         ${D.follow.length ? `<ul class="sd-follow">${D.follow.map((x, i) => `<li>${avatar(x.name, x.uid)}<div><a href="#/student/${esc(x.uid)}"><b>${esc(x.name)}</b></a>${x.level ? ` <span class="lvl ${["faible", "critique"].includes(x.level) ? "bad" : x.level === "moyen" ? "warn" : "ok"}">${esc(x.level)}</span>` : ""}${x.draft ? ` <span class="tag" title="Their last debrief isn't finalized">draft</span>` : ""}
-          <div class="small muted">${[x.missed.length ? `${x.missed.length} objective${x.missed.length > 1 ? "s" : ""} missed (${x.missed.join(", ")})` : "", x.lacunes.length ? `${x.lacunes.length} lacune${x.lacunes.length > 1 ? "s" : ""}: ${x.lacunes.slice(0, 3).join(", ")}${x.lacunes.length > 3 ? "…" : ""}` : "", x.features ? `${x.features} feature${x.features > 1 ? "s" : ""} not done` : ""].filter(Boolean).map(esc).join(" · ")}</div></div>
+          <div class="sd-why">${(x.why || []).map((w) => `<span class="sd-tag sd-maj">${esc(w)}</span>`).join("")}</div>
+          <div class="small muted">${[x.missed.length ? `${x.missed.length} competenc${x.missed.length > 1 ? "ies" : "y"} missed (${x.missed.join(", ")})` : "", x.lacunes.length ? `${x.lacunes.length} lacune${x.lacunes.length > 1 ? "s" : ""}: ${x.lacunes.slice(0, 3).join(", ")}${x.lacunes.length > 3 ? "…" : ""}` : "", x.features ? `${x.features} feature${x.features > 1 ? "s" : ""} not done` : ""].filter(Boolean).map(esc).join(" · ")}</div></div>
           <button class="btn small" data-sdplan="${i}">🧭 Plan d'action</button></li>`).join("")}</ul>` : `<p class="empty small">Nobody stands out: every student reached the objectives.</p>`}</section>
     </div>`}`;
   wireDiag(box);
 }
 
+/** The planning's objectives, by group (« HTML5 », « Mise en page »…): each item, who still has a lacune on it. */
+function goalsHtml(goals) {
+  let k = -1;
+  return goals.map((g) => {
+    const items = g.items.map((it) => ({ it, i: ++k }));
+    const seen = items.filter((x) => x.it.covered), later = items.filter((x) => !x.it.covered);
+    const one = g.items.length === 1 && g.items[0] === g.group;
+    return `<div class="sd-goal"><div class="sd-goal-h"><b>${esc(g.group)}</b>${seen.length ? `<span class="small muted">${seen.filter((x) => x.it.share === "few").length}/${seen.length} reached by most</span>` : `<span class="small muted">not evaluated yet</span>`}</div>
+      ${seen.map(({ it, i }) => `<div class="sd-gi"><span class="sd-gi-n">${one ? "" : esc(it.name)}</span>
+        ${sdBar([{ n: Math.max(0, it.of - it.n), cls: "ok", title: `${it.of - it.n} without a lacune on it` }, { n: it.n, cls: it.share === "majority" ? "bad" : it.share === "group" ? "warn" : "few", title: `${it.n} with a lacune` }])}
+        <span class="small sd-gi-c">${it.n ? `<span class="${it.share === "few" ? "" : "sd-miss"}">${it.n}/${it.of}</span> to review` : `<span class="lvl ok">✓ reached</span>`}</span>
+        <span class="sd-gi-a">${it.n ? sdPeople(it.missing, 5) + actionButtons("g", i, it.share, it.n) : ""}</span></div>`).join("")}
+      ${later.length ? `<div class="sd-gi-later small muted">Not evaluated yet: ${later.map(({ it }) => esc(it.name)).join(" · ")}</div>` : ""}</div>`;
+  }).join("");
+}
 function objHtml(o, i) {
   const seen = o.reached + o.low.length + o.missed.length;
   const miss = [...o.missed, ...o.low];
@@ -108,6 +129,7 @@ function sdItem(k, i) {
   const D = SD.D;
   if (k === "o") { const o = D.objectives[i]; return { text: `${o.name || o.label} (${o.label}N${o.level})`, students: [...o.missed, ...o.low], n: o.missed.length + o.low.length }; }
   if (k === "l") { const l = D.lacunes[i]; return { text: l.notion, students: l.students, n: l.n }; }
+  if (k === "g") { const all = D.goals.flatMap((g) => g.items.map((it) => ({ ...it, group: g.group }))); const it = all[i]; return it && { text: it.group === it.name ? it.name : `${it.group} : ${it.name}`, students: it.missing, n: it.n }; }
   return null;
 }
 function sdStudentsOf(ids) {
@@ -211,5 +233,15 @@ function wireDiag(box) {
     else if (a.type === "brief") sdBriefDialog([text]);
     else await sdPlans(sdStudentsOf(a.ids), text);
   }));
+  if ($("#sd-cgen", box)) {
+    $("#sd-cgen", box).onclick = (e) => busy(e.currentTarget, async () => {
+      if ($("#sd-c").value.trim() && !confirm("Replace the comment?")) return;
+      toast("⏳ Writing the comment…");
+      const R = await api(`/sprints/${SD.n}/comment`, { method: "POST", body: {} });
+      $("#sd-c").value = D.comment = R.comment; toast("Comment written and saved");
+    });
+    $("#sd-csave", box).onclick = (e) => busy(e.currentTarget, async () => { const R = await api(`/sprints/${SD.n}/comment`, { method: "PUT", body: { text: $("#sd-c").value } }); D.comment = R.comment; toast("Comment saved"); });
+    $("#sd-ccopy", box).onclick = () => copyText($("#sd-c").value, "Comment copied");
+  }
   $$("[data-sdcopy]", box).forEach((b) => b.onclick = () => { const a = D.actions.actions[Number(b.dataset.sdcopy)]; copyText([a.title, a.why, a.content].filter(Boolean).join("\n"), "Copied"); });
 }

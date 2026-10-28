@@ -103,6 +103,19 @@ async function loadRef(force = false) {
 const compName = (code) => REF?.referential.find((c) => c.code === code)?.name ?? "";
 const compChip = (s, cls = "") => { const p = parseC(s); return `<span class="tag comp ${cls}" title="${esc(p ? compName(p.code) : "")}">${esc(cText(s))}</span>`; };
 
+// ======================================================================= PROGRAMME & PLANNING
+// The year of the programme, week by week (sprints, briefs, competencies of each week), with « generate the brief of
+// this week ». The competencies themselves are on Evaluation → Competencies; the programme is changed in Settings.
+async function viewPlanning() {
+  const pg = await api("/programs");
+  const P = pg.current;
+  view.innerHTML = `<div class="page-head"><div><h1>Programme &amp; planning</h1>
+      <p class="sub"><b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}: the weeks, the sprints and the brief of each week.</p></div>
+      <div class="toolbar" style="margin:0"><a class="btn" href="#/sprints">Sprints →</a><a class="btn" href="#/settings/programme">${icon("gear")} Change the programme</a></div></div>
+    ${planningHtml(P, pg)}`;
+  $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
+}
+
 // ======================================================================= BRIEFS
 async function viewBriefs(tab = "list") {
   const [r, pg] = await Promise.all([api("/briefs"), api("/programs")]);
@@ -116,8 +129,6 @@ async function viewBriefs(tab = "list") {
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
       <button role="tab" data-t="follow">Follow-up</button>
-      <button role="tab" data-t="plan">Planning</button>
-      <button role="tab" data-t="prog">Programme &amp; competencies</button>
     </div>
     <div id="br-tab"></div>`;
   const tabs = {
@@ -129,19 +140,16 @@ async function viewBriefs(tab = "list") {
       { label: "Due", sort: "due_at", html: (b) => dueIn(b.due_at) },
     ], items, { onRow: (b) => (location.hash = `#/brief/${b.id}`), empty: "No brief yet: generate one from an idea, or import one from Simplonline." }),
     follow: () => `<div id="w-follow"><p class="muted">Loading…</p></div>`,
-    plan: () => planningHtml(P, pg),
-    prog: () => `<section class="panel"><div class="panel-head"><h2>${esc(P.name)}</h2><a class="btn" href="#/settings/programme">${icon("gear")} Change it in Settings</a></div>
-      <p class="muted small">To change the planning or the competencies (another year, another stack), download the Excel template in Settings → Programme, fill it and upload it.</p>
-      <div class="ref-list">${P.referential.map((c) => `<div><span class="tag comp ${c.kind}">${esc(cLabel(c.code))}</span> <span class="small">${esc(c.name)}</span></div>`).join("")}</div></section>`,
   };
   const show = (k) => {
     $$("[data-t]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.t === k)));
     $("#br-tab").innerHTML = tabs[k]();
-    if (k === "plan") $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
     if (k === "follow") wFollow($("#w-follow")).catch((e) => toast(e.message, true));
   };
   $$("[data-t]").forEach((b) => b.onclick = () => show(b.dataset.t));
-  show(tab);
+  // the planning moved to Evaluation → Programme (#/planning): old links still land there
+  if (tab === "plan" || tab === "prog") { location.hash = "#/planning"; return; }
+  show(tabs[tab] ? tab : "list");
   $("#br-new").onclick = () => briefGenerator(P, null, pg.now, pg);
   $("#br-import").onclick = () => briefGenerator(P, null, pg.now, { ...pg, mode: "import" });
   $("#br-quick").onclick = () => quickBrief();
@@ -2744,7 +2752,7 @@ async function programmeSettings(root) {
       <div class="prog-figs"><div><b>${P.weeks.length}</b><span>weeks</span></div><div><b>${P.sprints.length}</b><span>sprints</span></div><div><b>${P.referential.filter((c) => c.kind === "tech").length}</b><span>technical comp.</span></div><div><b>${P.referential.filter((c) => c.kind === "soft").length}</b><span>transversal comp.</span></div><div><b>${first ? dayLabelOf(first) : "—"}</b><span>to ${last ? dayLabelOf(last) : "—"}</span></div></div>
       ${pg.list.length > 1 ? `<label>Programme of this class</label><div class="toolbar" style="margin:0"><select id="pg-pick" style="min-width:320px">${pg.list.map((p) => `<option value="${esc(p.id)}" ${p.id === P.id ? "selected" : ""}>${esc(p.name)}${p.builtin ? " (built-in)" : ""}</option>`).join("")}</select><button class="btn" id="pg-use">Use it</button>
         ${P.custom ? `<button class="btn danger" id="pg-del">Delete this one</button>` : ""}</div>` : ""}
-      <p class="muted small">See the weeks in <a href="#/briefs/plan">Briefs → Planning</a>.</p>
+      <p class="muted small">See the weeks in <a href="#/planning">Evaluation → Programme &amp; planning</a>.</p>
     </div>
     <div class="panel set-card"><h3>Update it from Excel</h3>
       <div class="xl-steps">
@@ -2978,6 +2986,6 @@ function wireLearning(d, sid) {
 }
 
 Object.assign(routes, {
-  briefs: viewBriefs, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies,
+  briefs: viewBriefs, planning: viewPlanning, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies,
   projects: () => { location.hash = "#/briefs"; }, project: () => { location.hash = "#/briefs"; },
 });

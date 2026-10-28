@@ -16,7 +16,7 @@ import { getBrief, rewriteSection, saveBrief } from "./briefs.ts";
 import { askReview, paperFacts, parseQuestions, readPaper } from "./review/debrief.ts";
 import { remarkNotions, storyCore } from "./review/comment.ts";
 import { memberLevelOf } from "./review/members.ts";
-import { oneLine, reviewStates } from "./review/engine.ts";
+import { conceptsOf, oneLine, reviewStates } from "./review/engine.ts";
 
 export class DiagError extends Error {}
 
@@ -30,6 +30,41 @@ export function shareOf(n: number, of: number): Share {
 const key = (t: string) => String(t || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9#<>.]+/g, " ").trim();
 const parse = <T>(v: string | null | undefined, d: T): T => { try { return (v ? JSON.parse(v) : d) ?? d; } catch { return d; } };
 const day = (t: number | null | undefined) => (t ? new Date(t * 1000).toISOString().slice(0, 10) : "");
+
+// ------------------------------------------------------------------ the sprint's objectives (Technologies / concepts)
+/** The planning's « Technologies / concepts » cell (02_Sprints): the field that reads like « HTML5 : sémantique, formulaires… ».
+ *  The YouCode import keeps it in `briefs`, a programme written by hand may have it in `technologies`. */
+export function goalsText(ps: { briefs?: string; technologies?: string } | undefined): string {
+  if (!ps) return "";
+  const score = (t: string) => String(t || "").split(/\n+/).filter((l) => /^[^:]{2,50}:\s*\S/.test(l.trim()) && !/^-?\s*brief\s*\d/i.test(l.trim())).length;
+  const c = [ps.briefs || "", ps.technologies || ""].sort((a, b) => score(b) - score(a));
+  return score(c[0]) ? c[0] : "";
+}
+/** « Mise en page : Flexbox et CSS Grid. » → { group: "Mise en page", items: ["Flexbox", "CSS Grid"] }; a line without « : » is one item. */
+export function parseGoals(text: string): { group: string; items: string[] }[] {
+  const out: { group: string; items: string[] }[] = [];
+  for (const raw of String(text || "").split(/\n+/)) {
+    const line = raw.replace(/\*+/g, "").replace(/^[\s•\-–]+/, "").replace(/\s+/g, " ").trim().replace(/[.;]+$/, "");
+    if (line.length < 2 || /^(brief|-->|---)/i.test(line)) continue;
+    const m = line.match(/^([^:]{2,60}):\s*(.+)$/);
+    if (!m) { const one = line.replace(/\s*\(.*\)\s*$/, "").trim().slice(0, 80); out.push({ group: one, items: [one] }); continue; }
+    const items = m[2].split(/,|;|\s+et\s+(?=[A-ZÀ-Ýa-zà-ÿ])/).map((x) => x.trim().replace(/[.;]+$/, "")).filter((x) => x.length >= 2).map((x) => x.slice(0, 80));
+    out.push({ group: m[1].trim().slice(0, 60), items: [...new Set(items)].slice(0, 12) });
+  }
+  return out.filter((g) => g.items.length).slice(0, 20);
+}
+const STOPW = new Set(["les", "des", "une", "aux", "avec", "dans", "pour", "base", "mise", "page", "pages", "bonne", "bonnes", "pratique", "pratiques", "structure", "structuration",
+  "donnee", "donnees", "gestion", "utilisation", "classe", "classes", "unite", "unites", "design", "web", "outil", "outils", "projet", "projets", "creation", "dynamique", "moderne",
+  "notion", "notions", "css", "html", "code", "client", "cote", "fonctionnalite", "fonctionnalites", "lecture", "different", "differents", "simple", "simples", "selon", "entre"]);
+const wordsOf = (t: string) => new Set(key(t).split(" ").map((w) => w.replace(/s$/, "")).filter((w) => w.length >= 3 && !STOPW.has(w)));
+/** Does a lacune (a notion) touch an objective (an item of the planning)? Same concept, or a distinctive word in common. */
+export function touches(item: string, notion: string): boolean {
+  const ci = new Set(conceptsOf(item)), cn = conceptsOf(notion);
+  if (cn.some((c) => ci.has(c)) || ci.has(notion)) return true;
+  // the same word, or the same stem (« form » / « formulaire », « selecteur » / « selecteurs »)
+  const wi = [...wordsOf(item)];
+  return [...wordsOf(notion)].some((w) => wi.some((x) => x === w || (Math.min(x.length, w.length) >= 4 && (x.startsWith(w) || w.startsWith(x)))));
+}
 
 interface Rv { brief_id: number; who: string; status: string; level: string | null; plevel: string | null; ex: string | null; co: string | null; fin: string | null; mem: string | null; oral: string | null; rem: string | null; ck: string | null; contrib: string | null; assess: string | null }
 
@@ -64,6 +99,7 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
   const takers = aIds.length ? await all<{ assessment_id: number; discord_id: string; score: number | null; grades: string | null; answers: string | null }>(env,
     `SELECT assessment_id, discord_id, score, grades, answers FROM assessment_takers WHERE status = 'graded' AND assessment_id IN (${aIds.map(() => "?").join(",")})`, ...aIds).catch(() => []) : [];
   const qsOf = new Map(assessments.map((a) => [a.id, parseQuestions(a.questions)]));
+  const qTexts = [...qsOf.values()].flat().map((q: any) => `${q?.prompt || ""} ${q?.expected || ""}`);
   const assessBy = new Map<string, { brief: number; title: string; score: number | null; ko: string[]; ok: string[] }>();   // `${brief}|${uid}`
   for (const t of takers) {
     const a = assessments.find((x) => x.id === t.assessment_id)!;
@@ -170,9 +206,26 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
     .sort((a, b) => b.n - a.n || a.notion.localeCompare(b.notion)).slice(0, 40);
   const feats = [...features.values()].map((f) => ({ text: f.text, brief: f.brief, n: f.uids.size, share: shareOf(f.uids.size, E), students: who(f.uids) }))
     .sort((a, b) => b.n - a.n).slice(0, 25);
-  // to follow: several objectives missed, or many lacunes
-  const follow = people.map((x) => ({ ...x, weight: 3 * x.missed.length + x.lacunes.length + (["faible", "critique"].includes(x.level) ? 3 : 0) }))
-    .filter((x) => x.missed.length || x.lacunes.length >= 2 || ["faible", "critique"].includes(x.level)).sort((a, b) => b.weight - a.weight);
+  // to follow: the ones who stand out from the class — a weak level, several competencies missed, or far more lacunes
+  // than most (never the whole class: at most a third, and always the weak levels)
+  const counts = people.map((x) => x.lacunes.length).sort((a, b) => a - b);
+  const median = counts.length ? counts[Math.floor(counts.length / 2)] : 0;
+  const many = Math.max(5, median + 3);
+  const weak = (x: typeof people[number]) => ["faible", "critique"].includes(x.level);
+  const ranked = people.map((x) => ({ ...x, weight: 3 * x.missed.length + x.lacunes.length + (weak(x) ? 6 : 0) + (x.level === "critique" ? 4 : 0),
+    why: [x.level === "critique" ? "critical level" : weak(x) ? "weak level" : "", x.missed.length >= 2 ? `${x.missed.length} competencies missed` : "", x.lacunes.length >= many ? `${x.lacunes.length} lacunes (class: ~${median})` : ""].filter(Boolean) }))
+    .filter((x) => x.why.length).sort((a, b) => b.weight - a.weight);
+  const cap = Math.max(3, Math.ceil(E * 0.3));
+  const follow = [...ranked.filter(weak), ...ranked.filter((x) => !weak(x)).slice(0, Math.max(0, cap - ranked.filter(weak).length))].sort((a, b) => b.weight - a.weight);
+  // the sprint's objectives (planning: Technologies / concepts): who has a lacune on each; covered = an assessment
+  // question or a lacune is about it (else « not evaluated yet »)
+  const notionsOf = new Map<string, string[]>();
+  for (const v of notions.values()) for (const u of v.uids) notionsOf.set(u, [...(notionsOf.get(u) || []), v.notion]);
+  const goals = parseGoals(goalsText(ps)).map((gr) => ({ group: gr.group, items: gr.items.map((it) => {
+    const missing = [...notionsOf.entries()].filter(([, ns]) => ns.some((x) => touches(it, x))).map(([u]) => u);
+    const covered = missing.length > 0 || qTexts.some((t) => touches(it, t));
+    return { name: it, covered, n: missing.length, of: E, share: shareOf(missing.length, E), missing: who(missing) };
+  }) }));
   const today = new Date().toISOString().slice(0, 10);
   // the next briefs (to put a lacune into): not started yet, the soonest first
   const next = briefRows.filter((b) => b.status !== "archived" && !ids.includes(b.id) && (!b.start_at || day(b.start_at) >= today) && ((b.sprint ?? 0) >= n || !b.sprint))
@@ -183,7 +236,8 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
       state: today < sp.start ? "upcoming" : today > sp.end ? "done" : "running" },
     briefs: briefs.map((b) => ({ id: b.id, title: b.title, due: day(b.due_at), debriefs: reviews.filter((r) => r.brief_id === b.id).length, final: reviews.filter((r) => r.brief_id === b.id && r.status === "final").length, assessed: takers.filter((t) => assessments.some((a) => a.id === t.assessment_id && a.brief_id === b.id)).length })),
     students: students.length, evaluated: E,
-    objectives: objs, lacunes, features: feats, follow: follow.slice(0, 40), next,
+    objectives: objs, goals, lacunes, features: feats, follow: follow.slice(0, 40), next,
+    comment: (await one<{ comment: string }>(env, "SELECT comment FROM sprint_comments WHERE guild_id = ? AND program = ? AND sprint = ?", g.id, p.id, n).catch(() => null))?.comment || "",
     actions: parse<any>(saved?.v, null),
   };
 }

@@ -6455,7 +6455,7 @@ section("🩺 sprint diagnosis: objectives on the last brief, shared lacunes cou
   // brief A: everyone validated C3; brief B (the last one): only Alice did → the objective is judged on B
   for (const u of S) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bA, G, `u:${u}`, recOf(true), clock.now());
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bB, G, `u:${U.alice.id}`, recOf(true), clock.now());
-  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bB, G, `u:${U.bob.id}`, recOf(false, { remarks: { text: "Il ne sait pas expliquer la différence entre margin et padding." } }), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'draft', 'faible', ?)", bB, G, `u:${U.bob.id}`, recOf(false, { remarks: { text: "Il ne sait pas expliquer la différence entre margin et padding." } }), clock.now());
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bB, G, `u:${U.carol.id}`, recOf(false), clock.now());
   // brief B's assessment: Bob and Carol miss the grid question
   const qs = [{ id: "g", type: "explain", prompt: "Crée une grille CSS de 3 colonnes (grid-template-columns).", expected: "grid", points: 1 }, { id: "f", type: "explain", prompt: "Différence entre justify-content et align-items en Flexbox ?", expected: "axes", points: 1 }];
@@ -6469,8 +6469,12 @@ section("🩺 sprint diagnosis: objectives on the last brief, shared lacunes cou
   const grid = D.lacunes.find((l: any) => /grid|grille/i.test(l.notion));
   check(grid && grid.n === 2 && grid.sources.includes("assessment") && grid.students.map((x: any) => x.uid).sort().join() === [U.bob.id, U.carol.id].sort().join() && D.lacunes.some((l: any) => /margin/.test(l.notion) && l.sources.includes("debrief")),
     "the lacunes: from the last brief's assessment and the debrief's remarks, with how many students and who");
-  check(D.features.some((f: any) => /galerie/.test(f.text) && f.n === 2) && D.follow.some((x: any) => x.uid === U.bob.id && x.missed.length && x.lacunes.length) && !D.follow.some((x: any) => x.uid === U.alice.id),
-    "the last brief's features not done, and the students to follow (objectives missed, lacunes)");
+  check(D.follow.some((x: any) => x.uid === U.bob.id && x.why.includes("weak level")) && !D.follow.some((x: any) => x.uid === U.alice.id) && !D.follow.some((x: any) => x.uid === U.carol.id),
+    "students to follow: only the ones who stand out (a weak level, several competencies missed, far more lacunes than the class), never everyone");
+  const goals = D.goals.flatMap((g: any) => g.items.map((i: any) => ({ ...i, group: g.group })));
+  const gridG = goals.find((i: any) => i.name === "CSS Grid");
+  check(D.goals.length > 3 && gridG && gridG.covered && gridG.missing.some((x: any) => x.uid === U.bob.id) && goals.some((i: any) => !i.covered),
+    `the sprint's objectives come from the planning's Technologies / concepts (« Mise en page : Flexbox et CSS Grid »): who has a lacune on each, the ones not evaluated yet (${JSON.stringify(gridG)})`);
   const A = await api("POST", `/api/sprints/${n}/actions?g=${G}`, {});
   check(A.status === 200 && A.data.actions.actions.length === 3 && A.data.actions.actions[0].type === "live" && A.data.actions.actions[0].ids.length > 0 && (await api("GET", `/api/sprints/${n}/diag?g=${G}`)).data.actions?.resume,
     `✨ the actions proposed (live coding, plans, the next brief), kept with the sprint (${A.status} ${A.data.error ?? ""})`);
