@@ -3895,4 +3895,9 @@ window.CB_FR = {
   "Open on Simplonline": "Ouvrir sur Simplonline",
   "📄 Simplonline ↗": "📄 Simplonline ↗",
   "The Simplonline link must start with https://": "Le lien Simplonline doit commencer par https://",
+  "lines written by an AI": "lignes écrites par une IA",
+  "lines pasted": "lignes collées",
+  "🤖 AI lines": "🤖 Lignes IA",
+  "📋 Pasted": "📋 Collé",
+  "of the lines": "des lignes",
 };

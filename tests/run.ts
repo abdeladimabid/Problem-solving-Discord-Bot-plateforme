@@ -5158,7 +5158,17 @@ section("VS Code activity: the dashboard (today, week, learner, squads, CSV, rem
   const csv = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=day`);
   check(csv.status === 200 && String(csv.data).includes("learner,squad,status,active_min,writing_min") && String(csv.data).includes("Alice") && String(csv.data).includes(",4,"), "Export CSV of the day (minutes)");
   const csvw = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=week`);
-  check(String(csvw.data).includes(`${V.mondayOf(day)}_writing_min`) && String(csvw.data).includes("week_writing_min"), "…and of the week");
+  check(String(csvw.data).includes(`${V.mondayOf(day)}_writing_min`) && String(csvw.data).includes("week_writing_min") && String(csvw.data).includes("week_ai_lines,week_typed_lines,week_pasted_lines"), "…and of the week (with the lines by an AI, typed, pasted)");
+  // the week: lines written by an AI and pasted (big blocks added in a few seconds), per learner and for the class
+  {
+    const wk0 = q1("SELECT agg FROM vsc_days WHERE guild_id = ? AND discord_id = ? AND day = ?", G, U.alice.id, day);
+    const agg0 = JSON.parse(wk0?.agg || "{}");
+    run1("UPDATE vsc_days SET ai_lines = 120, human_lines = 80, agg = ? WHERE guild_id = ? AND discord_id = ? AND day = ?", JSON.stringify({ ...agg0, big: [[1, "todo", "app.js", 150], [2, "todo", "style.css", 90]] }), G, U.alice.id, day);
+    const W = (await api("GET", `/api/vscode/week?g=${G}&date=${day}`)).data;
+    const la = W.learners?.find((x: any) => x.id === U.alice.id);
+    check(la && la.ai === 120 && la.hu === 80 && la.pasted === 240 && la.pastes === 2 && W.totals.ai >= 120 && W.totals.pasted >= 240 && W.totals.pasteLearners >= 1, `the week: lines by an AI and lines pasted, per learner and for the class (${JSON.stringify(la && { ai: la.ai, p: la.pasted })})`);
+    run1("UPDATE vsc_days SET agg = ? WHERE guild_id = ? AND discord_id = ? AND day = ?", wk0?.agg ?? null, G, U.alice.id, day);
+  }
   // the reminder: only to students not connected
   discordCalls.length = 0;
   const rem = await api("POST", "/api/vscode/remind", { g: G, ids: [U.bob.id, U.alice.id, "424242"] });

@@ -2381,3 +2381,9 @@ button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); tr
 .br-done .br-bar i { background: var(--up); } .br-todo .br-bar i { background: #f59e0b; }
 .br-ok { color: var(--up); } .br-left { color: var(--warn); }
 @media (max-width: 700px) { .br-cards { grid-template-columns: 1fr; } }
+/* VS Code week: AI and pasted lines */
+.vs-figs { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); }
+.vs-heat .vs-cell { position: relative; }
+.vs-heat .vs-flags { position: absolute; top: 1px; right: 3px; font-style: normal; font-size: 9px; line-height: 1; opacity: .85; }
+.vs-hi { color: var(--down); font-weight: 700; }
+.vs-hi small { font-weight: 500; }

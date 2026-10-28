@@ -205,8 +205,11 @@ export async function classDay(env: Env, g: GuildRow, day: string, live = false)
 export async function classWeek(env: Env, g: GuildRow, day: string) {
   const mon = mondayOf(day), sun = addDays(mon, 6), prevMon = addDays(mon, -7);
   const { students, squadOf, squads } = await classStudents(env, g);
-  const rows = await all<{ discord_id: string; day: string; active_s: number; write_s: number }>(env,
-    "SELECT discord_id, day, active_s, write_s FROM vsc_days WHERE guild_id = ? AND day >= ? AND day <= ?", g.id, prevMon, sun);
+  // the lines too: written by an AI (agent, completion), typed by the learner, and pasted (a big jump of a file's line
+  // count in a few seconds, not by an AI: see vscode.ts BIG_LINES)
+  const rows = await all<{ discord_id: string; day: string; active_s: number; write_s: number; ai_lines: number | null; human_lines: number | null; big: string | null }>(env,
+    "SELECT discord_id, day, active_s, write_s, ai_lines, human_lines, json_extract(agg, '$.big') AS big FROM vsc_days WHERE guild_id = ? AND day >= ? AND day <= ?", g.id, prevMon, sun);
+  const pasted = (r: { big: string | null } | undefined) => { if (!r?.big) return [0, 0]; try { const b = JSON.parse(r.big); return Array.isArray(b) ? [b.reduce((s: number, x: any) => s + (Number(x?.[3]) || 0), 0), b.length] : [0, 0]; } catch { return [0, 0]; } };
   const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
   const cell = new Map(rows.map((r) => [`${r.discord_id}|${r.day}`, r]));
   const prev = new Map<string, [number, number]>();
@@ -214,12 +217,18 @@ export async function classWeek(env: Env, g: GuildRow, day: string) {
   const learners = students.map((p) => {
     const cells = days.map((d) => { const c = cell.get(`${p.discord_id}|${d}`); return [c?.active_s ?? 0, c?.write_s ?? 0] as [number, number]; });
     const pv = prev.get(p.discord_id) ?? [0, 0];
-    return { id: p.discord_id, name: p.name || p.discord_id, squad: squadOf.get(p.discord_id) ?? null, cells, active: cells.reduce((s, c) => s + c[0], 0), write: cells.reduce((s, c) => s + c[1], 0), prevActive: pv[0], prevWrite: pv[1] };
+    const mine = days.map((d) => cell.get(`${p.discord_id}|${d}`));
+    const lines = mine.map((c) => { const [n, k] = pasted(c); return { ai: c?.ai_lines ?? 0, hu: c?.human_lines ?? 0, pasted: n, pastes: k }; });
+    const sum = (k: "ai" | "hu" | "pasted" | "pastes") => lines.reduce((s, x) => s + x[k], 0);
+    return { id: p.discord_id, name: p.name || p.discord_id, squad: squadOf.get(p.discord_id) ?? null, cells, lines, active: cells.reduce((s, c) => s + c[0], 0), write: cells.reduce((s, c) => s + c[1], 0), prevActive: pv[0], prevWrite: pv[1],
+      ai: sum("ai"), hu: sum("hu"), pasted: sum("pasted"), pastes: sum("pastes") };
   });
   const perDay = days.map((_, i) => learners.reduce((s, l) => [s[0] + l.cells[i][0], s[1] + l.cells[i][1]], [0, 0]));
   return {
     monday: mon, days, squads, learners, perDay,
-    totals: { active: learners.reduce((s, l) => s + l.active, 0), write: learners.reduce((s, l) => s + l.write, 0), prevActive: learners.reduce((s, l) => s + l.prevActive, 0), prevWrite: learners.reduce((s, l) => s + l.prevWrite, 0) },
+    totals: { active: learners.reduce((s, l) => s + l.active, 0), write: learners.reduce((s, l) => s + l.write, 0), prevActive: learners.reduce((s, l) => s + l.prevActive, 0), prevWrite: learners.reduce((s, l) => s + l.prevWrite, 0),
+      ai: learners.reduce((s, l) => s + l.ai, 0), hu: learners.reduce((s, l) => s + l.hu, 0), pasted: learners.reduce((s, l) => s + l.pasted, 0), pastes: learners.reduce((s, l) => s + l.pastes, 0),
+      aiLearners: learners.filter((l) => l.ai > 0).length, pasteLearners: learners.filter((l) => l.pasted > 0).length },
     weekend: perDay.slice(5).some((d) => d[0] > 0),
   };
 }
@@ -312,8 +321,8 @@ export async function exportCsv(env: Env, g: GuildRow, period: "day" | "week", d
     for (const r of d.rows) lines.push([r.name, r.squad, r.status, min(r.active), min(r.write), hm(r.first), hm(r.last), r.cur?.p ?? "", r.lineData ? r.ai : "", r.lineData ? r.hu : ""]);
   } else {
     const w = await classWeek(env, g, day);
-    lines.push(["learner", "squad", ...w.days.flatMap((d) => [`${d}_active_min`, `${d}_writing_min`]), "week_active_min", "week_writing_min", "previous_week_writing_min"]);
-    for (const l of w.learners) lines.push([l.name, l.squad, ...l.cells.flatMap(([a, wr]) => [min(a), min(wr)]), min(l.active), min(l.write), min(l.prevWrite)]);
+    lines.push(["learner", "squad", ...w.days.flatMap((d) => [`${d}_active_min`, `${d}_writing_min`]), "week_active_min", "week_writing_min", "previous_week_writing_min", "week_ai_lines", "week_typed_lines", "week_pasted_lines"]);
+    for (const l of w.learners) lines.push([l.name, l.squad, ...l.cells.flatMap(([a, wr]) => [min(a), min(wr)]), min(l.active), min(l.write), min(l.prevWrite), l.ai, l.hu, l.pasted]);
   }
   return "﻿" + lines.map((r) => r.map(cell).join(",")).join("\n") + "\n";
 }
