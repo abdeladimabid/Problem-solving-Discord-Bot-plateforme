@@ -76,16 +76,17 @@ function drawDiag(box) {
 
 /** The planning's objectives, by group (« HTML5 », « Mise en page »…): each item, who still has a lacune on it. */
 function goalsHtml(goals) {
+  // the index of each item in the planning's order (the actions find it by it); the groups not evaluated yet first
   let k = -1;
-  return goals.map((g) => {
-    const items = g.items.map((it) => ({ it, i: ++k }));
+  const all = goals.map((g) => ({ g, items: g.items.map((it) => ({ it, i: ++k })) }));
+  return [...all.filter((x) => !x.g.items.some((it) => it.covered)), ...all.filter((x) => x.g.items.some((it) => it.covered))].map(({ g, items }) => {
     const seen = items.filter((x) => x.it.covered), later = items.filter((x) => !x.it.covered);
     const one = g.items.length === 1 && g.items[0] === g.group;
     return `<div class="sd-goal"><div class="sd-goal-h"><b>${esc(g.group)}</b>${seen.length ? `<span class="small muted">${seen.filter((x) => x.it.share === "few").length}/${seen.length} reached by most</span>` : `<span class="small muted">not evaluated yet</span>`}</div>
       ${seen.map(({ it, i }) => `<div class="sd-gi"><span class="sd-gi-n">${one ? "" : esc(it.name)}</span>
         ${sdBar([{ n: Math.max(0, it.of - it.n), cls: "ok", title: `${it.of - it.n} without a lacune on it` }, { n: it.n, cls: it.share === "majority" ? "bad" : it.share === "group" ? "warn" : "few", title: `${it.n} with a lacune` }])}
         <span class="small sd-gi-c">${it.n ? `<span class="${it.share === "few" ? "" : "sd-miss"}">${it.n}/${it.of}</span> to review` : `<span class="lvl ok">✓ reached</span>`}</span>
-        <span class="sd-gi-a">${it.n ? sdPeople(it.missing, 5) + actionButtons("g", i, it.share, it.n) : ""}</span></div>`).join("")}
+        <span class="sd-gi-a">${it.n ? (it.n > 2 ? sdPeople(it.missing, 5) : "<span></span>") + actionButtons("g", i, it.share, it.n) : ""}</span></div>`).join("")}
       ${later.length ? `<div class="sd-gi-later small muted">Not evaluated yet: ${later.map(({ it }) => esc(it.name)).join(" · ")}</div>` : ""}</div>`;
   }).join("");
 }
