@@ -25,6 +25,8 @@ import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { allowedLevel, blockSql, getBlocks, quickKindFor, setBlock } from "../src/shared/practiceblock.ts";
+import { pickChallenge as pickForTest } from "../src/shared/challenges.ts";
 import { contribution as memberContribution, memberLevel, memberLevelOf, memberLevels } from "../src/shared/review/members.ts";
 import { pickFiles, taskChecks, taskFallback, taskTarget } from "../src/shared/review/task.ts";
 import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, workshopTimingErrors } from "../src/shared/activities.ts";
@@ -6341,6 +6343,70 @@ section("debrief: performance criteria are like bonus (done: a plus; not done: n
   const rec = (critOk: boolean) => ({ result: { exigences: [{ type: "story", texte: "Page d'accueil" }, { type: "story", texte: "Formulaire" }, { type: "critere", texte: "W3C valide" }, { type: "critere", texte: "Accessibilité WCAG" }], competences: [] }, final: { ex: [true, true, critOk, critOk] } });
   const lv = (r: any) => debriefLevel(r, reviewStates(r));
   check(lv(rec(false)) === lv(rec(true)) && lv(rec(false)) === "excellent", `criteria not done don't lower the level (${lv(rec(false))} / ${lv(rec(true))})`);
+}
+
+section("🚫 practice blocks: one student, one type (some levels, some days), never picked, the reason when asked, the dashboard, /teacher block · unblock");
+{
+  const D = { id: "9201", name: "Dina", teacher: false };
+  run1("DELETE FROM app_settings WHERE k LIKE 'pblock:%'");
+  // /teacher block: students can't, the teacher can (with a DM to the student)
+  const denied = await slash(D, "teacher", { member: D.id, type: "bug" }, "block");
+  check(text(denied).includes("teacher"), "a student can't block anyone");
+  const dmsBefore = discordCalls.filter((c) => c.path === "/users/@me/channels" && c.body?.recipient_id === D.id).length;
+  const r = await slash(U.prof, "teacher", { member: D.id, type: "bug", level: "hard", reason: "Farming hard bugs: finish your brief first" }, "block");
+  check(r.type === 5 && text(lastPatch()).includes("can no longer practice") && text(lastPatch()).includes("Find the bug"), "/teacher block answers the teacher (privately)");
+  check(discordCalls.filter((c) => c.path === "/users/@me/channels" && c.body?.recipient_id === D.id).length === dmsBefore + 1, "…and the student gets a DM");
+  const bl = await getBlocks(env, G, D.id);
+  check(bl.length === 1 && bl[0].type === "bug" && bl[0].levels.join() === "hard" && !bl[0].until, "kept: Find the bug, hard only, until lifted");
+
+  // asked for directly: the reason; no level asked: the nearest open one
+  const asked = await slash(D, "practice", { difficulty: "hard", type: "bug" });
+  check(asked.type === 4 && text(asked).includes("paused") && text(asked).includes("Farming hard bugs"), "a blocked type and level asked for: the teacher's reason, no challenge");
+  check(allowedLevel(bl, "bug", "hard") === "medium" && allowedLevel(bl, "bug", "easy") === "easy", "no level chosen: the nearest open level (easier first)");
+  await slash(D, "practice", { difficulty: "medium", type: "bug" });
+  const aid = Number(ids(lastPatch()).find((i) => i.startsWith("ans:"))?.split(":")[1]);
+  const got = q1("SELECT c.kind, c.difficulty FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.id = ?", aid);
+  check(got?.kind === "bug" && got?.difficulty === "medium", "another level of the same type still works");
+
+  // a whole type: never in a random quick challenge
+  await slash(U.prof, "teacher", { member: D.id, type: "output", tell: false }, "block");
+  const asked2 = await slash(D, "practice", { difficulty: "easy", type: "output" });
+  check(text(asked2).includes("paused") && text(asked2).includes("Predict the output"), "every level blocked: refused at any level");
+  const g = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const list = await getBlocks(env, G, D.id);
+  let leaks = 0;
+  for (let i = 0; i < 12; i++) {
+    const c = await pickForTest(env, g, { players: [D.id], difficulty: "easy", mode: "quick", langs: ["python"], allowSeen: true, block: list });
+    if (c && c.kind === "output") leaks++;
+  }
+  check(leaks === 0, "a random quick challenge is never of a blocked type");
+  check(!(await pickForTest(env, g, { players: [D.id], difficulty: "hard", mode: "quick", kind: "bug", allowSeen: true, block: list })), "a blocked type and level: nothing picked");
+  check(quickKindFor(list, "easy") !== "output" && quickKindFor([{ type: "mcq", levels: [], until: null, reason: "", at: 0 }, { type: "bug", levels: [], until: null, reason: "", at: 0 }, { type: "complexity", levels: [], until: null, reason: "", at: 0 }, { type: "output", levels: [], until: null, reason: "", at: 0 }], "easy") === "none", "AI generation only of an open quick type (none left: none)");
+  const gitSql = blockSql([{ type: "git", levels: [], until: null, reason: "", at: 0 }]);
+  check(gitSql.sql.includes("'git'") && !gitSql.args.length, "a Git block leaves out Git questions only, not every multiple choice");
+
+  // the dashboard
+  const cls = await api("GET", `/api/practice-blocks?g=${G}`);
+  const me = cls.data.students?.find((s: any) => s.uid === D.id);
+  check(cls.status === 200 && me?.blocks.length === 2, "the class page lists the blocked students and their blocks");
+  const put = await api("PUT", `/api/students/${D.id}/blocks`, { g: G, type: "sql", levels: ["easy", "medium", "hard"], days: 3, reason: "x", notify: false });
+  check(put.status === 200 && put.data.blocks.find((b: any) => b.type === "sql")?.levels.length === 0 && put.data.blocks.find((b: any) => b.type === "sql")?.until > 0, "blocking from the dashboard (all three levels = every level, 3 days)");
+  check((await api("PUT", `/api/students/${D.id}/blocks`, { g: G, type: "nope" })).status === 400, "…an unknown type: refused");
+  const del = await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=output`);
+  check(del.status === 200 && !del.data.blocks.some((b: any) => b.type === "output"), "lifting one block from the dashboard");
+  check((await api("GET", `/api/students/${D.id}/blocks?g=${G}`)).data.blocks.length === 2, "the student's page reads their blocks");
+
+  // it ends by itself
+  await setBlock(env, G, D.id, { type: "regex", days: 1 });
+  clock.advance(2 * 86400);
+  check(!(await getBlocks(env, G, D.id)).some((b) => b.type === "regex") && (await getBlocks(env, G, D.id)).some((b) => b.type === "sql"), "a block for some days ends by itself (a longer one is still there)");
+
+  // /teacher unblock
+  const un = await slash(U.prof, "teacher", { member: D.id, type: "bug" }, "unblock");
+  check(text(un).includes("can practice") && !(await getBlocks(env, G, D.id)).some((b) => b.type === "bug"), "/teacher unblock lifts one type");
+  await slash(U.prof, "teacher", { member: D.id }, "unblock");
+  check(!(await getBlocks(env, G, D.id)).length, "/teacher unblock without a type lifts them all");
+  check(text(await slash(U.prof, "teacher", { member: D.id }, "unblock")).includes("no practice block"), "…nothing left to lift: said so");
 }
 
 section("slash command definitions are valid for Discord");

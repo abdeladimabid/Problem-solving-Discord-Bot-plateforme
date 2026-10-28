@@ -12,6 +12,19 @@ const diff = (required = true) => ({
   ],
 });
 
+// the types of challenge a teacher can block for one student (/teacher block · unblock, see practiceblock.ts)
+const BLOCK_CHOICES = [
+  { name: "Write code", name_localizations: fr("Écrire du code"), value: "write" },
+  { name: "Predict the output", name_localizations: fr("Deviner la sortie"), value: "output" },
+  { name: "Find the bug", name_localizations: fr("Trouver le bug"), value: "bug" },
+  { name: "Multiple choice", name_localizations: fr("QCM"), value: "mcq" },
+  { name: "Complexity", name_localizations: fr("Complexité"), value: "complexity" },
+  { name: "SQL query", name_localizations: fr("Requête SQL"), value: "sql" },
+  { name: "Regular expression", name_localizations: fr("Expression régulière"), value: "regex" },
+  { name: "Git question", name_localizations: fr("Question Git"), value: "git" },
+  { name: "HackerRank problem", name_localizations: fr("Problème HackerRank"), value: "coding" },
+];
+
 export const COMMANDS: any[] = [
   {
     name: "link", description: "Link your HackerRank username", description_localizations: fr("Relier ton nom d'utilisateur HackerRank"),
@@ -319,6 +332,33 @@ export const COMMANDS: any[] = [
       {
         type: SUB, name: "verify", description: "Confirm a student's HackerRank link yourself", description_localizations: fr("Confirmer toi-même le lien HackerRank d'un élève"),
         options: [{ type: USER, name: "member", description: "The student", description_localizations: fr("L'élève"), required: true }],
+      },
+      {
+        type: SUB, name: "block", description: "Stop a student from practicing a type of challenge", description_localizations: fr("Empêcher un élève de s'entraîner sur un type de défi"),
+        options: [
+          { type: USER, name: "member", description: "The student", description_localizations: fr("L'élève"), required: true },
+          { type: STRING, name: "type", description: "The type of challenge", description_localizations: fr("Le type de défi"), required: true, choices: BLOCK_CHOICES },
+          {
+            type: STRING, name: "level", description: "Which levels (default: every level)", description_localizations: fr("Quels niveaux (par défaut : tous)"),
+            choices: [
+              { name: "Every level", name_localizations: fr("Tous les niveaux"), value: "all" },
+              { name: "Hard", name_localizations: fr("Difficile"), value: "hard" },
+              { name: "Medium and hard", name_localizations: fr("Moyen et difficile"), value: "medium,hard" },
+              { name: "Medium", name_localizations: fr("Moyen"), value: "medium" },
+              { name: "Easy", name_localizations: fr("Facile"), value: "easy" },
+            ],
+          },
+          { type: INTEGER, name: "days", description: "For how many days (empty = until you lift it)", description_localizations: fr("Pendant combien de jours (vide = jusqu'à ce que tu le lèves)"), min_value: 1, max_value: 365 },
+          { type: STRING, name: "reason", description: "Why (the student reads it)", description_localizations: fr("Pourquoi (l'élève le lit)"), max_length: 300 },
+          { type: BOOLEAN, name: "tell", description: "Tell the student by DM (default: yes)", description_localizations: fr("Prévenir l'élève en MP (par défaut : oui)") },
+        ],
+      },
+      {
+        type: SUB, name: "unblock", description: "Let a student practice a type of challenge again", description_localizations: fr("Laisser un élève s'entraîner de nouveau sur un type de défi"),
+        options: [
+          { type: USER, name: "member", description: "The student", description_localizations: fr("L'élève"), required: true },
+          { type: STRING, name: "type", description: "The type (empty = every block)", description_localizations: fr("Le type (vide = tous les blocages)"), choices: BLOCK_CHOICES },
+        ],
       },
     ],
   },

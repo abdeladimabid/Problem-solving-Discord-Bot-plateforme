@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
@@ -344,6 +345,30 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       ]);
       return ok({ ok: true });
     }
+    // 🚫 practice blocks (practiceblock.ts): one student can't practice a type of challenge (some levels, for some days)
+    m = path.match(/^\/students\/(\d+)\/blocks$/);
+    if (m) {
+      const g = await guild(), id = m[1];
+      if (method === "GET") return ok({ blocks: await getBlocks(env, g.id, id) });
+      if (method === "PUT") {
+        let list;
+        try { list = await setBlock(env, g.id, id, body); } catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
+        let dmSent: boolean | null = null;
+        if (body.notify) {
+          const b = list.find((x) => x.type === body.type)!;
+          dmSent = await dm(env, id, { content: t(g.lang, "blk.dm", blockVars(g.lang, b)) }).catch(() => false);
+        }
+        return ok({ blocks: list, dm: dmSent });
+      }
+      if (method === "DELETE") {
+        const type = url.searchParams.get("type");
+        const before = await getBlocks(env, g.id, id);
+        const list = await removeBlock(env, g.id, id, type);
+        if (body?.notify !== false && type && before.some((b) => b.type === type)) ctx.waitUntil(dm(env, id, { content: t(g.lang, "blk.dm_lifted", { type: typeName(g.lang, type) }) }).catch(() => false));
+        return ok({ blocks: list });
+      }
+    }
+    if (path === "/practice-blocks" && method === "GET") return ok({ students: await classBlocks(env, (await guild()).id) });
     m = path.match(/^\/students\/(\d+)\/points$/);
     if (m && method === "POST") {
       const g = await guild();

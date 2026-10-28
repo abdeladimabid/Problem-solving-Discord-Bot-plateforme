@@ -659,7 +659,7 @@ async function viewStudent(arg) {
   // #/student/<id>?tab=github opens a tab directly
   const [id, qs] = String(arg || "").split("?");
   let current = new URLSearchParams(qs || "").get("tab") || "overview";
-  const [d, list] = await Promise.all([api(`/students/${id}`), loadStudents(), loadSkillDefs()]);
+  const [d, list, blk] = await Promise.all([api(`/students/${id}`), loadStudents(), api(`/students/${id}/blocks`).catch(() => ({ blocks: [] })), loadSkillDefs()]);
   const row = list.find((r) => r.discord_id === id) || { attention: [], trend: "flat" };
   const p = d.player;
   const solvedRows = d.attempts.filter((a) => a.status === "solved" || a.status === "claimed");
@@ -695,6 +695,7 @@ async function viewStudent(arg) {
         <div class="stu-chips">
           <span class="stu-chip">⭐ Level ${d.level.level} · ${esc(d.level.title)}</span>${trend(row.trend)}
           ${d.team ? `<span class="stu-chip">👥 ${esc(d.team.name)}</span>` : ""}
+          ${blk.blocks.length ? `<button type="button" class="stu-chip blk-chip" data-go="challenges" title="${esc(blk.blocks.map((b) => b.type).join(", "))}">🚫 ${blk.blocks.length} practice block${blk.blocks.length > 1 ? "s" : ""}</button>` : ""}
           ${gh?.login ? `<a class="stu-chip" href="https://github.com/${esc(gh.login)}" target="_blank" rel="noopener">🐙 ${esc(gh.login)}</a>` : `<span class="stu-chip off">🐙 GitHub not linked</span>`}
           ${p.hr_display ? `<a class="stu-chip ${p.hr_verified ? "" : "off"}" href="https://www.hackerrank.com/profile/${encodeURIComponent(p.hr_display)}" target="_blank" rel="noopener">HackerRank ${esc(p.hr_display)}${p.hr_verified ? " ✓" : ` · not verified${p.hr_code ? ` (code ${esc(p.hr_code)})` : ""}`}</a>` : `<span class="stu-chip off">HackerRank not linked</span>`}
         </div></div></div>
@@ -743,6 +744,7 @@ async function viewStudent(arg) {
     comps: () => (typeof learningPanel === "function" ? learningPanel(d, id, "comps") : `<p class="muted">—</p>`),
     github: () => `<div id="gh-tab"></div>`,
     challenges: () => `
+      <div id="blk-slot"></div>
       <div class="figures">
         <div class="figure"><b>${d.solved.total}</b><span>solved · ${d.solved.easy} easy, ${d.solved.medium} medium, ${d.solved.hard} hard</span></div>
         <div class="figure"><b>${pct(d.accuracy)}</b><span>accuracy (${d.failed} not solved)</span></div>
@@ -835,7 +837,7 @@ async function viewStudent(arg) {
     if (k === "overview") { wireWorkOn(id, p.name); }
     if (k === "comps" && typeof wireLearning === "function") wireLearning(d, id);
     if (k === "github" && typeof studentGithubTab === "function") studentGithubTab($("#gh-tab"), id, d);
-    if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); }
+    if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); if (typeof blockPanel === "function") blockPanel($("#blk-slot"), id, p.name).catch((e) => toast(e.message, true)); }
     if (k === "points") $("#tab-points").innerHTML = tabs.points();
     $$("#stu-pane a[href^='#/student/" + id + "?tab=']").forEach((a) => a.onclick = (e) => { e.preventDefault(); showPane(new URL(a.href).hash.split("tab=")[1]); });
   };

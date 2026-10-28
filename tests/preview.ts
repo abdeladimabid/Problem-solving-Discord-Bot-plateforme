@@ -385,6 +385,10 @@ env.ASSETS = {
   db.prepare("INSERT INTO guilds (id, name, lang, season, code_lang, daily_hour, league, created_at) VALUES (?, 'CS 2nd year · Group A', 'fr', 'Autumn 2026', 'javascript,php', 9, ?, ?)").run(G2, JSON.stringify({ on: true, name: "Group A" }), now - 60 * DAY);
   db.prepare("UPDATE guilds SET league = ? WHERE id = ?").run(JSON.stringify({ on: true, name: "Group B" }), G);
   db.prepare("UPDATE players SET share_key = 'demoprofile1' WHERE guild_id = ? AND discord_id = '100'").run(G);
+  // 🚫 practice blocks: Rayan farmed hard "Find the bug", Hiba is told to write code before more multiple choice
+  const blk = db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)");
+  blk.run(`pblock:${G}:107`, JSON.stringify([{ type: "bug", levels: ["hard"], until: now + 5 * DAY, reason: "Trop de bugs difficiles d'affilée : avance d'abord ton brief", at: now - 2 * DAY }]), now);
+  blk.run(`pblock:${G}:112`, JSON.stringify([{ type: "mcq", levels: [], until: null, reason: "Passe à Écrire du code", at: now - DAY }, { type: "complexity", levels: ["medium", "hard"], until: now + 12 * DAY, reason: "", at: now - DAY }]), now);
   // her portfolio: what she wrote with /portfolio, her GitHub, months of commits
   db.prepare("UPDATE players SET github_login = 'yasmine-dev' WHERE guild_id = ? AND discord_id = '100'").run(G);
   db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`pf:${G}:100`, JSON.stringify({

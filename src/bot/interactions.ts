@@ -10,7 +10,7 @@ import { notifyCfg, notifyTest, saveNotifyCfg, setTeacher } from "../shared/noti
 import { all, boardHidden, confirmHackerRank, findPlayer, getGuild, getPlayer, linkHackerRank, now, one, playerStats, quickSolvesToday, run, standings } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quickFactor, progressBar, scoringOf, secondsToNextDay, titleKey } from "../shared/game.ts";
-import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
+import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, dm, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
 import {
   answer, feedbackFor, finish, getAttempt, getChallenge, pickChallenge, renderFor, startAttempt, submitCode, verifyCoding,
   codeLangFor, guildLangs, starterFor, startExplain, answerExplain, explainState, EXPLAIN_SECONDS, ensureHints, hintSteps, solutionFor,
@@ -25,6 +25,7 @@ import { arenaChannel, strictArena } from "../shared/arena.ts";
 import { type Ix, deferReply, deferUpdate, errorText, guildFromButton, json, later, memberName, options, reply, say, update } from "./ix.ts";
 export { errorText } from "./ix.ts";
 import { pickForSkill } from "../shared/coach.ts";
+import { BLOCK_TYPES, LEVELS as BLOCK_LEVELS, allowedLevel, blockFor, blockVars, blockedText, getBlocks, quickBlockedText, quickKindFor, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { cmdCreate, createSubmit } from "./create.ts";
 import { FRAMES, THEMES, activeTitle, cosmeticLabel, cosmeticsOf, useHintToken } from "../shared/shop.ts";
 import { briefChoices, cmdBrief, cmdGithub } from "./briefcmd.ts";
@@ -187,13 +188,18 @@ async function cmdForMe(ix: Ix, chosen: Difficulty | null) {
     const level = chosen ?? tp.level;
     const why = t(L, `forme.${tp.reason}`, { skill: skillName(tp.skill, L), pct: tp.mastery ?? 0, level: t(L, `diff.${level}`) });
     if (tp.kind === "quick" && (await quickLocked(ix))) return { content: `${why}\n${quickLockedText(ix)}` };
-    const c = await pickForSkill(ix.env, ix.guild, ix.userId, tp.skill, level, { prefer: tp.kind === "quick" ? "quick" : "write", ...(tp.kind === "sql" ? { kind: "sql" } : {}) });
+    // the teacher's blocks: never a blocked type or level (see practiceblock.ts)
+    const block = await getBlocks(ix.env, ix.guild.id, ix.userId);
+    const c = await pickForSkill(ix.env, ix.guild, ix.userId, tp.skill, level, { prefer: tp.kind === "quick" ? "quick" : "write", ...(tp.kind === "sql" ? { kind: "sql" } : {}), block });
     if (!c) {
       // nothing left in the bank for them: the AI writes one, gentler for a beginner or a weak skill
       const sk = SKILLS.find((x) => x.key === tp.skill)!;
       const topic = tp.reason === "start" || tp.reason === "weak" ? `${sk.en}: a gentle first exercise for a beginner` : sk.en;
       const langs = guildLangs(ix.guild);
-      const job = tp.kind === "sql" ? null : await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: tp.kind === "write" ? "write" : "quick", difficulty: level, topic, token: ix.raw.token, codeLang: langs[0] });
+      // a blocked write-code becomes a quick one; a quick one only of a type still open
+      const genKind = tp.kind === "write" && !blockFor(block, "write", level) ? "write" : quickKindFor(block, level) ?? "quick";
+      if (tp.kind !== "sql" && genKind === "none") return { content: `${why}\n${quickBlockedText(L, block, level)}` };
+      const job = tp.kind === "sql" ? null : await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: genKind, difficulty: level, topic, token: ix.raw.token, codeLang: langs[0] });
       return { content: job ? `${why}\n${t(L, "forme.generating")}` : `${why}\n${t(L, tp.kind === "sql" ? "ch.none_left_kind" : "ch.queue_busy", { kind: t(L, "kind.sql") })}` };
     }
     const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "practice");
@@ -223,7 +229,27 @@ async function cmdPending(ix: Ix) {
 async function cmdPractice(ix: Ix, diffIn: Difficulty | null, type: string, topic: string | null, language: string | null) {
   const L = ix.L;
   // no level chosen: the one that suits the student (most of their skills are at it)
-  const difficulty: Difficulty = diffIn ?? (await levelFor(ix.env, ix.guild, ix.userId));
+  let difficulty: Difficulty = diffIn ?? (await levelFor(ix.env, ix.guild, ix.userId));
+  // 🚫 the teacher's blocks (practiceblock.ts): a blocked type asked for → their reason; no level chosen → the nearest open level
+  const block = await getBlocks(ix.env, ix.guild.id, ix.userId);
+  let quickKind: string | null = null;
+  if (block.length) {
+    if (type !== "quick") {
+      const b = blockFor(block, type, difficulty);
+      if (b) {
+        const lv = diffIn ? null : allowedLevel(block, type, difficulty);
+        if (!lv) return say(blockedText(L, b));
+        difficulty = lv;
+      }
+    } else {
+      quickKind = quickKindFor(block, difficulty);
+      if (quickKind === "none" && !diffIn) {
+        const lv = BLOCK_LEVELS.find((l) => quickKindFor(block, l) !== "none");
+        if (lv) { difficulty = lv; quickKind = quickKindFor(block, lv); }
+      }
+      if (quickKind === "none") return say(quickBlockedText(L, block, difficulty));
+    }
+  }
   const mode: Mode = type === "coding" ? "coding" : type === "write" ? "write" : "quick";
   if (isCodeLang(language)) await run(ix.env, "UPDATE players SET code_lang = ? WHERE guild_id = ? AND discord_id = ?", language, ix.guild.id, ix.userId);
   const p = await findPlayer(ix.env, ix.guild.id, ix.userId);
@@ -239,7 +265,7 @@ async function cmdPractice(ix: Ix, diffIn: Difficulty | null, type: string, topi
   const special = ({ sql: { skill: "sql", kind: "sql" }, regex: { skill: "regex", kind: "regex" }, git: { skill: "git", kind: "mcq" } } as Record<string, { skill: string; kind: string }>)[type];
   if (special) {
     later(ix, async () => {
-      const c = await pickForSkill(ix.env, ix.guild, ix.userId, special.skill, difficulty, { kind: special.kind });
+      const c = await pickForSkill(ix.env, ix.guild, ix.userId, special.skill, difficulty, { kind: special.kind, block });
       if (!c) return { content: t(L, "ch.none_left_kind", { kind: t(L, `kind.${special.kind === "mcq" ? "git" : special.kind}`) }) };
       const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "practice");
       return renderFor(ix.env, ix.guild, c, a);
@@ -252,14 +278,14 @@ async function cmdPractice(ix: Ix, diffIn: Difficulty | null, type: string, topi
     if (mode === "coding") {
       let exclude = new Set<string>();
       try { exclude = new Set((await recentSolves(p!.hr_username!)).keys()); } catch { /* HackerRank unreachable: don't exclude */ }
-      c = await pickChallenge(ix.env, ix.guild, { players: [ix.userId], difficulty, mode, exclude });
+      c = await pickChallenge(ix.env, ix.guild, { players: [ix.userId], difficulty, mode, exclude, block });
       if (!c) return { content: t(L, "ch.none_left", { difficulty: t(L, `diff.${difficulty}`) }) };
     } else if (!topic) {
-      c = await pickChallenge(ix.env, ix.guild, { players: [ix.userId], difficulty, mode, kind, langs: quickLangs });
+      c = await pickChallenge(ix.env, ix.guild, { players: [ix.userId], difficulty, mode, kind, langs: quickLangs, block });
     }
     if (!c) {
       // a topic, or the bank is exhausted: the AI writes a new one in the background
-      const job = await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: mode === "write" ? "write" : kind ?? "quick", difficulty, topic, token: ix.raw.token, codeLang: quickLangs[Math.floor(Math.random() * quickLangs.length)] });
+      const job = await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: mode === "write" ? "write" : kind ?? quickKind ?? "quick", difficulty, topic, token: ix.raw.token, codeLang: quickLangs[Math.floor(Math.random() * quickLangs.length)] });
       if (!job) return { content: t(L, "ch.queue_busy") };
       return { content: t(L, mode === "write" ? "ch.generating_write" : "ch.generating", { topic: topic ?? t(L, `diff.${difficulty}`) }) };
     }
@@ -760,6 +786,28 @@ async function cmdTeacher(ix: Ix, sub: string, o: Record<string, any>) {
   }
   if (sub === "dashboard") {
     return say(ix.env.DASHBOARD_URL ? t(L, "teacher.dashboard", { url: ix.env.DASHBOARD_URL }) : t(L, "teacher.no_dashboard"));
+  }
+  if (sub === "block" || sub === "unblock") {
+    const member = String(o.member), who = mention(member), type = o.type ? String(o.type) : null;
+    if (sub === "unblock") {
+      const before = await getBlocks(ix.env, g.id, member);
+      if (!before.length || (type && !before.some((b) => b.type === type))) return say(t(L, "blk.none", { user: who }));
+      await removeBlock(ix.env, g.id, member, type);
+      if (type) ix.ctx.waitUntil(dm(ix.env, member, { content: t(g.lang, "blk.dm_lifted", { type: typeName(g.lang, type) }) }).catch(() => false));
+      return say(type ? t(L, "blk.removed", { user: who, type: typeName(L, type) }) : t(L, "blk.removed_all", { user: who }));
+    }
+    if (!type || !BLOCK_TYPES.includes(type as never)) return say(t(L, "err.unknown"));
+    const levels = !o.level || o.level === "all" ? [] : String(o.level).split(",");
+    const list = await setBlock(ix.env, g.id, member, { type, levels, days: o.days ?? 0, reason: o.reason ?? "" });
+    const b = list.find((x) => x.type === type)!;
+    const v = blockVars(L, b);
+    if (o.tell === false) return say(t(L, "blk.set", { user: who, ...v, dm: "" }));
+    // the DM can take longer than Discord's 3 seconds: answered once it's sent
+    later(ix, async () => {
+      const sent = await dm(ix.env, member, { content: t(g.lang, "blk.dm", blockVars(g.lang, b)) }).catch(() => false);
+      return { content: t(L, "blk.set", { user: who, ...v, dm: t(L, sent ? "blk.dm_sent" : "blk.dm_failed") }) };
+    });
+    return deferReply(true);
   }
   if (sub === "verify") {
     const member = String(o.member);

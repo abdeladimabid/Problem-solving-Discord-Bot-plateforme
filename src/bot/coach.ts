@@ -1,4 +1,5 @@
 // Coaching commands: /skills (skill map + mistakes), the "train this skill" button.
+import { blockFor, getBlocks, quickBlockedText, quickKindFor } from "../shared/practiceblock.ts";
 import type { Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { t } from "../shared/i18n.ts";
 import { COLORS, btn, dm, row } from "../shared/discord.ts";
@@ -74,11 +75,15 @@ export async function trainSkill(ix: Ix, skill: string, difficulty: Difficulty) 
   const L = ix.L;
   if (!SKILLS.some((s) => s.key === skill)) return say(t(L, "err.unknown"));
   later(ix, async () => {
-    const c = await pickForSkill(ix.env, ix.guild, ix.userId, skill, difficulty, { prefer: CODE_SKILLS.includes(skill) ? "write" : "quick" });
+    // the teacher's practice blocks (practiceblock.ts): never a blocked type or level
+    const block = await getBlocks(ix.env, ix.guild.id, ix.userId);
+    const c = await pickForSkill(ix.env, ix.guild, ix.userId, skill, difficulty, { prefer: CODE_SKILLS.includes(skill) ? "write" : "quick", block });
     if (!c) {
       const langs = guildLangs(ix.guild);
+      const kind = CODE_SKILLS.includes(skill) && !blockFor(block, "write", difficulty) ? "write" : quickKindFor(block, difficulty) ?? "quick";
+      if (kind === "none") return { content: quickBlockedText(L, block, difficulty), embeds: [], components: [] };
       const job = await enqueue(ix.env, ix.guild, {
-        discordId: ix.userId, kind: CODE_SKILLS.includes(skill) ? "write" : "quick", difficulty,
+        discordId: ix.userId, kind, difficulty,
         topic: SKILLS.find((s) => s.key === skill)!.en, token: ix.raw.token, codeLang: langs[Math.floor(Math.random() * langs.length)],
       });
       return { content: job ? t(L, "skills.none_left", { skill: skillName(skill, L) }) : t(L, "ch.queue_busy"), embeds: [], components: [] };

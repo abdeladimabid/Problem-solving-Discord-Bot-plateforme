@@ -1,0 +1,31 @@
+// 🚫 Practice blocks (practiceblock.ts): what the student reads, and the teacher's /teacher block · unblock.
+export const EN_BLK: Record<string, string> = {
+  "blk.blocked": "🚫 Your teacher has paused **{type}**{levels} for you{until}.{reason}\nThe other types are still open: try `/practice type:` something else 💪",
+  "blk.quick_all": "🚫 Your teacher has paused the quick challenges for you{levels}.{reason}\nTry `/practice type:` Write code, SQL, Regex or Git 💪",
+  "blk.until": " until {when}",
+  "blk.reason": "\n> 📝 {reason}",
+  "blk.dm": "🚫 Your teacher has paused **{type}**{levels} in `/practice` for you{until}.{reason}\nEverything else is still open.",
+  "blk.dm_lifted": "✅ **{type}** is open again for you in `/practice`.",
+  "blk.set": "🚫 {user} can no longer practice **{type}**{levels}{until}.{dm}",
+  "blk.dm_sent": " They got a DM.",
+  "blk.dm_failed": " (Discord refused the DM: they block DMs.)",
+  "blk.removed": "✅ {user} can practice **{type}** again.",
+  "blk.removed_all": "✅ {user} has no practice block anymore.",
+  "blk.none": "{user} has no practice block.",
+  "blk.all_levels": "every level",
+};
+export const FR_BLK: Record<string, string> = {
+  "blk.blocked": "🚫 Ton enseignant a mis en pause **{type}**{levels} pour toi{until}.{reason}\nLes autres types restent ouverts : essaie `/practice type:` autre chose 💪",
+  "blk.quick_all": "🚫 Ton enseignant a mis en pause les défis rapides pour toi{levels}.{reason}\nEssaie `/practice type:` Écrire du code, SQL, Regex ou Git 💪",
+  "blk.until": " jusqu'au {when}",
+  "blk.reason": "\n> 📝 {reason}",
+  "blk.dm": "🚫 Ton enseignant a mis en pause **{type}**{levels} dans `/practice` pour toi{until}.{reason}\nTout le reste reste ouvert.",
+  "blk.dm_lifted": "✅ **{type}** est de nouveau ouvert pour toi dans `/practice`.",
+  "blk.set": "🚫 {user} ne peut plus s'entraîner sur **{type}**{levels}{until}.{dm}",
+  "blk.dm_sent": " Un MP lui a été envoyé.",
+  "blk.dm_failed": " (Discord a refusé le MP : l'élève bloque les MP.)",
+  "blk.removed": "✅ {user} peut de nouveau s'entraîner sur **{type}**.",
+  "blk.removed_all": "✅ {user} n'a plus aucun blocage d'entraînement.",
+  "blk.none": "{user} n'a aucun blocage d'entraînement.",
+  "blk.all_levels": "tous les niveaux",
+};

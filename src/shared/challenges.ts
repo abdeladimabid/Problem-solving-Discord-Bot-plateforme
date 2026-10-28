@@ -22,6 +22,7 @@ import { CODE_BOOST_KINDS, DOUBLE_ORIGINS, boostsOf, contractStep, cosmeticsOf, 
 import type { Boosts } from "./shop.ts";
 import { analyzeLog, editorToken, editorUrl, fingerprint, integrityOf, similarity } from "./integrity.ts";
 import type { EditorLog, IntegrityReport } from "./integrity.ts";
+import { type Block, blockSql } from "./practiceblock.ts";
 import { makeStarter, parseSignature, sampleCall, signatureLine } from "./starter.ts";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -56,26 +57,29 @@ export async function getChallenge(env: Env, id: number) {
 export async function pickChallenge(
   env: Env,
   guild: GuildRow,
-  o: { players: string[]; difficulty: Difficulty; mode: Mode; kind?: string | null; exclude?: Set<string>; allowSeen?: boolean; langs?: string[] },
+  o: { players: string[]; difficulty: Difficulty; mode: Mode; kind?: string | null; exclude?: Set<string>; allowSeen?: boolean; langs?: string[]; block?: Block[] },
 ): Promise<ChallengeRow | null> {
+  // the teacher's practice blocks for this student (see practiceblock.ts): those challenges are left out
+  const bl = blockSql(o.block ?? []);
   const notSeen = o.allowSeen ? "" : o.players.map(() => "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.challenge_id = c.id AND a.guild_id = ? AND a.discord_id = ?)").join(" ");
   const seenArgs = o.allowSeen ? [] : o.players.flatMap((p) => [guild.id, p]);
   const scope = "c.status = 'active' AND c.difficulty = ? AND (c.guild_id IS NULL OR c.guild_id = ?)";
   if (o.mode === "coding") {
-    const rows = await all<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind = 'code' AND ${scope} ${notSeen} ORDER BY RANDOM() LIMIT 25`,
-      o.difficulty, guild.id, ...seenArgs);
+    const rows = await all<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind = 'code' AND ${scope} ${notSeen} ${bl.sql} ORDER BY RANDOM() LIMIT 25`,
+      o.difficulty, guild.id, ...seenArgs, ...bl.args);
     return rows.find((c) => !o.exclude?.has((c.hr_slug ?? "").toLowerCase())) ?? null;
   }
   if (o.mode === "write") {
-    return one<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind = 'write' AND c.lang = ? AND ${scope} ${notSeen}
-      ORDER BY (c.source = 'seed') DESC, RANDOM() LIMIT 1`, guild.lang, o.difficulty, guild.id, ...seenArgs);
+    return one<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind = 'write' AND c.lang = ? AND ${scope} ${notSeen} ${bl.sql}
+      ORDER BY (c.source = 'seed') DESC, RANDOM() LIMIT 1`, guild.lang, o.difficulty, guild.id, ...seenArgs, ...bl.args);
   }
   const kind = o.kind && QUICK_KINDS.includes(o.kind) ? o.kind : null;
   const langs = o.langs?.length ? o.langs : guildLangs(guild);
   return one<ChallengeRow>(env, `SELECT c.* FROM challenges c WHERE c.kind IN ('mcq', 'complexity', 'output', 'bug') AND c.lang = ?
       AND (c.code_lang IS NULL OR c.code_lang IN (${langs.map(() => "?").join(", ")})) AND ${scope} ${kind ? "AND c.kind = ?" : ""} ${notSeen}
       AND COALESCE(c.topic, '') != 'git'   -- Git questions only come with /practice type:Git
-      ORDER BY RANDOM() LIMIT 1`, guild.lang, ...langs, o.difficulty, guild.id, ...(kind ? [kind] : []), ...seenArgs);
+      ${bl.sql}
+      ORDER BY RANDOM() LIMIT 1`, guild.lang, ...langs, o.difficulty, guild.id, ...(kind ? [kind] : []), ...seenArgs, ...bl.args);
 }
 
 /** Two bank challenges of the same kind and level: shown to the AI to calibrate difficulty. */
