@@ -9,9 +9,9 @@ const chatKey = () => `classbot.chat.${S.g}`;
 const chatLoad = () => { try { const v = JSON.parse(localStorage.getItem(chatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringify(list.slice(-40))); } catch { /* private window: this visit only */ } };
 
-/** The answer's text: escaped, then **bold**, lists and line breaks (nothing else from the AI reaches the page). */
+/** The answer's text: escaped, then **bold**, *italic*, lists and line breaks (nothing else from the AI reaches the page). */
 function chatText(t) {
-  const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").split("\n");
+  const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, "$1<i>$2</i>").split("\n");
   let html = "", list = false;
   for (const l of lines) {
     const li = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
@@ -22,7 +22,7 @@ function chatText(t) {
   return html + (list ? "</ul>" : "");
 }
 function chatTable(t, i) {
-  return `<div class="chat-table"><div class="chat-table-h"><b>${esc(t.title || "")}</b><button class="btn small" data-xl="${i}">Télécharger Excel</button></div>
+  return `<div class="chat-table"><div class="chat-table-h"><b>${esc(t.title || "")}</b><button class="btn small chat-xl" data-xl="${i}">Télécharger Excel</button></div>
     <div class="table-wrap"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
     <tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
 }
@@ -34,14 +34,16 @@ async function viewChat() {
       <button class="btn" id="chat-new">Nouvelle conversation</button></div>
     <section class="panel chat"><div class="chat-thread" id="chat-thread"></div>
       <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="2" placeholder="Ta question… (Entrée pour envoyer, Maj+Entrée pour aller à la ligne)" aria-label="Ta question"></textarea>
-        <button class="btn primary" id="chat-send" type="submit">Envoyer</button></form></section>`;
+        <button class="chat-send" id="chat-send" type="submit" aria-label="Envoyer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></form></section>`;
   const thread = $("#chat-thread"), q = $("#chat-q");
+  const avatar = `<div class="chat-avatar" aria-hidden="true">C</div>`;
   const draw = () => {
+    $("#chat-send").disabled = busy;
     thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
       ? `<div class="chat-msg me"><div class="chat-bubble">${esc(m.text)}</div></div>`
-      : `<div class="chat-msg bot"><div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}</div></div>`).join("")
-      + (busy ? `<div class="chat-msg bot"><div class="chat-bubble chat-wait">ClassBot regarde les données de la classe…</div></div>` : "")
-      : `<div class="chat-empty"><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button class="btn small" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
+      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}</div></div>`).join("")
+      + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span>ClassBot lit les données de la classe…</div></div>` : "")
+      : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">✦</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
     thread.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; q.focus(); });
     thread.querySelectorAll("[data-xl]").forEach((b) => b.onclick = () => {
       const t = list[Number(b.dataset.xl)].table;

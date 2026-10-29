@@ -60,7 +60,7 @@ const TOOLS = [
 ].join("\n");
 
 /** What ClassBot computes for the AI, read-only and only for this class (codes, never names). */
-async function runTools(env: Env, g: GuildRow, students: ChatStudent[], codes: ReturnType<typeof codesOf>, calls: { name: string; args?: any }[]) {
+async function runTools(env: Env, g: GuildRow, students: ChatStudent[], codes: ReturnType<typeof codesOf>, calls: { name: string; args?: any }[], round = 1) {
   const memo = new Map<string, Promise<any>>();
   const once = <T>(k: string, f: () => Promise<T>): Promise<T> => { if (!memo.has(k)) memo.set(k, f()); return memo.get(k)!; };
   const nivOf = () => once("niv", () => niveaux(env, g));
@@ -71,7 +71,7 @@ async function runTools(env: Env, g: GuildRow, students: ChatStudent[], codes: R
   const out: Record<string, unknown> = {};
   for (const [i, c] of calls.slice(0, 5).entries()) {
     const a = c.args && typeof c.args === "object" ? c.args : {};
-    const key = `${i + 1}_${c.name}${a.code ? "_" + a.code : a.brief ? "_" + a.brief : ""}`;
+    const key = `r${round}_${i + 1}_${c.name}${a.code ? "_" + a.code : a.brief ? "_" + a.brief : ""}`;
     const stu = a.code ? codes.byCode.get(String(a.code).toUpperCase()) : undefined;
     if (a.code && !stu) { out[key] = { erreur: `code inconnu : ${a.code}` }; continue; }
     try {
@@ -191,11 +191,29 @@ const SYSTEM = (g: GuildRow) => [
   "Un apprenant est désigné par un code (E1, E2…) : garde ces codes tels quels, ClassBot remet les noms. « il », « elle », « lui » renvoient à l'apprenant dont on vient de parler.",
   "À chaque étape, réponds UNIQUEMENT avec l'un de ces deux JSON :",
   '- pour demander des données (jusqu\'à 5 outils à la fois) : {"tools":[{"name":"student","args":{"code":"E7"}}]}',
-  '- pour répondre : {"answer":"ta réponse (markdown simple : **gras**, listes)","table":null ou {"title":"…","columns":["…"],"rows":[["…"]]}}',
+  '- pour répondre : {"answer":"ta réponse (markdown simple : **gras**, listes)","table_from":null ou {"data":"r1_1_students","title":"…","columns":{"Titre de colonne":"champ"}},"table":null}',
+  "Avant de répondre sur la classe ou un apprenant, demande TOUJOURS les données : tu ne connais aucun chiffre sans elles.",
   "Règles de la réponse : uniquement à partir des DONNÉES reçues, n'invente aucun chiffre ni aucun fait ; si l'information n'est pas dans ClassBot, dis-le simplement.",
   "Pour un bilan, une appréciation ou un commentaire : 5 à 8 phrases professionnelles et bienveillantes (où il en est, ses progrès, ses points forts, ce qu'il doit travailler, la suite), appuyées sur les chiffres.",
-  "Quand la réponse est une liste de plusieurs apprenants ou de plusieurs chiffres, ou quand on te demande un Excel, donne aussi \"table\" (le formateur pourra la télécharger en Excel).",
+  "Quand la réponse est une liste de plusieurs apprenants ou de plusieurs chiffres, ou quand on te demande un Excel, donne un tableau : de préférence \"table_from\" (la clé des DONNÉES qui contient la liste, et pour chaque colonne le champ à prendre, ex. {\"Apprenant\":\"code\",\"Niveau\":\"niveau\",\"Points\":\"points_saison\"}) : ClassBot le remplit avec les vraies valeurs. \"table\" (lignes écrites par toi) seulement pour un tableau que tu calcules toi-même, comme une comparaison.",
+  "Chaque chiffre de ta réponse vient des DONNÉES : recopie-le exactement. Si on te demande « tu es sûr ? », relis les DONNÉES (redemande-les si besoin) et corrige-toi franchement si tu t'es trompé.",
+  "Écris simplement : pas d'écriture inclusive (pas de « ·e·s »), pas d'italique.",
 ].join("\n");
+
+/**
+ * A table filled by ClassBot from the data the AI read (the AI only says which list and which fields): its values are
+ * the real ones, whatever the AI would have copied. Null when it points at nothing usable.
+ */
+function tableFrom(spec: any, results: Record<string, unknown>, byCode: Map<string, ChatStudent>): ChatTable | null {
+  if (!spec || typeof spec !== "object" || !spec.columns || typeof spec.columns !== "object") return null;
+  const src: any = results[String(spec.data || "")];
+  const list: any[] | undefined = Array.isArray(src) ? src : src && typeof src === "object" ? (Object.values(src).find((v) => Array.isArray(v) && v.some((x) => x && typeof x === "object")) as any[]) : undefined;
+  const cols = Object.entries(spec.columns as Record<string, unknown>).slice(0, 12).map(([title, field]) => [String(title).slice(0, 60), String(field)] as const);
+  if (!list?.length || !cols.length) return null;
+  const cell = (v: unknown) => (v == null ? "" : Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v));
+  return { title: showNames(String(spec.title || ""), byCode).slice(0, 120), columns: cols.map(([title]) => title),
+    rows: list.slice(0, 300).map((r) => cols.map(([, f]) => showNames(cell(r?.[f]), byCode).slice(0, 300))) };
+}
 
 /** The teacher's message → the answer (with the students' names back), maybe a table to see or download, and the data read. */
 export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], question: string, history: ChatTurn[] = []) {
@@ -217,26 +235,39 @@ export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], 
   }
   msgs.push({ role: "user", content: hide(q) });
   const used: string[] = [];
-  let reply: any = null;
-  // up to 3 rounds of data, then an answer (a 4th call forces it)
-  for (let round = 0; round < 4; round++) {
-    const last = round === 3;
+  const results: Record<string, unknown> = {};
+  let reply: any = null, bounced = false, round = 0;
+  // a word of politeness needs no data; anything else about the class does
+  const smallTalk = q.length < 40 && /^(merci|ok|d'accord|super|parfait|bonjour|salut|hello|hi|thanks|cool|top)\b/i.test(q);
+  // up to 3 rounds of data, then an answer (the last call forces it)
+  for (let step = 0; step < 5; step++) {
+    const last = step === 4;
     if (last) msgs.push({ role: "user", content: "Réponds maintenant avec les données que tu as (JSON \"answer\")." });
-    reply = await chatJson(env, msgs, { maxTokens: 2500, temperature: 0.3 }).catch(() => null);
+    reply = await chatJson(env, msgs, { maxTokens: 2500, temperature: 0.1 }).catch(() => null);
     const calls = Array.isArray(reply?.tools) ? reply.tools.filter((t: any) => t && typeof t.name === "string").slice(0, 5) : [];
-    if (!calls.length || last) break;
+    // an answer about the class without having read anything: sent back once, the data first
+    if (!calls.length && !used.length && !bounced && !smallTalk && !last && reply?.answer) {
+      bounced = true;
+      msgs.push({ role: "assistant", content: JSON.stringify(reply) });
+      msgs.push({ role: "user", content: "Tu as répondu sans lire aucune donnée de ClassBot : tes chiffres ne peuvent pas être justes. Demande d'abord les données nécessaires (JSON \"tools\"), puis réponds uniquement à partir d'elles." });
+      continue;
+    }
+    if (!calls.length || last || round >= 3) break;
+    round++;
     await aiBudgetUse(env, 1);
     used.push(...calls.map((c: any) => String(c.name)));
-    const data = await runTools(env, g, students, codes, calls);
+    const data = await runTools(env, g, students, codes, calls, round);
+    Object.assign(results, data);
     msgs.push({ role: "assistant", content: JSON.stringify({ tools: calls }) });
     msgs.push({ role: "user", content: `DONNÉES (calculées par ClassBot) :\n${JSON.stringify(data).slice(0, 16000)}` });
   }
   const answer = String(reply?.answer ?? "").trim();
   if (!answer) throw new ChatError("The AI couldn't answer right now. Try again in a moment (see Settings → AI keys).");
   const t = reply?.table;
-  const table: ChatTable | null = t && Array.isArray(t.columns) && Array.isArray(t.rows) && t.rows.length
+  const fromData = tableFrom(reply?.table_from, results, codes.byCode);
+  const table: ChatTable | null = fromData ?? (t && Array.isArray(t.columns) && Array.isArray(t.rows) && t.rows.length
     ? { title: showNames(String(t.title || ""), codes.byCode).slice(0, 120), columns: t.columns.slice(0, 12).map((c: unknown) => showNames(String(c ?? ""), codes.byCode).slice(0, 60)),
       rows: t.rows.slice(0, 300).map((r: unknown) => (Array.isArray(r) ? r : [r]).slice(0, 12).map((c) => showNames(String(c ?? ""), codes.byCode).slice(0, 300))) }
-    : null;
+    : null);
   return { answer: showNames(answer, codes.byCode).slice(0, 8000), table, used: [...new Set(used)] };
 }
