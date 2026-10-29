@@ -2054,6 +2054,7 @@ function renderAssessment() {
       <p class="sub">${status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status)} · ${a.questions.length} question(s) · ${a.settings.minutes ? `${a.settings.minutes} min` : "no time limit"}${a.closes_at ? ` · closes ${fmtDateTime(a.closes_at)}` : ""}</p>
       <p class="iv-sum" style="margin:6px 0 0">${optsChips(a.settings)} <button class="ap-link" id="aa-opts">Change</button></p></div>
       <div class="toolbar" style="margin:0">
+        ${a.questions.length ? `<button class="btn" id="aa-slides" title="One question per slide, to explain them to the class">▶ Present</button>` : ""}
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
         <button class="btn" id="aa-share">🔗 Share</button>
@@ -2073,6 +2074,7 @@ function renderAssessment() {
     tabs[k]($("#aa-tab"));
   };
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
+  if ($("#aa-slides") && typeof assessSlides === "function") $("#aa-slides").onclick = () => assessSlides(AS.A, 0);
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
   $("#aa-opts").onclick = () => assessOptionsDialog();
