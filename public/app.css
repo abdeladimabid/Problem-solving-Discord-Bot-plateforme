@@ -2449,4 +2449,6 @@ body.sl-open { overflow: hidden; }
 
 /* a student's intranet photo, over their initials */
 .avatar { position: relative; overflow: hidden; }
-.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
+  /* closer on the face: the photos are portraits (head and shoulders), the face sits in their upper part */
+  object-position: 50% 22%; transform: scale(1.45); transform-origin: 50% 30%; }
