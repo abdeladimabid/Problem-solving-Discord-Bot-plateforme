@@ -6727,6 +6727,9 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const fromData = await api("POST", "/api/chat", { g: G, question: "Tableau des faibles", history: [] });
   check(fromData.status === 200 && fromData.data.table?.title === "Faibles" && fromData.data.table.columns.join() === "Apprenant,Niveau" && fromData.data.table.rows.length === many.data.table.rows.length
     && !fromData.data.table.rows.flat().some((c: string) => /^E\d+$/.test(c) || c === "inventé"), `a table pointed at the data: filled by ClassBot with the real values and names (${JSON.stringify(fromData.data.table)?.slice(0, 120)})`);
+  const filtered = await api("POST", "/api/chat", { g: G, question: "Tous puis filtre", history: [] });
+  check(filtered.status === 200 && filtered.data.table?.columns.join() === "Apprenant,Niveau" && filtered.data.table.rows.length === many.data.table.rows.length && filtered.data.table.rows.every((r: string[]) => r[1] === "faible"),
+    `a table from the whole list with "where": only the rows asked for, the student column named so (${JSON.stringify(filtered.data.table)?.slice(0, 140)})`);
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }

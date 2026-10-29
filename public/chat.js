@@ -74,7 +74,7 @@ async function viewChat() {
     $("#chat-send").disabled = busy;
     thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
       ? `<div class="chat-msg me"><div class="chat-bubble">${esc(m.text)}</div></div>`
-      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.error ? "" : chatFoot(m, i)}</div></div>`).join("")
+      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.error || !Array.isArray(m.sources) ? "" : chatFoot(m, i)}</div></div>`).join("")
       + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span><span id="chat-status">${esc(status || "Je réfléchis…")}</span></div></div>` : "")
       : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">✦</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
     thread.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; q.focus(); });

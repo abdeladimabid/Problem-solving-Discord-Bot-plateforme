@@ -748,6 +748,9 @@ function fakeAI() {
         const all: string = input.messages.map((m: any) => m.content).join(" ");
         // a model that answers from nowhere the first time
         if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
+        if (last.includes("Tous puis filtre")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
+        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
+          table_from: { data: Object.keys(d)[0], where: { niveau: "faible" }, title: "Faibles", columns: { Code: "code", Niveau: "niveau" } }, table: null }) }; }
         if (!last.startsWith("DONNÉES")) {
           const code = (last.match(/\bE\d+\b/) || [])[0];
           return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
