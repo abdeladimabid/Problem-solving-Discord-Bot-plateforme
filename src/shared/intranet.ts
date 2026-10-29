@@ -115,15 +115,17 @@ export async function intranetFetch(env: Env, method: string, path: string, data
   return send(u.url, method, path, data === undefined ? "" : JSON.stringify(data), { token, secret });
 }
 
+/** The headers that prove a request comes from this trainer's ClassBot: their token, a time, a nonce used once, the signature. */
+async function signed(auth: { token: string; secret: string }, method: string, url: URL, body: string) {
+  const ts = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+  return { Authorization: `Bearer ${auth.token}`, "X-Classbot-Timestamp": String(ts), "X-Classbot-Nonce": nonce,
+    "X-Classbot-Signature": await hmac(auth.secret, await toSign(ts, nonce, method, url.pathname + url.search, body)) };
+}
 async function send(base: string, method: string, path: string, body: string, auth: { token: string; secret: string } | null): Promise<any> {
   const url = new URL(base + path);
   const headers: Record<string, string> = { Accept: "application/json", ...(body ? { "Content-Type": "application/json" } : {}) };
-  if (auth) {
-    const ts = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomUUID().replace(/-/g, "");
-    Object.assign(headers, { Authorization: `Bearer ${auth.token}`, "X-Classbot-Timestamp": String(ts), "X-Classbot-Nonce": nonce,
-      "X-Classbot-Signature": await hmac(auth.secret, await toSign(ts, nonce, method, url.pathname + url.search, body)) });
-  }
+  if (auth) Object.assign(headers, await signed(auth, method, url, body));
   let res: Response;
   try {
     res = await fetch(url.toString(), { method, body: body || undefined, redirect: "manual", signal: AbortSignal.timeout(15000), headers });
@@ -157,9 +159,60 @@ export async function intranetPing(env: Env, guildId: string) {
 }
 
 // ------------------------------------------------------------ the class's intranet classroom and its learners
-export interface Learner { id: number; first_name: string; last_name: string }
+export interface Learner { id: number; first_name: string; last_name: string; photo?: string | null }
 export const intranetClassrooms = async (env: Env, guildId: string) => (await intranetFetch(env, "GET", "/api/classbot/classrooms", undefined, guildId)).classrooms as { id: number; name: string; learners: number }[];
 export const intranetLearners = async (env: Env, guildId: string, classroomId: number) => (await intranetFetch(env, "GET", `/api/classbot/classrooms/${Math.floor(classroomId)}/learners`, undefined, guildId)).learners as Learner[];
+
+/** What ClassBot keeps of a linked learner's profile: their name and their photo's file name (to know when it changes). */
+async function rememberProfiles(env: Env, guildId: string, learners: Learner[]) {
+  if (!learners.length) return;
+  await env.DB.batch(learners.map((l) => env.DB.prepare("UPDATE intranet_links SET learner_name = ?, photo = ? WHERE guild_id = ? AND learner_id = ?")
+    .bind(learnerName(l).slice(0, 120), l.photo ? String(l.photo).slice(0, 200) : null, guildId, Math.floor(l.id))));
+}
+
+/** Every night: the linked learners' names and photos, for each class connected to the intranet (a class that fails waits for the next night). */
+export async function syncIntranetProfiles(env: Env) {
+  const gs = await all<{ id: string; intranet: string | null }>(env, "SELECT id, intranet FROM guilds WHERE intranet IS NOT NULL");
+  for (const g of gs) {
+    const c = intranetClassOf(g);
+    if (!c) continue;
+    try { await rememberProfiles(env, g.id, await intranetLearners(env, g.id, c.id)); } catch (e) { console.error("intranet profiles", g.id, (e as Error)?.message); }
+  }
+}
+
+/** The photos ClassBot has, by student: {discord id: photo file name} (the dashboard asks for each image when it shows it). */
+export async function intranetPhotos(env: Env, guildId: string): Promise<Record<string, string>> {
+  const rows = await all<{ discord_id: string; photo: string | null }>(env, "SELECT discord_id, photo FROM intranet_links WHERE guild_id = ? AND photo IS NOT NULL", guildId).catch(() => []);
+  return Object.fromEntries(rows.map((r) => [r.discord_id, r.photo!]));
+}
+
+/**
+ * A student's intranet photo: from Cloudflare's cache when it's there (fast, the intranet isn't asked), else from the intranet
+ * once (signed, as the trainer), then kept in the cache until the photo changes. Null: no photo, or the intranet can't give it.
+ */
+export async function intranetPhoto(env: Env, guildId: string, discordId: string): Promise<Response | null> {
+  const ln = await one<{ learner_id: number; photo: string | null }>(env, "SELECT learner_id, photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", guildId, discordId);
+  if (!ln?.photo) return null;
+  const c = intranetClassOf(await one<{ intranet: string | null }>(env, "SELECT intranet FROM guilds WHERE id = ?", guildId));
+  if (!c) return null;
+  const cache = (globalThis as any).caches?.default as Cache | undefined;
+  const key = new Request(`https://intranet-photo.classbot/${guildId}/${ln.learner_id}/${encodeURIComponent(ln.photo)}`);
+  const hit = cache ? await cache.match(key).catch(() => undefined) : undefined;
+  if (hit) return hit;
+  const st = await stateOf(env, guildId);
+  const u = checkUrl(st.url || env.INTRANET_URL || "");
+  const token = await unseal(env, st.auth?.tok), secret = await unseal(env, st.auth?.sig);
+  if (!token || !secret || !u.ok) return null;
+  const url = new URL(u.url + `/api/classbot/classrooms/${c.id}/learners/${Math.floor(ln.learner_id)}/photo`);
+  const res = await fetch(url.toString(), { headers: await signed({ token, secret }, "GET", url, ""), redirect: "manual", signal: AbortSignal.timeout(15000) }).catch(() => null);
+  const type = res?.headers.get("content-type") || "";
+  if (!res?.ok || !/^image\/(jpeg|png|webp)/i.test(type)) return null;
+  const img = await res.arrayBuffer();
+  if (img.byteLength > 2_000_000) return null;
+  const out = new Response(img, { headers: { "content-type": type, "cache-control": "public, max-age=2592000" } });
+  if (cache) await cache.put(key, out.clone()).catch(() => {});
+  return out;
+}
 
 export function intranetClassOf(g: { intranet?: string | null } | null): { id: number; name: string } | null {
   try { const c = JSON.parse(g?.intranet || "{}")?.classroom; return c && Number(c.id) ? { id: Number(c.id), name: String(c.name || "") } : null; } catch { return null; }
@@ -205,6 +258,7 @@ export async function intranetMatchView(env: Env, guildId: string) {
   const c = intranetClassOf(g);
   if (!c) throw new IntranetError("Choose the class's intranet classroom first.", "no_classroom");
   const learners = await intranetLearners(env, guildId, c.id);
+  await rememberProfiles(env, guildId, learners);
   const players = await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", guildId);
   const links = new Map((await all<{ discord_id: string; learner_id: number; by: string | null }>(env, "SELECT discord_id, learner_id, by FROM intranet_links WHERE guild_id = ?", guildId)).map((x) => [x.discord_id, x]));
   const byId = new Map(learners.map((l) => [l.id, l]));

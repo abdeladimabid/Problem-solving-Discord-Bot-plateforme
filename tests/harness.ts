@@ -75,7 +75,8 @@ export const leagueFake = { status: 200, body: null as any, calls: 0 };
 // a fake YouCode intranet: checks each request's signature like VerifyClassbotSignature.php, then answers
 export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
-  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
+  learners: {} as Record<number, { id: number; first_name: string; last_name: string; photo?: string | null }[]>,
+  photoCalls: 0,
   dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
@@ -285,6 +286,14 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
     const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
     if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);
+    // a learner's photo (an image, not JSON)
+    const pm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners\/(\d+)\/photo$/);
+    if (pm) {
+      intranetFake.photoCalls++;
+      if (!intranetFake.allowed.includes(Number(pm[1]))) return deny("classroom_not_allowed", 403);
+      const l = (intranetFake.learners[Number(pm[1])] || []).find((x) => x.id === Number(pm[2]));
+      return l?.photo ? new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { headers: { "content-type": "image/jpeg" } }) : deny("no_photo", 404);
+    }
     const sm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/squads$/);
     if (sm && init.method === "POST") {
       const cid = Number(sm[1]), b = JSON.parse(body || "{}");

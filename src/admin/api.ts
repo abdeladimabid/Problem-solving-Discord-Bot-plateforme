@@ -1,7 +1,7 @@
 // JSON API behind the teacher dashboard.
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
-import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
+import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -519,6 +519,16 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
     // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
+    // the students' intranet photos: which ones exist, and each image (from Cloudflare's cache after the first time)
+    if (path === "/intranet/photos" && method === "GET") { const g = await guild(); return ok({ photos: await intranetPhotos(env, g.id) }); }
+    if ((m = path.match(/^\/intranet\/photo\/(\d{1,25})$/)) && method === "GET") {
+      const g = await guild();
+      const img = await intranetPhoto(env, g.id, m[1]);
+      if (!img) return new Response(null, { status: 404 });
+      const h = new Headers(img.headers);
+      h.set("cache-control", "private, max-age=86400");
+      return new Response(img.body, { status: 200, headers: h });
+    }
     if (path.startsWith("/intranet/")) {
       const g = await guild();
       try {
