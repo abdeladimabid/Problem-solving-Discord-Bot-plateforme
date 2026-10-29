@@ -134,7 +134,7 @@ const EMOJI = {
   "🥇": ["medal", "gold"], "🥈": ["medal", "silver"], "🥉": ["medal", "bronze"], "🏅": ["medal", "gold"], "🎖": ["medal", "gold"], "🎯": ["target"], "💻": ["laptop"], "🖥": ["laptop"], "⚡": ["zap", "gold"],
   "💬": ["chat"], "🗨": ["chat"], "🎮": ["gamepad"], "🕹": ["gamepad"], "🛒": ["cart"], "🛍": ["cart"], "🛠": ["wrench"], "🔧": ["wrench"], "🔨": ["wrench"], "📊": ["chart"], "📈": ["up", "ok"], "📉": ["down", "ko"],
   "🦈": ["fish"], "🐟": ["fish"], "📺": ["tv"], "🐍": ["code"], "🐘": ["code"], "☕": ["coffee"], "⚛": ["atom"], "🧱": ["blocks"], "➕": ["plus"], "⏸": ["pause"], "⏹": ["stop"], "▶": ["play"],
-  "🚀": ["rocket", "violet"], "📣": ["megaphone"], "📢": ["megaphone"], "🛡": ["shield"], "💡": ["bulb", "gold"], "📋": ["clipboard"], "📖": ["book"], "📚": ["book"], "📘": ["book"], "📕": ["book"], "📗": ["clipboard", "ok"],
+  "🚀": ["rocket", "violet"], "📣": ["megaphone"], "📢": ["megaphone"], "🛡": ["shield"], "💡": ["bulb", "gold"], "📋": ["clipboard"], "📖": ["book"], "📚": ["book"], "📘": ["book"], "📕": ["book"], "📗": ["clipboard"],
   "🌱": ["sprout", "ok"], "🔒": ["lock"], "🔐": ["lock"], "🔑": ["key"], "⚙": ["gear"], "🔔": ["bell"], "🔕": ["bell"], "🗓": ["calendar"], "📅": ["calendar"], "📆": ["calendar"],
   "⚑": ["flag"], "🚩": ["flag", "ko"], "🏁": ["flag"], "🏃": ["run"], "⭐": ["star", "gold"], "🌟": ["star", "gold"], "🧾": ["receipt"], "🧬": ["dna"], "📥": ["inbox"], "📤": ["inbox"],
   "💤": ["moon"], "😴": ["moon"], "🧵": ["thread"], "🧪": ["flask"], "⇄": null, "🗄": ["db"], "💾": ["db"], "😶": ["meh"], "😐": ["meh"], "🙂": ["thumb", "ok"], "😀": ["thumb", "ok"],
