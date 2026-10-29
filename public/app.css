@@ -2517,7 +2517,6 @@ body.sl-open { overflow: hidden; }
 .chat-send { flex: none; width: 40px; height: 40px; border: 0; border-radius: 12px; color: #fff; cursor: pointer; display: grid; place-items: center;
   background: linear-gradient(90deg, #4f46e5, #7c3aed); box-shadow: 0 4px 10px rgba(99, 102, 241, .35); transition: transform .1s, filter .15s, opacity .15s; }
 .chat-send svg { transform: rotate(45deg); } .chat-send:hover { filter: brightness(1.08); } .chat-send:active { transform: scale(.95); } .chat-send:disabled { opacity: .5; cursor: default; }
-.chat-privacy { display: flex; align-items: center; justify-content: center; gap: 6px; margin: 8px 0 0; font-size: 11px; color: var(--ink-faint); text-align: center; }
 .chat-chk-head { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; }
 .chat-chk { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; margin-bottom: 6px; border-radius: 10px; font-size: 13px; border-left: 3px solid; }
 .chat-chk.ok { border-color: #10b981; background: color-mix(in srgb, #10b981 8%, transparent); } .chat-chk.ko { border-color: #ef4444; background: color-mix(in srgb, #ef4444 8%, transparent); }
@@ -2527,4 +2526,4 @@ body.sl-open { overflow: hidden; }
 :root[data-theme="dark"] .chat-lv.excellent { background: #1e1b4b; color: #a5b4fc; border-color: #3730a3; } :root[data-theme="dark"] .chat-lv.bon { background: #052e22; color: #6ee7b7; border-color: #065f46; }
 :root[data-theme="dark"] .chat-lv.moyen { background: #082f49; color: #7dd3fc; border-color: #075985; } :root[data-theme="dark"] .chat-lv.faible { background: #3a2a06; color: #fcd34d; border-color: #78530c; }
 :root[data-theme="dark"] .chat-lv.critique { background: #3f0d1a; color: #fda4af; border-color: #9f1239; }
-@media (max-width: 760px) { .chat { height: calc(100vh - 220px); min-height: 380px; } .chat-msg.me .chat-bubble { max-width: 88%; } .chat-avatar { display: none; } .chat-msg.bot .chat-bubble { padding: 14px 16px; } .chat-privacy { display: none; } }
+@media (max-width: 760px) { .chat { height: calc(100vh - 220px); min-height: 380px; } .chat-msg.me .chat-bubble { max-width: 88%; } .chat-avatar { display: none; } .chat-msg.bot .chat-bubble { padding: 14px 16px; } }

@@ -96,7 +96,6 @@ async function viewChat() {
         <div class="chat-sugg"><span>Suggestions :</span>${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div>
         <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="1" placeholder="Pose une question sur tes apprenants, les briefs, les niveaux…" aria-label="Ta question"></textarea>
           <button class="chat-send" id="chat-send" type="submit" aria-label="Envoyer" title="Envoyer (Entrée)">${chatIcon('<path d="M12 19V5m0 0l-7 7m7-7l7 7"/>', 20)}</button></form>
-        <p class="chat-privacy">${CHAT_SHIELD} Les noms des apprenants ne sont jamais envoyés à l'IA : elle ne voit que des codes.</p>
       </div></section>`;
   const thread = $("#chat-thread"), q = $("#chat-q");
   const avatar = `<div class="chat-avatar" aria-hidden="true">C</div>`;
