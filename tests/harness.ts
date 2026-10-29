@@ -745,6 +745,9 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        const all: string = input.messages.map((m: any) => m.content).join(" ");
+        // a model that answers from nowhere the first time
+        if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
         if (!last.startsWith("DONNÉES")) {
           const code = (last.match(/\bE\d+\b/) || [])[0];
           return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
@@ -753,6 +756,10 @@ function fakeAI() {
         const st = Object.values(data).find((v: any) => v && v.code) as any;
         if (st) return { response: JSON.stringify({ answer: `**${st.code}** est au niveau ${st.niveau}, ${st.entrainement.resolus} défis résolus.`, table: null }) };
         const faibles = (Object.values(data).find((v) => Array.isArray(v)) as any[]) || [];
+        // a table pointed at the data (and a wrong one written by hand: the data's wins)
+        if (all.includes("Tableau des faibles")) return { response: JSON.stringify({ answer: "Voici les faibles.",
+          table_from: { data: Object.keys(data).find((k) => Array.isArray(data[k])), title: "Faibles", columns: { Apprenant: "code", Niveau: "niveau" } },
+          table: { title: "Faux", columns: ["X"], rows: [["inventé"]] } }) };
         return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
