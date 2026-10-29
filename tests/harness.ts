@@ -411,6 +411,8 @@ export const ai = {
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],
+  chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
+  chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
@@ -745,6 +747,8 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
+        if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
         // a model that answers from nowhere the first time
         if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };

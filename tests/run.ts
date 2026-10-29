@@ -6740,6 +6740,13 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   check(chkItems[0]?.expected === String(students0) && chkItems[0].ok && chkItems.some((x: any) => x.question.startsWith("Quel est le niveau") && x.ok),
     `…the right answers computed by ClassBot, the chat's compared (${JSON.stringify(chkItems.slice(0, 2)).slice(0, 200)})`);
   check(chkItems.some((x: any) => !x.ok), "…a wrong answer is caught (the fake AI doesn't give the points)");
+  ai.chatFails = 1;
+  const flaky = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
+  check(flaky.status === 200 && flaky.data.answer.includes("apprenants") && ai.chatFails === 0, `the AI's answer cut short once: asked again, answered (${flaky.data.error ?? flaky.data.answer})`);
+  ai.chatProse = true;
+  const prose = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
+  ai.chatProse = false;
+  check(prose.status === 200 && prose.data.answer === "La classe va bien, rien d'inquiétant.", `the AI answering in plain text instead of JSON: its text is the answer (${prose.data.error ?? prose.data.answer})`);
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }
