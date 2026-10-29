@@ -3633,7 +3633,7 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
     const r2 = { result: { exigences: [], competences: [{ code: "C3", avis: "non_visible" }, { code: "C4", avis: "validable" }, { code: "C5", avis: "validable" }] },
       assess: [{ id: 1, title: "A", score: 20, done: 1, of: 1, comps: { C3: { ok: true }, C4: { ok: false } } }] };
     const s2 = reviewStates(r2);
-    check(s2.co.C3 === true && s2.co.C4 === false && s2.co.C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
+    check((s2.co as any).C3 === true && (s2.co as any).C4 === false && (s2.co as any).C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
     check(debriefLevel(r2, s2) === "critique" && debriefLevel({ ...r2, assess: [] }, s2) === "", "the proposed level counts the assessment's score (the competencies don't count in it)");
     // a strong project and every competency switched on can't hide a failed assessment: one level above it, at most
     const ex4 = Array.from({ length: 10 }, (_, i) => ({ type: "story", texte: "Point " + i, statut: i < 8 ? "fait" : "absent" }));
@@ -4700,8 +4700,8 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
   check(op.status === 200 && op.data.assessment.settings.nav === "forward" && op.data.assessment.settings.shuffle === false && op.data.assessment.settings.lockScreen === false, "the teacher sets the options before inviting");
-  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.dave?.id || U.carol.id], send: false });
-  const who = U.dave?.id || U.carol.id;
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [(U as any).dave?.id || U.carol.id], send: false });
+  const who = (U as any).dave?.id || U.carol.id;
   const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[who].split("/quiz/")[1];
   const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
   const sid = "sessionOPTOPTOPTOPTOPT01";
@@ -6123,7 +6123,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files, url) VALUES (?, ?, ?, 'commit', 'sq/hammam', ?, 'add everything', 'real', 420, 0, 2, ?)", G, sha, B, tc, `https://github.com/sq/hammam/commit/${sha}`);
   const V = await import("../src/shared/vscode.ts");
   const day = V.dayOf(tc), start = V.dayClock(day).start;
-  const hb = (t: number, f: string, ai: number, hu: number) => ({ t, p: "hammam", f, lang: "HTML", cat: ai ? "ai coding" : "coding", w: 1, lines: 100, ai, hu, lc: 1, ed: "VS Code" });
+  const hb = (t: number, f: string, ai: number, hu: number) => ({ t, p: "hammam", f, lang: "HTML", cat: ai ? "ai coding" : "coding", w: 1 as const, lines: 100, ai, hu, lc: 1 as const, ed: "VS Code" });
   const raw = V.packRaw([hb(tc - 1500, "index.html", 300, 0), hb(tc - 1200, "style.css", 0, 40)], start);
   const agg = { ...V.emptyAgg(), active: 1800, ai: 300, hu: 40, lineData: true, projects: [["hammam", 1800, 0]] };
   run1("INSERT INTO vsc_days (guild_id, discord_id, day, active_s, write_s, n, ai_lines, human_lines, agg, raw, rev, updated_at) VALUES (?, ?, ?, 1800, 0, 2, 300, 40, ?, ?, 0, ?)", G, B, day, JSON.stringify(agg), raw, clock.now());

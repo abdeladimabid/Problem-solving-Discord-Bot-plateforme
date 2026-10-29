@@ -147,7 +147,7 @@ export function matchNames(sheet: string[], students: { id: string; names: strin
 }
 
 async function studentNames(env: Env, g: GuildRow, students: { discord_id: string; name: string }[]) {
-  const intra = new Map((await all<{ discord_id: string; learner_name: string | null }>(env, "SELECT discord_id, learner_name FROM intranet_links WHERE guild_id = ?", g.id).catch(() => [])).map((r) => [r.discord_id, r.learner_name || ""]));
+  const intra = new Map((await all<{ discord_id: string; learner_name: string | null }>(env, "SELECT discord_id, learner_name FROM intranet_links WHERE guild_id = ?", g.id).catch(() => [])).map((r) => [r.discord_id, r.learner_name || ""] as const));
   return students.map((s) => ({ id: s.discord_id, name: s.name || s.discord_id, names: [intra.get(s.discord_id) || "", s.name].filter(Boolean) }));
 }
 

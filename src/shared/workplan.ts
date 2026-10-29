@@ -464,7 +464,7 @@ export async function studentAnswer(env: Env, gid: string, id: number, b: any) {
   } else if (s.kind === "mcq") {
     const pick = (Array.isArray(b.answer) ? b.answer : [b.answer]).map(Number).filter((k: number) => Number.isInteger(k) && k >= 0 && k < s.choices.length);
     if (!pick.length) throw new WorkPlanError("Choisis une réponse.");
-    const right = new Set(s.answer), got = new Set(pick);
+    const right = new Set<number>(s.answer), got = new Set<number>(pick);
     const ok = right.size === got.size && [...right].every((k) => got.has(k));
     const some = [...got].some((k) => right.has(k));
     s.work = { at: now(), answer: pick, tries, verdict: ok ? "correct" : some ? "partial" : "wrong", score: ok ? 100 : some ? 50 : 0,

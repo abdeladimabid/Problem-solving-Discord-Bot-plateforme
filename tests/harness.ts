@@ -401,7 +401,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 // ------------------------------------------------------------------- AI
 export const ai = {
   calls: 0,
-  mode: "good" as "good" | "lying" | "broken" | "badwrite",
+  mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
   images: [] as number[],
@@ -414,7 +414,7 @@ export const ai = {
   chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;

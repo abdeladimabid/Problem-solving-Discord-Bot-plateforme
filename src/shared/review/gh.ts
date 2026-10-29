@@ -132,7 +132,7 @@ export async function repoFiles(token, repo) {
 }
 
 // The project as it is now: every file name, the main files (HTML first) and the sure checks
-export async function repoSnapshot(token, repo, budget, commits, brief = '', opts = {}) {
+export async function repoSnapshot(token, repo, budget, commits, brief = '', opts: any = {}) {
   const info = await githubGet(`/repos/${repo}`, token).catch(() => ({}));
   // Branches other than the main one show a branching strategy
   const branchesP = opts.git ? githubGet(`/repos/${repo}/branches?per_page=100`, token).catch(() => null) : null;
@@ -210,7 +210,7 @@ const tagText = (h) => h.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').repl
 /** Every HTML page read in full (the AI only sees the start of each file): its headings, sections, forms, links. */
 export function pageOutline(texts) {
   const out = [];
-  for (const [f, t] of Object.entries(texts || {})) {
+  for (const [f, t] of Object.entries(texts || {}) as [string, string][]) {
     if (!/\.(html?|php|vue|jsx|tsx)$/i.test(f) || !t) continue;
     const heads = [...t.matchAll(/<h([1-3])[^>]*>([\s\S]{1,200}?)<\/h\1>/gi)].map((m) => tagText(m[2])).filter(Boolean).slice(0, 12);
     const ids = [...t.matchAll(/\bid=["']([\w-]{2,40})["']/gi)].map((m) => m[1]).slice(0, 15);

@@ -213,7 +213,7 @@ async function send(env: Env, g: GuildRow, c: LibCfg, items: { kind: string; key
 async function pushPending(env: Env, g: GuildRow, c: LibCfg, shareAll: boolean) {
   const acts = await all<any>(env, "SELECT * FROM activities WHERE guild_id = ? AND lib_at IS NULL ORDER BY day LIMIT 300", g.id);
   const gone = await all<{ kind: string; key: string }>(env, "SELECT kind, key FROM library_outbox WHERE guild_id = ?", g.id);
-  const items = [
+  const items: any[] = [
     ...acts.map((r) => ({ kind: "activity", key: `${r.day}:${r.kind}`, title: r.title, data: activityData(r) })),
     ...gone.filter((x) => !acts.some((r) => `${r.day}:${r.kind}` === x.key)).map((x) => ({ kind: x.kind, key: x.key, title: null, data: null, deleted: true })),
   ];

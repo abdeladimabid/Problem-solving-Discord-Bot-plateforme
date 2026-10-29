@@ -29,7 +29,7 @@ export function badMessage(msg) {
   return words.every((w) => VAGUE.has(w) || /^\d+$/.test(w));
 }
 
-export function classifyCommit(c, info, env = {}) {
+export function classifyCommit(c, info, env: any = {}) {
   const tinyMax = Number(env.TINY_LINES || 2);
   const hugeMin = Number(env.HUGE_LINES || 2000);
   const bad = badMessage(c.message);
@@ -95,7 +95,7 @@ export function parseSkills(text) {
 export function skillDisplay(code) {
   return /^T\d/.test(code) ? `C${code}` : code;
 }
-export function skillText(code, names = REF_NAMES) {
+export function skillText(code, names: Record<string, string> = REF_NAMES) {
   const [, id, lvl] = String(code).match(/^([CT]\d{1,2})N(\d)$/) || [null, String(code), '1'];
   const crit = REF_CRITERIA[id] && REF_CRITERIA[id][lvl];
   const label = id.startsWith('T') ? `compétence transversale C${id}` : `compétence technique ${id}`;
@@ -189,8 +189,8 @@ export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
 export const assessBase = (c) => String(c).toUpperCase().replace(/N\d$/, '').replace(/^CT/, 'T');
 /** What the graded assessments of the brief say of each competency: true (all validated it), false, absent = not tested. */
 export function assessVerdicts(rec) {
-  const out = {};
-  for (const a of (rec && rec.assess) || []) for (const [k, v] of Object.entries(a.comps || {})) {
+  const out: Record<string, boolean> = {};
+  for (const a of (rec && rec.assess) || []) for (const [k, v] of Object.entries(a.comps || {}) as [string, any][]) {
     if (!v || typeof v.ok !== 'boolean') continue;
     const b = assessBase(k);
     out[b] = b in out ? out[b] && v.ok : v.ok;
@@ -240,7 +240,7 @@ export const STEP_RESULTS = ['a_temps', 'en_retard', 'non_fait'];
 export const STEP_FR = { a_temps: 'validée à temps', en_retard: 'validée en retard', non_fait: 'non validée' };
 
 // The notions behind an assessment question (its text and its expected answer): what to study, not the question itself
-const CONCEPTS = [
+const CONCEPTS: [RegExp, string][] = [
   [/doctype|page (html )?minimale|structure (de base|d’une page|d'une page)|<\s*(html|head|body)\b/i, 'la structure d’une page HTML (doctype, head, body)'],
   [/feuille de style|stylesheet|<\s*link\b|styles?\.css/i, 'le lien entre une page HTML et sa feuille CSS (<link>)'],
   [/<\s*(form|input|label|button|select|textarea)\b|formulaire|submit/i, 'les formulaires HTML (form, input, label, button)'],
@@ -408,7 +408,7 @@ export const noUrl = (t) => String(t).replace(/https?:\/\/[^\s)"'<>\]“”‘�
 // A link copied from a README: no closing quote or punctuation stuck at the end
 export const cleanUrl = (u) => String(u || '').replace(/[“”‘’«»].*$/, '').replace(/,https?:.*$/i, '').replace(/[.,;:!?*_`~'"]+$/, '').slice(0, 200);
 export const planLinkIn = (text) => cleanUrl((String(text || '').match(PLAN_LINK) || [])[0]);
-const PLAN_TOOLS = [[/trello\.com/i, 'Trello'], [/atlassian\.net/i, 'Jira'], [/github\.com/i, 'GitHub Projects'], [/notion\.(so|site)/i, 'Notion'], [/clickup\.com/i, 'ClickUp'], [/linear\.app/i, 'Linear'], [/asana\.com/i, 'Asana'], [/monday\.com/i, 'monday.com']];
+const PLAN_TOOLS: [RegExp, string][] = [[/trello\.com/i, 'Trello'], [/atlassian\.net/i, 'Jira'], [/github\.com/i, 'GitHub Projects'], [/notion\.(so|site)/i, 'Notion'], [/clickup\.com/i, 'ClickUp'], [/linear\.app/i, 'Linear'], [/asana\.com/i, 'Asana'], [/monday\.com/i, 'monday.com']];
 const planTool = (url) => (PLAN_TOOLS.find(([re]) => re.test(url)) || [null, 'de planification'])[1];
 // A brief requirement about planning the work ("Lien du Trello", "Tableau Jira", "Planification des tâches sur Jira"…),
 // not about the project itself (a "Trello clone", an app that plans tasks, a "Planning des cours" page…).
@@ -585,7 +585,7 @@ const gridType = (t) => {
     : /^crit/.test(k) ? 'critere' : /^bonus|^option/.test(k) ? 'bonus' : /^oral|^pres|^demo/.test(k) ? 'oral' : 'story';
 };
 // Which check proves a requirement, from its words (used without AI, and when the AI gave none)
-const VERIF_HINTS = [
+const VERIF_HINTS: [RegExp, string][] = [
   [/w3c|validator/, 'w3c'], [/postman/, 'postman'], [/swagger|openapi|documentation (technique )?de l[’']api/, 'api_docs'], [/\buml\b|diagramme/, 'uml'],
   [/tests? unitaires|phpunit|\bpest\b/, 'tests'], [/\bjwt\b/, 'lv_jwt'], [/sanctum/, 'lv_sanctum'], [/socialite|google ou facebook/, 'lv_socialite'],
   [/stripe|paiement en ligne/, 'pay_stripe'], [/websocket|temps réel|reverb|pusher/, 'rt_websocket'], [/form requests?/, 'lv_requests'],
@@ -658,7 +658,7 @@ export function gridWanted(grid) {
 // Sure checks on the project files (no AI). Returns [{ id, ok: true|false|null, info?, label, detail }]
 // A check about something the brief does not ask for is left out (or shown as information only).
 // With a brief grid, `wanted` holds the checks the grid names: only those are kept (plus Git, always judged).
-export function siteChecks(paths, texts, info = {}, commits = [], brief = '', wanted = null) {
+export function siteChecks(paths, texts, info: any = {}, commits = [], brief = '', wanted = null) {
   const B = String(brief || '');
   const asks = (re) => !!wanted || !B || re.test(B);
   const names = Object.keys(texts);
@@ -676,11 +676,11 @@ export function siteChecks(paths, texts, info = {}, commits = [], brief = '', wa
   // An HTML file that only loads a JS app (React, Vue…) is not checked for structure
   const shell = (t) => /<div[^>]*\bid\s*=\s*["'](root|app)["']/i.test(t) && t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '').replace(/<[^>]+>/g, '').replace(/\s+/g, '').length < 60;
   const out = [];
-  const add = (id, ok, label, detail, extra) => out.push({ id, ok, label, detail, ...(extra || {}) });
+  const add = (id, ok, label, detail, extra?) => out.push({ id, ok, label, detail, ...(extra || {}) });
 
   // Pages of the site = pages linked from a menu (+ index). Other HTML files (tests, drafts) are listed apart.
   const zoneOf = (t) => (t.match(/<nav[\s\S]*?<\/nav>/gi) || t.match(/<header[\s\S]*?<\/header>/gi) || []).join('\n');
-  const linksOf = (t) => new Set((t.match(/href\s*=\s*["']([^"'#?]+\.html?)/gi) || []).map((h) => base(h.replace(/^href\s*=\s*["']/i, ''))));
+  const linksOf = (t) => new Set<string>((t.match(/href\s*=\s*["']([^"'#?]+\.html?)/gi) || []).map((h) => base(h.replace(/^href\s*=\s*["']/i, ''))));
   const linked = new Set(['index.html', 'index.htm']);
   for (const f of html) for (const l of linksOf(texts[f])) linked.add(l);
   let sitePages = allHtml.filter((f) => linked.has(base(f)));
@@ -865,7 +865,7 @@ export function cleanAi(r, commits, skills = [], items = []) {
     absent: 'absent', non: 'absent', manquant: 'absent', missing: 'absent', non_fait: 'absent', non_realise: 'absent', non_verifiable: 'non_verifiable', inconnu: 'non_verifiable' };
   const AVIS = { validable: 'validable', valide: 'validable', validee: 'validable', a_verifier: 'a_verifier', partiel: 'a_verifier', verifier: 'a_verifier', non_visible: 'non_visible', non_valide: 'non_visible', absent: 'non_visible' };
   const okOf = (v) => (v === true || /^(true|oui|yes|ok)$/i.test(String(v)) ? true : v === false || /^(false|non|no)$/i.test(String(v)) ? false : null);
-  const bySha = new Map(commits.map((c) => [c.sha.slice(0, 7), c]));
+  const bySha = new Map<string, any>(commits.map((c) => [c.sha.slice(0, 7), c]));
   const out = {
     resume: str(r.resume, 800),
     commits: [],
@@ -893,7 +893,7 @@ export function cleanAi(r, commits, skills = [], items = []) {
     const inOrder = !byN.size && given.length === items.length;
     items.forEach((it, i) => {
       const e = inOrder ? given[i] : byN.get(it.n);
-      const line = it.type === 'oral' ? { type: it.type, texte: noVerif(it.texte), statut: 'non_verifiable', preuve: 'à voir à l’oral' }
+      const line: any = it.type === 'oral' ? { type: it.type, texte: noVerif(it.texte), statut: 'non_verifiable', preuve: 'à voir à l’oral' }
         : { type: it.type, texte: noVerif(it.texte), statut: e ? STATUT[key(e.statut)] || 'non_verifiable' : 'non_verifiable', preuve: e ? str(e.preuve, 200) : 'non analysé' };
       if (it.verif) line.verif = it.verif;
       out.exigences.push(line);
