@@ -31,7 +31,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
-import { ChatError, chatFeedback, classChat } from "../shared/classchat.ts";
+import { ChatError, chatCheck, chatFeedback, classChat } from "../shared/classchat.ts";
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -75,6 +75,18 @@ class HttpError extends Error {
   }
 }
 const ok = (data: unknown) => Response.json(data);
+/** A chat's work sent as it goes: one JSON line per step, then {"done": result} or {"error": "…"}. */
+function chatStream(ctx: Ctx, run: (line: (o: any) => void) => Promise<unknown>): Response {
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const line = (o: unknown) => { w.write(enc.encode(JSON.stringify(o) + "\n")).catch(() => {}); };
+  ctx.waitUntil((async () => {
+    try { line({ done: await run(line) }); }
+    catch (e) { line({ error: e instanceof ChatError ? e.message : "The chat failed. Try again in a moment." }); if (!(e instanceof ChatError)) console.error("chat", e); }
+    finally { w.close().catch(() => {}); }
+  })());
+  return new Response(readable, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+}
 const DIFFS = ["easy", "medium", "hard"];
 const KINDS = ["code", "write", "mcq", "output", "bug", "complexity"];
 
@@ -525,15 +537,12 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const question = String(body.question ?? ""), history = Array.isArray(body.history) ? body.history : [];
       if (!body.stream) return ok(await classChat(env, g, list, question, history));
       // streamed: one JSON line per step (what is being read, then writing), then the answer, so the teacher sees it work
-      const { readable, writable } = new TransformStream();
-      const w = writable.getWriter(), enc = new TextEncoder();
-      const line = (o: unknown) => { w.write(enc.encode(JSON.stringify(o) + "\n")).catch(() => {}); };
-      ctx.waitUntil((async () => {
-        try { line({ done: await classChat(env, g, list, question, history, line) }); }
-        catch (e) { line({ error: e instanceof ChatError ? e.message : "The chat failed. Try again in a moment." }); if (!(e instanceof ChatError)) console.error("chat", e); }
-        finally { w.close().catch(() => {}); }
-      })());
-      return new Response(readable, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+      return chatStream(ctx, (line) => classChat(env, g, list, question, history, line));
+    }
+    // "Is the chat reliable?": questions with a known answer, each result as it comes, then the score
+    if (path === "/chat/check" && method === "POST") {
+      const g = await guild(), list = await students(env, g);
+      return chatStream(ctx, (line) => chatCheck(env, g, list, (item, i, total) => line({ item, i, total })));
     }
     if (path === "/chat/feedback" && method === "POST") { const g = await guild(); return ok(await chatFeedback(env, g.id, body)); }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }

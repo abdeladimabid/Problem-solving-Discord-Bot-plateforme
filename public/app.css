@@ -2501,4 +2501,8 @@ body.sl-open { overflow: hidden; }
 .chat-vote.up:hover:not(:disabled), .chat-vote.up.on { color: #059669; background: color-mix(in srgb, #10b981 14%, transparent); }
 .chat-vote.down:hover:not(:disabled), .chat-vote.down.on { color: #dc2626; background: color-mix(in srgb, #ef4444 14%, transparent); }
 .chat-vote.on svg { fill: currentColor; fill-opacity: .18; } .chat-vote:disabled { cursor: default; } .chat-vote:disabled:not(.on) { opacity: .35; }
+.chat-chk-head { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; }
+.chat-chk { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; margin-bottom: 6px; border-radius: 10px; font-size: 13px; border-left: 3px solid; }
+.chat-chk.ok { border-color: #10b981; background: color-mix(in srgb, #10b981 8%, transparent); } .chat-chk.ko { border-color: #ef4444; background: color-mix(in srgb, #ef4444 8%, transparent); }
+.chat-chk span { color: var(--ink-faint); overflow-wrap: anywhere; }
 @media (max-width: 760px) { .chat { height: calc(100vh - 170px); } .chat-bubble { max-width: 92%; } .chat-avatar { display: none; } }

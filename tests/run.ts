@@ -6730,6 +6730,16 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const filtered = await api("POST", "/api/chat", { g: G, question: "Tous puis filtre", history: [] });
   check(filtered.status === 200 && filtered.data.table?.columns.join() === "Apprenant,Niveau" && filtered.data.table.rows.length === many.data.table.rows.length && filtered.data.table.rows.every((r: string[]) => r[1] === "faible"),
     `a table from the whole list with "where": only the rows asked for, the student column named so (${JSON.stringify(filtered.data.table)?.slice(0, 140)})`);
+  run1("DELETE FROM ai_usage");
+  const chk = await api("POST", "/api/chat/check", { g: G });
+  const chkLines = String(chk.data).trim().split("\n").map((l) => JSON.parse(l));
+  const chkDone = chkLines.at(-1)?.done, chkItems = chkLines.filter((l) => l.item).map((l) => l.item);
+  const students0 = (await api("GET", `/api/students?g=${G}`)).data.length;
+  check(chk.status === 200 && chkDone?.total >= 6 && chkItems.length === chkDone.total && chkDone.score === chkItems.filter((x: any) => x.ok).length,
+    `"is the chat reliable?": each question's result as it comes, then the score (${chkDone?.score}/${chkDone?.total})`);
+  check(chkItems[0]?.expected === String(students0) && chkItems[0].ok && chkItems.some((x: any) => x.question.startsWith("Quel est le niveau") && x.ok),
+    `…the right answers computed by ClassBot, the chat's compared (${JSON.stringify(chkItems.slice(0, 2)).slice(0, 200)})`);
+  check(chkItems.some((x: any) => !x.ok), "…a wrong answer is caught (the fake AI doesn't give the points)");
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }

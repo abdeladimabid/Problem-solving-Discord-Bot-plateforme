@@ -27,8 +27,8 @@ function chatTable(t, i) {
     <tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
 }
 /** The chat's answer, read as it comes: each step (what ClassBot reads, then writing) given to onStep. */
-async function chatAsk(body, onStep) {
-  const res = await fetch(`/api/chat?g=${encodeURIComponent(S.g)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ g: S.g, stream: true, ...body }) });
+async function chatAsk(body, onStep, path = "/chat") {
+  const res = await fetch(`/api${path}?g=${encodeURIComponent(S.g)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ g: S.g, stream: true, ...body }) });
   if (res.status === 401) { location.href = "/login"; throw new Error("Please sign in again."); }
   if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
   const reader = res.body.getReader(), dec = new TextDecoder();
@@ -52,6 +52,22 @@ async function chatAsk(body, onStep) {
 
 const CHAT_UP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>`;
 const CHAT_DOWN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>`;
+/** "Is the chat reliable?": ClassBot asks questions it knows the answer to, and shows each result as it comes. */
+function chatCheckDialog() {
+  const d = openDialog("Tester la fiabilité du chat", `<p class="sub">ClassBot pose au chat environ 8 questions dont il calcule lui-même la bonne réponse (nombre d'apprenants, niveaux, points…), avec ta première clé IA. Ça prend 1 à 2 minutes et utilise une trentaine d'appels IA.</p><div id="chk-out"></div>`,
+    [{ label: "Lancer le test", primary: true, action: async () => {
+      const out = $("#chk-out", d), rows = [];
+      const draw = (head) => { out.innerHTML = `<p class="chat-chk-head">${head}</p>${rows.map((it) => `<div class="chat-chk ${it.ok ? "ok" : "ko"}"><b>${it.ok ? "✓" : "✗"} ${esc(it.question)}</b>
+        <span>Attendu : ${esc(it.expected)}</span>${it.ok ? "" : `<span>Réponse : ${esc(it.got)}</span>`}</div>`).join("")}`; };
+      draw("<span class=\"chat-dots\"><i></i><i></i><i></i></span> Question 1…");
+      try {
+        const r = await chatAsk({}, (m) => { rows.push(m.item); draw(`<span class="chat-dots"><i></i><i></i><i></i></span> Question ${m.i + 2} sur ${m.total}…`); }, "/chat/check");
+        draw(`<b>${r.score} / ${r.total} justes</b> ${r.score === r.total ? "· le chat est fiable avec cette clé." : "· regarde les réponses fausses ; essaie une autre IA en premier dans Réglages → Clés IA."}`);
+      } catch (e) { draw(`<span class="chat-err">${esc(e.message)}</span>`); }
+    } }]);
+  return d;
+}
+
 /** Under an answer: what ClassBot read for it, and 👍 / 👎. */
 function chatFoot(m, i) {
   const src = (m.sources || []).length ? `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">Lu : ${m.sources.map(esc).join(" · ")}</span>`
@@ -64,7 +80,8 @@ async function viewChat() {
   let list = chatLoad(), busy = false, status = "";
   view.innerHTML = `
     <div class="page-head"><div><h1>Chat avec ta classe</h1><p class="sub">Pose tes questions sur tes apprenants, comme à un collègue : ClassBot lit les données de la classe et répond. Les noms ne sont jamais envoyés à l'IA.</p></div>
-      <button class="btn" id="chat-new">Nouvelle conversation</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="chat-check" title="Des questions dont ClassBot connaît la bonne réponse, posées au chat : pour voir s'il est fiable avec ta clé IA">Tester la fiabilité</button>
+      <button class="btn" id="chat-new">Nouvelle conversation</button></div></div>
     <section class="panel chat"><div class="chat-thread" id="chat-thread"></div>
       <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="2" placeholder="Ta question… (Entrée pour envoyer, Maj+Entrée pour aller à la ligne)" aria-label="Ta question"></textarea>
         <button class="chat-send" id="chat-send" type="submit" aria-label="Envoyer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></form></section>`;
@@ -112,6 +129,7 @@ async function viewChat() {
   };
   $("#chat-form").onsubmit = (e) => { e.preventDefault(); send(); };
   q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  $("#chat-check").onclick = () => chatCheckDialog();
   $("#chat-new").onclick = () => { list = []; chatSave(list); draw(); q.focus(); };
   draw();
   q.focus();

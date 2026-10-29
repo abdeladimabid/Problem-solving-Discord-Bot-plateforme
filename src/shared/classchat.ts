@@ -337,3 +337,60 @@ export async function chatFeedback(env: Env, guildId: string, body: any) {
   await env.DB.prepare("DELETE FROM chat_feedback WHERE guild_id = ? AND id NOT IN (SELECT id FROM chat_feedback WHERE guild_id = ? ORDER BY id DESC LIMIT 500)").bind(guildId, guildId).run();
   return { saved: true };
 }
+
+
+export interface ChatCheckItem { question: string; expected: string; got: string; ok: boolean }
+
+/**
+ * "Is the chat reliable?": questions whose right answer ClassBot computes itself from the class's data (how many
+ * students, how many at a level, who is at a level, a student's level, points, solved challenges), asked to the chat
+ * as a teacher would, each answer compared. With the class's AI as it is set (its first key): to compare the AIs.
+ */
+export async function chatCheck(env: Env, g: GuildRow, students: ChatStudent[], onItem?: (it: ChatCheckItem, i: number, total: number) => void) {
+  const named = students.filter((s) => s.name && s.name.trim().length >= 3).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  if (!named.length) throw new ChatError("No students in this class yet.");
+  if (!(await aiBudgetOk(env, 30))) throw new ChatError("Not enough AI left today for the check (about 30 calls, see Settings → AI keys).");
+  const n = await niveaux(env, g);
+  const lv = (s: ChatStudent) => n[s.discord_id]?.lv ?? "aucun";
+  const counts = new Map<string, number>();
+  for (const s of students) counts.set(lv(s), (counts.get(lv(s)) ?? 0) + 1);
+  const ranked = [...counts].filter(([l]) => l !== "aucun").sort((a, b) => b[1] - a[1]);
+  // a whole number on its own in the text (not a piece of another number)
+  const has = (t: string, num: number) => new RegExp(`(?<![\\d])${num}(?![\\d]|[.,]\\d)`).test(t);
+  const nameIn = (t: string, s: ChatStudent) => new RegExp(`(?<!\\p{L})${escRx(norm(s.name))}(?!\\p{L})`, "u").test(norm(t));
+  const tests: { q: string; expected: string; ok: (r: Awaited<ReturnType<typeof classChat>>) => boolean }[] = [
+    { q: "Combien d'apprenants y a-t-il dans la classe ?", expected: String(students.length), ok: (r) => has(r.answer, students.length) },
+  ];
+  if (ranked[0]) tests.push({ q: `Combien d'apprenants sont au niveau ${ranked[0][0]} ?`, expected: String(ranked[0][1]), ok: (r) => has(r.answer, ranked[0][1]) });
+  // a list: the weakest level that has students
+  const weak = ["critique", "faible", "moyen"].find((l) => counts.get(l));
+  if (weak) {
+    const want = new Set(named.filter((s) => lv(s) === weak));
+    tests.push({ q: `Mets les apprenants au niveau ${weak} dans un tableau.`, expected: `${want.size} apprenant(s) : ${[...want].map((s) => s.name).join(", ")}`.slice(0, 300),
+      ok: (r) => {
+        const text = r.table ? r.table.rows.flat().join(" | ") : r.answer;
+        const found = named.filter((s) => nameIn(text, s));
+        return found.length === want.size && found.every((s) => want.has(s));
+      } });
+  }
+  // two students: the first and the middle one of the list, their level, points, challenges solved
+  for (const s of [...new Set([named[0], named[Math.floor(named.length / 2)]])]) {
+    tests.push({ q: `Quel est le niveau de ${s.name} ?`, expected: lv(s), ok: (r) => norm(r.answer).includes(norm(lv(s))) });
+    tests.push({ q: `Combien de points ${s.name} a cette saison ?`, expected: String(s.season_pts ?? 0), ok: (r) => has(r.answer, s.season_pts ?? 0) });
+  }
+  tests.push({ q: `Combien de défis ${named[0].name} a résolus ?`, expected: String(named[0].solved ?? 0), ok: (r) => has(r.answer, named[0].solved ?? 0) });
+
+  const items: ChatCheckItem[] = [];
+  for (const [i, t] of tests.entries()) {
+    let it: ChatCheckItem;
+    try {
+      const r = await classChat(env, g, students, t.q, []);
+      it = { question: t.q, expected: t.expected, got: (r.answer + (r.table ? ` [tableau : ${r.table.rows.length} ligne(s)]` : "")).slice(0, 400), ok: t.ok(r) };
+    } catch (e) {
+      it = { question: t.q, expected: t.expected, got: e instanceof Error ? e.message : String(e), ok: false };
+    }
+    items.push(it);
+    onItem?.(it, i, tests.length);
+  }
+  return { score: items.filter((x) => x.ok).length, total: items.length, items };
+}
