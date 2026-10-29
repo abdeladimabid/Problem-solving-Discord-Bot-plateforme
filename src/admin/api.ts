@@ -31,7 +31,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
-import { ChatError, classChat } from "../shared/classchat.ts";
+import { ChatError, chatFeedback, classChat } from "../shared/classchat.ts";
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -524,6 +524,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       return ok(await classChat(env, g, await students(env, g), String(body.question ?? ""), Array.isArray(body.history) ? body.history : []));
     }
+    if (path === "/chat/feedback" && method === "POST") { const g = await guild(); return ok(await chatFeedback(env, g.id, body)); }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
     // the students' intranet photos: which ones exist, and each image (from Cloudflare's cache after the first time)
     if (path === "/intranet/photos" && method === "GET") { const g = await guild(); return ok({ photos: await intranetPhotos(env, g.id) }); }

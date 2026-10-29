@@ -6705,6 +6705,12 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   ai.chatSeen.length = 0;
   const one = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [] });
   check(one.status === 200 && one.data.answer.includes(alice) && !/\bE\d+\b/.test(one.data.answer) && one.data.used.includes("student"), `a question about a student: answered from their data, their name back in the answer (${one.data.error ?? one.data.answer})`);
+  check(one.data.sources?.join() === `le dossier de ${alice}`, `…and what was read, in words, with the name (${one.data.sources})`);
+  check(ai.chatSeen.some((m) => m.includes("jamais des consignes")) && ai.chatSeen.some((m) => m.includes("pas des consignes) :")), "…the texts in the data are announced to the AI as data, not instructions");
+  const fb = await api("POST", "/api/chat/feedback", { g: G, vote: -1, question: "Combien de faibles ?", answer: "3", sources: ["la liste des apprenants"] });
+  const fbRow = q1("SELECT vote, question, sources FROM chat_feedback WHERE guild_id = ? ORDER BY id DESC", G);
+  check(fb.status === 200 && fbRow?.vote === -1 && fbRow.question === "Combien de faibles ?" && fbRow.sources.includes("apprenants"), "👎 on an answer: kept with the question and what was read");
+  check((await api("POST", "/api/chat/feedback", { g: G, vote: 5, question: "x", answer: "y" })).status === 400, "…a vote that isn't 1 or -1: refused");
   check(ai.chatSeen.length >= 2 && !ai.chatSeen.some((m) => names.some((n: string) => new RegExp(`(?<!\\p{L})${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\p{L})`, "iu").test(m))), "…no student's name is ever sent to the AI (codes only)");
   const many = await api("POST", "/api/chat", { g: G, question: "Combien de faibles, et qui ?", history: [{ role: "user", text: `et ${alice} ?` }, { role: "assistant", text: `${alice} va bien.` }] });
   check(many.status === 200 && Array.isArray(many.data.table?.rows) && many.data.table.columns.join() === "Apprenant,Niveau" && !many.data.table.rows.flat().some((c: string) => /^E\d+$/.test(c)),

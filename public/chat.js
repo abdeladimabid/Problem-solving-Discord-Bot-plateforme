@@ -26,6 +26,13 @@ function chatTable(t, i) {
     <div class="table-wrap"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
     <tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
 }
+/** Under an answer: what ClassBot read for it, and 👍 / 👎. */
+function chatFoot(m, i) {
+  const src = (m.sources || []).length ? `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">Lu : ${m.sources.map(esc).join(" · ")}</span>`
+    : `<span class="chat-src">Aucune donnée lue</span>`;
+  const btn = (v, icon, label) => `<button type="button" class="chat-vote${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
+  return `<div class="chat-foot">${src}<span class="chat-votes">${btn(1, "👍", "Bonne réponse")}${btn(-1, "👎", "Réponse fausse")}</span></div>`;
+}
 
 async function viewChat() {
   let list = chatLoad(), busy = false;
@@ -41,13 +48,24 @@ async function viewChat() {
     $("#chat-send").disabled = busy;
     thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
       ? `<div class="chat-msg me"><div class="chat-bubble">${esc(m.text)}</div></div>`
-      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}</div></div>`).join("")
+      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.error ? "" : chatFoot(m, i)}</div></div>`).join("")
       + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span>ClassBot lit les données de la classe…</div></div>` : "")
       : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">✦</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
     thread.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; q.focus(); });
     thread.querySelectorAll("[data-xl]").forEach((b) => b.onclick = () => {
       const t = list[Number(b.dataset.xl)].table;
       saveBlob(XL.writeXlsx([{ name: (t.title || "ClassBot").slice(0, 30), rows: [t.columns, ...t.rows], widths: t.columns.map(() => 22) }]), `${(t.title || "classbot").replace(/[^\w\- ]+/g, "").trim() || "classbot"}.xlsx`);
+    });
+    // 👍 / 👎: kept by ClassBot (with the question) to see where the chat goes wrong
+    thread.querySelectorAll("[data-vote]").forEach((b) => b.onclick = async () => {
+      const i = Number(b.dataset.i), m = list[i], vote = Number(b.dataset.vote);
+      if (m.vote) return;
+      const question = [...list.slice(0, i)].reverse().find((x) => x.role === "user")?.text || "";
+      try {
+        await api("/chat/feedback", { method: "POST", body: { vote, question, answer: m.text, sources: m.sources || [] } });
+        m.vote = vote; chatSave(list); draw();
+        toast(vote > 0 ? "Merci !" : "Merci, c'est noté : ça aidera à corriger le chat.");
+      } catch (e) { toast(e.message, true); }
     });
     thread.scrollTop = thread.scrollHeight;
   };
@@ -59,7 +77,7 @@ async function viewChat() {
     q.value = ""; busy = true; draw();
     try {
       const r = await api("/chat", { method: "POST", body: { question: text, history } });
-      list.push({ role: "assistant", text: r.answer, table: r.table || null });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [] });
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true }); }
     busy = false; chatSave(list); draw();
   };
