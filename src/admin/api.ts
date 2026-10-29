@@ -31,6 +31,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
+import { ChatError, classChat } from "../shared/classchat.ts";
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -518,6 +519,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // -------------------------------------------------------------- teams
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
     // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
+    // Chat with your class: a message (and the last turns) → the answer from the class's data
+    if (path === "/chat" && method === "POST") {
+      const g = await guild();
+      return ok(await classChat(env, g, await students(env, g), String(body.question ?? ""), Array.isArray(body.history) ? body.history : []));
+    }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
     // the students' intranet photos: which ones exist, and each image (from Cloudflare's cache after the first time)
     if (path === "/intranet/photos" && method === "GET") { const g = await guild(); return ok({ photos: await intranetPhotos(env, g.id) }); }
@@ -993,7 +999,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof HandError || e instanceof PlanError || e instanceof WorkPlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof ChatError || e instanceof HandError || e instanceof PlanError || e instanceof WorkPlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });

@@ -6697,6 +6697,23 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
   } finally { googleFake.handler = null; }
 }
 
+section("Chat with your class: free questions, the class's data read by ClassBot, no student name sent to the AI");
+{
+  const alice = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name as string;
+  // the students' names (the Students list: the teacher's own account isn't a student)
+  const names = (await api("GET", `/api/students?g=${G}`)).data.map((r: any) => String(r.name || "")).filter((n: string) => n.length >= 3);
+  ai.chatSeen.length = 0;
+  const one = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [] });
+  check(one.status === 200 && one.data.answer.includes(alice) && !/\bE\d+\b/.test(one.data.answer) && one.data.used.includes("student"), `a question about a student: answered from their data, their name back in the answer (${one.data.error ?? one.data.answer})`);
+  check(ai.chatSeen.length >= 2 && !ai.chatSeen.some((m) => names.some((n: string) => new RegExp(`(?<![\p{L}])${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\p{L}])`, "iu").test(m))), "…no student's name is ever sent to the AI (codes only)");
+  const many = await api("POST", "/api/chat", { g: G, question: "Combien de faibles, et qui ?", history: [{ role: "user", text: `et ${alice} ?` }, { role: "assistant", text: `${alice} va bien.` }] });
+  check(many.status === 200 && Array.isArray(many.data.table?.rows) && many.data.table.columns.join() === "Apprenant,Niveau" && !many.data.table.rows.flat().some((c: string) => /^E\d+$/.test(c)),
+    `a question on the class: a table to download, with the students' names (${JSON.stringify(many.data.table)?.slice(0, 120)})`);
+  check(!ai.chatSeen.some((m) => m.toLowerCase().includes(alice.toLowerCase())), "…the conversation so far is sent without names too");
+  check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
+  run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;
