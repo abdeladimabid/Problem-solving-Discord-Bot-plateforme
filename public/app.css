@@ -2446,3 +2446,7 @@ body.sl-open { overflow: hidden; }
 .gs-tbl tr.gs-none td:nth-child(2) { color: var(--down, #c33); }
 @media (max-width: 600px) { .gs-tbl td:first-child, .gs-tbl th:first-child { display: none; } }
 #set-gsheet { display: grid; gap: 14px; }
+
+/* a student's intranet photo, over their initials */
+.avatar { position: relative; overflow: hidden; }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }

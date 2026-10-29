@@ -159,8 +159,15 @@ const avatar = (name, id = "") => {
   let h = 0;
   for (const ch of String(id || s)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const ini = s.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
-  return `<span class="avatar" style="background:${AVATAR_COLORS[h % AVATAR_COLORS.length]}">${esc(ini)}</span>`;
+  // their intranet photo when ClassBot has one (over the initials: if the image can't load, the initials stay)
+  const ph = id && S.photos?.[id];
+  const img = ph ? `<img src="/api/intranet/photo/${encodeURIComponent(id)}?g=${encodeURIComponent(S.g)}&v=${encodeURIComponent(ph)}" alt="" loading="lazy" onerror="this.remove()">` : "";
+  return `<span class="avatar${img ? " has-photo" : ""}" style="background:${AVATAR_COLORS[h % AVATAR_COLORS.length]}">${esc(ini)}${img}</span>`;
 };
+/** The class's students' intranet photos (one small request when the class opens; each image is asked when shown). */
+async function loadPhotos() {
+  try { S.photos = (await api("/intranet/photos")).photos || {}; } catch { S.photos = {}; }
+}
 const delta = (now, before, suffix = "") => {
   if (before == null) return "";
   const d = now - before;
@@ -2300,9 +2307,10 @@ async function viewPoints() {
       S.g = sel.value;
       Object.assign(S, { guild: S.guilds.find((g) => g.id === S.g), discord: null, students: null, challenges: null });
       try { localStorage.setItem("classbot.g", S.g); } catch { /* ignore */ }
-      route();
+      loadPhotos().then(route);
     };
     S.guild = S.guilds.find((g) => g.id === S.g) ?? null;
+    await loadPhotos();
   } catch (e) {
     view.innerHTML = `<div class="notice"><b>Couldn't reach the dashboard API.</b> ${esc(e.message)}</div>`;
     return;

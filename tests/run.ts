@@ -4807,6 +4807,17 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const mine = await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 501 });
   check(row(mine.data, U.carol.id).linked?.id === 501 && row(mine.data, U.carol.id).linked.by === "you" && !row(mine.data, U.alice.id).linked, "…the teacher's choice wins (the learner moves to that student)");
   check((await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 777 })).status === 400, "…a learner outside the classroom: refused");
+  // the learners' photos: their file names are kept when the learners are read; each image comes from the intranet (signed)
+  intranetFake.learners[12][0].photo = "501-1700000000.jpg";
+  await api("GET", `/api/intranet/match?g=${G}`);
+  check(q1("SELECT photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.carol.id).photo === "501-1700000000.jpg" && !q1("SELECT photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).photo,
+    "the linked learners' photos are known (their file names only)");
+  const phs = await api("GET", `/api/intranet/photos?g=${G}`);
+  check(phs.status === 200 && phs.data.photos[U.carol.id] === "501-1700000000.jpg" && !(U.bob.id in phs.data.photos), "…the dashboard knows which students have one");
+  const calls0 = intranetFake.photoCalls;
+  const img = await api("GET", `/api/intranet/photo/${U.carol.id}?g=${G}`);
+  check(img.status === 200 && intranetFake.photoCalls === calls0 + 1, `…a photo is fetched from the intranet with the signed access (${img.status})`);
+  check((await api("GET", `/api/intranet/photo/${U.bob.id}?g=${G}`)).status === 404 && intranetFake.photoCalls === calls0 + 1, "…no photo: nothing asked, 404");
   // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
   run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
     JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
