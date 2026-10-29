@@ -410,7 +410,8 @@ export const ai = {
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
-  maxTokens: [] as number[],   // the answer length each call allowed
+  maxTokens: [] as number[],
+  chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
@@ -740,6 +741,20 @@ function fakeAI() {
       if (sys.includes("Écris le code de départ")) return { response: JSON.stringify({ starter: "# 1. créer le dépôt\n# 2. …", expected: "git init\ngit add .\ngit commit -m \"init\"\ngit switch -c feature/home-layout\ngit push -u origin feature/home-layout\ngh pr create" }) };
       if (sys.includes("Écris 4 choix")) return { response: JSON.stringify({ choices: ["git push", "git pull", "git fetch", "git clone"], answer: [0] }) };
       if (sys.includes("Écris la réponse attendue")) return { response: JSON.stringify({ expected: "- le dépôt distant\n- la branche suivie" }) };
+      // Chat with your class: asks for the data first, then answers from it (keeping the students' codes)
+      if (sys.includes("Il te parle librement de sa classe")) {
+        const last: string = input.messages[input.messages.length - 1]?.content ?? "";
+        ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        if (!last.startsWith("DONNÉES")) {
+          const code = (last.match(/\bE\d+\b/) || [])[0];
+          return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
+        }
+        const data = JSON.parse(last.slice(last.indexOf("{")));
+        const st = Object.values(data).find((v: any) => v && v.code) as any;
+        if (st) return { response: JSON.stringify({ answer: `**${st.code}** est au niveau ${st.niveau}, ${st.entrainement.resolus} défis résolus.`, table: null }) };
+        const faibles = (Object.values(data).find((v) => Array.isArray(v)) as any[]) || [];
+        return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
+      }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
         if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
           { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },

@@ -1,0 +1,71 @@
+"use strict";
+// Chat with your class: talk freely about the students; ClassBot reads the class's data and answers. The conversation
+// is kept in this browser (per class); a table in an answer can be downloaded as an Excel file.
+/* global $, api, esc, toast, view, routes, S, XL, saveBlob */
+
+const CHAT_EXAMPLES = ["Comment va la classe cette semaine ?", "Combien de faibles, et qui ?", "Que fait Amine en ce moment ?",
+  "Toutes les statistiques d'Amine cette année", "Écris un bilan de l'année d'Amine pour l'administration", "Mets tous les faibles dans un Excel"];
+const chatKey = () => `classbot.chat.${S.g}`;
+const chatLoad = () => { try { const v = JSON.parse(localStorage.getItem(chatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
+const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringify(list.slice(-40))); } catch { /* private window: this visit only */ } };
+
+/** The answer's text: escaped, then **bold**, lists and line breaks (nothing else from the AI reaches the page). */
+function chatText(t) {
+  const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").split("\n");
+  let html = "", list = false;
+  for (const l of lines) {
+    const li = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
+    if (li) { if (!list) { html += "<ul>"; list = true; } html += `<li>${li[1]}</li>`; continue; }
+    if (list) { html += "</ul>"; list = false; }
+    html += l.trim() ? `<p>${l}</p>` : "";
+  }
+  return html + (list ? "</ul>" : "");
+}
+function chatTable(t, i) {
+  return `<div class="chat-table"><div class="chat-table-h"><b>${esc(t.title || "")}</b><button class="btn small" data-xl="${i}">Télécharger Excel</button></div>
+    <div class="table-wrap"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
+    <tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+}
+
+async function viewChat() {
+  let list = chatLoad(), busy = false;
+  view.innerHTML = `
+    <div class="page-head"><div><h1>Chat avec ta classe</h1><p class="sub">Pose tes questions sur tes apprenants, comme à un collègue : ClassBot lit les données de la classe et répond. Les noms ne sont jamais envoyés à l'IA.</p></div>
+      <button class="btn" id="chat-new">Nouvelle conversation</button></div>
+    <section class="panel chat"><div class="chat-thread" id="chat-thread"></div>
+      <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="2" placeholder="Ta question… (Entrée pour envoyer, Maj+Entrée pour aller à la ligne)" aria-label="Ta question"></textarea>
+        <button class="btn primary" id="chat-send" type="submit">Envoyer</button></form></section>`;
+  const thread = $("#chat-thread"), q = $("#chat-q");
+  const draw = () => {
+    thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
+      ? `<div class="chat-msg me"><div class="chat-bubble">${esc(m.text)}</div></div>`
+      : `<div class="chat-msg bot"><div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}</div></div>`).join("")
+      + (busy ? `<div class="chat-msg bot"><div class="chat-bubble chat-wait">ClassBot regarde les données de la classe…</div></div>` : "")
+      : `<div class="chat-empty"><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button class="btn small" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
+    thread.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; q.focus(); });
+    thread.querySelectorAll("[data-xl]").forEach((b) => b.onclick = () => {
+      const t = list[Number(b.dataset.xl)].table;
+      saveBlob(XL.writeXlsx([{ name: (t.title || "ClassBot").slice(0, 30), rows: [t.columns, ...t.rows], widths: t.columns.map(() => 22) }]), `${(t.title || "classbot").replace(/[^\w\- ]+/g, "").trim() || "classbot"}.xlsx`);
+    });
+    thread.scrollTop = thread.scrollHeight;
+  };
+  const send = async () => {
+    const text = q.value.trim();
+    if (!text || busy) return;
+    const history = list.filter((m) => !m.error).slice(-8).map((m) => ({ role: m.role, text: m.text }));
+    list.push({ role: "user", text });
+    q.value = ""; busy = true; draw();
+    try {
+      const r = await api("/chat", { method: "POST", body: { question: text, history } });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null });
+    } catch (e) { list.push({ role: "assistant", text: e.message, error: true }); }
+    busy = false; chatSave(list); draw();
+  };
+  $("#chat-form").onsubmit = (e) => { e.preventDefault(); send(); };
+  q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
+  $("#chat-new").onclick = () => { list = []; chatSave(list); draw(); q.focus(); };
+  draw();
+  q.focus();
+}
+
+Object.assign(routes, { chat: viewChat });

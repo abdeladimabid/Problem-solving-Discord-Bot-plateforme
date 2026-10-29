@@ -563,6 +563,7 @@ window.CB_FR = {
 "Default scoring restored": "Barème par défaut rétabli",
 "Default scoring.": "Barème par défaut.",
 "Delete": "Supprimer",
+"Chat with your class": "Chat avec ta classe",
 "From their last finalized debrief": "D’après son dernier débrief finalisé",
 "no level yet": "pas encore de niveau",
 "Last debrief": "Dernier débrief",
