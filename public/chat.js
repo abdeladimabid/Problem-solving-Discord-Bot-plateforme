@@ -26,16 +26,42 @@ function chatTable(t, i) {
     <div class="table-wrap"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
     <tbody>${t.rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
 }
+/** The chat's answer, read as it comes: each step (what ClassBot reads, then writing) given to onStep. */
+async function chatAsk(body, onStep) {
+  const res = await fetch(`/api/chat?g=${encodeURIComponent(S.g)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ g: S.g, stream: true, ...body }) });
+  if (res.status === 401) { location.href = "/login"; throw new Error("Please sign in again."); }
+  if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error || `Request failed (${res.status})`);
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buf += dec.decode(value || new Uint8Array(), { stream: !done });
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const l = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!l) continue;
+      const m = JSON.parse(l);
+      if (m.done) return m.done;
+      if (m.error) throw new Error(m.error);
+      onStep(m);
+    }
+    if (done) throw new Error("The chat stopped before answering. Try again.");
+  }
+}
+
+const CHAT_UP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg>`;
+const CHAT_DOWN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg>`;
 /** Under an answer: what ClassBot read for it, and 👍 / 👎. */
 function chatFoot(m, i) {
   const src = (m.sources || []).length ? `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">Lu : ${m.sources.map(esc).join(" · ")}</span>`
     : `<span class="chat-src">Aucune donnée lue</span>`;
-  const btn = (v, icon, label) => `<button type="button" class="chat-vote${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
-  return `<div class="chat-foot">${src}<span class="chat-votes">${btn(1, "👍", "Bonne réponse")}${btn(-1, "👎", "Réponse fausse")}</span></div>`;
+  const btn = (v, icon, label) => `<button type="button" class="chat-vote ${v > 0 ? "up" : "down"}${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
+  return `<div class="chat-foot">${src}<span class="chat-votes">${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
 }
 
 async function viewChat() {
-  let list = chatLoad(), busy = false;
+  let list = chatLoad(), busy = false, status = "";
   view.innerHTML = `
     <div class="page-head"><div><h1>Chat avec ta classe</h1><p class="sub">Pose tes questions sur tes apprenants, comme à un collègue : ClassBot lit les données de la classe et répond. Les noms ne sont jamais envoyés à l'IA.</p></div>
       <button class="btn" id="chat-new">Nouvelle conversation</button></div>
@@ -49,7 +75,7 @@ async function viewChat() {
     thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
       ? `<div class="chat-msg me"><div class="chat-bubble">${esc(m.text)}</div></div>`
       : `<div class="chat-msg bot">${avatar}<div class="chat-bubble">${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.error ? "" : chatFoot(m, i)}</div></div>`).join("")
-      + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span>ClassBot lit les données de la classe…</div></div>` : "")
+      + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span><span id="chat-status">${esc(status || "Je réfléchis…")}</span></div></div>` : "")
       : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">✦</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Par exemple :</p><div class="chat-ex">${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div></div>`;
     thread.querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; q.focus(); });
     thread.querySelectorAll("[data-xl]").forEach((b) => b.onclick = () => {
@@ -76,10 +102,13 @@ async function viewChat() {
     list.push({ role: "user", text });
     q.value = ""; busy = true; draw();
     try {
-      const r = await api("/chat", { method: "POST", body: { question: text, history } });
+      const r = await chatAsk({ question: text, history }, (st) => {
+        status = st.step === "read" ? `Je lis ${st.sources.join(", ") || "les données"}…` : "J'écris la réponse…";
+        const el = $("#chat-status"); if (el) el.textContent = status;
+      });
       list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [] });
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true }); }
-    busy = false; chatSave(list); draw();
+    busy = false; status = ""; chatSave(list); draw();
   };
   $("#chat-form").onsubmit = (e) => { e.preventDefault(); send(); };
   q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };

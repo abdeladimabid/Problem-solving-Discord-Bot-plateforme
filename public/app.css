@@ -2497,6 +2497,8 @@ body.sl-open { overflow: hidden; }
 .chat-send:hover { transform: scale(1.06); } .chat-send:disabled { opacity: .5; cursor: default; transform: none; }
 .chat-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); font-size: 12px; color: var(--ink-faint); }
 .chat-src { overflow-wrap: anywhere; } .chat-votes { display: flex; gap: 4px; flex: none; }
-.chat-vote { border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 2px 6px; cursor: pointer; font-size: 14px; opacity: .55; transition: opacity .15s, background .15s; }
-.chat-vote:hover:not(:disabled) { opacity: 1; background: var(--blue-50); } .chat-vote.on { opacity: 1; background: var(--blue-50); border-color: var(--line); } .chat-vote:disabled:not(.on) { opacity: .2; cursor: default; }
+.chat-vote { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-faint); cursor: pointer; transition: color .15s, background .15s; }
+.chat-vote.up:hover:not(:disabled), .chat-vote.up.on { color: #059669; background: color-mix(in srgb, #10b981 14%, transparent); }
+.chat-vote.down:hover:not(:disabled), .chat-vote.down.on { color: #dc2626; background: color-mix(in srgb, #ef4444 14%, transparent); }
+.chat-vote.on svg { fill: currentColor; fill-opacity: .18; } .chat-vote:disabled { cursor: default; } .chat-vote:disabled:not(.on) { opacity: .35; }
 @media (max-width: 760px) { .chat { height: calc(100vh - 170px); } .chat-bubble { max-width: 92%; } .chat-avatar { display: none; } }

@@ -521,8 +521,19 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
     // Chat with your class: a message (and the last turns) → the answer from the class's data
     if (path === "/chat" && method === "POST") {
-      const g = await guild();
-      return ok(await classChat(env, g, await students(env, g), String(body.question ?? ""), Array.isArray(body.history) ? body.history : []));
+      const g = await guild(), list = await students(env, g);
+      const question = String(body.question ?? ""), history = Array.isArray(body.history) ? body.history : [];
+      if (!body.stream) return ok(await classChat(env, g, list, question, history));
+      // streamed: one JSON line per step (what is being read, then writing), then the answer, so the teacher sees it work
+      const { readable, writable } = new TransformStream();
+      const w = writable.getWriter(), enc = new TextEncoder();
+      const line = (o: unknown) => { w.write(enc.encode(JSON.stringify(o) + "\n")).catch(() => {}); };
+      ctx.waitUntil((async () => {
+        try { line({ done: await classChat(env, g, list, question, history, line) }); }
+        catch (e) { line({ error: e instanceof ChatError ? e.message : "The chat failed. Try again in a moment." }); if (!(e instanceof ChatError)) console.error("chat", e); }
+        finally { w.close().catch(() => {}); }
+      })());
+      return new Response(readable, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     }
     if (path === "/chat/feedback" && method === "POST") { const g = await guild(); return ok(await chatFeedback(env, g.id, body)); }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }

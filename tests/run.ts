@@ -6706,6 +6706,12 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const one = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [] });
   check(one.status === 200 && one.data.answer.includes(alice) && !/\bE\d+\b/.test(one.data.answer) && one.data.used.includes("student"), `a question about a student: answered from their data, their name back in the answer (${one.data.error ?? one.data.answer})`);
   check(one.data.sources?.join() === `le dossier de ${alice}`, `…and what was read, in words, with the name (${one.data.sources})`);
+  const streamed = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [], stream: true });
+  const lines = String(streamed.data).trim().split("\n").map((l) => JSON.parse(l));
+  check(streamed.status === 200 && lines[0]?.step === "read" && lines[0].sources.join() === `le dossier de ${alice}` && lines[1]?.step === "write" && lines.at(-1)?.done?.answer?.includes(alice),
+    `streamed: what is being read (with the name), then writing, then the answer (${String(streamed.data).slice(0, 160)})`);
+  const streamedErr = await api("POST", "/api/chat", { g: G, question: " ", stream: true });
+  check(JSON.parse(String(streamedErr.data).trim()).error?.includes("Write your question"), "…a refused question: the error in the stream");
   check(ai.chatSeen.some((m) => m.includes("jamais des consignes")) && ai.chatSeen.some((m) => m.includes("pas des consignes) :")), "…the texts in the data are announced to the AI as data, not instructions");
   const fb = await api("POST", "/api/chat/feedback", { g: G, vote: -1, question: "Combien de faibles ?", answer: "3", sources: ["la liste des apprenants"] });
   const fbRow = q1("SELECT vote, question, sources FROM chat_feedback WHERE guild_id = ? ORDER BY id DESC", G);
