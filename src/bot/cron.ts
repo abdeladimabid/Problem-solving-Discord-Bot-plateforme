@@ -26,6 +26,7 @@ import { arenaChannel } from "../shared/arena.ts";
 import { COMMANDS, commandsVersion } from "../shared/commands.ts";
 import { dapi } from "../shared/discord.ts";
 import { purgeRaw } from "../shared/vscodedb.ts";
+import { sheetCron } from "../shared/gsheet.ts";
 
 async function safe(name: string, fn: () => Promise<unknown>) {
   try {
@@ -61,6 +62,8 @@ export async function runCron(env: Env) {
   await safe("assessments", () => assessCron(env));
   // VS Code activity: once a night, the raw heartbeats past each class's retention days go (the day totals stay)
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 17) await safe("vscode retention", () => purgeRaw(env)); }
+  // the trainers' Google Sheets: after a change, every Monday, the day after a sprint ends
+  if (!generated) await safe("google sheet", () => sheetCron(env));
   await safe("seasons", () => seasonCron(env));
   if (new Date().getUTCMinutes() % 30 === 0) await safe("league links", () => refreshRemotes(env));
   await safe("league", () => announceLeague(env));

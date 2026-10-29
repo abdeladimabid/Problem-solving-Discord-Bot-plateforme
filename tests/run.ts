@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { intranetFake } from "./harness.ts";
+import { intranetFake, googleFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
@@ -31,6 +31,7 @@ import { contribution as memberContribution, memberLevel, memberLevelOf, memberL
 import { pickFiles, taskChecks, taskFallback, taskTarget } from "../src/shared/review/task.ts";
 import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, workshopTimingErrors } from "../src/shared/activities.ts";
 import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
+import { matchNames as sheetMatch, findTabs, sheetIdOf, weekKey, sheetCron } from "../src/shared/gsheet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -1010,10 +1011,14 @@ section("dashboard: points for everyone or selected students, resets");
 {
   const season = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ? AND season = (SELECT season FROM guilds WHERE id = ?)", id, G).s;
   const total = (id: string) => q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE discord_id = ?", id).s;
-  const players = q("SELECT discord_id FROM players WHERE guild_id = ?", G).map((r: any) => r.discord_id);
+  // the teacher (who also uses the bot) is never a student: « everyone » is the class
+  const players = q("SELECT discord_id FROM players WHERE guild_id = ? AND discord_id != ?", G, U.prof.id).map((r: any) => r.discord_id);
   const before = Object.fromEntries(players.map((p: string) => [p, season(p)]));
+  const profBefore = season(U.prof.id);
   const a1 = await api("POST", "/api/points/bulk", { g: G, all: true, action: "add", amount: 10, reason: "Workshop" });
-  check(a1.status === 200 && players.every((p: string) => season(p) === before[p] + 10), "+10 for everyone");
+  check(a1.status === 200 && players.every((p: string) => season(p) === before[p] + 10) && season(U.prof.id) === profBefore, "+10 for everyone (the teacher isn't a student)");
+  const st = await api("GET", `/api/students?g=${G}`);
+  check(st.status === 200 && !st.data.some((x: any) => x.discord_id === U.prof.id) && st.data.some((x: any) => x.discord_id === U.alice.id), "the teacher is never in the students' list (a command with « Manage Server » marks them as staff)");
   const dmsBefore = discordCalls.filter((x) => x.path.startsWith("/channels/dm-")).length;
   await api("POST", "/api/points/bulk", { g: G, students: [U.bob.id], action: "remove", amount: 4, notify: true });
   check(season(U.bob.id) === before[U.bob.id] + 6, "−4 for one student");
@@ -1902,12 +1907,13 @@ section("teacher DMs: /help-me and /ask notify the teacher, /teacher notify, set
   check(t1.data.ok === true && toProf().length === n + 1 && JSON.stringify(toProf().at(-1).body).includes("Notifications are on"), "'Send me a test DM' works");
 
   // another teacher takes over with /teacher notify
-  const prof2 = { id: "101", name: "Prof2", teacher: true };
+  const prof2 = { id: "177", name: "Prof2", teacher: true };
   const r = await slash(prof2, "teacher", { help_me: true }, "notify");
   check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === prof2.id && text(r).includes("you"), "/teacher notify sends the DMs to whoever runs it");
   check(discordCalls.some((x) => x.path === `/channels/dm-${prof2.id}/messages` && JSON.stringify(x.body).includes("Notifications are on")), "/teacher notify sends a test DM");
   await slash(U.prof, "teacher", { language: "en" }, "setup");
   check(q1("SELECT teacher_id FROM guilds WHERE id = ?", G).teacher_id === U.prof.id, "/teacher setup also makes you the one who gets them");
+  run1("DELETE FROM players WHERE guild_id = ? AND discord_id = ?", G, prof2.id);
   run1("DELETE FROM faq WHERE guild_id = ? AND (question LIKE '%internet%' OR question LIKE '%lab open%')", G);
 }
 
@@ -2961,7 +2967,7 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   const ev = q("SELECT skill, ok, source FROM skill_evidence WHERE discord_id = ? AND source = ?", U.alice.id, `brief:${id}`);
   check(ev.some((e: any) => e.ok === 0) && ev.some((e: any) => e.ok === 1), "checks of the code become skill evidence (good and missed)");
   const pts = q1("SELECT COALESCE(SUM(amount), 0) AS n FROM ledger WHERE discord_id = ? AND reason = 'brief'", U.alice.id).n - ptsBefore;
-  check(pts > 0, "points for the competencies validated");
+  check(pts === 0 && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).coins >= 0, "a finalized debrief gives no points (only coins)");
   check(discordCalls.slice(calls0).some((c) => JSON.stringify(c.body ?? {}).includes("mon commentaire")), "comment sent by DM");
   const det = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
   const c3 = det.data.learning.competencies.find((c: any) => c.code === "C3");
@@ -2977,7 +2983,7 @@ section("debriefs: switches, comment, mise en situation, finalize → competenci
   await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { co: { T1: false } } });
   await api("POST", `/api/briefs/${id}/review/finalize`, { g: G, who, states: { co: { T1: true } } });
   const ledgerB = q("SELECT amount FROM ledger WHERE discord_id = ? AND reason = 'brief' AND ref = ?", U.alice.id, String(id));
-  check(ledgerB.reduce((s: number, r: any) => s + r.amount, 0) === pts && ledgerB.length === 1, "reopen, change, finalize again: the points once, one line in the history");
+  check(ledgerB.length === 0, "reopen, change, finalize again: still no points in the history");
   // reopened and finalized again (and again), even after analyzing again: always the points once
   const c0 = coinsOf();
   await api("POST", `/api/briefs/${id}/review/reopen`, { g: G, who });
@@ -5169,7 +5175,17 @@ section("VS Code activity: the dashboard (today, week, learner, squads, CSV, rem
   const csv = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=day`);
   check(csv.status === 200 && String(csv.data).includes("learner,squad,status,active_min,writing_min") && String(csv.data).includes("Alice") && String(csv.data).includes(",4,"), "Export CSV of the day (minutes)");
   const csvw = await api("GET", `/api/vscode/export.csv?g=${G}&date=${day}&period=week`);
-  check(String(csvw.data).includes(`${V.mondayOf(day)}_writing_min`) && String(csvw.data).includes("week_writing_min"), "…and of the week");
+  check(String(csvw.data).includes(`${V.mondayOf(day)}_writing_min`) && String(csvw.data).includes("week_writing_min") && String(csvw.data).includes("week_ai_lines,week_typed_lines,week_pasted_lines"), "…and of the week (with the lines by an AI, typed, pasted)");
+  // the week: lines written by an AI and pasted (big blocks added in a few seconds), per learner and for the class
+  {
+    const wk0 = q1("SELECT agg FROM vsc_days WHERE guild_id = ? AND discord_id = ? AND day = ?", G, U.alice.id, day);
+    const agg0 = JSON.parse(wk0?.agg || "{}");
+    run1("UPDATE vsc_days SET ai_lines = 120, human_lines = 80, agg = ? WHERE guild_id = ? AND discord_id = ? AND day = ?", JSON.stringify({ ...agg0, big: [[1, "todo", "app.js", 150], [2, "todo", "style.css", 90]] }), G, U.alice.id, day);
+    const W = (await api("GET", `/api/vscode/week?g=${G}&date=${day}`)).data;
+    const la = W.learners?.find((x: any) => x.id === U.alice.id);
+    check(la && la.ai === 120 && la.hu === 80 && la.pasted === 240 && la.pastes === 2 && W.totals.ai >= 120 && W.totals.pasted >= 240 && W.totals.pasteLearners >= 1, `the week: lines by an AI and lines pasted, per learner and for the class (${JSON.stringify(la && { ai: la.ai, p: la.pasted })})`);
+    run1("UPDATE vsc_days SET agg = ? WHERE guild_id = ? AND discord_id = ? AND day = ?", wk0?.agg ?? null, G, U.alice.id, day);
+  }
   // the reminder: only to students not connected
   discordCalls.length = 0;
   const rem = await api("POST", "/api/vscode/remind", { g: G, ids: [U.bob.id, U.alice.id, "424242"] });
@@ -6177,6 +6193,20 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
+  // what each comment talks about: a member → their assessment (what they mastered); the squad → the project
+  {
+    const { getReview } = await import("../src/shared/review/debrief.ts");
+    const { memberCommentData, commentData, aiCommentPrompt, commentText } = await import("../src/shared/review/comment.ts");
+    const R = (await getReview(env, id, who))!.rec;
+    const mA = R.contrib.find((x: any) => x.gid === A), dA = memberCommentData(mA, R, R.members[A]);
+    const pA = aiCommentPrompt(dA);
+    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n- /.test(pA)
+      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Lors de l’évaluation, tu as montré que tu maîtrises/.test(commentText(dA)),
+      `a member's comment: what goes well comes from their assessment (what they mastered, the grader's comment), never the project's features (${dA.mode} ${JSON.stringify(dA.assess)})`);
+    const dS = commentData({ first: R.squad.name, group: R.squad.name, project: R.brief, rec: R }), pS = aiCommentPrompt(dS);
+    check(dS.mode === "group" && !dS.assess && /TYPE DE COMMENTAIRE : ÉQUIPE/.test(pS) && /CE QUI EST RÉUSSI DANS LE PROJET|CE QUI EST À AMÉLIORER DANS LE PROJET/.test(pS) && /CONTRIBUTION DE CHAQUE MEMBRE :?[\s\S]*commits/.test(pS) && !/MAÎTRISÉ À L’ÉVALUATION/.test(pS),
+      "the squad's comment: the project (interface, planning, README, commits, team), not the assessment");
+  }
   // Finalize + DM: each member gets their own comment, not the squad's
   await api("POST", `/api/briefs/${id}/review/comment?g=${G}`, { who, text: "SQUAD-COMMENT pour toute l'équipe." });
   discordCalls.length = 0;
@@ -6437,6 +6467,239 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   await slash(U.prof, "teacher", { member: D.id }, "unblock");
   check(!(await getBlocks(env, G, D.id)).length, "/teacher unblock without a type lifts them all");
   check(text(await slash(U.prof, "teacher", { member: D.id }, "unblock")).includes("no practice block"), "…nothing left to lift: said so");
+}
+
+section("🩺 sprint diagnosis: objectives on the last brief, shared lacunes counted, features not done, students to follow, actions");
+{
+  const { shareOf } = await import("../src/shared/sprintdiag.ts");
+  check(shareOf(8, 14) === "majority" && shareOf(4, 14) === "group" && shareOf(2, 14) === "few" && shareOf(2, 5) === "few" && shareOf(3, 5) === "majority", "how many share a problem: most of the class (≥ 50 %), a part, a few (≤ 20 % or 2 students)");
+  // a sprint of the programme with two briefs: the last one's debriefs and assessment decide
+  const ov = await api("GET", `/api/sprints?g=${G}`);
+  const n = ov.data.sprints?.[0]?.n;
+  // at the end of the sprint: these are its last briefs
+  const t1 = Math.floor(Date.parse(ov.data.sprints[0].end + "T09:00:00Z") / 1000) - 4 * 86400;
+  const S = [U.alice.id, U.bob.id, U.carol.id];
+  run1("INSERT INTO briefs (guild_id, title, status, data, competencies, sprint, start_at, due_at, created_at) VALUES (?, 'Diag A', 'assigned', '{}', 'C1N1,C3N1', ?, ?, ?, ?)", G, n, t1, t1 + 86400, t1);
+  const bA = q1("SELECT MAX(id) AS id FROM briefs").id;
+  run1("INSERT INTO briefs (guild_id, title, status, data, competencies, sprint, start_at, due_at, created_at) VALUES (?, 'Diag B', 'assigned', '{}', 'C3N1', ?, ?, ?, ?)", G, n, t1 + 2 * 86400, t1 + 3 * 86400, t1);
+  const bB = q1("SELECT MAX(id) AS id FROM briefs").id;
+  const recOf = (c3: boolean, extra: any = {}) => JSON.stringify({ result: { exigences: [{ type: "story", texte: "En tant que visiteur, je veux voir la galerie", statut: c3 ? "fait" : "absent" }], competences: [{ code: "C3N1", avis: c3 ? "validable" : "non_visible" }, { code: "C1N1", avis: "validable" }] }, ...extra });
+  // brief A: everyone validated C3; brief B (the last one): only Alice did → the objective is judged on B
+  for (const u of S) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bA, G, `u:${u}`, recOf(true), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bB, G, `u:${U.alice.id}`, recOf(true), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'draft', 'faible', ?)", bB, G, `u:${U.bob.id}`, recOf(false, { remarks: { text: "Il ne sait pas expliquer la différence entre margin et padding." } }), clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bB, G, `u:${U.carol.id}`, recOf(false), clock.now());
+  // brief B's assessment: Bob and Carol miss the grid question
+  const qs = [{ id: "g", type: "explain", prompt: "Crée une grille CSS de 3 colonnes (grid-template-columns).", expected: "grid", points: 1 }, { id: "f", type: "explain", prompt: "Différence entre justify-content et align-items en Flexbox ?", expected: "axes", points: 1 }];
+  run1("INSERT INTO assessments (guild_id, title, brief_id, status, questions, settings, created_at) VALUES (?, 'Quiz Diag', ?, 'closed', ?, '{}', ?)", G, bB, JSON.stringify(qs), clock.now());
+  const aq = q1("SELECT MAX(id) AS id FROM assessments").id;
+  S.forEach((u, i) => run1("INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, status, seed, score, grades) VALUES (?, ?, ?, 'graded', ?, 50, ?)", aq, G, u, i + 1, JSON.stringify({ g: { verdict: i ? "wrong" : "correct" }, f: { verdict: "correct" } })));
+  const D = (await api("GET", `/api/sprints/${n}/diag?g=${G}`)).data;
+  const c3 = D.objectives?.find((o: any) => o.label === "C3");
+  check(D.evaluated >= 3 && c3 && c3.reached + c3.low.length >= 1 && c3.missed.some((x: any) => x.uid === U.bob.id) && c3.missed.some((x: any) => x.uid === U.carol.id) && c3.from.includes("Diag B") && !c3.missed.some((x: any) => x.uid === U.alice.id),
+    `an objective is judged on the last brief of the sprint that covers it (C3 on « Diag B », not « Diag A ») (${JSON.stringify(c3 && { r: c3.reached, m: c3.missed.length, f: c3.from })})`);
+  const grid = D.lacunes.find((l: any) => /grid|grille/i.test(l.notion));
+  check(grid && grid.n === 2 && grid.sources.includes("assessment") && grid.students.map((x: any) => x.uid).sort().join() === [U.bob.id, U.carol.id].sort().join() && D.lacunes.some((l: any) => /margin/.test(l.notion) && l.sources.includes("debrief")),
+    "the lacunes: from the last brief's assessment and the debrief's remarks, with how many students and who");
+  check(D.follow.some((x: any) => x.uid === U.bob.id && x.why.includes("weak level")) && !D.follow.some((x: any) => x.uid === U.alice.id) && !D.follow.some((x: any) => x.uid === U.carol.id),
+    "students to follow: only the ones who stand out (a weak level, several competencies missed, far more lacunes than the class), never everyone");
+  const goals = D.goals.flatMap((g: any) => g.items.map((i: any) => ({ ...i, group: g.group })));
+  const gridG = goals.find((i: any) => i.name === "CSS Grid");
+  check(D.goals.length > 3 && gridG && gridG.covered && gridG.missing.some((x: any) => x.uid === U.bob.id) && goals.some((i: any) => !i.covered),
+    `the sprint's objectives come from the planning's Technologies / concepts (« Mise en page : Flexbox et CSS Grid »): who has a lacune on each, the ones not evaluated yet (${JSON.stringify(gridG)})`);
+  const A = await api("POST", `/api/sprints/${n}/actions?g=${G}`, {});
+  check(A.status === 200 && A.data.actions.actions.length === 3 && A.data.actions.actions[0].type === "live" && A.data.actions.actions[0].ids.length > 0 && (await api("GET", `/api/sprints/${n}/diag?g=${G}`)).data.actions?.resume,
+    `✨ the actions proposed (live coding, plans, the next brief), kept with the sprint (${A.status} ${A.data.error ?? ""})`);
+  // 📦 into a brief that hasn't started: user stories added, the rest kept; a started one never changes
+  run1("INSERT INTO briefs (guild_id, title, status, data, created_at) VALUES (?, 'Next one', 'draft', ?, ?)", G, JSON.stringify({ title: "Next one", groups: [{ title: "Visiteur", emoji: "", stories: ["En tant que visiteur, je veux voir l'accueil."] }] }), clock.now());
+  const bN = q1("SELECT MAX(id) AS id FROM briefs").id;
+  const cy = await api("POST", `/api/sprints/${n}/carry?g=${G}`, { brief: bN, items: ["CSS Grid"] });
+  const nd = JSON.parse(q1("SELECT data, internal FROM briefs WHERE id = ?", bN).data), ni = JSON.parse(q1("SELECT internal FROM briefs WHERE id = ?", bN).internal || "{}");
+  check(cy.status === 200 && nd.groups.flatMap((x: any) => x.stories).length >= 1 && /CSS Grid/.test(ni.notes || "") && q1("SELECT status FROM briefs WHERE id = ?", bN).status === "draft", `📦 into the next brief: its user stories rewritten with it, the reason in its notes, its status kept (${cy.status} ${cy.data.error ?? ""})`);
+  check((await api("POST", `/api/sprints/${n}/carry?g=${G}`, { brief: bA, items: ["CSS Grid"] })).status === 400, "…a brief already started: never changed");
+  run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aq); run1("DELETE FROM assessments WHERE id = ?", aq);
+  run1("DELETE FROM brief_reviews WHERE brief_id IN (?, ?)", bA, bB); run1("DELETE FROM briefs WHERE id IN (?, ?, ?)", bA, bB, bN);
+}
+
+section("📁 briefs list: debriefs finalized / left (never the teacher), the Simplonline link in the announcement and /brief");
+{
+  const { saveBrief } = await import("../src/shared/briefs.ts");
+  const bid = await saveBrief(env, { id: G } as any, null, { status: "draft", data: { title: "Brief Simplon", summary: "Un site vitrine.", link: "https://simplonline.co/briefs/abc-123", competencies: ["C1N1"], modalities: { due: "2026-12-01" } } });
+  check(JSON.parse(q1("SELECT data FROM briefs WHERE id = ?", bid).data).link === "https://simplonline.co/briefs/abc-123", "a brief keeps its Simplonline link");
+  const bad = await saveBrief(env, { id: G } as any, null, { data: { title: "x", link: "javascript:alert(1)" } });
+  check(!JSON.parse(q1("SELECT data FROM briefs WHERE id = ?", bad).data).link, "…never anything but an https link");
+  discordCalls.length = 0;
+  const as = await api("POST", `/api/briefs/${bid}/assign?g=${G}`, { start: "2026-11-20", due: "2026-12-01", announce: true });
+  const ann = discordCalls.find((c) => c.method === "POST" && /\/messages$/.test(c.path) && JSON.stringify(c.body).includes("Brief Simplon"));
+  check(as.status === 200 && ann && JSON.stringify(ann.body).includes("https://simplonline.co/briefs/abc-123") && JSON.stringify(ann.body.components || []).includes("simplonline.co"), `the announcement shares the Simplonline link, with a button (${as.status})`);
+  // two students finalized out of the class (the teacher never counts)
+  const studs = q("SELECT discord_id FROM players WHERE guild_id = ? AND discord_id != ?", G, U.prof.id).map((r: any) => r.discord_id);
+  for (const u of studs.slice(0, 2)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
+  run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${U.prof.id}`, clock.now());
+  const L = (await api("GET", `/api/briefs?g=${G}`)).data.items.find((x: any) => x.id === bid);
+  check(L && L.debrief.total === studs.length && L.debrief.final === 2 && L.debrief.left === studs.length - 2 && L.link === "https://simplonline.co/briefs/abc-123",
+    `the list: debriefs finalized and left, the teacher's own debrief not counted (${JSON.stringify(L?.debrief)})`);
+  const r = await slash(U.alice, "brief", {}, "list");
+  check(r.type === 5 && /\[Brief Simplon\]\(https:\/\/simplonline\.co\/briefs\/abc-123\)/.test(text(lastPatch())), "/brief: the title opens the brief on Simplonline");
+  run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid); run1("DELETE FROM briefs WHERE id IN (?, ?)", bid, bad);
+}
+
+section("debrief requirements: the AI reads only the start of each file; a page or feature that is in the repo is done");
+{
+  const { foundInRepo, pageOutline, rescueFound } = await import("../src/shared/review/gh.ts");
+  const paths = ["index.html", "pages/services.html", "about-us.html", "js/gallery.js", "css/style.css"];
+  const texts: Record<string, string> = { "index.html": "<html>" + "x".repeat(3000) + '<section id="temoignages"><h2>Ce que disent nos clients</h2></section><form id="contact-form"><input><textarea></textarea></form>', "pages/services.html": "<h1>Nos services</h1>" };
+  check(foundInRepo("En tant que visiteur, je veux consulter la page Services afin de connaître l'offre", paths, texts) === "fichier pages/services.html"
+    && /temoignage/.test(foundInRepo("En tant que visiteur, je veux lire les témoignages des clients", paths, texts) || "")
+    && foundInRepo("En tant que visiteur, je veux voir la galerie photos", paths, texts) === "fichier js/gallery.js"
+    && foundInRepo("En tant que visiteur, je veux en savoir plus (page À propos)", paths, texts) === "fichier about-us.html"
+    && foundInRepo("En tant que visiteur, je veux réserver une visite en ligne", paths, texts) === null, "a page or a feature is found by its file, a section far down the page, a heading (English names too); one that isn't there is not");
+  const ex = rescueFound([{ type: "story", texte: "En tant que visiteur, je veux voir la galerie", statut: "absent" }, { type: "story", texte: "je veux réserver une visite", statut: "absent" }, { type: "story", texte: "voir les services", statut: "absent", bound: true, check: "pages" }], { paths, texts });
+  check(ex[0].statut === "fait" && /js\/gallery\.js.*à confirmer/.test(ex[0].preuve) && ex[1].statut === "absent" && ex[2].statut === "absent", "the AI's « absent » on what is in the repo becomes done (with where it is, to confirm); a sure automatic check is never overruled");
+  check(/temoignages, contact-form/.test(pageOutline(texts)) && /1 formulaire/.test(pageOutline(texts)), "the AI gets the outline of every page read in full (headings, sections, forms, links)");
+}
+
+section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint, briefs and debriefs, plans d'action)");
+{
+  // the names: by their words, the intranet name too; a tie or an unknown name = nobody; the teacher's choice wins
+  const studs = [{ id: "1", names: ["Aya Hakim", "aya"] }, { id: "2", names: ["Mehdi"] }, { id: "3", names: ["amine_amrouch"] }, { id: "4", names: ["Sara"] }, { id: "5", names: ["Sara B"] }];
+  const mm = sheetMatch(["Hakim Aya", "MEHDI KHANFRI", "Amrouch Amine", "Sara Alaoui", "Inconnu Total"], studs);
+  check(mm["Hakim Aya"] === "1" && mm["MEHDI KHANFRI"] === "2" && mm["Amrouch Amine"] === "3" && mm["Inconnu Total"] === "", `names matched by their words, in any order or case (${JSON.stringify(mm)})`);
+  check(mm["Sara Alaoui"] === "", "…two students who could be the same row: nobody (the teacher picks)");
+  check(sheetMatch(["Hakim Aya"], studs, { "hakim aya": "4" })["Hakim Aya"] === "4" && sheetMatch(["Hakim Aya"], studs, { "hakim aya": "" })["Hakim Aya"] === "", "the teacher's choice wins (a student, or nobody)");
+  const T = findTabs(["Niveau technique", "Suivi et Validation Classe", "Suivi fil rouge", "Plan daction  Retro"]);
+  check(T.niveau === "Niveau technique" && T.suivi === "Suivi et Validation Classe" && T.plan === "Plan daction  Retro", "the tabs found by their names (Suivi fil rouge never)");
+  check(sheetIdOf("https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit#gid=0") === "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", "the sheet's id from its link");
+  check(weekKey(Date.UTC(2026, 10, 2, 6)) === "2026-10-26" && weekKey(Date.UTC(2026, 10, 2, 9)) === "2026-11-02", "the week starts on Monday 08:00");
+
+  // a service account key (a real RSA key) and a fake Google
+  const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const der = Buffer.from(await crypto.subtle.exportKey("pkcs8", kp.privateKey)).toString("base64");
+  const pem = `-----BEGIN PRIVATE KEY-----\n${der.match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`;
+  const keyJson = JSON.stringify({ type: "service_account", project_id: "p", private_key: pem, client_email: "classbot@p.iam.gserviceaccount.com" });
+  const SID = "1SheetIdForTheTestsXXXXXXXXXXXXXXXX";
+  const cells: Record<string, Record<string, any>> = { "Niveau technique": { A3: "Durand Alice", A4: "BOB martin", A5: "DUPONT carol", A6: "Inconnu Total", G3: "Bon", C3: 9 }, "Suivi et Validation Classe": {}, "Suivi fil rouge": { A4: "x" }, "Plan daction  Retro": {} };
+  const calls: string[] = [];
+  let tokens = 0, badSig = 0;
+  const col = (c: string) => c.charCodeAt(0) - 65, colName = (i: number) => String.fromCharCode(65 + i);
+  const parse = (r: string) => { const m = r.match(/^'((?:[^']|'')*)'!([A-Z])(\d+)(?::([A-Z])(\d+))?$/)!; return { tab: m[1].replace(/''/g, "'"), c0: col(m[2]), r0: Number(m[3]), c1: col(m[4] || m[2]), r1: Number(m[5] || m[3]) }; };
+  googleFake.handler = async (url, method, body) => {
+    calls.push(`${method} ${url.pathname}`);
+    if (url.hostname === "oauth2.googleapis.com") {
+      const a = new URLSearchParams(body).get("assertion")!.split(".");
+      const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", kp.publicKey, Buffer.from(a[2], "base64url"), new TextEncoder().encode(`${a[0]}.${a[1]}`));
+      const claims = JSON.parse(Buffer.from(a[1], "base64url").toString());
+      if (!ok || claims.iss !== "classbot@p.iam.gserviceaccount.com" || !/spreadsheets/.test(claims.scope)) { badSig++; return Response.json({ error: "invalid_grant" }, { status: 400 }); }
+      tokens++;
+      return Response.json({ access_token: "ya29.test", expires_in: 3600 });
+    }
+    if (!url.pathname.startsWith(`/v4/spreadsheets/${SID}`)) return Response.json({ error: { message: "nope" } }, { status: 403 });
+    const rest = decodeURIComponent(url.pathname.slice(`/v4/spreadsheets/${SID}`.length));
+    if (!rest) return Response.json({ properties: { title: "Suivi_Formateur_TEST" }, sheets: Object.keys(cells).map((t) => ({ properties: { title: t } })) });
+    if (rest.startsWith("/values/") && method === "GET") {
+      const p = parse(rest.slice(8)), out: any[] = [];
+      for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
+      while (out.length && out[out.length - 1] === "") out.pop();
+      return Response.json({ values: out.length ? [out] : [] });
+    }
+    const b = JSON.parse(body);
+    if (rest === "/values:batchUpdate") {
+      check(b.valueInputOption === "USER_ENTERED", "written as if typed (dates become dates)");
+      for (const d of b.data) { const p = parse(d.range); d.values.forEach((row: any[], i: number) => row.forEach((v, j) => { if (v !== null) cells[p.tab][`${colName(p.c0 + j)}${p.r0 + i}`] = v; })); }
+      return Response.json({});
+    }
+    if (rest === "/values:batchClear") { for (const r of b.ranges) { const p = parse(r); for (let i = p.r0; i <= p.r1; i++) for (let j = p.c0; j <= p.c1; j++) delete cells[p.tab][`${colName(j)}${i}`]; } return Response.json({}); }
+    return Response.json({ error: { message: "unknown" } }, { status: 400 });
+  };
+  try {
+    let V = await api("GET", `/api/settings/gsheet?g=${G}`);
+    check(V.status === 200 && !V.data.key && !V.data.sheet, "nothing set at first");
+    check((await api("POST", `/api/settings/gsheet/fill`, { g: G })).status === 400, "Fill now without a sheet: refused, with why");
+    check((await api("PUT", `/api/settings/gsheet/key`, { g: G, key: "{\"type\":\"user\"}" })).status === 400 && (await api("PUT", `/api/settings/gsheet/key`, { g: G, key: "AIza..." })).status === 400, "not a service account key: refused, with what to do");
+    V = await api("PUT", `/api/settings/gsheet/key`, { g: G, key: keyJson });
+    check(V.status === 200 && V.data.key?.email === "classbot@p.iam.gserviceaccount.com" && V.data.key.source === "settings" && tokens === 1 && !badSig, `the key is tested with Google (a signed JWT) and kept; only its email is shown (${V.status} ${JSON.stringify(V.data)})`);
+    check(!JSON.stringify(V.data).includes("PRIVATE"), "…never the key itself");
+    const no = await api("PUT", `/api/settings/gsheet`, { g: G, url: "https://docs.google.com/spreadsheets/d/1NotSharedWithClassBotXXXXXXXXXXXXX/edit" });
+    check(no.status === 400 && /share it with classbot@p\.iam\.gserviceaccount\.com as Editor/.test(no.data.error), `a sheet not shared: says to share it with the account's email (${no.data.error})`);
+    V = await api("PUT", `/api/settings/gsheet`, { g: G, url: `https://docs.google.com/spreadsheets/d/${SID}/edit#gid=0` });
+    check(V.status === 200 && V.data.sheet?.id === SID && V.data.tabs.tabs.plan === "Plan daction  Retro" && V.data.auto === true, "the sheet linked: its tabs found, filled by itself by default");
+
+    // the data: an intranet name for Carol, levels, a brief of sprint 1 debriefed for Alice only, a plan sent to Bob
+    run1("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, by, at) VALUES (?, ?, 4242, 'Carol Dupont', 'you', ?)", G, U.carol.id, clock.now());
+    const O = (await api("GET", `/api/sprints?g=${G}`)).data;
+    const sp = O.sprints[0];
+    await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.alice.id, level: "excellent" });
+    await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.bob.id, level: "critique" });
+    const P = (await api("GET", `/api/programs?g=${G}`)).data.current;
+    const wk = P.weeks.find((w: any) => w.sprint === sp.n).n;
+    const mk = await api("POST", "/api/briefs", { g: G, week: wk, data: { title: "=Brief Sheet", context: "Un site." } });
+    const bid = mk.data.brief.id;
+    const st = Math.floor(Date.UTC(2026, 8, 14, 9) / 1000), du = Math.floor(Date.UTC(2026, 8, 18, 22) / 1000);
+    run1("UPDATE briefs SET status = 'assigned', week = ?, sprint = ?, start_at = ?, due_at = ? WHERE id = ?", wk, sp.n, st, du, bid);
+    run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
+    run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${U.alice.id}`, clock.now());
+    const plan = { id: 9901, gid: G, sid: U.bob.id, name: "Bob", title: "Plan", message: "", status: "sent", due_at: Math.floor(Date.UTC(2026, 9, 30, 12) / 1000), created_at: st, updated_at: st, sent_at: Math.floor(Date.UTC(2026, 9, 20, 12) / 1000), done_at: null,
+      diag: { at: st, model: "x", summary: "s", lacunes: [{ notion: "Flexbox", priority: 1, why: "", evidence: [], comps: [] }, { notion: "Git", priority: 2, why: "", evidence: [], comps: [] }], proposals: [] },
+      steps: [{ id: "aaaa", kind: "code", title: "Une page en flex", notion: "Flexbox" }, { id: "bbbb", kind: "answer", title: "", notion: "Git" }] };
+    run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `wplan:${G}:9901`, JSON.stringify(plan), clock.now());
+    run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `wplan:${G}:9902`, JSON.stringify({ ...plan, id: 9902, status: "draft" }), clock.now());
+
+    // the sprint has to be over for its levels to be written
+    const ahead = Math.max(0, Math.ceil((Date.parse(sp.end + "T23:00:00Z") - Date.now()) / 1000) + 86400 * 2);
+    clock.advance(ahead);
+    const N = await api("GET", `/api/settings/gsheet/names?g=${G}`);
+    const who = (n: string) => N.data.rows.find((r: any) => r.name === n)?.uid;
+    check(N.status === 200 && who("Durand Alice") === U.alice.id && who("BOB martin") === U.bob.id && who("DUPONT carol") === U.carol.id && who("Inconnu Total") === "" && N.data.students.every((s: any) => s.id !== U.prof.id),
+      `the names of the sheet matched to the students (Discord name, intranet name); the teacher isn't one (${JSON.stringify(N.data.rows)})`);
+    const F = await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    const NT = cells["Niveau technique"], SU = cells["Suivi et Validation Classe"], PL = cells["Plan daction  Retro"];
+    const c = colName(6 + sp.n - 1), top = 2 + 3 * (sp.n - 1);
+    check(F.status === 200 && F.data.result.ok, `filled (${JSON.stringify(F.data.result)})`);
+    check(NT[`${c}3`] === "Excellent(e)" && NT[`${c}4`] === "Critique" && NT.C3 === 9 && NT.A3 === "Durand Alice", `Niveau technique: the teacher's level in S${sp.n}, over what was there; the other columns untouched (${NT[`${c}3`]} ${NT[`${c}4`]})`);
+    check(Object.keys(NT).every((k) => !/^[G-N]6$/.test(k)) && F.data.result.unmatched.includes("Inconnu Total"), "…a name with no student: nothing written, and said");
+    const row = [0, 1, 2].map((k) => top + k).find((r) => SU[`B${r}`] === "'=Brief Sheet")!;
+    check(!!row && SU[`C${row}`] === "2026-09-14" && SU[`D${row}`] === "2026-09-18", `Suivi: the brief (never read as a formula) with its start and end dates (${JSON.stringify(SU)})`);
+    check(SU[`E${row}`] === "En cours" && !SU[`F${row}`] && SU[`G${top}`] !== "Oui", "…debriefing individuel « En cours » (one debrief of three): no collective debriefing nor retro yet");
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === "1. Une page en flex\n2. Git" && PL.G4 === "2026-10-30" && !PL.B5,
+      `Plan d'action: the plan sent (not the draft): the student as in the sheet, level, difficulties, start, actions, end (${JSON.stringify(PL)})`);
+    check(!calls.some((x) => x.includes("fil")) && Object.keys(cells["Suivi fil rouge"]).length === 1, "Suivi fil rouge never touched");
+    // every debrief finalized: Oui, and the collective debriefing and the retro too
+    for (const u of N.data.students.map((x: any) => x.id).filter((x: string) => x !== U.alice.id)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
+    run1("DELETE FROM app_settings WHERE k = ?", `wplan:${G}:9901`);
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(SU[`E${row}`] === "Oui" && SU[`F${row}`] === "Oui", "every debrief finalized: individual « Oui », collective « Oui »");
+    const block = [0, 1, 2].map((k) => top + k).filter((r) => SU[`B${r}`]);
+    check(block.every((r) => SU[`E${r}`] === "Oui") === (SU[`G${top}`] === "Oui"), "…and the retro once every brief of the sprint is finalized");
+    check(!PL.B4 && !PL.F4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
+
+    // automatically: a debrief finalized marks the sheet, the cron fills it 2 minutes later (every 5 minutes)
+    const fills0 = calls.filter((x) => x.endsWith("batchUpdate")).length;
+    run1("UPDATE app_settings SET v = json_set(v, '$.dirty', ?) WHERE k = ?", clock.now() - 600, `gsheet:${G}`);
+    const toMinute = (m: number) => { const d = new Date(Date.now()); clock.advance(((m - d.getUTCMinutes() + 60) % 60 || 60) * 60); };
+    toMinute(2); await sheetCron(env);
+    const fills1 = calls.filter((x) => x.endsWith("batchUpdate")).length;
+    await api("PUT", `/api/settings/gsheet`, { g: G, auto: false });
+    run1("UPDATE app_settings SET v = json_set(v, '$.dirty', ?) WHERE k = ?", clock.now() - 600, `gsheet:${G}`);
+    toMinute(7); await sheetCron(env);
+    check(fills1 === fills0 + 1 && calls.filter((x) => x.endsWith("batchUpdate")).length === fills1, `filled by itself after a change; not when « Fill it by myself » is off (${fills0} ${fills1})`);
+    // the teacher fixes a name
+    await api("PUT", `/api/settings/gsheet/names`, { g: G, map: { "Inconnu Total": U.carol.id, "DUPONT carol": "" } });
+    const N2 = await api("GET", `/api/settings/gsheet/names?g=${G}`);
+    check(N2.data.rows.find((r: any) => r.name === "Inconnu Total").uid === U.carol.id && N2.data.rows.find((r: any) => r.name === "DUPONT carol").uid === "", "the teacher's names are kept");
+    // Google says no: kept as the last result, shown in Settings
+    googleFake.handler = () => Response.json({ error: { message: "quota" } }, { status: 429 });
+    const E = await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(E.status === 200 && !E.data.result.ok && /quota/.test(E.data.result.error) && E.data.last.ok === false, "an error from Google: said, and kept for the Settings page");
+    check((await api("DELETE", `/api/settings/gsheet/key`, { g: G })).data.key === null, "the key can be removed");
+    await api("PUT", `/api/settings/gsheet`, { g: G, unlink: true });
+    check((await api("GET", `/api/settings/gsheet?g=${G}`)).data.sheet === null, "the sheet can be unlinked");
+    clock.advance(-ahead);
+    run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
+    run1("UPDATE briefs SET status = 'archived' WHERE id = ?", bid);
+    run1("DELETE FROM app_settings WHERE k LIKE ?", `wplan:${G}:99%`);
+    run1("DELETE FROM intranet_links WHERE learner_id = 4242");
+    run1("DELETE FROM sprint_reviews WHERE guild_id = ? AND sprint = ? AND discord_id IN (?, ?)", G, sp.n, U.alice.id, U.bob.id);
+  } finally { googleFake.handler = null; }
 }
 
 section("slash command definitions are valid for Discord");

@@ -241,6 +241,7 @@ export function gradingInstructions(lang: "fr" | "en" = "fr"): string {
     "- Juge chaque objectif séparément : une faute ailleurs ne rend pas faux un objectif réussi. Une autre bonne façon de faire est juste.",
     "- Du code laissé dans un commentaire : compte les objectifs qu’il montre, enlève seulement la syntaxe.",
     "- Seul le contenu TECHNIQUE compte : l’orthographe, la grammaire, le style, le mélange de langues (français, anglais, darija) ne coûtent aucun point et tu n’en parles jamais.",
+    "- LANGUE des explications : une réponse en français, en anglais, en darija marocaine (lettres latines comme « hadi katkhdem », chiffres comme « 3la », « 7it », « kat9ad », ou en arabe) ou un MÉLANGE des trois est TOUJOURS acceptée. Seule la compréhension de la notion compte : lis la darija comme du français (« display flex kaykhli les éléments ijiw f ligne » = les éléments s’alignent sur une ligne, juste). Si un passage est vraiment incompréhensible, mets l’objectif à « ? » plutôt que faux.",
     "- verdict : \"correct\" (tout est juste, score ≥ 85 % des points), \"partial\" (l’idée est là mais il manque quelque chose ou il y a une erreur), \"wrong\" (faux ou hors sujet), \"empty\" (non tentée : aucune réponse, ou le code de départ rendu tel quel ; score 0).",
     "- score : un nombre de 0 aux points de la question (des demi-points sont possibles), cohérent avec le verdict.",
     "",

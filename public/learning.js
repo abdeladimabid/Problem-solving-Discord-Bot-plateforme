@@ -103,11 +103,76 @@ async function loadRef(force = false) {
 const compName = (code) => REF?.referential.find((c) => c.code === code)?.name ?? "";
 const compChip = (s, cls = "") => { const p = parseC(s); return `<span class="tag comp ${cls}" title="${esc(p ? compName(p.code) : "")}">${esc(cText(s))}</span>`; };
 
+// ======================================================================= PROGRAMME & PLANNING
+// The year of the programme, week by week (sprints, briefs, competencies of each week), with « generate the brief of
+// this week ». The competencies themselves are on Evaluation → Competencies; the programme is changed in Settings.
+async function viewPlanning() {
+  const pg = await api("/programs");
+  const P = pg.current;
+  view.innerHTML = `<div class="page-head"><div><h1>Programme</h1>
+      <p class="sub"><b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}: the weeks, the sprints and the brief of each week.</p></div>
+      <div class="toolbar" style="margin:0"><a class="btn" href="#/sprints">Sprints →</a><a class="btn" href="#/settings/programme">${icon("gear")} Change the programme</a></div></div>
+    ${planningHtml(P, pg)}`;
+  $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
+}
+
 // ======================================================================= BRIEFS
+// The list: one card per brief, by where it stands — in progress, to debrief (the deadline passed, debriefs left),
+// debriefing finalized, drafts. Each card: dates, competencies, hand-ins, its debriefs (finalized / left), Simplonline.
+const BRF = { f: "all" };
+function briefStage(b) {
+  const now = Date.now() / 1000;
+  if (b.status === "draft") return "draft";
+  if (b.status === "archived") return "archived";
+  if (b.debrief && b.debrief.total && b.debrief.left === 0) return "done";
+  if (b.due_at && b.due_at < now) return "debrief";
+  return "running";
+}
+const BR_STAGE = { running: ["In progress", "br-run"], debrief: ["To debrief", "br-todo"], done: ["Debriefing finalized", "br-done"], draft: ["Draft", "br-draft"], archived: ["Archived", "br-draft"] };
+function briefCards(items) {
+  const st = items.map((b) => ({ b, s: briefStage(b) }));
+  const count = (k) => st.filter((x) => x.s === k).length;
+  const list = st.filter((x) => BRF.f === "all" || x.s === BRF.f);
+  const order = { debrief: 0, running: 1, done: 2, draft: 3, archived: 4 };
+  list.sort((a, b) => order[a.s] - order[b.s] || (b.b.due_at || 0) - (a.b.due_at || 0));
+  const card = ({ b, s }) => {
+    const d = b.debrief || { total: 0, final: 0, drafts: 0, left: 0 };
+    const [lab, cls] = BR_STAGE[s];
+    const pct = d.total ? Math.round((100 * d.final) / d.total) : 0;
+    const comps = (b.competencies || "").split(",").filter(Boolean);
+    return `<article class="br-card ${cls}" data-brief="${b.id}" tabindex="0" role="link" aria-label="${esc(b.title)}">
+      <div class="br-top"><span class="br-stage ${cls}">${s === "done" ? "✓ " : ""}${lab}</span>
+        <span class="small muted">${b.week ? `Week ${b.week}` : ""}${b.sprint ? ` · Sprint ${b.sprint}` : ""}${b.kind === "squad" ? " · 👥 squads" : ""}</span>
+        ${b.link ? `<a class="br-simplon" href="${esc(b.link)}" target="_blank" rel="noopener" title="Open on Simplonline" data-stop>📄 Simplonline ↗</a>` : ""}</div>
+      <h3>${esc(b.title)}</h3>
+      ${b.summary ? `<p class="br-sum">${esc(b.summary)}</p>` : ""}
+      ${comps.length ? `<div class="br-comps">${comps.map((c) => compChip(c)).join("")}</div>` : ""}
+      <div class="br-foot">
+        <div class="br-dates small">${b.start_at ? `${fmtDate(b.start_at)} → ` : ""}${b.due_at ? dueIn(b.due_at) : "No deadline"}</div>
+        ${s === "draft" ? `<span class="small muted">Not assigned yet</span>` : `<div class="br-deb">
+          <div class="br-deb-l small">${s === "done" ? `<b class="br-ok">✓ Debriefing finalized</b> · ${d.total} ${d.squads ? "squad" : "student"}${d.total > 1 ? "s" : ""}`
+            : d.total ? `<b>${d.final}/${d.total}</b> debriefs finalized · <b class="${s === "debrief" ? "br-left" : ""}">${d.left} left</b>${d.drafts ? ` <span class="muted">(${d.drafts} in progress)</span>` : ""}` : `<span class="muted">No student yet</span>`}
+            <span class="muted"> · ${b.handins} hand-in${b.handins === 1 ? "" : "s"}</span></div>
+          <span class="br-bar"><i style="width:${pct}%"></i></span></div>`}
+      </div></article>`;
+  };
+  return `<div class="toolbar br-filter" style="margin:0 0 12px"><div class="seg" role="group">${[["all", "All", items.length], ["debrief", "To debrief", count("debrief")], ["running", "In progress", count("running")], ["done", "Finalized", count("done")], ["draft", "Drafts", count("draft")]]
+      .map(([v, l, n]) => `<button type="button" data-brf="${v}" aria-pressed="${BRF.f === v}">${l} <span class="muted">${n}</span></button>`).join("")}</div></div>
+    ${list.length ? `<div class="br-cards">${list.map(card).join("")}</div>` : `<p class="empty">${items.length ? "None here." : "No brief yet: generate one from an idea, or import one from Simplonline."}</p>`}`;
+}
+function wireBriefCards() {
+  $$("[data-brf]").forEach((b) => b.onclick = () => { BRF.f = b.dataset.brf; $("#br-tab").innerHTML = briefCards(BRF.items || []); wireBriefCards(); });
+  $$("[data-brief]").forEach((c) => {
+    const go = () => { location.hash = `#/brief/${c.dataset.brief}`; };
+    c.onclick = (e) => { if (!e.target.closest("[data-stop]")) go(); };
+    c.onkeydown = (e) => { if (e.key === "Enter") go(); };
+  });
+}
 async function viewBriefs(tab = "list") {
   const [r, pg] = await Promise.all([api("/briefs"), api("/programs")]);
   const P = pg.current;
   const items = r.items;
+  BRF.items = items;
   view.innerHTML = `
     <div class="page-head"><div><h1>Briefs</h1>
       <p class="sub">Projects of the class, following <b>${esc(P.name)}</b>${pg.now ? ` · this is week ${pg.now}` : ""}. Every debrief updates the competencies and skills of the student.</p></div>
@@ -116,32 +181,22 @@ async function viewBriefs(tab = "list") {
     <div class="tabs" role="tablist">
       <button role="tab" data-t="list">Briefs (${items.length})</button>
       <button role="tab" data-t="follow">Follow-up</button>
-      <button role="tab" data-t="plan">Planning</button>
-      <button role="tab" data-t="prog">Programme &amp; competencies</button>
     </div>
     <div id="br-tab"></div>`;
   const tabs = {
-    list: () => table([
-      { label: "Brief", sort: "title", html: (b) => `<b>${esc(b.title)}</b>${b.source && b.source !== "manual" ? ` <span class="tag">${esc(b.source.startsWith("watcher") ? "from Watcher" : b.source === "ai" ? "✨ AI" : b.source)}</span>` : ""}` },
-      { label: "Week", sort: "week", num: true, html: (b) => (b.week ? `S${b.week}` : "—") },
-      { label: "Status", sort: "status", html: (b) => status(b.status === "assigned" ? "active" : b.status, STATUS[b.status]) },
-      { label: "Competencies", html: (b) => (b.competencies || "").split(",").filter(Boolean).map((c) => compChip(c)).join(" ") || `<span class="muted">—</span>` },
-      { label: "Due", sort: "due_at", html: (b) => dueIn(b.due_at) },
-    ], items, { onRow: (b) => (location.hash = `#/brief/${b.id}`), empty: "No brief yet: generate one from an idea, or import one from Simplonline." }),
+    list: () => briefCards(items),
     follow: () => `<div id="w-follow"><p class="muted">Loading…</p></div>`,
-    plan: () => planningHtml(P, pg),
-    prog: () => `<section class="panel"><div class="panel-head"><h2>${esc(P.name)}</h2><a class="btn" href="#/settings/programme">${icon("gear")} Change it in Settings</a></div>
-      <p class="muted small">To change the planning or the competencies (another year, another stack), download the Excel template in Settings → Programme, fill it and upload it.</p>
-      <div class="ref-list">${P.referential.map((c) => `<div><span class="tag comp ${c.kind}">${esc(cLabel(c.code))}</span> <span class="small">${esc(c.name)}</span></div>`).join("")}</div></section>`,
   };
   const show = (k) => {
     $$("[data-t]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.t === k)));
     $("#br-tab").innerHTML = tabs[k]();
-    if (k === "plan") $$("[data-genweek]").forEach((b) => b.onclick = () => briefGenerator(P, Number(b.dataset.genweek), pg.now, pg));
+    if (k === "list") wireBriefCards();
     if (k === "follow") wFollow($("#w-follow")).catch((e) => toast(e.message, true));
   };
   $$("[data-t]").forEach((b) => b.onclick = () => show(b.dataset.t));
-  show(tab);
+  // the planning moved to Evaluation → Programme (#/planning): old links still land there
+  if (tab === "plan" || tab === "prog") { location.hash = "#/planning"; return; }
+  show(tabs[tab] ? tab : "list");
   $("#br-new").onclick = () => briefGenerator(P, null, pg.now, pg);
   $("#br-import").onclick = () => briefGenerator(P, null, pg.now, { ...pg, mode: "import" });
   $("#br-quick").onclick = () => quickBrief();
@@ -497,6 +552,9 @@ function briefEditorTab(root) {
   root.innerHTML = `<div class="brief-grid">
     <div class="bf-list">
       ${card("title", `<input type="text" data-f="title" value="${esc(d.title)}" style="width:100%">`)}
+      <section class="bf" data-sec="link"><header><b>🔗 Simplonline link</b>${d.link ? `<span class="bf-act"><a class="btn small" href="${esc(d.link)}" target="_blank" rel="noopener">Open ↗</a></span>` : ""}</header>
+        <input type="url" data-f="link" value="${esc(d.link || "")}" style="width:100%" placeholder="https://simplonline.co/briefs/…">
+        <p class="muted small" style="margin:6px 0 0">Shared with the students: a button in the Discord announcement, and the title opens it in <code>/brief</code>.</p></section>
       ${card("summary", ta("summary", d.summary, "", 60))}
       ${card("tags", `<input type="text" data-f="tags" data-k="csv" value="${esc(d.tags.join(", "))}" style="width:100%" placeholder="HTML, CSS, Tailwind, Figma">`)}
       ${card("context", ta("context", d.context, "", 420))}
@@ -587,6 +645,8 @@ function assignBriefDialog() {
     <p class="small muted" style="margin:4px 0 6px">Work: <b>${esc(WORK_MODES.find(([v]) => v === mode)[1])}</b> <span class="muted">(change it in the brief's modalities)</span></p>
     <div class="field-row"><div><label for="ab-s">Start</label><input type="date" id="ab-s" value="${esc(d.modalities.start)}"></div><div><label for="ab-d">Due</label><input type="date" id="ab-d" value="${esc(d.modalities.due)}"></div><div><label for="ab-t">At (UTC)</label><input type="time" id="ab-t" value="${esc(d.modalities.time || "23:59")}"></div></div>
     <div data-wsprint></div>
+    <label for="ab-l">🔗 Simplonline link <span class="muted">(the students get it in the announcement and in <code>/brief</code>)</span></label>
+    <input type="url" id="ab-l" value="${esc(d.link || "")}" placeholder="https://simplonline.co/briefs/…" style="width:100%">
     <label for="ab-h">Expected repo name <span class="muted">(optional: finds their repo when they didn't hand it in, e.g. <code>portfolio</code>)</span></label>
     <input type="text" id="ab-h" value="${esc(B.repo_hint || "")}" style="max-width:340px">
     ${grouped ? `<div class="ab-sq">
@@ -597,9 +657,10 @@ function assignBriefDialog() {
       <div id="ab-board" class="${mode === "binôme" ? "ab-pairs" : ""}"></div></div>` : ""}
     <label class="check"><input type="checkbox" id="ab-a" ${b.status === "assigned" ? "" : "checked"}> Announce it in Discord (in #general)</label>`,
     [{ label: b.status === "assigned" ? "Save" : "Assign", primary: true, action: async () => {
-      const keep = squads.filter((x) => x.members.length);
+      const keep = squads.filter((x) => x.members.length), link = $("#ab-l").value.trim();
+      if (link && !/^https:\/\/\S+$/.test(link)) throw new Error("The Simplonline link must start with https://");
       if (grouped && !keep.length) throw new Error(mode === "binôme" ? "Make the pairs first (Random pairs, or load the class squads)." : "Make the squads first (Balanced squads, or load the class squads).");
-      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...(live && live !== d.modalities.mode ? { data: { ...d, modalities: { ...d.modalities, mode: live } } } : {}) } });
+      await api(`/briefs/${b.id}`, { method: "PUT", body: { kind: grouped ? "squad" : "solo", squads: grouped ? keep : [], repo_hint: $("#ab-h").value.trim(), ...((live && live !== d.modalities.mode) || link !== (d.link || "") ? { data: { ...d, link, modalities: { ...d.modalities, mode: live || d.modalities.mode } } } : {}) } });
       BR.B = await api(`/briefs/${b.id}/assign`, { method: "POST", body: { start: $("#ab-s").value, due: $("#ab-d").value, time: $("#ab-t").value, ...($(".w-sp", dlg) ? { sprint: $(".w-sp", dlg).value } : {}), announce: $("#ab-a").checked } });
       dlg.close(); toast(b.status === "assigned" ? "Saved" : "Assigned to the class"); renderBrief();
     } }]);
@@ -1170,9 +1231,9 @@ function renderDebrief() {
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
       ${sq ? "" : `<section class="panel" id="db-level"></section>`}
       <section class="panel" id="db-fpanel">${final ? `<h2>✅ Finalized</h2>
-          <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.pts || 0), 0)} pts, ${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
+          <p class="small">On ${fmtDateTime(R.final_at)}${R.sent_at ? ` · comment sent by DM ${fmtAgo(R.sent_at)}` : ""}. The competencies and skills are on the student's record${rec.awarded ? ` (${Object.values(rec.awarded).reduce((s, x) => s + (x.coins || 0), 0)} 🪙)` : ""}.</p>
           <button class="btn" id="db-reopen">Reopen</button>`
-        : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the points and coins of the brief.</p>
+        : `<h2>Finalize</h2><p class="small muted">Records the competencies validated (and the others as “not yet”), the skills shown or missed in the code, and the mise en situation, on ${rec.squad ? "each member's" : "the student's"} record; gives the coins of the brief (no points).</p>
           <label class="check"><input type="checkbox" id="db-dm"> ${rec.squad ? "Send each member their own comment by Discord DM" : "Send the comment by Discord DM"}</label>
           ${rec.squad ? `<p class="small muted" style="margin:4px 0 0 24px">The comment on their card (yours, the AI's or the one from their switches), not the squad comment.</p>` : ""}
           <p class="toolbar" style="margin:12px 0 0"><button class="btn" id="db-save" title="Keep everything as it is now and come back later">💾 Save draft</button><button class="btn primary" id="db-fin">Finalize the debrief</button></p>`}</section>
@@ -1447,7 +1508,7 @@ function membersPayload() {
   return Object.fromEntries($$(".member").map((m) => [m.dataset.gid, {
     quiz: $("[data-q]", m).value, mes: { r: $("[data-mr]", m).value, note: "" }, note: $("[data-mn]", m).value,
     co: Object.fromEntries($$("[data-mco]", m).map((x) => [x.dataset.mco, x.checked])), coSet: m.dataset.coset === "1",
-    ...($("[data-mtext]", m)?.dataset.set === "1" ? { text: $("[data-mtext]", m).value } : {}) }]));
+    ...($("[data-mtext]", m)?.dataset.set === "1" ? { text: $("[data-mtext]", m).value } : m.dataset.clear === "1" ? { text: "" } : {}) }]));
 }
 async function saveMembersNow() {
   if (!$(".member") || DB.R.status === "final") return;
@@ -1485,7 +1546,19 @@ function wireMembers() {
       // text that was there (their assessment's comment, an older version) is replaced
       clearTimeout(DB.mtimer);
       toast("⏳ Writing the comment from their switches and your note…");
-      const R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
+      let R;
+      try {
+        R = await api(`/briefs/${DB.bid}/review/membercomment`, { method: "POST", body: { who: DB.who, gid, members: membersPayload() } });
+      } catch (err) {
+        // the AI rewrite failed: the comment is written from their switches and note all the same (no AI)
+        const mem = card.closest(".member") || card;
+        ta.dataset.set = "0"; mem.dataset.clear = "1";
+        try { await saveMembersNow(); } finally { delete mem.dataset.clear; }
+        ta.value = DB.R.review?.members?.[gid]?.comment || ta.value;
+        $("[data-mtst]", card).textContent = "From their switches and your note: it follows them until you edit it.";
+        toast(`The AI couldn't rewrite it (${err.message}): written from the switches and your note instead.`, true);
+        return;
+      }
       if (DB.R.review) DB.R.review.members = R.members;
       // the other members' comments still written from their switches follow them (like a save)
       for (const c of $$(".mc")) { const t = $("[data-mtext]", c); if (t && c !== card && t.dataset.set !== "1") t.value = R.comments?.[c.dataset.gid] ?? t.value; }
@@ -1643,12 +1716,12 @@ function wireDebrief() {
     if ($(".member")) await saveMembers();
     const R = await api(`/briefs/${bid}/review/finalize`, { method: "POST", body: { who, states: currentStates(), comment: DB.commentEdited ? c.value : "", notify: $("#db-dm").checked } });
     const aw = Object.values(R.awarded || {});
-    toast(`Finalized: recorded for ${R.students} student(s)${aw.length ? ` · +${aw.reduce((s, x) => s + (x.pts || 0), 0)} pts` : ""}${R.sent ? " · comment sent" : ""}`);
+    toast(`Finalized: recorded for ${R.students} student(s)${aw.length ? ` · +${aw.reduce((s, x) => s + (x.coins || 0), 0)} 🪙` : ""}${R.sent ? " · comment sent" : ""}`);
     DB.R = { ...DB.R, ...R };
     DB.B = await api(`/briefs/${bid}`);
     renderDebrief();
   });
-  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies, skills, points and coins leave the student's record until you finalize it again: finalizing gives them back (once).", "Reopen", async () => {
+  if ($("#db-reopen")) $("#db-reopen").onclick = () => confirmDialog("Reopen this debrief?", "Its competencies, skills and coins leave the student's record until you finalize it again: finalizing gives them back (once). Points an older debrief gave stay.", "Reopen", async () => {
     const R = await api(`/briefs/${bid}/review/reopen`, { method: "POST", body: { who } });
     DB.R = { ...DB.R, ...R }; DB.B = await api(`/briefs/${bid}`); renderDebrief();
   });
@@ -1981,6 +2054,7 @@ function renderAssessment() {
       <p class="sub">${status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status)} · ${a.questions.length} question(s) · ${a.settings.minutes ? `${a.settings.minutes} min` : "no time limit"}${a.closes_at ? ` · closes ${fmtDateTime(a.closes_at)}` : ""}</p>
       <p class="iv-sum" style="margin:6px 0 0">${optsChips(a.settings)} <button class="ap-link" id="aa-opts">Change</button></p></div>
       <div class="toolbar" style="margin:0">
+        ${a.questions.length ? `<button class="btn" id="aa-slides" title="One question per slide, to explain them to the class">▶ Present</button>` : ""}
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
         <button class="btn" id="aa-share">🔗 Share</button>
@@ -2000,6 +2074,7 @@ function renderAssessment() {
     tabs[k]($("#aa-tab"));
   };
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
+  if ($("#aa-slides") && typeof assessSlides === "function") $("#aa-slides").onclick = () => assessSlides(AS.A, 0);
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
   $("#aa-opts").onclick = () => assessOptionsDialog();
@@ -2732,7 +2807,7 @@ async function programmeSettings(root) {
       <div class="prog-figs"><div><b>${P.weeks.length}</b><span>weeks</span></div><div><b>${P.sprints.length}</b><span>sprints</span></div><div><b>${P.referential.filter((c) => c.kind === "tech").length}</b><span>technical comp.</span></div><div><b>${P.referential.filter((c) => c.kind === "soft").length}</b><span>transversal comp.</span></div><div><b>${first ? dayLabelOf(first) : "—"}</b><span>to ${last ? dayLabelOf(last) : "—"}</span></div></div>
       ${pg.list.length > 1 ? `<label>Programme of this class</label><div class="toolbar" style="margin:0"><select id="pg-pick" style="min-width:320px">${pg.list.map((p) => `<option value="${esc(p.id)}" ${p.id === P.id ? "selected" : ""}>${esc(p.name)}${p.builtin ? " (built-in)" : ""}</option>`).join("")}</select><button class="btn" id="pg-use">Use it</button>
         ${P.custom ? `<button class="btn danger" id="pg-del">Delete this one</button>` : ""}</div>` : ""}
-      <p class="muted small">See the weeks in <a href="#/briefs/plan">Briefs → Planning</a>.</p>
+      <p class="muted small">See the weeks in <a href="#/planning">Evaluation → Programme</a>.</p>
     </div>
     <div class="panel set-card"><h3>Update it from Excel</h3>
       <div class="xl-steps">
@@ -2966,6 +3041,6 @@ function wireLearning(d, sid) {
 }
 
 Object.assign(routes, {
-  briefs: viewBriefs, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies,
+  briefs: viewBriefs, planning: viewPlanning, brief: viewBrief, debrief: viewDebrief, assessments: viewAssessments, assessment: viewAssessment, github: viewGithub, competencies: viewCompetencies,
   projects: () => { location.hash = "#/briefs"; }, project: () => { location.hash = "#/briefs"; },
 });

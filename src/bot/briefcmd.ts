@@ -34,11 +34,15 @@ export async function cmdBrief(ix: Ix, sub: string, o: Record<string, any>) {
     later(ix, async () => {
       const list = await studentBriefs(ix.env, g, ix.userId);
       if (!list.length) return { content: t(L, "brief.none") };
+      // each brief's page on Simplonline, when the teacher gave it: the title opens it
+      const ids = list.slice(0, 8).map((b) => b.id);
+      const links = new Map((await all<{ id: number; link: string | null }>(ix.env, `SELECT id, json_extract(data, '$.link') AS link FROM briefs WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids).catch(() => []))
+        .filter((r) => r.link && /^https:\/\//.test(r.link)).map((r) => [r.id, r.link!]));
       const lines = list.slice(0, 8).map((b) => {
         const squad = b.squad ? t(L, "brief.squad", { name: b.squad.name, sm: b.squad.sm ? t(L, "brief.sm") : "" }) : "";
         const handin = b.handin ? t(L, "brief.handed", { repo: `[${b.handin.repo}](https://github.com/${b.handin.repo})` }) : t(L, "brief.not_handed");
         const res = b.review?.status === "final" ? "\n" + t(L, "brief.result", { pct: b.review.pct ?? "—", ok: (b.review.ok ?? []).map((c: string) => { const pc = parseComp(c); return pc ? compLabel(pc.code) + (pc.level ? "N" + pc.level : "") : c; }).join(", ") || "—" }) : "";
-        return t(L, "brief.line", { title: b.title, squad, due: b.due ? `<t:${b.due}:R>` : "—", handin }) + res;
+        return t(L, "brief.line", { title: links.has(b.id) ? `[${b.title}](${links.get(b.id)})` : b.title, squad, due: b.due ? `<t:${b.due}:R>` : "—", handin }) + res;
       });
       return { embeds: [{ title: t(L, "brief.list_title"), description: lines.join("\n\n").slice(0, 4000), color: COLORS.blue }] };
     });

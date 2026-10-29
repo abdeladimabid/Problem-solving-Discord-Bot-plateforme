@@ -152,6 +152,11 @@ function vsWeek(box) {
   const tr = (now, before) => { const p = trendPct(now, before); return p == null ? `<span class="muted small">new</span>` : `<span class="delta ${p > 0 ? "up" : p < 0 ? "down" : "flat"}" title="Writing time vs the week before">${p > 0 ? "▲" : p < 0 ? "▼" : "•"} ${Math.abs(p)}%</span>`; };
   const tot = w.totals, best = days.reduce((b, d, i) => (w.perDay[i][1] > (w.perDay[b]?.[1] ?? -1) ? i : b), 0);
   const zero = learners.filter((l) => !l.write).length;
+  // the share of the lines an AI wrote (AI + typed by the learner); pasted = big blocks added in a few seconds, not by an AI
+  const aiPct = (x) => (x.ai + x.hu ? Math.round((100 * x.ai) / (x.ai + x.hu)) : 0);
+  const vsNum = (n) => Number(n || 0).toLocaleString();
+  const aiCell = (x) => (x.ai ? `<span class="${aiPct(x) >= 50 ? "vs-hi" : ""}" title="${vsNum(x.ai)} lines by an AI, ${vsNum(x.hu)} typed: ${aiPct(x)}% by an AI">${vsNum(x.ai)} <small class="muted">${aiPct(x)}%</small></span>` : `<span class="muted">—</span>`);
+  const pasteCell = (x) => (x.pasted ? `<span class="vs-hi" title="${x.pastes} big block${x.pastes > 1 ? "s" : ""} pasted (${vsNum(x.pasted)} lines added in a few seconds)">${vsNum(x.pasted)} <small class="muted">×${x.pastes}</small></span>` : `<span class="muted">—</span>`);
   const labels = days.map((d) => vsDayLabel(d, { weekday: "short", day: "numeric" }));
   box.innerHTML = `
     <div class="figures vs-figs">
@@ -159,18 +164,20 @@ function vsWeek(box) {
       <div class="figure"><div class="ico">⌨️</div><div><b>${esc(vsDur(tot.active))}</b><span>active time this week</span></div></div>
       <div class="figure"><div class="ico">📅</div><div><b>${w.perDay[best]?.[1] ? esc(vsDayLabel(days[best], { weekday: "long" })) : "—"}</b><span>most writing</span></div></div>
       <div class="figure${zero ? " cs-attn" : ""}"><div class="ico">😶</div><div><b>${zero}</b><span>no writing time this week</span></div></div>
+      <div class="figure${tot.ai && aiPct(tot) >= 50 ? " cs-attn" : ""}"><div class="ico">🤖</div><div><b>${vsNum(tot.ai)}</b><span>lines written by an AI${tot.ai ? ` · ${aiPct(tot)}% of the lines · ${tot.aiLearners} learner${tot.aiLearners > 1 ? "s" : ""}` : ""}</span></div></div>
+      <div class="figure${tot.pasted ? " cs-attn" : ""}"><div class="ico">📋</div><div><b>${vsNum(tot.pasted)}</b><span>lines pasted${tot.pasted ? ` · ${tot.pastes} paste${tot.pastes > 1 ? "s" : ""} · ${tot.pasteLearners} learner${tot.pasteLearners > 1 ? "s" : ""}` : ""}</span></div></div>
     </div>
     <div class="panel" style="margin-top:14px">
       <div class="panel-head"><h2>Week of ${esc(vsDayLabel(w.monday, { day: "numeric", month: "long" }))}</h2><span class="muted small">colour = writing time · hover a cell for the details</span></div>
       <div class="table-wrap"><table class="vs-heat">
-        <thead><tr><th>Learner</th>${days.map((d) => `<th class="num">${esc(vsDayLabel(d, { weekday: "short", day: "numeric" }))}</th>`).join("")}<th class="num">Writing</th><th class="num">Active</th><th class="num">vs last week</th></tr></thead>
+        <thead><tr><th>Learner</th>${days.map((d) => `<th class="num">${esc(vsDayLabel(d, { weekday: "short", day: "numeric" }))}</th>`).join("")}<th class="num">Writing</th><th class="num">Active</th><th class="num" title="Lines written by an AI (agent, completion) and their share of the lines">🤖 AI lines</th><th class="num" title="Lines pasted: big blocks added in a few seconds, not by an AI">📋 Pasted</th><th class="num">vs last week</th></tr></thead>
         <tbody>${learners.map((l) => `<tr class="clickable" tabindex="0" data-id="${esc(l.id)}">
           <td><span class="vs-who">${avatar(l.name, l.id)}<span><b>${esc(l.name)}</b>${l.squad ? `<small class="muted">${esc(l.squad)}</small>` : ""}</span></span></td>
-          ${l.cells.slice(0, n).map(([a, wr], i) => `<td class="vs-cell" style="background:${heat(wr)}" title="${esc(vsDayLabel(days[i]))} · ${vsMin(a)} min active · ${vsMin(wr)} min writing"><span>${wr ? vsMin(wr) : a ? "·" : ""}</span></td>`).join("")}
-          <td class="num"><b>${esc(vsDur(l.write))}</b></td><td class="num">${esc(vsDur(l.active))}</td><td class="num">${l.write || l.prevWrite ? tr(l.write, l.prevWrite) : `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody>
-        <tfoot><tr><th>Class</th>${days.map((_, i) => `<th class="num">${vsMin(w.perDay[i][1])}</th>`).join("")}<th class="num">${esc(vsDur(tot.write))}</th><th class="num">${esc(vsDur(tot.active))}</th><th class="num">${tr(tot.write, tot.prevWrite)}</th></tr></tfoot>
+          ${l.cells.slice(0, n).map(([a, wr], i) => { const x = l.lines?.[i] || {}; return `<td class="vs-cell" style="background:${heat(wr)}" title="${esc(vsDayLabel(days[i]))} · ${vsMin(a)} min active · ${vsMin(wr)} min writing${x.ai ? ` · ${x.ai} lines by an AI` : ""}${x.pasted ? ` · ${x.pasted} lines pasted` : ""}"><span>${wr ? vsMin(wr) : a ? "·" : ""}</span>${x.ai || x.pasted ? `<i class="vs-flags">${x.ai ? "🤖" : ""}${x.pasted ? "📋" : ""}</i>` : ""}</td>`; }).join("")}
+          <td class="num"><b>${esc(vsDur(l.write))}</b></td><td class="num">${esc(vsDur(l.active))}</td><td class="num">${aiCell(l)}</td><td class="num">${pasteCell(l)}</td><td class="num">${l.write || l.prevWrite ? tr(l.write, l.prevWrite) : `<span class="muted">—</span>`}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><th>Class</th>${days.map((_, i) => `<th class="num">${vsMin(w.perDay[i][1])}</th>`).join("")}<th class="num">${esc(vsDur(tot.write))}</th><th class="num">${esc(vsDur(tot.active))}</th><th class="num">${aiCell(tot)}</th><th class="num">${pasteCell(tot)}</th><th class="num">${tr(tot.write, tot.prevWrite)}</th></tr></tfoot>
       </table>${learners.length ? "" : `<p class="empty">No learner here.</p>`}</div>
-      <p class="muted small">Numbers are minutes of writing time; « · » = active without writing.</p>
+      <p class="muted small">Numbers are minutes of writing time; « · » = active without writing; 🤖 = lines written by an AI that day, 📋 = a big block pasted (hover for the details).</p>
     </div>
     <div class="panel" style="margin-top:14px"><div class="panel-head"><h2>The class per day</h2><span class="muted small">minutes</span></div>
       ${barChart(labels, [{ name: "Writing", values: days.map((_, i) => vsMin(w.perDay[i][1])), color: "var(--s1)" }, { name: "Other active time", values: days.map((_, i) => vsMin(w.perDay[i][0] - w.perDay[i][1])), color: "var(--s2)" }], { every: 1, height: 200 })}</div>`;

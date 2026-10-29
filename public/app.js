@@ -42,8 +42,15 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify({ g: S.g, ...opts.body }) : undefined,
   });
   if (res.status === 401) { location.href = "/login"; throw new Error("Please sign in again."); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  const raw = await res.text().catch(() => "");
+  let data = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch { data = {}; }
+  if (!res.ok) {
+    // not ClassBot's answer (a Cloudflare error page): say which error, it tells what went wrong
+    const code = (raw.match(/error code:?\s*(\d{3,4})/i) || raw.match(/Error\s*(1\d{3})/) || [])[1];
+    const title = ((raw.match(/<title>([^<]{3,120})<\/title>/i) || [])[1] || "").replace(/\s*\|\s*.*$/, "").trim();
+    throw new Error(data.error || `Request failed (${res.status}${code ? ` · Cloudflare error ${code}` : ""}${title && !/^\d+$/.test(title) ? ` · ${title}` : ""})`);
+  }
   return data;
 }
 
@@ -368,7 +375,9 @@ const routes = {
   daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
 async function route() {
-  const [name, arg] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  const [name, ...more] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  // most pages take one segment; a page with tabs (#/sprints/3/review) gets the rest too
+  const arg = name === "sprints" ? more.join("/") : more[0];
   const fn = routes[name] || viewOverview;
   const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", wplan: "assignments", assessment: "assessments", battle: "games", battles: "games", game: "games" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
@@ -1697,6 +1706,7 @@ async function viewSettings(arg) {
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
+    ["gsheet", "📗", "Google Sheet", "Suivi Formateur, filled for you"],
     ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
@@ -1861,6 +1871,11 @@ async function viewSettings(arg) {
       <div id="set-intranet"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="gsheet" hidden>
+      ${head("Google Sheet · Suivi Formateur", "ClassBot fills your Suivi Formateur sheet: the sprint levels (Niveau technique), the briefs and where the debriefs are (Suivi et Validation Classe), and the plans d'action sent. Suivi fil rouge is never touched.")}
+      <div id="set-gsheet"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="vscode" hidden>
       ${head("VS Code tracking", "Each learner's coding time in VS Code (the WakaTime extension pointed at ClassBot). Nothing is recorded before the learner reads what is kept and says yes with /vscode setup; they can pause or delete it at any time.")}
       <div id="set-vscode"><p class="muted">Loading…</p></div>
@@ -1883,6 +1898,7 @@ async function viewSettings(arg) {
       if (k === "ai") aiSettings($("#set-ai"));
       if (k === "library") librarySettings($("#set-library"));
       if (k === "intranet") intranetSettings($("#set-intranet"));
+      if (k === "gsheet" && typeof gsheetSettings === "function") gsheetSettings($("#set-gsheet"));
       if (k === "vscode" && typeof vscodeSettings === "function") vscodeSettings($("#set-vscode")).catch((e) => { $("#set-vscode").innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; });
     }
   };

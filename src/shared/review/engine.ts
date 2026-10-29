@@ -249,7 +249,7 @@ const CONCEPTS = [
   [/<\s*(ul|ol|li|table|tr|td)\b|\bliste/i, 'les listes et les tableaux HTML'],
   [/\b(header|nav|main|footer|section|article)\b|s[ée]mantique/i, 'les balises sémantiques'],
   [/s[ée]lecteur|\b(classe|class|id)\b[^.]{0,40}\bCSS|\bCSS\b[^.]{0,60}\b(classe|class|id)\b|\.[a-z][\w-]*\s*\{/i, 'les sélecteurs CSS (balise, classe, id)'],
-  [/\bmargin\b|\bpadding\b|\bborder\b|centr|mod[èe]le de bo[iî]te|box-sizing/i, 'le modèle de boîte et le centrage (margin, padding)'],
+  [/\bmargin\b|\bpadding\b|\bborder\b|centr|mod[èe]le de bo[iî]te|box[- ]?model|box-sizing/i, 'le modèle de boîte et le centrage (margin, padding)'],
   [/\bdisplay\b|\binline\b|\bblock\b/i, 'la propriété display (block, inline)'],
   [/flex|justify-content|align-items/i, 'Flexbox'],
   [/\bgrid\b|grid-template/i, 'CSS Grid'],
