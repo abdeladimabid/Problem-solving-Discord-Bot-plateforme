@@ -5,7 +5,7 @@ import { GH_WEB } from './gh.ts';
 
 export function countAction(event: string, p: any, analysis: any) {
   if (event === 'push') {
-    const list = Object.values(analysis || {}).filter((a) => a.kind !== 'merge' && !a.notMine && !a.old);
+    const list = (Object.values(analysis || {}) as any[]).filter((a) => a.kind !== 'merge' && !a.notMine && !a.old);
     const flagged = list.filter((a) => a.flags.length > 0); // huge / node_modules: suspicious, not scored
     const real = list.filter((a) => a.kind === 'real' && a.flags.length === 0);
     return {
@@ -186,7 +186,7 @@ export function formatWebhook(event, p, discordId = null, analysis = null, sende
       if (p.created && commits.length === 0) return null;
       const branch = branchOf(p.ref);
       const n = commits.length;
-      const a = analysis || {};
+      const a: Record<string, any> = analysis || {};
       const list = commits.slice(-5).map((c) => commitLine(c, a[c.id]));
       if (n > 5) list.unshift(`…and ${n - 5} earlier commit(s)`);
       const tip = Object.values(a).some((x) => x.bad)

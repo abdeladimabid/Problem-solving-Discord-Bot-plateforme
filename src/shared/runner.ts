@@ -526,7 +526,7 @@ export async function runnerHealth(env: Env): Promise<{ ok: boolean; ms: number;
 
 /** Run a program on a few visible tests and return each output (the editor's "Run" button). */
 export async function runSamples(env: Env, lang: CodeLang, code: string, tests: { input: string }[], limit: number)
-  : Promise<{ compile?: string; rows: { status: "ok" | "tle" | "re"; time: number; output: string; error: string }[] }> {
+  : Promise<{ compile?: string; rows: { status: "ok" | "tle" | "re" | "ge"; time: number; output: string; error: string }[] }> {
   const ts = tests.map((t) => ({ input: t.input, gen: null }));
   let res: { compile?: string; rows: HarnessRow[] };
   try {

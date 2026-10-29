@@ -401,7 +401,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 // ------------------------------------------------------------------- AI
 export const ai = {
   calls: 0,
-  mode: "good" as "good" | "lying" | "broken" | "badwrite",
+  mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
   images: [] as number[],
@@ -411,8 +411,10 @@ export const ai = {
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],
+  chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
+  chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -745,9 +747,14 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
+        if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
         // a model that answers from nowhere the first time
         if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
+        if (last.includes("Tous puis filtre")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
+        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
+          table_from: { data: Object.keys(d)[0], where: { niveau: "faible" }, title: "Faibles", columns: { Code: "code", Niveau: "niveau" } }, table: null }) }; }
         if (!last.startsWith("DONNÉES")) {
           const code = (last.match(/\bE\d+\b/) || [])[0];
           return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
