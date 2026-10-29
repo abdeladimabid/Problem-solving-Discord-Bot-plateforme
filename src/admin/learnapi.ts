@@ -18,6 +18,7 @@ import { ManifestError, finishManifest, githubManifest } from "../shared/github.
 import { WatcherMsgError, announceFr, postStatus } from "../shared/watcher_discord.ts";
 import { DiagError, carryToBrief, proposeActions, sprintDiagnosis } from "../shared/sprintdiag.ts";
 import { staffIds, withoutStaff } from "../shared/staff.ts";
+import { markSheetDirty } from "../shared/gsheet.ts";
 import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComment, sprintView, sprintsOverview } from "../shared/sprints.ts";
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
@@ -394,9 +395,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       if (body.states) await saveStates(env, g, id, who, body.states);
       if (typeof body.comment === "string" && body.comment.trim()) await saveCommentText(env, g, id, who, body.comment);
       const r = await finalizeReview(env, g, { id, title: b.title, competencies: b.skills.join(",") }, who, { notify: !!body.notify });
+      await markSheetDirty(env, g.id);
       return ok({ ...r, ...(await reviewView(env, g, id, who)) });
     }
-    if (act === "reopen") { await reopenReview(env, g, id, who); return ok(await reviewView(env, g, id, who)); }
+    if (act === "reopen") { await reopenReview(env, g, id, who); await markSheetDirty(env, g.id); return ok(await reviewView(env, g, id, who)); }
     // steps: the bot proposes from the repo at the step's date, the teacher decides
     if (act === "stepcheck" && method === "POST") { const prop = await proposeStep(env, g, b, who, Number(body.n)); return ok({ prop, ...(await reviewView(env, g, id, who)) }); }
     if (act === "step" && method === "POST") { await saveStep(env, g, b, who, Number(body.n), String(body.final || ""), String(body.note || "")); return ok(await reviewView(env, g, id, who)); }
@@ -415,9 +417,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "diag" && method === "GET") return ok(await sprintDiagnosis(env, g, n));
     if (act === "actions" && method === "POST") return ok({ actions: await proposeActions(env, g, n) });
     if (act === "carry" && method === "POST") return ok(await carryToBrief(env, g, n, Number(body.brief), Array.isArray(body.items) ? body.items.map(String) : [], String(body.wish ?? "")));
-    if (act === "levels" && method === "POST") { const r = await proposeLevels(env, g, n); return ok({ ...r, ...(await sprintView(env, g, n)) }); }
+    if (act === "levels" && method === "POST") { const r = await proposeLevels(env, g, n); await markSheetDirty(env, g.id); return ok({ ...r, ...(await sprintView(env, g, n)) }); }
     if (act === "decide" && method === "POST") {
       await saveDecision(env, g, n, String(body.discord_id || ""), { level: body.level, decision: body.decision, note: body.note });
+      await markSheetDirty(env, g.id);
       return ok({ ok: true });
     }
     if (act === "comment" && method === "POST") return ok(await sprintComment(env, g, n));

@@ -64,6 +64,7 @@ import { quietWriters } from "../shared/vscodedb.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
+import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
   status: number;
@@ -463,6 +464,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (m[2] === "send" && method === "POST") {
         if (body.edits) await savePlanEdits(env, g, pid, body.edits);
         const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
+        await markSheetDirty(env, g.id);
         return ok({ ...(await workPlanView(env, g, pid)), dm: r.dm });
       }
     }
@@ -547,6 +549,19 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           return ok(await intranetMatchView(env, g.id));
         }
       } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+    }
+    // 📗 the trainer's Google Sheet (Suivi Formateur), filled by ClassBot
+    if (path === "/settings/gsheet" || path.startsWith("/settings/gsheet/")) {
+      const g = await guild();
+      try {
+        if (path === "/settings/gsheet" && method === "GET") return ok(await sheetView(env, g));
+        if (path === "/settings/gsheet" && method === "PUT") { const r = await saveSheet(env, g, body); return ok({ ...(await sheetView(env, g)), tabs: r.tabs }); }
+        if (path === "/settings/gsheet/key" && method === "PUT") { await saveKey(env, String(body.key ?? "")); return ok(await sheetView(env, g)); }
+        if (path === "/settings/gsheet/key" && method === "DELETE") { await saveKey(env, null); return ok(await sheetView(env, g)); }
+        if (path === "/settings/gsheet/names" && method === "GET") return ok(await namesView(env, g));
+        if (path === "/settings/gsheet/names" && method === "PUT") { await saveNames(env, g, body.map && typeof body.map === "object" ? body.map : {}); return ok(await namesView(env, g)); }
+        if (path === "/settings/gsheet/fill" && method === "POST") return ok({ result: await fillSheet(env, g, "manual"), ...(await sheetView(env, g)) });
+      } catch (e) { if (e instanceof SheetError) throw new HttpError(400, e.message); throw e; }
     }
     if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
       const g = await guild();

@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { intranetFake } from "./harness.ts";
+import { intranetFake, googleFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import bot from "../src/bot/index.ts";
@@ -31,6 +31,7 @@ import { contribution as memberContribution, memberLevel, memberLevelOf, memberL
 import { pickFiles, taskChecks, taskFallback, taskTarget } from "../src/shared/review/task.ts";
 import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, workshopTimingErrors } from "../src/shared/activities.ts";
 import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
+import { matchNames as sheetMatch, findTabs, sheetIdOf, weekKey, sheetCron } from "../src/shared/gsheet.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -6540,6 +6541,149 @@ section("debrief requirements: the AI reads only the start of each file; a page 
   const ex = rescueFound([{ type: "story", texte: "En tant que visiteur, je veux voir la galerie", statut: "absent" }, { type: "story", texte: "je veux réserver une visite", statut: "absent" }, { type: "story", texte: "voir les services", statut: "absent", bound: true, check: "pages" }], { paths, texts });
   check(ex[0].statut === "fait" && /js\/gallery\.js.*à confirmer/.test(ex[0].preuve) && ex[1].statut === "absent" && ex[2].statut === "absent", "the AI's « absent » on what is in the repo becomes done (with where it is, to confirm); a sure automatic check is never overruled");
   check(/temoignages, contact-form/.test(pageOutline(texts)) && /1 formulaire/.test(pageOutline(texts)), "the AI gets the outline of every page read in full (headings, sections, forms, links)");
+}
+
+section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint, briefs and debriefs, plans d'action)");
+{
+  // the names: by their words, the intranet name too; a tie or an unknown name = nobody; the teacher's choice wins
+  const studs = [{ id: "1", names: ["Aya Hakim", "aya"] }, { id: "2", names: ["Mehdi"] }, { id: "3", names: ["amine_amrouch"] }, { id: "4", names: ["Sara"] }, { id: "5", names: ["Sara B"] }];
+  const mm = sheetMatch(["Hakim Aya", "MEHDI KHANFRI", "Amrouch Amine", "Sara Alaoui", "Inconnu Total"], studs);
+  check(mm["Hakim Aya"] === "1" && mm["MEHDI KHANFRI"] === "2" && mm["Amrouch Amine"] === "3" && mm["Inconnu Total"] === "", `names matched by their words, in any order or case (${JSON.stringify(mm)})`);
+  check(mm["Sara Alaoui"] === "", "…two students who could be the same row: nobody (the teacher picks)");
+  check(sheetMatch(["Hakim Aya"], studs, { "hakim aya": "4" })["Hakim Aya"] === "4" && sheetMatch(["Hakim Aya"], studs, { "hakim aya": "" })["Hakim Aya"] === "", "the teacher's choice wins (a student, or nobody)");
+  const T = findTabs(["Niveau technique", "Suivi et Validation Classe", "Suivi fil rouge", "Plan daction  Retro"]);
+  check(T.niveau === "Niveau technique" && T.suivi === "Suivi et Validation Classe" && T.plan === "Plan daction  Retro", "the tabs found by their names (Suivi fil rouge never)");
+  check(sheetIdOf("https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/edit#gid=0") === "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", "the sheet's id from its link");
+  check(weekKey(Date.UTC(2026, 10, 2, 6)) === "2026-10-26" && weekKey(Date.UTC(2026, 10, 2, 9)) === "2026-11-02", "the week starts on Monday 08:00");
+
+  // a service account key (a real RSA key) and a fake Google
+  const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const der = Buffer.from(await crypto.subtle.exportKey("pkcs8", kp.privateKey)).toString("base64");
+  const pem = `-----BEGIN PRIVATE KEY-----\n${der.match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`;
+  const keyJson = JSON.stringify({ type: "service_account", project_id: "p", private_key: pem, client_email: "classbot@p.iam.gserviceaccount.com" });
+  const SID = "1SheetIdForTheTestsXXXXXXXXXXXXXXXX";
+  const cells: Record<string, Record<string, any>> = { "Niveau technique": { A3: "Durand Alice", A4: "BOB martin", A5: "DUPONT carol", A6: "Inconnu Total", G3: "Bon", C3: 9 }, "Suivi et Validation Classe": {}, "Suivi fil rouge": { A4: "x" }, "Plan daction  Retro": {} };
+  const calls: string[] = [];
+  let tokens = 0, badSig = 0;
+  const col = (c: string) => c.charCodeAt(0) - 65, colName = (i: number) => String.fromCharCode(65 + i);
+  const parse = (r: string) => { const m = r.match(/^'((?:[^']|'')*)'!([A-Z])(\d+)(?::([A-Z])(\d+))?$/)!; return { tab: m[1].replace(/''/g, "'"), c0: col(m[2]), r0: Number(m[3]), c1: col(m[4] || m[2]), r1: Number(m[5] || m[3]) }; };
+  googleFake.handler = async (url, method, body) => {
+    calls.push(`${method} ${url.pathname}`);
+    if (url.hostname === "oauth2.googleapis.com") {
+      const a = new URLSearchParams(body).get("assertion")!.split(".");
+      const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", kp.publicKey, Buffer.from(a[2], "base64url"), new TextEncoder().encode(`${a[0]}.${a[1]}`));
+      const claims = JSON.parse(Buffer.from(a[1], "base64url").toString());
+      if (!ok || claims.iss !== "classbot@p.iam.gserviceaccount.com" || !/spreadsheets/.test(claims.scope)) { badSig++; return Response.json({ error: "invalid_grant" }, { status: 400 }); }
+      tokens++;
+      return Response.json({ access_token: "ya29.test", expires_in: 3600 });
+    }
+    if (!url.pathname.startsWith(`/v4/spreadsheets/${SID}`)) return Response.json({ error: { message: "nope" } }, { status: 403 });
+    const rest = decodeURIComponent(url.pathname.slice(`/v4/spreadsheets/${SID}`.length));
+    if (!rest) return Response.json({ properties: { title: "Suivi_Formateur_TEST" }, sheets: Object.keys(cells).map((t) => ({ properties: { title: t } })) });
+    if (rest.startsWith("/values/") && method === "GET") {
+      const p = parse(rest.slice(8)), out: any[] = [];
+      for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
+      while (out.length && out[out.length - 1] === "") out.pop();
+      return Response.json({ values: out.length ? [out] : [] });
+    }
+    const b = JSON.parse(body);
+    if (rest === "/values:batchUpdate") {
+      check(b.valueInputOption === "USER_ENTERED", "written as if typed (dates become dates)");
+      for (const d of b.data) { const p = parse(d.range); d.values.forEach((row: any[], i: number) => row.forEach((v, j) => { if (v !== null) cells[p.tab][`${colName(p.c0 + j)}${p.r0 + i}`] = v; })); }
+      return Response.json({});
+    }
+    if (rest === "/values:batchClear") { for (const r of b.ranges) { const p = parse(r); for (let i = p.r0; i <= p.r1; i++) for (let j = p.c0; j <= p.c1; j++) delete cells[p.tab][`${colName(j)}${i}`]; } return Response.json({}); }
+    return Response.json({ error: { message: "unknown" } }, { status: 400 });
+  };
+  try {
+    let V = await api("GET", `/api/settings/gsheet?g=${G}`);
+    check(V.status === 200 && !V.data.key && !V.data.sheet, "nothing set at first");
+    check((await api("POST", `/api/settings/gsheet/fill`, { g: G })).status === 400, "Fill now without a sheet: refused, with why");
+    check((await api("PUT", `/api/settings/gsheet/key`, { g: G, key: "{\"type\":\"user\"}" })).status === 400 && (await api("PUT", `/api/settings/gsheet/key`, { g: G, key: "AIza..." })).status === 400, "not a service account key: refused, with what to do");
+    V = await api("PUT", `/api/settings/gsheet/key`, { g: G, key: keyJson });
+    check(V.status === 200 && V.data.key?.email === "classbot@p.iam.gserviceaccount.com" && V.data.key.source === "settings" && tokens === 1 && !badSig, `the key is tested with Google (a signed JWT) and kept; only its email is shown (${V.status} ${JSON.stringify(V.data)})`);
+    check(!JSON.stringify(V.data).includes("PRIVATE"), "…never the key itself");
+    const no = await api("PUT", `/api/settings/gsheet`, { g: G, url: "https://docs.google.com/spreadsheets/d/1NotSharedWithClassBotXXXXXXXXXXXXX/edit" });
+    check(no.status === 400 && /share it with classbot@p\.iam\.gserviceaccount\.com as Editor/.test(no.data.error), `a sheet not shared: says to share it with the account's email (${no.data.error})`);
+    V = await api("PUT", `/api/settings/gsheet`, { g: G, url: `https://docs.google.com/spreadsheets/d/${SID}/edit#gid=0` });
+    check(V.status === 200 && V.data.sheet?.id === SID && V.data.tabs.tabs.plan === "Plan daction  Retro" && V.data.auto === true, "the sheet linked: its tabs found, filled by itself by default");
+
+    // the data: an intranet name for Carol, levels, a brief of sprint 1 debriefed for Alice only, a plan sent to Bob
+    run1("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, by, at) VALUES (?, ?, 4242, 'Carol Dupont', 'you', ?)", G, U.carol.id, clock.now());
+    const O = (await api("GET", `/api/sprints?g=${G}`)).data;
+    const sp = O.sprints[0];
+    await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.alice.id, level: "excellent" });
+    await api("POST", `/api/sprints/${sp.n}/decide`, { g: G, discord_id: U.bob.id, level: "critique" });
+    const P = (await api("GET", `/api/programs?g=${G}`)).data.current;
+    const wk = P.weeks.find((w: any) => w.sprint === sp.n).n;
+    const mk = await api("POST", "/api/briefs", { g: G, week: wk, data: { title: "=Brief Sheet", context: "Un site." } });
+    const bid = mk.data.brief.id;
+    const st = Math.floor(Date.UTC(2026, 8, 14, 9) / 1000), du = Math.floor(Date.UTC(2026, 8, 18, 22) / 1000);
+    run1("UPDATE briefs SET status = 'assigned', week = ?, sprint = ?, start_at = ?, due_at = ? WHERE id = ?", wk, sp.n, st, du, bid);
+    run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
+    run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${U.alice.id}`, clock.now());
+    const plan = { id: 9901, gid: G, sid: U.bob.id, name: "Bob", title: "Plan", message: "", status: "sent", due_at: Math.floor(Date.UTC(2026, 9, 30, 12) / 1000), created_at: st, updated_at: st, sent_at: Math.floor(Date.UTC(2026, 9, 20, 12) / 1000), done_at: null,
+      diag: { at: st, model: "x", summary: "s", lacunes: [{ notion: "Flexbox", priority: 1, why: "", evidence: [], comps: [] }, { notion: "Git", priority: 2, why: "", evidence: [], comps: [] }], proposals: [] },
+      steps: [{ id: "aaaa", kind: "code", title: "Une page en flex", notion: "Flexbox" }, { id: "bbbb", kind: "answer", title: "", notion: "Git" }] };
+    run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `wplan:${G}:9901`, JSON.stringify(plan), clock.now());
+    run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `wplan:${G}:9902`, JSON.stringify({ ...plan, id: 9902, status: "draft" }), clock.now());
+
+    // the sprint has to be over for its levels to be written
+    const ahead = Math.max(0, Math.ceil((Date.parse(sp.end + "T23:00:00Z") - Date.now()) / 1000) + 86400 * 2);
+    clock.advance(ahead);
+    const N = await api("GET", `/api/settings/gsheet/names?g=${G}`);
+    const who = (n: string) => N.data.rows.find((r: any) => r.name === n)?.uid;
+    check(N.status === 200 && who("Durand Alice") === U.alice.id && who("BOB martin") === U.bob.id && who("DUPONT carol") === U.carol.id && who("Inconnu Total") === "" && N.data.students.every((s: any) => s.id !== U.prof.id),
+      `the names of the sheet matched to the students (Discord name, intranet name); the teacher isn't one (${JSON.stringify(N.data.rows)})`);
+    const F = await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    const NT = cells["Niveau technique"], SU = cells["Suivi et Validation Classe"], PL = cells["Plan daction  Retro"];
+    const c = colName(6 + sp.n - 1), top = 2 + 3 * (sp.n - 1);
+    check(F.status === 200 && F.data.result.ok, `filled (${JSON.stringify(F.data.result)})`);
+    check(NT[`${c}3`] === "Excellent(e)" && NT[`${c}4`] === "Critique" && NT.C3 === 9 && NT.A3 === "Durand Alice", `Niveau technique: the teacher's level in S${sp.n}, over what was there; the other columns untouched (${NT[`${c}3`]} ${NT[`${c}4`]})`);
+    check(Object.keys(NT).every((k) => !/^[G-N]6$/.test(k)) && F.data.result.unmatched.includes("Inconnu Total"), "…a name with no student: nothing written, and said");
+    const row = [0, 1, 2].map((k) => top + k).find((r) => SU[`B${r}`] === "'=Brief Sheet")!;
+    check(!!row && SU[`C${row}`] === "2026-09-14" && SU[`D${row}`] === "2026-09-18", `Suivi: the brief (never read as a formula) with its start and end dates (${JSON.stringify(SU)})`);
+    check(SU[`E${row}`] === "En cours" && !SU[`F${row}`] && SU[`G${top}`] !== "Oui", "…debriefing individuel « En cours » (one debrief of three): no collective debriefing nor retro yet");
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === "1. Une page en flex\n2. Git" && PL.G4 === "2026-10-30" && !PL.B5,
+      `Plan d'action: the plan sent (not the draft): the student as in the sheet, level, difficulties, start, actions, end (${JSON.stringify(PL)})`);
+    check(!calls.some((x) => x.includes("fil")) && Object.keys(cells["Suivi fil rouge"]).length === 1, "Suivi fil rouge never touched");
+    // every debrief finalized: Oui, and the collective debriefing and the retro too
+    for (const u of N.data.students.map((x: any) => x.id).filter((x: string) => x !== U.alice.id)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
+    run1("DELETE FROM app_settings WHERE k = ?", `wplan:${G}:9901`);
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(SU[`E${row}`] === "Oui" && SU[`F${row}`] === "Oui", "every debrief finalized: individual « Oui », collective « Oui »");
+    const block = [0, 1, 2].map((k) => top + k).filter((r) => SU[`B${r}`]);
+    check(block.every((r) => SU[`E${r}`] === "Oui") === (SU[`G${top}`] === "Oui"), "…and the retro once every brief of the sprint is finalized");
+    check(!PL.B4 && !PL.F4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
+
+    // automatically: a debrief finalized marks the sheet, the cron fills it 2 minutes later (every 5 minutes)
+    const fills0 = calls.filter((x) => x.endsWith("batchUpdate")).length;
+    run1("UPDATE app_settings SET v = json_set(v, '$.dirty', ?) WHERE k = ?", clock.now() - 600, `gsheet:${G}`);
+    const toMinute = (m: number) => { const d = new Date(Date.now()); clock.advance(((m - d.getUTCMinutes() + 60) % 60 || 60) * 60); };
+    toMinute(2); await sheetCron(env);
+    const fills1 = calls.filter((x) => x.endsWith("batchUpdate")).length;
+    await api("PUT", `/api/settings/gsheet`, { g: G, auto: false });
+    run1("UPDATE app_settings SET v = json_set(v, '$.dirty', ?) WHERE k = ?", clock.now() - 600, `gsheet:${G}`);
+    toMinute(7); await sheetCron(env);
+    check(fills1 === fills0 + 1 && calls.filter((x) => x.endsWith("batchUpdate")).length === fills1, `filled by itself after a change; not when « Fill it by myself » is off (${fills0} ${fills1})`);
+    // the teacher fixes a name
+    await api("PUT", `/api/settings/gsheet/names`, { g: G, map: { "Inconnu Total": U.carol.id, "DUPONT carol": "" } });
+    const N2 = await api("GET", `/api/settings/gsheet/names?g=${G}`);
+    check(N2.data.rows.find((r: any) => r.name === "Inconnu Total").uid === U.carol.id && N2.data.rows.find((r: any) => r.name === "DUPONT carol").uid === "", "the teacher's names are kept");
+    // Google says no: kept as the last result, shown in Settings
+    googleFake.handler = () => Response.json({ error: { message: "quota" } }, { status: 429 });
+    const E = await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(E.status === 200 && !E.data.result.ok && /quota/.test(E.data.result.error) && E.data.last.ok === false, "an error from Google: said, and kept for the Settings page");
+    check((await api("DELETE", `/api/settings/gsheet/key`, { g: G })).data.key === null, "the key can be removed");
+    await api("PUT", `/api/settings/gsheet`, { g: G, unlink: true });
+    check((await api("GET", `/api/settings/gsheet?g=${G}`)).data.sheet === null, "the sheet can be unlinked");
+    clock.advance(-ahead);
+    run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
+    run1("UPDATE briefs SET status = 'archived' WHERE id = ?", bid);
+    run1("DELETE FROM app_settings WHERE k LIKE ?", `wplan:${G}:99%`);
+    run1("DELETE FROM intranet_links WHERE learner_id = 4242");
+    run1("DELETE FROM sprint_reviews WHERE guild_id = ? AND sprint = ? AND discord_id IN (?, ?)", G, sp.n, U.alice.id, U.bob.id);
+  } finally { googleFake.handler = null; }
 }
 
 section("slash command definitions are valid for Discord");

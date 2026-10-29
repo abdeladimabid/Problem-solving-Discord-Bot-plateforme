@@ -750,7 +750,7 @@ tests/          end-to-end tests (run.ts, harness.ts) and the demo preview (prev
 - **Built-in challenges:** `tools/bank_*.py`; `python tools/gen_bank.py` re-verifies everything (runs each snippet, reference vs brute force, timing) and writes the migration. The bank has 529 built-in challenges: 102 multiple choice, 57 complexity, 104 predict the output, 64 find the bug, 32 regex, 28 SQL, 64 write code (each in English and French), and 78 HackerRank problems.
 - **Templates for Activités** live in `docs/activities/` and in `src/shared/activities.ts` (checks and markdown). Change both together.
 - **Scoring defaults** are in `DEFAULT_SCORING` and `RULES` (`src/shared/game.ts`).
-- **Worker settings** (see `src/shared/types.ts`): `DISCORD_APP_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_TOKEN`, `PUBLIC_URL`, `DASHBOARD_URL`, `AI_DAILY_LIMIT`, `TEAM_DOMAIN`, `POLICY_AUD`, `ADMIN_PASSWORD`, `RUNNER_URL`, `WANDBOX_URL`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `GROQ_API_KEY`, `GROQ_MODEL`, the `GITHUB_*` secrets, `WATCHER_KV` and `INTRANET_URL`.
+- **Worker settings** (see `src/shared/types.ts`): `DISCORD_APP_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_TOKEN`, `PUBLIC_URL`, `DASHBOARD_URL`, `AI_DAILY_LIMIT`, `TEAM_DOMAIN`, `POLICY_AUD`, `ADMIN_PASSWORD`, `RUNNER_URL`, `WANDBOX_URL`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `GROQ_API_KEY`, `GROQ_MODEL`, the `GITHUB_*` secrets, `WATCHER_KV`, `INTRANET_URL` and `GOOGLE_SERVICE_ACCOUNT` (optional: the JSON key of the Google service account that fills the trainers' Suivi Formateur sheets; it can also be pasted in Settings → Google Sheet).
 
 ---
 

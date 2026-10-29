@@ -154,6 +154,14 @@ export async function sprintsOverview(env: Env, g: GuildRow) {
   };
 }
 
+/** For the Google Sheet: the sprints (dates, briefs) and each student's level per sprint (the teacher's, else the proposed one). */
+export async function sheetLevels(env: Env, g: GuildRow) {
+  const L = await load(env, g);
+  const levels = new Map<string, Record<number, string>>(L.students.map((s) => [s.discord_id, {}]));
+  for (const sp of L.sprints) for (const r of sprintRows(L, sp)) { const l = r.level || r.plevel; if (l && levels.has(r.discord_id)) levels.get(r.discord_id)![sp.n] = l; }
+  return { sprints: L.sprints.map((s) => ({ n: s.n, start: s.start, end: s.end, briefs: s.briefs })), students: L.students.map((s) => ({ discord_id: s.discord_id, name: s.name || "" })), levels };
+}
+
 /** One student's sprints for their page, as the Sprints page shows them: the teacher's level, else the one proposed
  *  (✨ Propose levels, else their last finalized debrief's), the decision, the note, the debriefs left to finalize. */
 export async function studentSprints(env: Env, g: GuildRow, uid: string) {

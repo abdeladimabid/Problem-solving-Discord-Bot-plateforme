@@ -139,11 +139,14 @@ export const discordFake = { channels: [] as any[], fail: [] as { method: string
 export const discordRoles = { forbidden: false, list: [{ id: "g1", name: "@everyone", position: 0 }, { id: "r1", name: "Champion", color: 0, position: 2 }, { id: "r2", name: "On Fire", color: 0, position: 1 }] as any[] };
 let msgId = 1000;
 
+/** Google (OAuth token + Sheets API): the test sets the handler. */
+export const googleFake = { handler: null as null | ((url: URL, method: string, body: string, headers: any) => Response | Promise<Response>) };
 export const libraryHub = { handler: null as null | ((r: Request) => Promise<Response>), target: "", down: false };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
   const method = (init.method ?? "GET").toUpperCase();
+  if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
     const path = url.pathname.replace("/api/v10", "");
