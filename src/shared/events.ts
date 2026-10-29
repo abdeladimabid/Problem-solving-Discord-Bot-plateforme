@@ -163,10 +163,15 @@ export async function createBoss(env: Env, g: GuildRow, o: { challengeId: number
   return b;
 }
 
-/** A submission on the boss: damage = MAX_HIT × share of tests passed (each student's best counts). */
+/**
+ * A submission on the boss: damage = MAX_HIT × share of tests passed (each student's best counts), once the code passes
+ * the examples. The unchanged template (it prints n) or a constant answer passes hidden tests by chance (every test whose
+ * answer is n): it never hits. The judge runs the examples first and keeps the first failed test.
+ */
 export async function bossHit(env: Env, g: GuildRow, bossId: number, userId: string, j: Judgement): Promise<string | null> {
   const b = await one<BossRow>(env, "SELECT * FROM bosses WHERE id = ? AND guild_id = ?", bossId, g.id);
   if (!b || b.status !== "active" || now() > b.deadline) return null;
+  if (j.failed?.sample || !j.passed) return t(g.lang, "boss.samples_first");
   const dmg = Math.round(MAX_HIT * (j.total ? j.passed / j.total : 0));
   const prev = (await one<{ damage: number }>(env, "SELECT damage FROM boss_hits WHERE boss_id = ? AND discord_id = ?", bossId, userId))?.damage ?? 0;
   if (dmg > prev) await run(env, "INSERT INTO boss_hits (boss_id, discord_id, damage, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (boss_id, discord_id) DO UPDATE SET damage = excluded.damage, updated_at = excluded.updated_at", bossId, userId, dmg, now());

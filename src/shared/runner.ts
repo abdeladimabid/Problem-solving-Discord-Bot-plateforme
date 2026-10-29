@@ -336,7 +336,20 @@ done(rows);
 let wandboxNode = "nodejs-20.17.0";
 let wandboxPhp = LANGS.php.wandbox ?? "php-8.3.12";
 
-async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 60000): Promise<any> {
+/**
+ * Wandbox is a free public service: when it is overloaded it times out or answers 429 / 5xx for a moment. One more
+ * try a second later gets most of those through (a whole class pressing Run at once).
+ */
+async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 45000): Promise<any> {
+  try {
+    return await wandboxOnce(env, body, timeoutMs);
+  } catch (e) {
+    if (!(e instanceof RunnerUnavailable) || !/timeout|unreachable|HTTP (429|5\d\d)/.test(e.message)) throw e;
+    await new Promise((r) => setTimeout(r, 1200));
+    return wandboxOnce(env, body, timeoutMs);
+  }
+}
+async function wandboxOnce(env: Env, body: Record<string, unknown>, timeoutMs: number): Promise<any> {
   const base = (env.WANDBOX_URL || "https://wandbox.org").replace(/\/$/, "");
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);

@@ -80,7 +80,16 @@ async function runOnSamples(env: Env, g: GuildRow, a: AttemptRow, c: ChallengeRo
   if ((a.runs ?? 0) >= MAX_RUNS) return { error: g.lang === "fr" ? `Tu as utilisé tes ${MAX_RUNS} exécutions pour ce défi.` : `You've used your ${MAX_RUNS} runs for this challenge.` };
   await run(env, "UPDATE attempts SET runs = runs + 1 WHERE id = ?", a.id);
   const samples = (await loadTests(env, c)).filter((x) => x.sample);
-  const res = await runSamples(env, lang, code, samples.map((s) => ({ input: s.input ?? "" })), c.time_limit ?? 2);
+  let res: Awaited<ReturnType<typeof runSamples>>;
+  try {
+    res = await runSamples(env, lang, code, samples.map((s) => ({ input: s.input ?? "" })), c.time_limit ?? 2);
+  } catch (e) {
+    if (!(e instanceof RunnerUnavailable)) throw e;
+    // the code runner is overloaded: this run isn't counted, and the student knows it isn't their code
+    await run(env, "UPDATE attempts SET runs = MAX(0, runs - 1) WHERE id = ?", a.id);
+    console.error("run samples", lang, e.message);
+    return { error: t(g.lang, "judge.run_busy") };
+  }
   if (res.compile) return { compile: res.compile, runsLeft: MAX_RUNS - (a.runs ?? 0) - 1 };
   return {
     runsLeft: MAX_RUNS - (a.runs ?? 0) - 1,
@@ -217,8 +226,8 @@ button:disabled { opacity: .55; cursor: default; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
 <script>
 const T = {
-  en: { run: "▶ Run samples", submit: "Submit", noPaste: "Pasting is disabled: type your code", noCopy: "Copying the statement is disabled", task: "Your task", fnTask: "Complete the function below. It receives the input and must RETURN the answer: reading the input and printing are already done at the bottom of the template.", progTask: "Write a complete program: read the input exactly as described in Input, and print only the answer (no messages like \"Enter a number\").", examples: "Examples", sample: "Sample", input: "Input", expected: "Expected", got: "Your output", allPass: "All samples pass. Submit to run the hidden tests.", samplesFail: "Some samples fail", running: "Running…", judging: "Running your code on the hidden tests…", left: "tries left", runsLeft: "runs left", accepted: "Accepted!", hint: "Hint", explainTitle: "🧠 Explain your code", explainIntro: (p) => "Answer 2 short questions about YOUR code to get the other " + p + " points. You have 3 minutes once you start.", explainStart: "Start (3 min)", explainSend: "Send my answers", explainDone: (s, p) => "Explanation score: " + s + "% · +" + p + " pts", reset: "Start again from the template? Your current code will be replaced.", done: "This challenge is finished.", tle: "Too slow", re: "Runtime error", compile: "Doesn't compile", points: "points", wrong: "Wrong answer", unavailable: "Judge unavailable", back: "You can close this page and go back to Discord.", away: "You left the page: that's recorded for your teacher.", note: "Pasting is off · leaving the page is recorded" },
-  fr: { run: "▶ Tester les exemples", submit: "Soumettre", noPaste: "Coller est désactivé : tape ton code", noCopy: "Copier l'énoncé est désactivé", task: "Ta mission", fnTask: "Complète la fonction ci-dessous. Elle reçoit l'entrée et doit RETOURNER la réponse : la lecture de l'entrée et l'affichage sont déjà faits en bas du modèle.", progTask: "Écris un programme complet : lis l'entrée exactement comme décrit dans Entrée, et affiche uniquement la réponse (pas de message comme « Entrez un nombre »).", examples: "Exemples", sample: "Exemple", input: "Entrée", expected: "Attendu", got: "Ta sortie", allPass: "Tous les exemples passent. Soumets pour lancer les tests cachés.", samplesFail: "Certains exemples échouent", running: "Exécution…", judging: "Exécution de ton code sur les tests cachés…", left: "essais restants", runsLeft: "exécutions restantes", accepted: "Accepté !", hint: "Indice", explainTitle: "🧠 Explique ton code", explainIntro: (p) => "Réponds à 2 courtes questions sur TON code pour gagner les " + p + " autres points. Tu as 3 minutes une fois commencé.", explainStart: "Commencer (3 min)", explainSend: "Envoyer mes réponses", explainDone: (s, p) => "Explication : " + s + " % · +" + p + " pts", reset: "Recommencer depuis le modèle ? Ton code actuel sera remplacé.", done: "Ce défi est terminé.", tle: "Trop lent", re: "Erreur d'exécution", compile: "Ne compile pas", points: "points", wrong: "Mauvaise réponse", unavailable: "Correcteur indisponible", back: "Tu peux fermer cette page et revenir sur Discord.", away: "Tu as quitté la page : c'est enregistré pour ton enseignant.", note: "Coller est désactivé · quitter la page est enregistré" },
+  en: { run: "▶ Run samples", submit: "Submit", noPaste: "Pasting is disabled: type your code", noCopy: "Copying the statement is disabled", task: "Your task", fnTask: "Complete the function below. It receives the input and must RETURN the answer: reading the input and printing are already done at the bottom of the template.", progTask: "Write a complete program: read the input exactly as described in Input, and print only the answer (no messages like \"Enter a number\").", examples: "Examples", sample: "Sample", input: "Input", expected: "Expected", got: "Your output", allPass: "All samples pass. Submit to run the hidden tests.", samplesFail: "Some samples fail", running: "Running…", judging: "Running your code on the hidden tests…", left: "tries left", runsLeft: "runs left", accepted: "Accepted!", hint: "Hint", explainTitle: "🧠 Explain your code", explainIntro: (p) => "Answer 2 short questions about YOUR code to get the other " + p + " points. You have 3 minutes once you start.", explainStart: "Start (3 min)", explainSend: "Send my answers", explainDone: (s, p) => "Explanation score: " + s + "% · +" + p + " pts", reset: "Start again from the template? Your current code will be replaced.", done: "This challenge is finished.", tle: "Too slow", re: "Runtime error", compile: "Doesn't compile", points: "points", wrong: "Wrong answer", unavailable: "Judge unavailable", back: "You can close this page and go back to Discord.", away: "You left the page: that's recorded for your teacher.", note: "Pasting is off · leaving the page is recorded", local: "Ran in your browser: instant, not counted. Submit runs the hidden tests on ClassBot." },
+  fr: { run: "▶ Tester les exemples", submit: "Soumettre", noPaste: "Coller est désactivé : tape ton code", noCopy: "Copier l'énoncé est désactivé", task: "Ta mission", fnTask: "Complète la fonction ci-dessous. Elle reçoit l'entrée et doit RETOURNER la réponse : la lecture de l'entrée et l'affichage sont déjà faits en bas du modèle.", progTask: "Écris un programme complet : lis l'entrée exactement comme décrit dans Entrée, et affiche uniquement la réponse (pas de message comme « Entrez un nombre »).", examples: "Exemples", sample: "Exemple", input: "Entrée", expected: "Attendu", got: "Ta sortie", allPass: "Tous les exemples passent. Soumets pour lancer les tests cachés.", samplesFail: "Certains exemples échouent", running: "Exécution…", judging: "Exécution de ton code sur les tests cachés…", left: "essais restants", runsLeft: "exécutions restantes", accepted: "Accepté !", hint: "Indice", explainTitle: "🧠 Explique ton code", explainIntro: (p) => "Réponds à 2 courtes questions sur TON code pour gagner les " + p + " autres points. Tu as 3 minutes une fois commencé.", explainStart: "Commencer (3 min)", explainSend: "Envoyer mes réponses", explainDone: (s, p) => "Explication : " + s + " % · +" + p + " pts", reset: "Recommencer depuis le modèle ? Ton code actuel sera remplacé.", done: "Ce défi est terminé.", tle: "Trop lent", re: "Erreur d'exécution", compile: "Ne compile pas", points: "points", wrong: "Mauvaise réponse", unavailable: "Correcteur indisponible", back: "Tu peux fermer cette page et revenir sur Discord.", away: "Tu as quitté la page : c'est enregistré pour ton enseignant.", note: "Coller est désactivé · quitter la page est enregistré", local: "Exécuté dans ton navigateur : instantané, non compté. Soumettre lance les tests cachés sur ClassBot." },
 };
 const token = location.pathname.split("/")[2];
 const $ = (s) => document.querySelector(s);
@@ -342,11 +351,85 @@ async function boot() {
   renderAll();
   cm.focus();
 }
+// JavaScript: the samples run here, in a Web Worker of this browser (instant, no code runner to wait for, nothing
+// counted). Node's ways to read the input work: require("fs").readFileSync(0), readline, process.stdin. Submit is
+// always judged by ClassBot on the hidden tests. Anything this can't run (another module) goes to the server instead.
+function jsWorkerMain() {
+  self.onmessage = function (e) {
+    const input = e.data.input, out = [], t0 = performance.now();
+    let err = "", done = false;
+    const fmt = (v, top) => {
+      if (typeof v === "string") return top ? v : "'" + v + "'";
+      if (v === null || v === undefined || typeof v !== "object") return String(v);
+      if (Array.isArray(v)) return v.length ? "[ " + v.map((x) => fmt(x, false)).join(", ") + " ]" : "[]";
+      const ks = Object.keys(v);
+      return ks.length ? "{ " + ks.map((k) => k + ": " + fmt(v[k], false)).join(", ") + " }" : "{}";
+    };
+    const print = function () { out.push(Array.prototype.map.call(arguments, (x) => fmt(x, true)).join(" ") + "\n"); };
+    const lines = input.split("\n");
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    const on = { line: [], close: [], data: [], end: [] };
+    const rl = { on: (ev, f) => { if (on[ev]) on[ev].push(f); return rl; }, once: (ev, f) => rl.on(ev, f), close: () => {}, setPrompt: () => {}, prompt: () => {} };
+    rl[Symbol.asyncIterator] = async function* () { for (const l of lines) yield l; };
+    const EXIT = {};
+    const proc = {
+      argv: ["node", "sol.js"], env: {}, platform: "linux", exitCode: 0,
+      stdin: { fd: 0, on: (ev, f) => { if (on[ev]) on[ev].push(f); return proc.stdin; }, setEncoding: () => {}, resume: () => {} },
+      stdout: { write: (s) => { out.push(String(s)); return true; } },
+      stderr: { write: () => true },
+      exit: () => { throw EXIT; }, nextTick: (f, ...a) => Promise.resolve().then(() => f(...a)), hrtime: { bigint: () => BigInt(Math.round(performance.now() * 1e6)) },
+    };
+    const mods = {
+      fs: { readFileSync: () => input },
+      readline: { createInterface: () => rl },
+      util: { format: function () { return Array.prototype.map.call(arguments, (x) => fmt(x, true)).join(" "); }, inspect: (x) => fmt(x, false) },
+      os: { EOL: "\n" },
+    };
+    const req = (name) => { const m = mods[String(name).replace(/^node:/, "")]; if (!m) throw new Error("MODULE:" + name); return m; };
+    const cons = { log: print, info: print, debug: print, warn: () => {}, error: () => {} };
+    const finish = () => { if (done) return; done = true; self.postMessage({ output: out.join(""), error: err, time: (performance.now() - t0) / 1000 }); };
+    const fail = (x) => { if (x === EXIT) return; err = x && x.message ? String(x.message) : String(x); };
+    self.addEventListener("unhandledrejection", (ev) => { fail(ev.reason); });
+    try {
+      const module = { exports: {} };
+      new Function("require", "process", "console", "module", "exports", e.data.code)(req, proc, cons, module, module.exports);
+      for (const f of on.data) f(input);
+      for (const f of on.end) f();
+      for (const l of lines) for (const f of on.line) f(l);
+      for (const f of on.close) f();
+    } catch (x) { fail(x); }
+    setTimeout(finish, 30);
+  };
+}
+let jsWorkerUrl = null;
+function runJsSample(code, input, limitMs) {
+  return new Promise((resolve) => {
+    jsWorkerUrl = jsWorkerUrl || URL.createObjectURL(new Blob(["(" + jsWorkerMain.toString() + ")()"], { type: "text/javascript" }));
+    const w = new Worker(jsWorkerUrl);
+    const timer = setTimeout(() => { w.terminate(); resolve({ status: "tle", time: limitMs / 1000, output: "", error: "" }); }, limitMs);
+    w.onmessage = (e) => { clearTimeout(timer); w.terminate(); resolve({ status: e.data.error ? "re" : "ok", time: e.data.time, output: e.data.output, error: e.data.error }); };
+    w.onerror = (e) => { clearTimeout(timer); w.terminate(); e.preventDefault(); resolve({ status: "re", time: 0, output: "", error: e.message || "error" }); };
+    w.postMessage({ code, input });
+  });
+}
+async function runJsLocal(code) {
+  if (typeof Worker === "undefined" || !D.samples || !D.samples.length) return null;
+  const rows = [];
+  for (const s of D.samples) {
+    const r = await runJsSample(code, s.input, Math.max(2, D.timeLimit || 2) * 1000 + 1500);
+    if (r.status === "re" && r.error.startsWith("MODULE:")) return null;   // a module the browser doesn't have: ClassBot runs it
+    const out = r.output.split(/\s+/).filter(Boolean).join(" ");
+    rows.push({ input: s.input, expected: s.expected, output: r.output, status: r.status, time: r.time, error: r.error, ok: r.status === "ok" && out === s.expected });
+  }
+  return { rows, local: true };
+}
 async function runSamples() {
   if (busy) return; busy = true; $("#run").disabled = true;
   $("#out").innerHTML = "<p class='muted'>" + L.running + "</p>";
   try {
-    const r = await call("run", { code: cm.getValue(), lang: $("#lang").value });
+    let r = null;
+    if ($("#lang").value === "javascript") { try { r = await runJsLocal(cm.getValue()); } catch (e) { r = null; } }
+    if (!r) r = await call("run", { code: cm.getValue(), lang: $("#lang").value });
     if (r.error) throw new Error(r.error);
     let h = "";
     if (r.compile) h = "<div class='verdict bad'>❌ " + L.compile + "</div><pre>" + esc(r.compile) + "</pre>";
@@ -355,7 +438,7 @@ async function runSamples() {
       h = "<div class='verdict " + (all ? "ok" : "bad") + "'>" + (all ? "✅ " + L.allPass : "❌ " + L.samplesFail) + "</div>";
       r.rows.forEach((x, i) => { h += "<div class='sample'><b>" + (x.ok ? "✅" : "❌") + " " + L.sample + " " + (i + 1) + "</b> <span class='muted'>" + x.time.toFixed(2) + " s" + (x.status === "tle" ? " · " + L.tle : x.status === "re" ? " · " + L.re : "") + "</span>" + (x.ok ? "" : "<div class='muted'>" + L.expected + "</div><pre>" + esc(x.expected) + "</pre><div class='muted'>" + L.got + "</div><pre>" + esc(x.output || "∅") + "</pre>" + (x.error ? "<pre>" + esc(x.error) + "</pre>" : "")) + "</div>"; });
     }
-    h += "<p class='muted'>" + r.runsLeft + " " + L.runsLeft + "</p>";
+    h += "<p class='muted'>" + (r.local ? L.local : r.runsLeft + " " + L.runsLeft) + "</p>";
     $("#out").innerHTML = h;
   } catch (e) { $("#out").innerHTML = "<div class='notice'>" + esc(e.message) + "</div>"; }
   busy = false; $("#run").disabled = false;

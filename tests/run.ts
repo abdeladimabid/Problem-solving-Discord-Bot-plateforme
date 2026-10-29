@@ -1080,6 +1080,14 @@ section("anti-cheat: function mode, code editor, typing record, explain your cod
   const code = js.starter.replace(/function solve\(s\) \{[\s\S]*?\n\}/, realSolve);
   const runRes: any = await (await ed("/run", { code, lang: "javascript" })).json();
   check(runRes.rows?.length === 2 && runRes.rows.every((r: any) => r.ok), "▶ Run samples: both samples pass");
+  // the code runner is overloaded: Run says so plainly (not "the AI couldn't check"), no error 500, the run isn't counted
+  const runs0 = q1("SELECT runs FROM attempts WHERE id = ?", aid).runs;
+  runner.down = true;
+  const busyRun = await ed("/run", { code, lang: "javascript" });
+  const busyRes: any = await busyRun.json();
+  runner.down = false;
+  check(busyRun.status === 200 && /overloaded|surchargé/.test(String(busyRes.error)) && !/AI|IA/.test(String(busyRes.error)) && q1("SELECT runs FROM attempts WHERE id = ?", aid).runs === runs0,
+    "▶ Run samples while the runner is overloaded: a clear message, and the run isn't counted");
   // typed character by character, with a few corrections, never leaving the page
   const typed = realSolve.split("");
   const changes: any[] = [[0, 0, 0, js.starter, "setValue"]];
@@ -1641,6 +1649,14 @@ section("✨ AI helper for boss battles and bounties");
   check(rel.status === 200 && discordCalls.slice(pc).some((c) => JSON.stringify(c.body).includes("Lord Segfault awakens")), "the AI boss is released with its intro in Discord");
   const EV = await import("../src/shared/events.ts");
   const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+  // the unchanged template prints n: on the Kraken it passed 3 hidden tests of 9 (answers 1, 2, 3) but not the examples
+  const hc = discordCalls.length;
+  const tpl = await EV.bossHit(env, gRow, rel.data.id, U.carol.id, { verdict: "wrong", passed: 3, total: 9, maxTime: 0, judge: "tests", failed: { idx: 1, sample: true } } as any);
+  check(String(tpl).includes("examples first") && !q1("SELECT 1 AS x FROM boss_hits WHERE boss_id = ? AND discord_id = ?", rel.data.id, U.carol.id) && !discordCalls.slice(hc).some((c) => JSON.stringify(c.body).includes(`<@${U.carol.id}>`)),
+    "the template (or any answer failing the examples) never hits the boss, even when hidden tests pass by chance");
+  check(String(await EV.bossHit(env, gRow, rel.data.id, U.carol.id, { verdict: "wrong", passed: 0, total: 9, maxTime: 0, judge: "ai" } as any)).includes("examples first"), "…nor an answer the AI judged wrong");
+  const part = await EV.bossHit(env, gRow, rel.data.id, U.carol.id, { verdict: "wrong", passed: 5, total: 9, maxTime: 0, judge: "tests", failed: { idx: 6, sample: false } } as any);
+  check(q1("SELECT damage FROM boss_hits WHERE boss_id = ? AND discord_id = ?", rel.data.id, U.carol.id)?.damage === 22 && String(part).includes("22"), "examples passed, some hidden tests failed: partial damage (40 × 5/9 = 22)");
   const h0 = discordCalls.length;
   await EV.bossHit(env, gRow, rel.data.id, U.alice.id, { passed: 1, total: 1 } as any);
   const told = discordCalls.slice(h0).map((c) => JSON.stringify(c.body)).join(" ");
