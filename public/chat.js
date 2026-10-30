@@ -6,7 +6,7 @@
 // until the class's own suggestions arrive (or if they can't): questions that fit any class
 const CHAT_EXAMPLES = ["Comment va la classe cette semaine ?", "Qui est à surveiller en ce moment, et pourquoi ?", "Mets les apprenants à surveiller dans un Excel"];
 // the questions this teacher asks most in this class: the ones asked again come first among the suggestions
-const askedKey = () => `classbot.chat.asked.${S.g}`;
+const askedKey = () => `classbot.chat.asked2.${S.g}`;
 const askedLoad = () => { try { const v = JSON.parse(localStorage.getItem(askedKey()) || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
 function askedNote(q) {
   const k = q.trim().replace(/\s+/g, " ");
@@ -16,7 +16,15 @@ function askedNote(q) {
   const top = Object.entries(v).sort((a, b) => b[1] - a[1]).slice(0, 60);
   try { localStorage.setItem(askedKey(), JSON.stringify(Object.fromEntries(top))); } catch { /* private window */ }
 }
-const askedTop = (n) => Object.entries(askedLoad()).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
+const askedTop = (n) => Object.entries(askedLoad()).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => tidyQuestion(k));
+/** A question as the teacher typed it, written out properly for a suggestion ("que fait X mtn" → "Que fait X en ce moment ?"). */
+function tidyQuestion(q) {
+  let t = q.trim().replace(/\s+/g, " ").replace(/\bmtn\b/gi, "en ce moment").replace(/\bmaintenant\b/gi, "en ce moment").replace(/\bpk\b|\bpq\b/gi, "pourquoi")
+    .replace(/\bstp\b|\bsvp\b/gi, "").replace(/\s+([.,])/g, "$1").replace(/\s*([?!])/g, " $1").replace(/\s{2,}/g, " ").trim();
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  if (/^(que|qui|quoi|quel|quelle|quels|quelles|comment|combien|où|ou|pourquoi|est-ce)\b/i.test(t) && !/[?!.]$/.test(t)) t += " ?";
+  return t;
+}
 const chatKey = () => `classbot.chat.${S.g}`;
 const chatLoad = () => { try { const v = JSON.parse(localStorage.getItem(chatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringify(list.slice(-40))); } catch { /* private window: this visit only */ } };
@@ -149,7 +157,6 @@ async function viewChat() {
     if (!text || busy) return;
     const history = list.filter((m) => !m.error).slice(-8).map((m) => ({ role: m.role, text: m.text }));
     list.push({ role: "user", text });
-    askedNote(text);
     q.value = ""; grow(); busy = true; draw();
     try {
       const r = await chatAsk({ question: text, history }, (st) => {
@@ -157,6 +164,7 @@ async function viewChat() {
         const el = $("#chat-status"); if (el) el.textContent = status;
       });
       list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], general: !!r.general, at: Date.now() });
+      if (!/^Je ne trouve pas\b/.test(String(r.answer || ""))) askedNote(text);
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true, at: Date.now() }); }
     busy = false; status = ""; chatSave(list); draw();
   };
@@ -165,7 +173,9 @@ async function viewChat() {
   q.oninput = grow;
   // the suggestions: this teacher's frequent questions first, then the class's own (a new draw at each visit)
   const sugg = (list2) => {
-    const all = [...new Set([...askedTop(2), ...list2])].slice(0, 7);
+    const seen = new Set(), all = [];
+    for (const x of [...askedTop(2), ...list2]) { const k = x.toLowerCase().replace(/[^\p{L}\d]+/gu, ""); if (!seen.has(k)) { seen.add(k); all.push(x); } }
+    all.length = Math.min(all.length, 7);
     $("#chat-sugg").innerHTML = `<span>Suggestions :</span>${all.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}`;
     $("#chat-sugg").querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; grow(); q.focus(); });
   };
