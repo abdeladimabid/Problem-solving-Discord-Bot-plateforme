@@ -93,7 +93,8 @@ function chatCheckDialog() {
 function chatFoot(m, i) {
   const src = `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">${CHAT_EYE}<span>${(m.sources || []).length ? `Lu : ${m.sources.map(esc).join(" · ")}` : "Aucune donnée lue"}</span></span>`;
   const btn = (v, icon, label) => `<button type="button" class="chat-vote ${v > 0 ? "up" : "down"}${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
-  return `<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
+  const warn = (m.unverified || []).length ? `<p class="chat-warn" title="Ces chiffres ne sont pas dans les données lues par ClassBot : vérifie-les avant de t'en servir">⚠ Chiffres non vérifiés : ${m.unverified.map(esc).join(", ")}</p>` : "";
+  return `${warn}<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
 }
 
 async function viewChat() {
@@ -153,7 +154,7 @@ async function viewChat() {
         status = st.step === "read" ? `Je lis ${st.sources.join(", ") || "les données"}…` : "J'écris la réponse…";
         const el = $("#chat-status"); if (el) el.textContent = status;
       });
-      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], at: Date.now() });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], at: Date.now() });
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true, at: Date.now() }); }
     busy = false; status = ""; chatSave(list); draw();
   };

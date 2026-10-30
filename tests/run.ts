@@ -19,7 +19,7 @@ import { finish } from "../src/shared/challenges.ts";
 import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
-import { codesOf, hideNames } from "../src/shared/classchat.ts";
+import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
@@ -6763,6 +6763,22 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const tech = await api("POST", "/api/chat", { g: G, question: "Combien de briefs techniques ?", history: [] });
   check(tech.data.answer === "La classe a 4 briefs, niveaux dans.", `the AI's technical references taken out of the answer (${tech.data.answer})`);
   check(ai.chatSeen.some((m) => m.includes("LA QUESTION À LAQUELLE RÉPONDRE : « Combien de briefs techniques ? »")), "…the question repeated after the data, so the AI answers it and not an earlier one");
+  const sure = await api("POST", "/api/chat", { g: G, question: "are you sure ?", history: [{ role: "user", text: "que fait othman ?" }, { role: "assistant", text: "Je ne trouve pas **othman** dans cette classe (X)." }] });
+  check(/^Oui : j'ai revérifié la liste des \d+ apprenants/.test(sure.data.answer) && sure.data.answer.includes("**othman**"), `"are you sure?" after "I can't find X": about that answer, checked again by ClassBot (${sure.data.answer})`);
+  const made = await api("POST", "/api/chat", { g: G, question: "Chiffre inventé : combien de faibles ?", history: [] });
+  check(made.status === 200 && !made.data.answer.includes("4242") && !made.data.unverified.length, `a figure not in the data: the AI asked to correct it, corrected (${made.data.answer})`);
+  const stubborn = await api("POST", "/api/chat", { g: G, question: "Chiffre têtu : combien de faibles ?", history: [] });
+  check(stubborn.data.unverified?.join() === "4242", `…still wrong after that: flagged to the teacher (${stubborn.data.unverified})`);
+  check(!made.data.answer.includes("inPlan") && !stubborn.data.answer.includes("inPlan"), "…a field name written out (« (inPlan = non) ») taken out");
+  {
+    const big = { r1_1_students: Array.from({ length: 300 }, (_, i) => ({ code: `E${i + 1}`, niveau: i % 3 ? "moyen" : "faible", points: i * 7 })) };
+    const fitted = JSON.parse(fitData(big, 4000));
+    check(fitted.r1_1_students.tronque.endsWith("sur 300") && fitted.r1_1_students.elements.length < 300 && JSON.stringify(fitted).length <= 4000,
+      `data too long for the AI: the list cut and said so, with its exact total (${fitted.r1_1_students.tronque})`);
+    const v = (t: string) => unverifiedNumbers(t, big, "question sur 7 jours");
+    check(!v("Il y a 100 faibles et 200 moyens, E3 a 14 points, sur 7 jours, soit 33 %.").length && v("Il y a 4242 faibles et 12,5 % de moyens.").join() === "4242,12,5",
+      `the numbers of an answer checked against the data: counts, values, the question, percentages fine; the rest flagged (${v("Il y a 4242 faibles et 12,5 % de moyens.")})`);
+  }
   const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
   check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0, `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
   const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
