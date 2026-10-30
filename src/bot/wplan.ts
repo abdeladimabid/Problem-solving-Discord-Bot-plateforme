@@ -3,11 +3,13 @@
 //   GET  /wp/<t>/data     the plan: the actions, what they answered, the corrections (never the expected answers)
 //   POST /wp/<t>/answer   their answer to one action (checked at once: the AI for code and written answers)
 //   POST /wp/<t>/check    a mini brief's objective ticked or unticked (the teacher sees it, it counts in the progress)
+//   GET  /wp/<t>/guide    their guide (📚 Mes notions): each lacune explained with resources, ?lang=fr|ary|en
 //   POST /wp/<t>/ask      a question for the teacher (✋ the Help queue; the answer comes back here and by DM)
 import type { Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { WorkPlanError, readPlanToken, studentAnswer, studentAsk, studentCheck, studentView } from "../shared/workplan.ts";
 import { getGuild } from "../shared/db.ts";
+import { studentGuide } from "../shared/wpguide.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const HTML = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" };
@@ -20,6 +22,10 @@ export async function handleWorkPlan(request: Request, env: Env, token: string, 
   if (action === "data" && request.method === "GET") {
     const v = await studentView(env, t.gid, t.id);
     return v ? json(v) : json({ error: "Ce plan n'est plus disponible." }, 404);
+  }
+  if (action === "guide" && request.method === "GET") {
+    try { return json(await studentGuide(env, await getGuild(env, t.gid), t.id, new URL(request.url).searchParams.get("lang") || "fr")); }
+    catch (e) { if (e instanceof WorkPlanError) return json({ error: e.message }, 400); throw e; }
   }
   if ((action === "answer" || action === "check" || action === "ask") && request.method === "POST") {
     let b: any = {};
@@ -90,6 +96,29 @@ details.mine summary{cursor:pointer;color:var(--soft);font-size:14px;margin-top:
 .k-challenge{--kc:var(--k-challenge)}.k-code{--kc:var(--k-code)}.k-answer{--kc:var(--k-answer)}.k-mcq{--kc:var(--k-mcq)}.k-brief{--kc:var(--k-brief)}
 .ctx{margin:10px 0 6px;padding:14px 16px;border-radius:14px;background:var(--bg);font-size:15.5px}.ctx h3{font-size:15px;margin:14px 0 6px}.ctx h3:first-child{margin-top:0}.ctx p{margin:4px 0}.ctx ul{margin:4px 0;padding-left:20px}.ctx li{margin:3px 0}
 .confetti{font-size:15px;margin-top:10px;font-weight:700}
+.tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:5px;margin:0 0 16px}
+.tabs button{flex:1;border:0;background:none;color:var(--soft);font:inherit;font-weight:700;padding:11px 10px;border-radius:12px;cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--blue);color:#fff}.tabs button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.guide .gh{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px}.guide h2{margin:0 0 4px;font-size:22px}.guide .gh p{margin:0;font-size:15px;max-width:520px}
+.langs{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}.langs button{border:0;background:none;color:var(--soft);font:inherit;font-size:14px;font-weight:700;padding:8px 12px;cursor:pointer}
+.langs button[aria-pressed=true]{background:var(--blue50);color:var(--blue)}.langs button+button{border-left:1px solid var(--line)}
+.gload{display:flex;gap:12px;align-items:center;justify-content:center;padding:40px 10px;color:var(--soft);background:var(--card);border:1px solid var(--line);border-radius:18px}
+.spin{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.gintro{font-size:16.5px;margin:0 0 14px}
+.notion-card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;margin:0 0 14px;box-shadow:0 4px 18px #0f1d3a0c;border-top:5px solid var(--pc,var(--blue))}
+.notion-card.p1{--pc:#dc2626}.notion-card.p2{--pc:#ea580c}.notion-card.p3{--pc:#2563eb}
+.notion-card header{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.notion-card h3{margin:0;font-size:19px;flex:1;min-width:180px}
+.gnum{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--pc);color:#fff;font-weight:800;font-size:14px;flex:none}
+.gprio{font-size:12px;font-weight:800;padding:3px 10px;border-radius:99px;color:var(--pc);background:var(--bg)}
+.gfor{margin:12px 0;padding:10px 14px;border-radius:12px;background:var(--warn50);font-size:15px}.gfor b,.gtest b{display:block;font-size:13px;margin-bottom:2px}
+.gexp{font-size:16px;margin:10px 0}.glbl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:16px 0 6px}
+.rtl .glbl{letter-spacing:0}.gpts,.gmis{margin:0;padding-inline-start:22px}.gpts li,.gmis li{margin:4px 0}.gmis li::marker{content:"⚠️ "}
+.gcode{position:relative;background:var(--code);color:#e5edf9;border-radius:12px;padding:30px 14px 14px;overflow:auto;font-size:14px;line-height:1.5;margin:0;text-align:left}
+.gcode code{background:none;padding:0;color:inherit}.glang{position:absolute;top:8px;left:12px;font:700 11px Inter,system-ui,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#93a4c3}
+.gnote{font-size:14px;margin:6px 0 0}.gtest{margin:14px 0 0;padding:12px 14px;border-radius:12px;background:var(--blue50);font-size:15px}
+.gres{list-style:none;padding:0;margin:0;display:grid;gap:8px}.gres li{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.gres a{display:flex;gap:10px;justify-content:space-between;align-items:baseline;color:var(--blue);text-decoration:none;flex-wrap:wrap}.gres a:hover b{text-decoration:underline}
+.gvia{font-size:12px;color:var(--faint);white-space:nowrap}.gwhy{display:block;font-size:14px;color:var(--soft);margin-top:2px}
 </style></head><body><div class="wrap" id="app"><div class="full"><div><div class="big">🧭</div><p class="muted">Chargement…</p></div></div></div>
 <script>
 var TOKEN = ${JSON.stringify(token)};
@@ -105,7 +134,7 @@ function api(path, body) {
 }
 function load() {
   if (!TOKEN) { app.innerHTML = '<div class="full"><div><div class="big">🔒</div><h1>Lien expiré</h1><p class="muted">Demande à ton formateur de te renvoyer ton plan d\\'action.</p></div></div>'; return; }
-  api("/data").then(function (d) { P = d; draw(); }).catch(function (e) { app.innerHTML = '<div class="full"><div><div class="big">😕</div><p>' + esc(e.message) + '</p></div></div>'; });
+  api("/data").then(function (d) { P = d; if (TAB === "guide") loadGuide(GL); draw(); }).catch(function (e) { app.innerHTML = '<div class="full"><div><div class="big">😕</div><p>' + esc(e.message) + '</p></div></div>'; });
 }
 // the brief's context: its parts (a line starting with an emoji) as headings, "- " lines as lists
 function ctxHtml(text) {
@@ -159,6 +188,49 @@ function stepHtml(s, i) {
   if (s.review) h += '<div class="teacher"><b>' + (s.review.ok ? "✓ Validé par ton formateur" : "↻ Ton formateur te demande de le reprendre") + '</b>' + (s.review.comment ? '<div>' + rich(s.review.comment) + '</div>' : "") + '</div>';
   return h + '</article>';
 }
+var TAB = location.hash === "#notions" ? "guide" : "actions", GL = "fr", G = {};
+try { GL = localStorage.getItem("wp-guide-lang") || "fr"; } catch (e) {}
+var GLANG = { fr: "Français", ary: "الدارجة", en: "English" };
+var GT = {
+  fr: { title: "Mes notions", sub: "Pour chaque notion à travailler : pourquoi elle compte pour toi, l'essentiel à comprendre, un exemple, les pièges, un petit test, et des ressources pour aller plus loin.", forYou: "Pourquoi pour toi", keys: "À retenir", ex: "Exemple", mis: "Erreurs à éviter", test: "Teste-toi", res: "Pour aller plus loin", making: "Ton guide se prépare… (moins d'une minute)", prio: { 1: "Prioritaire", 2: "Important", 3: "À consolider" }, tr: "Traduction en cours…" },
+  ary: { title: "المفاهيم ديالي", sub: "على كل مفهوم خاصك تخدم عليه: علاش مهم ليك، شنو خاصك تفهم، مثال، الأخطاء اللي خاصك تتجنب، تمرين صغير، وموارد باش تزيد القدام.", forYou: "علاش مهم ليك", keys: "شنو خاصك تعقل", ex: "مثال", mis: "أخطاء خاصك تتجنبها", test: "جرب راسك", res: "باش تزيد القدام", making: "الدليل ديالك كيتوجد… (أقل من دقيقة)", prio: { 1: "أولوية", 2: "مهم", 3: "خاصو يتقوى" }, tr: "كنترجمو…" },
+  en: { title: "My concepts", sub: "For each concept to work on: why it matters for you, the essentials, an example, the traps, a small self-test, and resources to go further.", forYou: "Why it matters for you", keys: "Key points", ex: "Example", mis: "Mistakes to avoid", test: "Test yourself", res: "Go further", making: "Your guide is being prepared… (less than a minute)", prio: { 1: "Priority", 2: "Important", 3: "To strengthen" }, tr: "Translating…" },
+};
+function tabsHtml() {
+  return '<nav class="tabs" role="tablist"><button role="tab" data-tab="actions" aria-selected="' + (TAB === "actions") + '">🧭 Mes actions</button><button role="tab" data-tab="guide" aria-selected="' + (TAB === "guide") + '">📚 Mes notions</button></nav>';
+}
+function guideHtml() {
+  var t = GT[GL] || GT.fr, g = G[GL], rtl = GL === "ary";
+  var h = '<section class="guide' + (rtl ? ' rtl" dir="rtl" lang="ar"' : '"') + '><div class="gh"><div><h2>📚 ' + esc(t.title) + '</h2><p class="muted">' + esc(t.sub) + '</p></div>'
+    + '<div class="langs" role="group" aria-label="Langue">' + ["fr", "ary", "en"].map(function (l) { return '<button data-lang="' + l + '" aria-pressed="' + (GL === l) + '"' + (l === "ary" ? ' lang="ar"' : "") + '>' + GLANG[l] + '</button>'; }).join("") + '</div></div>';
+  if (!g || g.loading) return h + '<div class="gload"><span class="spin"></span>' + esc(g && g.making ? t.making : g && g.loading && GL !== "fr" ? t.tr : t.making) + '</div></section>';
+  if (g.state === "failed") return h + '<div class="fb wrong">' + esc(g.error || "") + '</div></section>';
+  var d = g.guide;
+  h += (g.error ? '<div class="fb partial">' + esc(g.error) + '</div>' : "") + '<div>' + (d.intro ? '<p class="gintro">' + rich(d.intro) + '</p>' : "");
+  d.items.forEach(function (x, i) {
+    h += '<article class="notion-card p' + x.priority + '"><header><span class="gnum">' + (i + 1) + '</span><h3>' + rich(x.notion) + '</h3><span class="gprio">' + esc(t.prio[x.priority] || "") + '</span></header>'
+      + (x.forYou ? '<div class="gfor"><b>' + esc(t.forYou) + '</b>' + rich(x.forYou) + '</div>' : "")
+      + '<div class="gexp">' + rich(x.explain).replace(/\\n/g, "<br>") + '</div>'
+      + (x.points.length ? '<div class="glbl">' + esc(t.keys) + '</div><ul class="gpts">' + x.points.map(function (p) { return "<li>" + rich(p) + "</li>"; }).join("") + '</ul>' : "")
+      + (x.example ? '<div class="glbl">' + esc(t.ex) + '</div><pre class="gcode" dir="ltr"><span class="glang">' + esc(x.example.lang) + '</span><code>' + esc(x.example.code) + '</code></pre>' + (x.example.note ? '<p class="muted gnote">' + rich(x.example.note) + '</p>' : "") : "")
+      + (x.mistakes.length ? '<div class="glbl">' + esc(t.mis) + '</div><ul class="gmis">' + x.mistakes.map(function (p) { return "<li>" + rich(p) + "</li>"; }).join("") + '</ul>' : "")
+      + (x.selfTest ? '<div class="gtest"><b>✍️ ' + esc(t.test) + '</b>' + rich(x.selfTest) + '</div>' : "")
+      + (x.resources.length ? '<div class="glbl">' + esc(t.res) + '</div><ul class="gres">' + x.resources.map(function (r) {
+        return '<li><a href="' + esc(r.url) + '" target="_blank" rel="noopener noreferrer"><b dir="auto">' + esc(r.title) + '</b><span class="gvia">' + esc(r.via) + ' ↗</span></a>' + (r.note ? '<span class="gwhy">' + rich(r.note) + '</span>' : "") + '</li>'; }).join("") + '</ul>' : "")
+      + '</article>';
+  });
+  return h + '</div></section>';
+}
+function loadGuide(l) {
+  if (G[l] && !G[l].loading && G[l].state === "ready") return;
+  G[l] = { loading: true, making: !G.fr || G.fr.loading };
+  api("/guide?lang=" + l).then(function (d) {
+    if (d.state === "making") { G[l] = { loading: true, making: true }; setTimeout(function () { delete G[l]; if (TAB === "guide" && GL === l) loadGuide(l); }, 6000); }
+    else { G[l] = d; if (d.state === "ready" && d.lang === "fr") G.fr = d; }
+    if (TAB === "guide" && GL === l) draw();
+  }).catch(function (e) { G[l] = { state: "failed", error: e.message }; if (TAB === "guide" && GL === l) draw(); });
+  if (TAB === "guide") draw();
+}
 function draw() {
   var pct = P.pct != null ? P.pct : P.total ? Math.round(100 * P.done / P.total) : 0;
   app.innerHTML = '<header class="hero"><div class="eyebrow">🧭 Mon plan d\\'action</div><h1>' + esc(P.title) + '</h1>'
@@ -166,9 +238,11 @@ function draw() {
     + (P.message ? '<div class="msg">' + rich(P.message) + '</div>' : "")
     + '<div class="prog"><div class="bar"><i style="width:' + pct + '%"></i></div><b data-pct>' + pct + ' %</b></div><div style="font-size:14px;opacity:.9;margin-top:6px">' + P.done + ' / ' + P.total + ' action' + (P.total > 1 ? "s" : "") + ' validée' + (P.done > 1 ? "s" : "") + (P.objTotal ? ' · <span data-objall>' + P.objDone + ' / ' + P.objTotal + '</span> objectifs cochés' : "") + '</div>'
     + (P.status === "done" ? '<div class="confetti">🎉 Bravo, tout est fait !</div>' : "") + '</header>'
-    + P.steps.map(stepHtml).join("") + helpHtml() + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
+    + tabsHtml() + (TAB === "guide" ? guideHtml() : P.steps.map(stepHtml).join("") + helpHtml()) + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
   Array.prototype.forEach.call(app.querySelectorAll("[data-chk]"), function (c) { c.onchange = function () { tick(c); }; });
   var ab = document.getElementById("ask-go"); if (ab) ab.onclick = function () { ask(ab); };
+  Array.prototype.forEach.call(app.querySelectorAll("[data-tab]"), function (b) { b.onclick = function () { TAB = b.getAttribute("data-tab"); try { history.replaceState(null, "", TAB === "guide" ? "#notions" : location.pathname); } catch (e) {} if (TAB === "guide") loadGuide(GL); draw(); }; });
+  Array.prototype.forEach.call(app.querySelectorAll("[data-lang]"), function (b) { b.onclick = function () { GL = b.getAttribute("data-lang"); try { localStorage.setItem("wp-guide-lang", GL); } catch (e) {} loadGuide(GL); draw(); }; });
   Array.prototype.forEach.call(app.querySelectorAll("[data-send]"), function (b) { b.onclick = function () { send(b); }; });
   Array.prototype.forEach.call(app.querySelectorAll("textarea[data-ans]"), function (t) {
     t.addEventListener("keydown", function (e) { if (e.key === "Tab" && !t.classList.contains("prose")) { e.preventDefault(); var a = t.selectionStart; t.value = t.value.slice(0, a) + "  " + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = a + 2; } });

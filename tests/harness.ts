@@ -418,6 +418,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 // ------------------------------------------------------------------- AI
 export const ai = {
   calls: 0,
+  guideUsers: [] as string[],
   mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
@@ -535,6 +536,19 @@ function fakeAI() {
         const wish = ((user.split("CONSIGNE DU FORMATEUR (prioritaire) :\n<<<\n")[1] || "").split("\n>>>")[0] || "");
         return { response: JSON.stringify({ titre: cur.titre || "Mini-projet : portfolio", notion: "Flexbox, Grid", context: (cur.contexte || "Ton portfolio.") + " Il grandit.",
           tasks: [...(cur.taches || []), ...items.map((x) => `Dans la page, ${x.toLowerCase()}`), ...(wish && !items.length ? [`Ajouter : ${wish}`] : [])], deliverable: cur.livrable || "Le lien du dépôt GitHub", hours: (cur.heures || 3) + 1, ajoute: items }) };
+      }
+      // 📚 a plan's guide: one fiche per notion, its resources picked among the ones found (R1…), plus one that doesn't exist
+      if (sys.includes("Tu écris le GUIDE PERSONNEL")) {
+        ai.guideUsers.push(user);
+        const notions = [...user.matchAll(/^NOTION \d+ : (.+) \(priorité \d\)$/gm)].map((m) => m[1]);
+        return { response: JSON.stringify({ intro: "On reprend les bases ensemble.", fiches: notions.map((n) => ({ notion: n, pour_toi: "Dans ton brief, ça bloquait.", explication: `La notion ${n} expliquée simplement.`,
+          points: ["Point 1", "Point 2", "Point 3"], exemple: { langage: "css", code: "nav ul { display: flex; }", note: "Une barre flex." }, erreurs: ["Oublier `display: flex`"], auto_test: "Que fait `justify-content` ?",
+          ressources: [{ id: "R1", note: "La référence" }, { id: "R9", note: "Inventée" }] })) }) };
+      }
+      if (sys.includes("Tu traduis le guide d'un apprenant")) {
+        const src = JSON.parse(user.replace(/^<<<\n/, "").replace(/\n>>>$/, ""));
+        const tag = sys.includes("DARIJA") ? "[ary] " : "[en] ";
+        return { response: JSON.stringify({ intro: tag + src.intro, fiches: src.fiches.map((f: any) => ({ ...f, explication: tag + f.explication, points: f.points.map((x: string) => tag + x), notes: f.notes.map((x: string) => tag + x) })) }) };
       }
       if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("Écris UNE action de type")) {
         const ch = Number((user.match(/^(\d+) · /m) || [])[1] || 0);

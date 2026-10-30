@@ -2565,3 +2565,4 @@ body.sl-open { overflow: hidden; }
 .wp-ask-h { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .wp-objpeek { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
 .wp-objpeek .ap-wpbar { width: 90px; }
+.wp-gnot { margin: 0 0 10px; padding-left: 18px; font-size: 13.5px; } .wp-gnot li { margin: 2px 0; }

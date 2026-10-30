@@ -6326,6 +6326,27 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   await api("PUT", `/api/hands/${hand.id}?g=${G}`, { action: "reply", reply: "C'est un attribut pour les lecteurs d'écran." });
   const va = (await wp("data")).data.asks[0];
   check(va.status === "done" && /lecteurs d'écran/.test(va.reply) && va.question === "Je ne comprends pas aria-required", "…the answer is on their page");
+  // 📚 their guide: each lacune explained, with real resources only, in French, darija or English
+  {
+    const n0 = ai.guideUsers.length;
+    const G1 = await wp("guide?lang=fr");
+    const P1 = await api("GET", `/api/wplans/${id}?g=${G}`);
+    const gd = G1.data.guide;
+    check(G1.status === 200 && G1.data.state === "ready" && gd.items.length >= 1 && gd.items.length === P1.data.plan.diag.lacunes.length && /expliquée simplement/.test(gd.items[0].explain), `the guide: one fiche per lacune of the diagnosis (${G1.status} ${JSON.stringify(G1.data).slice(0, 200)})`);
+    check(gd.items.every((x: any) => x.resources.length >= 1 && x.resources.every((r: any) => /^https:\/\/(developer\.mozilla\.org|stackoverflow\.com)\//.test(r.url))) && !JSON.stringify(gd).includes("Inventée"), "…its resources are the ones found by the search, never one the AI made up");
+    check(n0 >= 1 && ai.guideUsers.length === n0 && !/Bob/.test(ai.guideUsers[ai.guideUsers.length - 1]) && P1.data.guide.state === "ready" && P1.data.guide.notions.length === gd.items.length, `…made when the plan was sent (no name sent to the AI); the teacher's page says it's ready (${n0} ${ai.guideUsers.length})`);
+    const G2 = await wp("guide?lang=fr");
+    check(ai.guideUsers.length === n0 && G2.data.guide.items[0].explain === gd.items[0].explain, "…kept: opened again, not made again");
+    const A1 = await wp("guide?lang=ary"), E1 = await wp("guide?lang=en");
+    check(A1.data.lang === "ary" && /^\[ary\] /.test(A1.data.guide.items[0].explain) && A1.data.guide.items[0].example.code === gd.items[0].example.code && A1.data.guide.items[0].resources[0].url === gd.items[0].resources[0].url, "in darija: the texts translated, the code and the links kept");
+    check(E1.data.lang === "en" && /^\[en\] /.test(E1.data.guide.intro), "in English");
+    const calls = ai.calls; await wp("guide?lang=ary");
+    check(ai.calls === calls, "…a translation is made once, then kept");
+    const R = await api("POST", `/api/wplans/${id}/guide?g=${G}`, {});
+    check(R.status === 200 && R.data.guide.state === "ready" && ai.guideUsers.length === n0 + 1 && R.data.guide.langs.length === 0, "the teacher can make it again (the translations are made again too)");
+    const pg2 = await wp();
+    check(/Mes notions/.test(pg2.data) && /data-lang/.test(pg2.data), "their page has the 📚 Mes notions tab and the language buttons");
+  }
   // the teacher follows and validates
   const T1 = await api("GET", `/api/wplans/${id}?g=${G}`);
   const st = (sid: string) => T1.data.status.steps.find((x: any) => x.id === sid).state;

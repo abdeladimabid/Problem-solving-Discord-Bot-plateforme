@@ -42,6 +42,8 @@ export interface WorkPlan {
   diag: Diagnosis | null; steps: Step[];
   /** the student's questions from their page (✋ the Help queue) */
   asks?: { hand: number; step: string; at: number }[];
+  /** their guide: each lacune explained, with resources (wpguide.ts) */
+  guide?: any;
 }
 
 const KEY = (gid: string, id: number) => `wplan:${gid}:${id}`;
@@ -82,7 +84,7 @@ export async function getPlan(env: Env, gid: string, id: number): Promise<WorkPl
   if (!r) return null;
   try { return JSON.parse(r.v); } catch { return null; }
 }
-async function putPlan(env: Env, p: WorkPlan) {
+export async function putPlan(env: Env, p: WorkPlan) {
   p.updated_at = now();
   await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", KEY(p.gid, p.id), JSON.stringify(p), p.updated_at);
 }
@@ -414,7 +416,14 @@ export async function planView(env: Env, g: GuildRow, id: number) {
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   await settle(env, p);
-  return { plan: p, status: p.status === "draft" ? null : await planStatus(env, p), url: p.status === "draft" ? null : planUrl(env, await planToken(env, p)), asks: await asksOf(env, p) };
+  return { plan: p, status: p.status === "draft" ? null : await planStatus(env, p), url: p.status === "draft" ? null : planUrl(env, await planToken(env, p)), asks: await asksOf(env, p), guide: guideInfo(p) };
+}
+/** Where the student's guide is (📚 wpguide.ts), for the teacher's page. */
+function guideInfo(p: WorkPlan) {
+  const st = p.guide;
+  if (!st) return null;
+  return { state: st.state === "making" && now() - st.at >= 240 ? "failed" : st.state, at: st.at, error: st.error || null,
+    notions: (st.fr?.items || []).map((x: any) => x.notion), langs: Object.keys(st.tr || {}), resources: (st.fr?.items || []).reduce((a: number, x: any) => a + (x.resources?.length || 0), 0) };
 }
 /** Every plan of the class (or of one student), short. */
 export async function plansSummary(env: Env, g: GuildRow, sid?: string) {

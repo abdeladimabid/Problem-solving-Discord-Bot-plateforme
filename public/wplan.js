@@ -45,7 +45,7 @@ async function giveWorkDialog(preStudents = [], rows = []) {
 // ------------------------------------------------------------------ the builder
 async function viewWorkPlan(id) {
   const r = await api(`/wplans/${id}`);
-  Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] });
+  Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
   if (WPS.lastId !== id) { WPS.open = new Set(); WPS.lastId = id; }
   drawWorkPlan();
 }
@@ -224,7 +224,19 @@ function progressPanelHtml(st) {
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
     <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
-    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}</section>${asksPanelHtml()}`;
+    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}</section>${guidePanelHtml()}${asksPanelHtml()}`;
+}
+/** 📚 Their guide (on their page, "Mes notions"): each lacune explained, with resources; French, darija or English. */
+function guidePanelHtml() {
+  const g = WPS.guide, url = WPS.url ? `${WPS.url}#notions` : "";
+  const st = !g ? `<p class="small muted">Made when they first open it.</p>`
+    : g.state === "making" ? `<p class="small"><span class="wp-state blue">Being made…</span> it takes about a minute.</p>`
+    : g.state === "failed" ? `<p class="small gh-warn">❌ ${esc(g.error || "It couldn't be made.")}</p>`
+    : `<p class="small muted" style="margin:0 0 6px">${g.notions.length} notion${g.notions.length > 1 ? "s" : ""} explained · ${g.resources} resource${g.resources === 1 ? "" : "s"} · made ${esc(fmtAgo(g.at))}${g.langs.length ? ` · read in ${g.langs.map((l) => ({ ary: "darija", en: "English" })[l] || l).join(", ")}` : ""}</p>
+      <ul class="wp-gnot">${g.notions.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+  return `<section class="panel wp-guide"><div class="panel-head"><h2>📚 Their guide</h2>${url ? `<a class="btn small" href="${esc(url)}" target="_blank" rel="noopener">See it ↗</a>` : ""}</div>
+    <p class="small muted" style="margin-top:-4px">On their page, <b>Mes notions</b>: each lacune explained for them, an example, the traps, a self-test and real resources (found by a web search, never made up). In French, darija or English.</p>
+    ${st}<button class="btn small" id="wp-guide-go">${g && g.state === "ready" ? "↻ Make it again" : "✨ Make it now"}</button></section>`;
 }
 const WP_ASK = { waiting: ["warn", "Waiting"], helping: ["blue", "You're on it"], done: ["up", "Answered"], cancelled: ["", "Cancelled"] };
 /** The student's questions from their page: they are in the Help queue, answered there. */
@@ -295,6 +307,11 @@ async function wpIntegrate(adds, wish = "") {
 
 function wireWorkPlan() {
   const p = WPS.plan, draft = wpDraft();
+  if ($("#wp-guide-go")) $("#wp-guide-go").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api(`/wplans/${p.id}/guide`, { method: "POST", body: {} });
+    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan();
+    toast(r.guide?.state === "ready" ? "Their guide is ready" : "The guide couldn't be made", r.guide?.state !== "ready");
+  });
   if ($("#wp-give")) $("#wp-give").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog([p.sid]));
   $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
   $("#wp-del").onclick = () => confirmDialog(draft ? "Delete this draft?" : `Delete ${p.name}'s plan?`, draft ? "Its diagnosis and actions are lost." : "Their page stops working and its open challenges are cancelled. What they did stays in their history.", "Delete",
@@ -343,7 +360,7 @@ function wireWorkPlan() {
     $$("[data-rv]").forEach((b) => b.onclick = () => busy(b, async () => {
       const c = $(`[data-rvc="${CSS.escape(b.dataset.rv)}"]`)?.value || "";
       const r = await api(`/wplans/${p.id}/review`, { method: "POST", body: { step: b.dataset.rv, ok: b.dataset.ok === "1", comment: c } });
-      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Validated" : `${p.name} will see it's to redo`);
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Validated" : `${p.name} will see it's to redo`);
     }));
     return;
   }
@@ -396,7 +413,7 @@ function wireWorkPlan() {
     if (!go) return;
     clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving;
     const r = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title").value, message: $("#wp-msg").value, due_at: wpDueValue() } } });
-    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] });
+    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
     toast(r.dm ? `Sent: ${p.name} got their page by DM` : `Sent, but the DM couldn't go (closed DMs?): copy their link`, !r.dm);
     drawWorkPlan();
   });

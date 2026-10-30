@@ -66,6 +66,7 @@ import { quietWriters } from "../shared/vscodedb.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
+import { makeGuide } from "../shared/wpguide.ts";
 import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
@@ -466,7 +467,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
     if (path === "/wplans" && method === "POST") return ok(await createPlan(env, await guild(), String(body.student ?? "")));
-    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review))?$/);
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|guide))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
@@ -479,8 +480,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (body.edits) await savePlanEdits(env, g, pid, body.edits);
         const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
         await markSheetDirty(env, g.id);
+        // 📚 their guide (each lacune explained, with resources) is made in the background: ready when they open it
+        ctx.waitUntil(makeGuide(forClass(env, g.id), g, pid).catch((e) => console.error("guide", e)));
         return ok({ ...(await workPlanView(env, g, pid)), dm: r.dm });
       }
+      if (m[2] === "guide" && method === "POST") { await makeGuide(forClass(env, g.id), g, pid); return ok(await workPlanView(env, g, pid)); }
     }
     m = path.match(/^\/plan\/(\d+)$/);
     if (m && method === "PUT") return ok(await savePlan(env, await guild(), m[1], body));
