@@ -19,6 +19,7 @@ import { finish } from "../src/shared/challenges.ts";
 import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
+import { codesOf, hideNames } from "../src/shared/classchat.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
@@ -6747,6 +6748,19 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const prose = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
   ai.chatProse = false;
   check(prose.status === 200 && prose.data.answer === "La classe va bien, rien d'inquiétant.", `the AI answering in plain text instead of JSON: its text is the answer (${prose.data.error ?? prose.data.answer})`);
+  {
+    const fake = [{ discord_id: "1", name: "Amine Alaoui" }, { discord_id: "2", name: "Amine Bennani" }, { discord_id: "3", name: "Sara Idrissi" }] as any[];
+    const c = codesOf(fake), h = (t: string) => hideNames(t, fake, c.codeOf);
+    check(/\(E\d ou E\d\)/.test(h("Que fait Amine ?")) && !h("Que fait Amine ?").includes("Amine"), `a first name two students share: both codes, the first name not sent (${h("Que fait Amine ?")})`);
+    check(h("Que fait Karim ?") === "Que fait Karim ?" && /^Et E\d \?$/.test(h("Et Sara ?")), "…a name not in the class stays as it is (the AI says it isn't there); a first name only one student has: their code");
+  }
+  const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
+  check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0, `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
+  const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
+  check(sg1.status === 200 && sg1.data.suggestions.length === 6 && [...sg1.data.suggestions, ...sg2.data.suggestions].some((x: string) => names.some((n: string) => x.includes(n)) || x.includes("brief")),
+    `suggestions for this class (${sg1.data.suggestions?.slice(0, 3).join(" | ")})`);
+  check(!sg1.data.suggestions.some((x: string) => /Amine/.test(x) && !names.some((n: string) => n.includes("Amine"))), "…no name from another class");
+  check(sg1.data.suggestions.join("|") !== sg2.data.suggestions.join("|") || (await api("GET", `/api/chat/suggestions?g=${G}`)).data.suggestions.join("|") !== sg1.data.suggestions.join("|"), "…a new draw each time");
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }

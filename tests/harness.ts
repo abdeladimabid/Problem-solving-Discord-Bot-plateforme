@@ -747,6 +747,7 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        if (String(input.messages[input.messages.length - 1]?.content).includes("Ressources générales")) return { response: JSON.stringify({ answer: "Voir MDN (modules) et javascript.info : liens à vérifier.", general: true }) };
         if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
         if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
