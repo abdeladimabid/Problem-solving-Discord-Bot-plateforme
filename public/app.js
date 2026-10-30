@@ -1233,10 +1233,10 @@ function apCard(r, wplans = []) {
     ${e.total ? `<div class="ap-bar" aria-hidden="true">${seg(e.done, "var(--up)", "done") + seg(e.late, "var(--warn)", "late") + seg(e.failed + e.missed, "var(--down)", "not solved / missed") + seg(e.open, "var(--line-strong)", "open")}</div>` : ""}
     ${hist.length ? `<div class="ap-hist"><span class="ap-ml">Levels</span>${hist.map((h) => `<${h.href ? `a href="${h.href}"` : "span"} class="ap-h pgc-${esc(h.lv)}" data-tip="${esc(h.k)} · ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}" aria-label="${esc(h.k)} ${esc(h.t)}: ${esc(AP_LV[h.lv] || h.lv)}">${esc(h.k)}</${h.href ? "a" : "span"}>`).join("")}</div>` : ""}
     ${typeof wpCardLine === "function" ? wpCardLine(wplans) : ""}
-    ${r.note ? `<blockquote class="ap-note"><p>${esc(r.note.text)}</p><footer>${r.note.by === "ai" ? "✨ AI" : "You"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}
+    ${r.note ? `<blockquote class="ap-note ${r.note.text.length > 160 ? "ap-fold" : ""}"><p>${esc(r.note.text)}</p><footer>${r.note.text.length > 160 ? `<button class="ap-link ap-more" data-ap-more aria-expanded="false">Show all</button>` : ""}${r.note.by === "ai" ? "✨ AI" : "You"}${r.note.at ? ` · ${esc(fmtDate(r.note.at))}` : ""}
         <button class="ap-link" data-ap-edit="${id}">Edit</button><button class="ap-link" data-ap-ai="${id}">${r.note.by === "ai" ? "Rewrite" : "✨ AI version"}</button></footer></blockquote>`
       : `<div class="ap-note empty"><button class="ap-link" data-ap-edit="${id}">${icon("plus")}Write a comment</button><span class="muted">or</span><button class="ap-link" data-ap-ai="${id}">✨ let the AI sum up</button></div>`}
-    <footer class="ap-foot"><button class="btn small primary" data-ap-give="${id}">${icon("clipboard")}Give work</button><button class="btn small" data-ap-gaps="${id}">🔎 Weak points</button><a class="btn small" href="#/student/${id}">Profile</a></footer></article>`;
+    <footer class="ap-foot">${(() => { const live = wplans.find((p) => p.status !== "done"); return live ? `<a class="btn small primary" href="#/wplan/${live.id}">🧭 ${live.status === "draft" ? "Continue the plan" : "See their work"}</a>` : `<button class="btn small primary" data-ap-give="${id}">${icon("clipboard")}Give work</button>`; })()}<button class="btn small" data-ap-gaps="${id}">🔎 Weak points</button><a class="btn small" href="#/student/${id}">Profile</a></footer></article>`;
 }
 /** A student's weak points (lacunes): debrief by debrief, then the assessments. */
 async function gapsDialog(r) {
@@ -1298,6 +1298,10 @@ async function viewAssignments() {
   $("#ap-new").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog(P.plan.map((r) => r.discord_id), giveRows));
   $$("[data-ap-give]").forEach((b) => b.onclick = () => busy(b, () => giveWorkDialog([b.dataset.apGive], giveRows)));
   $$("[data-ap-gaps]").forEach((b) => b.onclick = () => busy(b, () => gapsDialog(byId.get(b.dataset.apGaps))));
+  $$("[data-ap-more]").forEach((b) => b.onclick = () => {
+    const open = b.closest(".ap-note").classList.toggle("open");
+    b.setAttribute("aria-expanded", String(open)); b.textContent = open ? "Show less" : "Show all";
+  });
   $$("[data-ap-edit]").forEach((b) => b.onclick = () => {
     const r = byId.get(b.dataset.apEdit);
     openDialog(`Comment on ${r.name}`, `<label for="ap-t">What you see, what was agreed with the student, the next step</label>

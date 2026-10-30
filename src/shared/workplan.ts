@@ -11,6 +11,7 @@ import { signText } from "./integrity.ts";
 import { askReview } from "./review/debrief.ts";
 import { gapsOf } from "./actionplan.ts";
 import { questionAi } from "./assess.ts";
+import { HandError, raiseHand } from "./hands.ts";
 
 export class WorkPlanError extends Error {}
 
@@ -30,6 +31,8 @@ export interface Step {
   ask?: string;
   /** a brief: what was integrated into it (titles of the actions folded in as features) */
   merged?: string[];
+  /** a mini brief: the objectives the student ticked (their indexes), and when */
+  checks?: number[]; checked_at?: number | null;
 }
 export interface Lacune { notion: string; priority: 1 | 2 | 3; why: string; evidence: string[]; comps: string[] }
 export interface Diagnosis { at: number; model: string; summary: string; lacunes: Lacune[]; proposals: Step[]; wish?: string }
@@ -37,6 +40,8 @@ export interface WorkPlan {
   id: number; gid: string; sid: string; name: string; title: string; message: string; status: "draft" | "sent" | "done";
   due_at: number | null; created_at: number; updated_at: number; sent_at: number | null; done_at: number | null;
   diag: Diagnosis | null; steps: Step[];
+  /** the student's questions from their page (✋ the Help queue) */
+  asks?: { hand: number; step: string; at: number }[];
 }
 
 const KEY = (gid: string, id: number) => `wplan:${gid}:${id}`;
@@ -375,10 +380,15 @@ export async function planStatus(env: Env, p: WorkPlan) {
     else if (!s.work) state = "todo";
     else if (s.kind === "brief" || s.work.verdict === "submitted") state = "submitted";
     else state = s.work.verdict === "correct" ? "done" : s.work.verdict === "partial" ? "partial" : "failed";
-    return { id: s.id, state, asg: asg.find((x) => x.id === s.asg_id)?.status ?? null };
+    // how far they are in it: done = all of it; a mini brief = the objectives they ticked
+    const tasks = s.kind === "brief" ? (s.brief?.tasks || []).length : 0;
+    const ticked = tasks ? (s.checks || []).filter((k) => k >= 0 && k < tasks).length : 0;
+    const progress = state === "done" ? 1 : tasks ? ticked / tasks : 0;
+    return { id: s.id, state, asg: asg.find((x) => x.id === s.asg_id)?.status ?? null, ticked, tasks, progress };
   });
   const done = steps.filter((s) => s.state === "done").length;
-  return { steps, done, total: steps.length, pct: steps.length ? Math.round((100 * done) / steps.length) : 0 };
+  const objTotal = steps.reduce((a, s) => a + s.tasks, 0), objDone = steps.reduce((a, s) => a + s.ticked, 0);
+  return { steps, done, total: steps.length, objDone, objTotal, pct: steps.length ? Math.round((100 * steps.reduce((a, s) => a + s.progress, 0)) / steps.length) : 0 };
 }
 async function settle(env: Env, p: WorkPlan) {
   if (p.status !== "sent") return;
@@ -404,7 +414,7 @@ export async function planView(env: Env, g: GuildRow, id: number) {
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   await settle(env, p);
-  return { plan: p, status: p.status === "draft" ? null : await planStatus(env, p), url: p.status === "draft" ? null : planUrl(env, await planToken(env, p)) };
+  return { plan: p, status: p.status === "draft" ? null : await planStatus(env, p), url: p.status === "draft" ? null : planUrl(env, await planToken(env, p)), asks: await asksOf(env, p) };
 }
 /** Every plan of the class (or of one student), short. */
 export async function plansSummary(env: Env, g: GuildRow, sid?: string) {
@@ -428,14 +438,15 @@ export async function studentView(env: Env, gid: string, id: number) {
   await settle(env, p);
   const st = await planStatus(env, p);
   return {
-    title: p.title, name: p.name, message: p.message, due_at: p.due_at, status: p.status, done: st.done, total: st.total,
+    title: p.title, name: p.name, message: p.message, due_at: p.due_at, status: p.status, done: st.done, total: st.total, pct: st.pct, objDone: st.objDone, objTotal: st.objTotal,
     steps: p.steps.map((s, i) => {
       const state = st.steps[i].state;
       return { id: s.id, kind: s.kind, kindLabel: KIND_FR[s.kind], title: s.title, notion: s.notion, why: s.why, prompt: s.prompt, lang: s.lang, starter: s.starter,
         choices: s.kind === "mcq" ? s.choices : [], multi: s.kind === "mcq" && s.answer.length > 1,
         challenge: s.kind === "challenge" ? s.challenge : null, brief: s.brief, state, work: s.work ? { answer: s.work.answer, link: s.work.link, note: s.work.note, verdict: s.work.verdict, comment: s.work.comment, tries: s.work.tries, at: s.work.at } : null,
-        review: s.review };
+        review: s.review, checks: s.kind === "brief" ? s.checks || [] : [] };
     }),
+    asks: await asksOf(env, p),
   };
 }
 
@@ -484,6 +495,59 @@ export async function studentAnswer(env: Env, gid: string, id: number, b: any) {
   await putPlan(env, p);
   await settle(env, p);
   return { work: s.work };
+}
+
+/** A mini brief's objective ticked (or unticked) by the student: their teacher sees it, and it counts in the progress. */
+export async function studentCheck(env: Env, gid: string, id: number, b: any) {
+  const p = await getPlan(env, gid, id);
+  if (!p || p.status === "draft") throw new WorkPlanError("Ce plan n'est plus disponible.");
+  const s = p.steps.find((x) => x.id === String(b.step || ""));
+  if (!s || s.kind !== "brief" || !s.brief) throw new WorkPlanError("Action inconnue.");
+  const k = Math.floor(Number(b.i));
+  if (!(k >= 0 && k < s.brief.tasks.length)) throw new WorkPlanError("Objectif inconnu.");
+  const set = new Set((s.checks || []).filter((x) => x >= 0 && x < s.brief!.tasks.length));
+  if (b.on) set.add(k); else set.delete(k);
+  s.checks = [...set].sort((x, y) => x - y);
+  s.checked_at = now();
+  await putPlan(env, p);
+  return { checks: s.checks };
+}
+
+/** The student's questions from their page: each one raises their hand (✋ Help queue); the teacher answers there (by DM too). */
+async function asksOf(env: Env, p: WorkPlan) {
+  const list = (p.asks || []).slice(-20);
+  if (!list.length) return [];
+  const ids = list.map((a) => a.hand);
+  const rows = await all<{ id: number; question: string; status: string; reply: string | null; created_at: number; done_at: number | null }>(env,
+    `SELECT id, question, status, reply, created_at, done_at FROM hands WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids).catch(() => []);
+  const waitingBefore = async (h: { id: number }) => (await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting' AND id <= ?", p.gid, h.id))?.n ?? 0;
+  const out = [];
+  for (const a of [...list].reverse()) {
+    const h = rows.find((r) => r.id === a.hand);
+    if (!h) continue;
+    const step = p.steps.find((s) => s.id === a.step);
+    out.push({ id: h.id, step: a.step || "", stepTitle: step ? step.title || step.notion : "", question: h.question.replace(/^🧭 [^\n]*\n/, ""), status: h.status, reply: h.reply, at: h.created_at, done_at: h.done_at,
+      place: h.status === "waiting" ? await waitingBefore(h) : 0 });
+  }
+  return out;
+}
+const HAND_FR: Record<string, string> = {
+  "hand.too_short": "Écris ta question (quelques mots au moins).",
+  "hand.already": "Tu as déjà une demande en cours : ton formateur va te répondre. Tu pourras en poser une autre ensuite.",
+};
+export async function studentAsk(env: Env, g: GuildRow, id: number, b: any) {
+  const p = await getPlan(env, g.id, id);
+  if (!p || p.status === "draft") throw new WorkPlanError("Ce plan n'est plus disponible.");
+  const step = p.steps.find((x) => x.id === String(b.step || "")) || null;
+  const q = str(b.question, 900);
+  if (q.length < 3) throw new WorkPlanError(HAND_FR["hand.too_short"]);
+  const head = `🧭 Plan d'action${step ? ` · action ${p.steps.indexOf(step) + 1} : ${step.title || step.notion}` : ""}`;
+  let r;
+  try { r = await raiseHand(env, g, p.sid, p.name, `${head}\n${q}`, str(b.code, 6000) || null); }
+  catch (e) { if (e instanceof HandError) throw new WorkPlanError(HAND_FR[e.message] || e.message); throw e; }
+  p.asks = [...(p.asks || []), { hand: r.id, step: step?.id || "", at: now() }].slice(-30);
+  await putPlan(env, p);
+  return { position: r.position };
 }
 
 export const _test = { cleanStep, stepFromAi, KEY };
