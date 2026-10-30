@@ -6303,6 +6303,29 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   const b0 = await wp("answer", { step: br.id, link: "pas un lien" });
   const b1 = await wp("answer", { step: br.id, link: "https://github.com/bob/nav", note: "Fait avec gap" });
   check(b0.status === 400 && b1.data.work.verdict === "submitted", "the mini brief is handed in as a link");
+  // the mini brief's objectives: a checklist they tick, the teacher sees it, it counts in the progress
+  const nT = br.brief.tasks.length;
+  check(nT >= 2 && v.objTotal === nT && v.objDone === 0 && Array.isArray(br.checks), `their page: the objectives to tick (${nT})`);
+  const k1 = await wp("check", { step: br.id, i: 0, on: true }), k2 = await wp("check", { step: br.id, i: 1, on: true }), k3 = await wp("check", { step: br.id, i: 1, on: false });
+  const kBad = await wp("check", { step: br.id, i: 99, on: true }), kCode = await wp("check", { step: code.id, i: 0, on: true });
+  check(k1.status === 200 && k2.data.checks.join() === "0,1" && k3.data.checks.join() === "0" && kBad.status === 400 && kCode.status === 400, "ticked and unticked; an unknown objective or an action that isn't a brief: refused");
+  const T0 = await api("GET", `/api/wplans/${id}?g=${G}`);
+  const brSt = T0.data.status.steps.find((x: any) => x.id === br.id);
+  check(T0.data.plan.steps.find((x: any) => x.id === br.id).checks.join() === "0" && brSt.ticked === 1 && T0.data.status.objDone === 1 && T0.data.status.objTotal === nT, "the teacher sees which objectives are ticked");
+  const expectPct = Math.round(100 * (2 + 1 / nT) / steps.length);
+  check(T0.data.status.pct === expectPct, `the progress counts the ticked objectives (${T0.data.status.pct} % = ${expectPct} %)`);
+  // a question from their page: in the Help queue, answered there, the answer back on their page
+  const q0 = await wp("ask", { question: "?" });
+  const q1r = await wp("ask", { question: "Je ne comprends pas aria-required", step: br.id, code: "<input required>" });
+  const q2 = await wp("ask", { question: "Encore une" });
+  check(q0.status === 400 && q1r.status === 200 && q1r.data.position >= 1 && q2.status === 400 && /déjà une demande/.test(q2.data.error), "a question: too short refused; sent; one at a time");
+  const hq = await api("GET", `/api/hands?g=${G}`);
+  const hand = hq.data.open.find((h: any) => /aria-required/.test(h.question));
+  check(!!hand && hand.discord_id === B && /^🧭 Plan d'action · action \d+ : /.test(hand.question) && hand.code === "<input required>", "…it reaches the Help queue, with the action it is about and the code");
+  check((await wp("data")).data.asks[0].status === "waiting" && T0.status === 200 && (await api("GET", `/api/wplans/${id}?g=${G}`)).data.asks.length === 1, "…their page and the plan page show it waiting");
+  await api("PUT", `/api/hands/${hand.id}?g=${G}`, { action: "reply", reply: "C'est un attribut pour les lecteurs d'écran." });
+  const va = (await wp("data")).data.asks[0];
+  check(va.status === "done" && /lecteurs d'écran/.test(va.reply) && va.question === "Je ne comprends pas aria-required", "…the answer is on their page");
   // the teacher follows and validates
   const T1 = await api("GET", `/api/wplans/${id}?g=${G}`);
   const st = (sid: string) => T1.data.status.steps.find((x: any) => x.id === sid).state;

@@ -1457,7 +1457,7 @@ dialog.confirm-dlg { width: min(440px, calc(100vw - 32px)); }
 .ap-note { margin: 0; background: var(--blue-50); border-left: 3px solid var(--blue); border-radius: 0 var(--radius-s) var(--radius-s) 0; padding: 9px 12px; }
 .ap-note p { margin: 0 0 6px; font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; }
 .ap-note footer { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-soft); }
-.ap-note footer .ap-link:first-of-type { margin-left: auto; }
+.ap-note footer [data-ap-edit] { margin-left: auto; }
 .ap-note.empty { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; background: transparent; border: 1px dashed var(--line-strong); border-radius: var(--radius-s); font-size: 13px; }
 .ap-link { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; color: var(--blue); font-weight: 600; font-size: 12.5px; }
 .ap-link .i { width: 14px; height: 14px; } .ap-link:hover { text-decoration: underline; } .ap-link:focus-visible { outline: 2px solid var(--blue); border-radius: 4px; }
@@ -2447,6 +2447,7 @@ body.sl-open { overflow: hidden; }
 @media (max-width: 600px) { .gs-tbl td:first-child, .gs-tbl th:first-child { display: none; } }
 #set-gsheet { display: grid; gap: 14px; }
 
+<<<<<<< HEAD
 /* a student's intranet photo, over their initials */
 .avatar { position: relative; overflow: hidden; }
 .avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit;
@@ -2529,3 +2530,22 @@ body.sl-open { overflow: hidden; }
 :root[data-theme="dark"] .chat-lv.moyen { background: #082f49; color: #7dd3fc; border-color: #075985; } :root[data-theme="dark"] .chat-lv.faible { background: #3a2a06; color: #fcd34d; border-color: #78530c; }
 :root[data-theme="dark"] .chat-lv.critique { background: #3f0d1a; color: #fda4af; border-color: #9f1239; }
 @media (max-width: 760px) { .chat { height: calc(100vh - 220px); min-height: 380px; } .chat-msg.me .chat-bubble { max-width: 88%; } .chat-avatar { display: none; } .chat-msg.bot .chat-bubble { padding: 14px 16px; } }
+=======
+/* a long comment on a plan d'action card: 3 lines, "Show all" opens it */
+.ap-note.ap-fold:not(.open) p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ap-note .ap-more { margin-right: 4px; font-weight: 600; }
+
+/* plan d'action: the objectives the student ticked, their questions */
+.wp-objn { font-weight: 600; font-size: 12px; color: var(--ink-soft); text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.wp-objl.ticks { list-style: none; padding-left: 0; }
+.wp-objl.ticks li { display: flex; gap: 8px; align-items: flex-start; }
+.wp-tick { width: 18px; height: 18px; flex: none; border: 2px solid var(--line-strong); border-radius: 5px; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #fff; margin-top: 2px; }
+.wp-objl.ticks li.on .wp-tick { background: var(--up); border-color: var(--up); }
+.wp-objl.ticks li.on { color: var(--ink-soft); }
+.wp-ring span { line-height: 1.4; }
+.wp-ask { border-top: 1px solid var(--line); padding: 10px 0; }
+.wp-ask:first-of-type { border-top: 0; padding-top: 0; }
+.wp-ask p { margin: 6px 0 0; white-space: pre-wrap; font-size: 14px; }
+.wp-ask-h { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wp-objpeek { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
+.wp-objpeek .ap-wpbar { width: 90px; }
