@@ -6838,6 +6838,30 @@ section("Chat with your class: free questions, the class's data read by ClassBot
     for (const p of view.data.search.providers) await api("DELETE", `/api/settings/ai/search/${p.id}?g=${G}`);
     check((await api("GET", `/api/settings/ai?g=${G}`)).data.search.providers.length === 0, "…services removed");
   }
+  {
+    // actions: the AI proposes, ClassBot checks, the teacher confirms, ClassBot does it like the dashboard's buttons
+    const bob = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).name as string;
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+    const prop = await api("POST", "/api/chat", { g: G, question: `Ajoute ${bob} au plan d'action, il bloque sur flexbox`, history: [] });
+    const a = prop.data.action;
+    check(prop.status === 200 && a?.type === "plan_add" && a.students.length === 1 && a.students[0].id === U.bob.id && a.students[0].name === bob && a.note === `${bob} bloque sur flexbox`,
+      `an action asked: proposed with this class's student only, the names back in the note (${JSON.stringify(a)})`);
+    check(!q1("SELECT 1 AS x FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id), "…nothing done before the teacher confirms");
+    check((await api("POST", "/api/chat", { g: G, question: "Action fantôme", history: [] })).data.action === null, "…an action on no student of the class: not proposed");
+    const okAdd = await api("POST", "/api/chat/action", { g: G, type: "plan_add", ids: [U.bob.id, "123456789"], note: "bloque sur flexbox (modifié)" });
+    const row = q1("SELECT flagged, note, note_by FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+    check(okAdd.status === 200 && okAdd.data.done.join() === bob && row?.flagged === 1 && row.note === "bloque sur flexbox (modifié)" && row.note_by === "you",
+      `confirmed: added to the plan d'action with the teacher's note, like the plan's own button (${JSON.stringify(row)})`);
+    await api("POST", "/api/chat/action", { g: G, type: "plan_remove", ids: [U.bob.id] });
+    check(q1("SELECT flagged FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id)?.flagged === -1, "…taken out of the plan");
+    discordCalls.length = 0;
+    const msg = await api("POST", "/api/chat/action", { g: G, type: "message", ids: [U.bob.id, U.alice.id], text: "Courage pour le brief !" });
+    check(msg.status === 200 && msg.data.done.length + msg.data.failed.length === 2 && discordCalls.filter((c) => c.body?.embeds?.[0]?.description === "Courage pour le brief !").length === msg.data.done.length && msg.data.done.length >= 1,
+      `…a Discord message to two students: sent to each, like the student page's Message button (${JSON.stringify(msg.data)})`);
+    check((await api("POST", "/api/chat/action", { g: G, type: "message", ids: ["123456789"], text: "x" })).status === 400 && (await api("POST", "/api/chat/action", { g: G, type: "delete_all", ids: [U.bob.id] })).status === 400,
+      "…a student of another class, or an action that doesn't exist: refused");
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  }
   const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
   check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0 && general.data.general === true
     && general.data.answer.includes("[Bon guide](https://links.example.org/ok)") && !general.data.answer.includes("Page inventée") && general.data.answer.includes("Et aussi ce lien dans une phrase")

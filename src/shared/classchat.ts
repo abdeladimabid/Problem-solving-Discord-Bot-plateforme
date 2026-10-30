@@ -7,7 +7,9 @@ import type { Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now } from "./db.ts";
 import { chat, extractJson } from "./ai.ts";
 import { classReport } from "./classreport.ts";
-import { niveaux, planView, type PlanStudent } from "./actionplan.ts";
+import { niveaux, planView, savePlan, type PlanStudent } from "./actionplan.ts";
+import { dm } from "./discord.ts";
+import { t } from "./i18n.ts";
 import { studentGithub } from "./ghdetail.ts";
 import { progressView } from "./review/debrief.ts";
 import { webSearch } from "./websearch.ts";
@@ -310,6 +312,8 @@ const SYSTEM = (g: GuildRow, web = false) => [
   "Une liste trop longue arrive coupée, avec \"tronque\" (« 40 sur 85 ») : le total exact est le second nombre ; ne compte jamais les éléments d'une liste coupée, et pour la liste entière utilise \"table_from\" (ClassBot la remplit en entier).",
   "Chaque chiffre de ta réponse vient des DONNÉES : recopie-le exactement. Si on te demande « tu es sûr ? », relis les DONNÉES (redemande-les si besoin) et corrige-toi franchement si tu t'es trompé.",
   "« Tu es sûr ? » porte sur ta DERNIÈRE réponse, pas sur une autre : revérifie celle-là.",
+  'Agir : quand le formateur demande d\'ajouter un apprenant au plan d\'action, de l\'en retirer, d\'écrire une note sur lui, ou d\'envoyer un message à un ou plusieurs apprenants, ne dis JAMAIS que c\'est fait : propose l\'action dans "action" et dis-lui de confirmer ci-dessous. Une seule action par réponse. Format : "action": {"type":"plan_add"|"plan_remove"|"note"|"message", "codes":["E3"], "note":"…" (plan_add, note), "text":"…" (message)}.',
+  "Un message aux apprenants (action message) : court, bienveillant, en tutoiement, sans chiffre inventé ; tu peux écrire leur code (E3) : ClassBot remet leur prénom. Pour « les faibles », « ceux à surveiller »… lis d'abord la liste (outil students) pour avoir leurs codes.",
   "Réponds uniquement à la DERNIÈRE question du formateur : les messages d'avant ne servent que de contexte, ne leur réponds pas une deuxième fois.",
   "Écris pour un formateur : jamais de nom d'outil, de clé ni de champ technique (pas de class_overview, students.niveau, r1_…, pas de `code`).",
   "Écris simplement : pas d'écriture inclusive (pas de « ·e·s »), pas d'italique.",
@@ -548,7 +552,7 @@ export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], 
       }
     }
     // an answer about the class without having read anything: sent back once, the data first
-    if (!calls.length && !used.length && !bounced && !smallTalk && !last && reply?.answer && reply?.general !== true) {
+    if (!calls.length && !used.length && !bounced && !smallTalk && !last && reply?.answer && reply?.general !== true && !reply?.action) {
       bounced = true;
       msgs.push({ role: "assistant", content: JSON.stringify(reply) });
       msgs.push({ role: "user", content: "Tu as répondu sans lire aucune donnée de ClassBot : tes chiffres ne peuvent pas être justes. Demande d'abord les données nécessaires (JSON \"tools\"), puis réponds uniquement à partir d'elles." });
@@ -592,7 +596,57 @@ export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], 
       rows: t.rows.slice(0, 300).map((r: unknown) => (Array.isArray(r) ? r : [r]).slice(0, 12).map((c) => showNames(String(c ?? ""), codes.byCode).slice(0, 300))) }
     : null);
   answer = await checkLinks(answer);
-  return { answer: showNames(answer, codes.byCode).slice(0, 8000), table, used: [...new Set(used)], sources: sources.slice(0, 12), unverified: unverified.slice(0, 8), general: !used.length };
+  const action = proposedAction(reply?.action, codes.byCode);
+  return { action, answer: showNames(answer, codes.byCode).slice(0, 8000), table, used: [...new Set(used)], sources: sources.slice(0, 12), unverified: unverified.slice(0, 8), general: !used.length };
+}
+
+// ------------------------------------------------------------ actions (proposed by the AI, done by ClassBot on the teacher's click)
+export type ChatActionType = "plan_add" | "plan_remove" | "note" | "message";
+export interface ChatAction { type: ChatActionType; students: { id: string; name: string }[]; note?: string; text?: string; label: string }
+const ACTION_LABEL: Record<ChatActionType, string> = { plan_add: "Ajouter au plan d'action", plan_remove: "Retirer du plan d'action", note: "Écrire la note (plan d'action)", message: "Envoyer un message Discord" };
+
+/** The AI's proposal made safe: its students are this class's (codes → names), its type allowed, its text there. Null otherwise. */
+function proposedAction(raw: any, byCode: Map<string, ChatStudent>): ChatAction | null {
+  if (!raw || typeof raw !== "object" || !ACTION_LABEL[raw.type as ChatActionType]) return null;
+  const type = raw.type as ChatActionType;
+  const list = [...new Set((Array.isArray(raw.codes) ? raw.codes : [raw.code]).map((c: unknown) => String(c ?? "").toUpperCase().trim()))]
+    .map((c) => byCode.get(c as string)).filter((s): s is ChatStudent => !!s);
+  const students = list.slice(0, type === "message" ? 60 : 10).map((s) => ({ id: s.discord_id, name: String(s.name || s.discord_id) }));
+  if (!students.length) return null;
+  const note = showNames(String(raw.note ?? ""), byCode).trim().slice(0, 2000);
+  const text = showNames(String(raw.text ?? ""), byCode).trim().slice(0, 1900);
+  if (type === "note" && !note) return null;
+  if (type === "message" && !text) return null;
+  return { type, students, ...(type === "plan_add" || type === "note" ? { note } : {}), ...(type === "message" ? { text } : {}), label: ACTION_LABEL[type] };
+}
+
+/**
+ * The action, confirmed by the teacher: checked again (a student of this class only, an allowed action), then done
+ * the way the dashboard's own buttons do it (the plan d'action's save; the student page's Discord message).
+ */
+export async function runChatAction(env: Env, g: GuildRow, students: ChatStudent[], b: any) {
+  const type = String(b?.type || "") as ChatActionType;
+  if (!ACTION_LABEL[type]) throw new ChatError("Unknown action.");
+  const mine = new Map(students.map((s) => [s.discord_id, s]));
+  const ids = [...new Set<string>((Array.isArray(b?.ids) ? b.ids : []).map(String))].filter((id) => mine.has(id)).slice(0, type === "message" ? 60 : 10);
+  if (!ids.length) throw new ChatError("No student of this class in this action.");
+  const name = (id: string) => String(mine.get(id)?.name || id);
+  const note = String(b?.note ?? "").trim().slice(0, 2000), text = String(b?.text ?? "").trim().slice(0, 1900);
+  const done: string[] = [], failed: string[] = [];
+  if (type === "message") {
+    if (!text) throw new ChatError("Write the message first.");
+    for (const id of ids) {
+      const sent = await dm(env, id, { embeds: [{ title: t(g.lang, "teacher.note_title"), description: text, color: 0x2a78d6 }] }).catch(() => null);
+      (sent ? done : failed).push(name(id));
+    }
+  } else {
+    if (type === "note" && !note) throw new ChatError("Write the note first.");
+    for (const id of ids) {
+      const set = type === "plan_add" ? { flagged: 1, ...(note ? { note } : {}) } : type === "plan_remove" ? { flagged: -1 } : { note };
+      await savePlan(env, g, id, set).then(() => done.push(name(id)), () => failed.push(name(id)));
+    }
+  }
+  return { type, done, failed, label: ACTION_LABEL[type] };
 }
 
 /** The teacher's 👍 / 👎 on an answer (kept: the last 500 of the class). */

@@ -766,6 +766,11 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        // an action asked: proposed (never done by the AI); "E999" isn't in the class
+        { const lastA = String(input.messages[input.messages.length - 1]?.content);
+          const am = lastA.match(/^Ajoute (E\d+) au plan/);
+          if (am) return { response: JSON.stringify({ personnes: [am[1]], answer: `Je te propose d'ajouter ${am[1]} au plan d'action : confirme ci-dessous.`, action: { type: "plan_add", codes: [am[1], "E999"], note: `${am[1]} bloque sur flexbox` } }) };
+          if (lastA.startsWith("Action fantôme")) return { response: JSON.stringify({ personnes: [], answer: "Je te propose…", action: { type: "message", codes: ["E999"], text: "Bonjour" } }) }; }
         // the teacher's notes on a student; the web for resources (the answer gives the links found)
         if (/^Notes sur E\d+/.test(String(input.messages[input.messages.length - 1]?.content))) {
           const code = String(input.messages[input.messages.length - 1].content).match(/E\d+/)![0];

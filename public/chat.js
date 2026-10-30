@@ -99,6 +99,25 @@ function chatCheckDialog() {
   return d;
 }
 
+/**
+ * An action the chat proposes (plan d'action, a note, a Discord message): nothing is done until the teacher confirms;
+ * the note or the message can be changed first. Once done or cancelled, the card says so.
+ */
+function chatActionCard(a, i) {
+  const st = a.status || "pending";
+  const who = a.students.map((s) => `<span class="chat-act-chip">${esc(s.name)}</span>`).join("");
+  const field = a.type === "message" ? "text" : a.type === "plan_add" || a.type === "note" ? "note" : null;
+  const body = field && st === "pending"
+    ? `<label class="chat-act-l">${field === "text" ? "Le message (tu peux le modifier)" : "La note (tu peux la modifier)"}</label><textarea class="chat-act-t" data-act-field="${i}" rows="${field === "text" ? 4 : 2}">${esc(a[field] || "")}</textarea>`
+    : field && a[field] ? `<p class="chat-act-q">${esc(a[field])}</p>` : "";
+  const r = a.result;
+  const foot = st === "pending" ? `<div class="chat-act-b"><button type="button" class="chat-act-ok" data-act-ok="${i}">Confirmer</button><button type="button" class="chat-act-no" data-act-no="${i}">Annuler</button></div>`
+    : st === "cancelled" ? `<p class="chat-act-s">Annulé : rien n'a été fait.</p>`
+    : `<p class="chat-act-s ${r?.failed?.length ? "bad" : ""}">${r?.done?.length ? `✓ Fait pour ${esc(r.done.join(", "))}.` : ""}${r?.failed?.length ? ` ⚠ Pas pu pour ${esc(r.failed.join(", "))}${a.type === "message" ? " (Discord refuse : messages privés fermés)" : ""}.` : ""}</p>`;
+  return `<div class="chat-act ${st}"><div class="chat-act-h">${chatIcon('<path d="M13 10V3L4 14h7v7l9-11h-7z"/>')} ${esc(a.label)}${a.students.length > 1 ? ` · ${a.students.length} apprenants` : ""}</div>
+    <div class="chat-act-who">${who}</div>${body}${foot}</div>`;
+}
+
 /** Under an answer: what ClassBot read for it, and 👍 / 👎. */
 function chatFoot(m, i) {
   const src = `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">${CHAT_EYE}<span>${(m.sources || []).length ? `Lu : ${m.sources.map(esc).join(" · ")}` : m.general ? "Réponse générale, hors données de la classe" : "Aucune donnée lue"}</span></span>`;
@@ -127,9 +146,22 @@ async function viewChat() {
     $("#chat-send").disabled = busy;
     thread.innerHTML = list.length ? list.map((m, i) => m.role === "user"
       ? `<div class="chat-msg me"><div class="chat-bubble"><p class="chat-who">Toi</p>${esc(m.text)}</div>${me}</div>`
-      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble"><div class="chat-card-h"><span>ClassBot</span><time>${esc(chatTime(m.at))}</time></div>${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.error || !Array.isArray(m.sources) ? "" : chatFoot(m, i)}</div></div>`).join("")
+      : `<div class="chat-msg bot">${avatar}<div class="chat-bubble"><div class="chat-card-h"><span>ClassBot</span><time>${esc(chatTime(m.at))}</time></div>${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${m.action ? chatActionCard(m.action, i) : ""}${m.error || !Array.isArray(m.sources) ? "" : chatFoot(m, i)}</div></div>`).join("")
       + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span><span id="chat-status">${esc(status || "Je réfléchis…")}</span></div></div>` : "")
       : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">C</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Pose ta question comme à un collègue, ou choisis une suggestion en bas.</p></div>`;
+    // an action: done by ClassBot only on "Confirmer" (with the note or message as the teacher left it)
+    thread.querySelectorAll("[data-act-field]").forEach((t) => t.oninput = () => { const a = list[Number(t.dataset.actField)].action; a[a.type === "message" ? "text" : "note"] = t.value; chatSave(list); });
+    thread.querySelectorAll("[data-act-no]").forEach((b) => b.onclick = () => { list[Number(b.dataset.actNo)].action.status = "cancelled"; chatSave(list); draw(); });
+    thread.querySelectorAll("[data-act-ok]").forEach((b) => b.onclick = async () => {
+      const a = list[Number(b.dataset.actOk)].action;
+      b.disabled = true; b.textContent = "…";
+      try {
+        a.result = await api("/chat/action", { method: "POST", body: { type: a.type, ids: a.students.map((s) => s.id), note: a.note, text: a.text } });
+        a.status = "done";
+        toast(a.result.failed.length ? `${a.result.done.length} fait(s), ${a.result.failed.length} impossible(s)` : `✓ ${a.label} : fait`, !!a.result.failed.length);
+      } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Confirmer"; return; }
+      chatSave(list); draw();
+    });
     thread.querySelectorAll("[data-copy]").forEach((b) => b.onclick = () => {
       const m = list[Number(b.dataset.copy)];
       const text = m.text + (m.table ? "\n\n" + [m.table.columns, ...m.table.rows].map((r) => r.join("\t")).join("\n") : "");
@@ -163,7 +195,7 @@ async function viewChat() {
         status = st.step === "read" ? `Je lis ${st.sources.join(", ") || "les données"}…` : "J'écris la réponse…";
         const el = $("#chat-status"); if (el) el.textContent = status;
       });
-      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], general: !!r.general, at: Date.now() });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], general: !!r.general, action: r.action || null, at: Date.now() });
       if (!/^Je ne trouve pas\b/.test(String(r.answer || ""))) askedNote(text);
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true, at: Date.now() }); }
     busy = false; status = ""; chatSave(list); draw();
