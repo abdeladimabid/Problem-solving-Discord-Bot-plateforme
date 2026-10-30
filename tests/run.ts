@@ -6754,6 +6754,15 @@ section("Chat with your class: free questions, the class's data read by ClassBot
     check(/\(E\d ou E\d\)/.test(h("Que fait Amine ?")) && !h("Que fait Amine ?").includes("Amine"), `a first name two students share: both codes, the first name not sent (${h("Que fait Amine ?")})`);
     check(h("Que fait Karim ?") === "Que fait Karim ?" && /^Et E\d \?$/.test(h("Et Sara ?")), "…a name not in the class stays as it is (the AI says it isn't there); a first name only one student has: their code");
   }
+  const nobody = await api("POST", "/api/chat", { g: G, question: "Que fait Hamza mtn ?", history: [{ role: "user", text: "comment se fait le débriefing" }, { role: "assistant", text: "Le débriefing…" }] });
+  check(nobody.status === 200 && /Je ne trouve pas \*\*Hamza\*\* dans cette classe/.test(nobody.data.answer) && !nobody.data.used.length, `someone not in the class: said so by ClassBot, nothing else answered (${nobody.data.answer})`);
+  const typo = alice.split(" ")[0].slice(0, -1) || "Alic";
+  const close = await api("POST", "/api/chat", { g: G, question: `Que fait ${typo} mtn ?`, history: [] });
+  check(close.data.answer.includes(`Tu veux dire **${alice}**`), `…a typo: the student meant is proposed (${close.data.answer})`);
+  ai.chatSeen.length = 0;
+  const tech = await api("POST", "/api/chat", { g: G, question: "Combien de briefs techniques ?", history: [] });
+  check(tech.data.answer === "La classe a 4 briefs, niveaux dans.", `the AI's technical references taken out of the answer (${tech.data.answer})`);
+  check(ai.chatSeen.some((m) => m.includes("LA QUESTION À LAQUELLE RÉPONDRE : « Combien de briefs techniques ? »")), "…the question repeated after the data, so the AI answers it and not an earlier one");
   const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
   check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0, `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
   const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
