@@ -6764,6 +6764,15 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   check(chkItems[0]?.expected === String(students0) && chkItems[0].ok && chkItems.some((x: any) => x.question.startsWith("Quel est le niveau") && x.ok),
     `…the right answers computed by ClassBot, the chat's compared (${JSON.stringify(chkItems.slice(0, 2)).slice(0, 200)})`);
   check(chkItems.some((x: any) => !x.ok), "…a wrong answer is caught (the fake AI doesn't give the points)");
+  // the AI key at its limit for the whole test: the questions are "not tested", out of the score (not counted wrong)
+  run1("DELETE FROM ai_usage");
+  ai.chatFails = 100000;
+  const lim = await api("POST", "/api/chat/check", { g: G });
+  ai.chatFails = 0;
+  const limDone = String(lim.data).trim().split("\n").map((l) => JSON.parse(l)).at(-1)?.done;
+  run1("DELETE FROM ai_usage");
+  check(limDone?.skipped >= 8 && limDone.score === limDone.total && limDone.items.filter((x: any) => x.skipped).every((x: any) => /limite/.test(x.got)) && limDone.items.filter((x: any) => !x.skipped).every((x: any) => x.ok),
+    `…the AI key at its limit: each question asked again, then "not tested", none counted wrong (${limDone?.score}/${limDone?.total}, ${limDone?.skipped} skipped)`);
   ai.chatFails = 1;
   const flaky = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
   check(flaky.status === 200 && flaky.data.answer.includes("apprenants") && ai.chatFails === 0, `the AI's answer cut short once: asked again, answered (${flaky.data.error ?? flaky.data.answer})`);

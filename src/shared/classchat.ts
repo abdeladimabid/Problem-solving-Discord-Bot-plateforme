@@ -539,7 +539,7 @@ export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], 
     if (last) msgs.push({ role: "user", content: "Réponds maintenant avec les données que tu as (JSON \"answer\")." });
     reply = await ask(env, msgs);
     // the AI failed (an error, or a broken JSON): once more before giving up
-    if (!reply && !retried && !last) { retried = true; continue; }
+    if (!reply && !retried && !last) { retried = true; await pause(env, 3); continue; }
     const calls = Array.isArray(reply?.tools) ? reply.tools.filter((t: any) => t && typeof t.name === "string").slice(0, 5) : [];
     // someone named who isn't in this class: said so by ClassBot, never answered with another student's data
     if (!namesChecked && reply) {
@@ -683,7 +683,10 @@ export async function chatFeedback(env: Env, guildId: string, body: any) {
 }
 
 
-export interface ChatCheckItem { question: string; expected: string; got: string; ok: boolean }
+export interface ChatCheckItem { question: string; expected: string; got: string; ok: boolean; skipped?: boolean }
+/** A wait of n seconds (CHAT_PAUSE_MS sets the second: 0 in the tests): the AI keys' per-minute limits get some air. */
+const pause = (env: Env, n: number) => new Promise((r) => setTimeout(r, n * Number((env as any).CHAT_PAUSE_MS ?? 1000)));
+const AI_DOWN = /couldn't answer|used up|Not enough AI/;
 
 /**
  * "Is the chat reliable?": questions whose right answer ClassBot computes itself from the class's data (how many
@@ -750,18 +753,29 @@ export async function chatCheck(env: Env, g: GuildRow, students: ChatStudent[], 
   }
 
   const items: ChatCheckItem[] = [];
+  // one question at a time, with a pause: ~45 AI calls at once would hit a free key's per-minute limit; a question the AI
+  // couldn't answer (the key at its limit) is asked again after a minute, then left out of the score ("not tested")
+  let usedUp = false;
   for (const [i, t] of tests.entries()) {
-    let it: ChatCheckItem;
-    try {
-      const r = await classChat(env, g, students, t.q, t.history ?? []);
-      it = { question: t.q, expected: t.expected, got: (r.answer + (r.table ? ` [tableau : ${r.table.rows.length} ligne(s)]` : "")).slice(0, 400), ok: t.ok(r) };
-    } catch (e) {
-      it = { question: t.q, expected: t.expected, got: e instanceof Error ? e.message : String(e), ok: false };
+    let it: ChatCheckItem | null = null;
+    for (let tries = 0; tries < 2 && !it; tries++) {
+      if (usedUp) { it = { question: t.q, expected: t.expected, got: "Pas posée : l'IA de la classe est épuisée pour aujourd'hui.", ok: false, skipped: true }; break; }
+      if (i || tries) await pause(env, tries ? 30 : 3);
+      try {
+        const r = await classChat(env, g, students, t.q, t.history ?? []);
+        it = { question: t.q, expected: t.expected, got: (r.answer + (r.table ? ` [tableau : ${r.table.rows.length} ligne(s)]` : "")).slice(0, 400), ok: t.ok(r) };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/used up|Not enough AI/.test(msg)) usedUp = true;
+        if (!AI_DOWN.test(msg)) it = { question: t.q, expected: t.expected, got: msg, ok: false };
+        else if (tries || usedUp) it = { question: t.q, expected: t.expected, got: "Pas testée : ta clé IA était à sa limite (trop de demandes par minute).", ok: false, skipped: true };
+      }
     }
-    items.push(it);
-    onItem?.(it, i, tests.length);
+    items.push(it!);
+    onItem?.(it!, i, tests.length);
   }
-  return { score: items.filter((x) => x.ok).length, total: items.length, items };
+  const asked = items.filter((x) => !x.skipped);
+  return { score: asked.filter((x) => x.ok).length, total: asked.length, skipped: items.length - asked.length, items };
 }
 
 /**
