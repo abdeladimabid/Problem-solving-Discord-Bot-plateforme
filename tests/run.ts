@@ -6802,6 +6802,42 @@ section("Chat with your class: free questions, the class's data read by ClassBot
     check(!v("Il y a 100 faibles et 200 moyens, E3 a 14 points, sur 7 jours, soit 33 %.").length && v("Il y a 4242 faibles et 12,5 % de moyens.").join() === "4242,12,5",
       `the numbers of an answer checked against the data: counts, values, the question, percentages fine; the rest flagged (${v("Il y a 4242 faibles et 12,5 % de moyens.")})`);
   }
+  {
+    // the teacher's notes: read by the chat, with the students' names hidden
+    const bob = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).name as string;
+    run1("INSERT OR REPLACE INTO plan_notes (guild_id, discord_id, note, note_by, note_at, flagged, updated_at) VALUES (?, ?, ?, 'you', ?, 0, ?)", G, U.bob.id, `${bob} bloque sur flexbox, ${alice} l'aide`, 1790000000, 1790000000);
+    ai.chatSeen.length = 0;
+    const notes = await api("POST", "/api/chat", { g: G, question: `Notes sur ${bob}`, history: [] });
+    check(notes.status === 200 && notes.data.answer.includes("plan d'action (ta note)") && notes.data.answer.includes("bloque sur flexbox") && notes.data.answer.includes(alice) && notes.data.sources.join().includes("les notes et commentaires"),
+      `the teacher's notes on a student: read by the chat (${notes.data.error ?? notes.data.answer})`);
+    check(!ai.chatSeen.some((m) => m.includes(bob) || m.includes(alice)), "…the names in the notes are hidden from the AI too");
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  }
+  {
+    // web search: the free sources without any key; the class's services in order; the free ones when they fail
+    ai.searchCalls.length = 0;
+    const free = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    check(free.status === 200 && free.data.answer.includes("(MDN)") && free.data.answer.includes("(Stack Overflow)") && !ai.searchCalls.includes("api.tavily.com") && free.data.sources.some((x: string) => x.startsWith("le web")),
+      `web search with no key: the free sources (MDN, Stack Overflow) (${free.data.error ?? free.data.answer})`);
+    check(!free.data.sources.join().includes("E3"), "…a student's code never goes into the web query");
+    const bad = await api("POST", "/api/settings/ai/search", { g: G, type: "tavily", key: "tvly-bad123456789" });
+    check(bad.status === 400 && /refused/.test(bad.data.error), `a search key that doesn't work: not saved (${bad.data.error})`);
+    const added = await api("POST", "/api/settings/ai/search", { g: G, type: "tavily", key: "tvly-good123456789" });
+    await api("POST", "/api/settings/ai/search", { g: G, type: "brave", key: "BSAgood123456789" });
+    const view = await api("GET", `/api/settings/ai?g=${G}`);
+    check(added.status === 200 && view.data.search.providers.map((p: any) => p.label).join() === "Tavily,Brave Search" && !JSON.stringify(view.data).includes("tvly-good123456789"),
+      "search services saved in order, the keys never sent back to the page");
+    ai.searchCalls.length = 0;
+    const keyed = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    check(keyed.data.answer.includes("(Tavily)") && keyed.data.answer.includes("(MDN)") && !ai.searchCalls.includes("api.search.brave.com"), `…the first service answers, MDN's own pages added (${keyed.data.answer})`);
+    ai.searchDown = true; ai.searchCalls.length = 0;
+    const down = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    ai.searchDown = false;
+    check(ai.searchCalls.includes("api.tavily.com") && ai.searchCalls.includes("api.search.brave.com") && down.data.answer.includes("(MDN)") && down.data.answer.includes("(Stack Overflow)"),
+      `…every service down: the next one tried, then the free sources answer (${down.data.answer})`);
+    for (const p of view.data.search.providers) await api("DELETE", `/api/settings/ai/search/${p.id}?g=${G}`);
+    check((await api("GET", `/api/settings/ai?g=${G}`)).data.search.providers.length === 0, "…services removed");
+  }
   const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
   check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0 && general.data.general === true
     && general.data.answer.includes("[Bon guide](https://links.example.org/ok)") && !general.data.answer.includes("Page inventée") && general.data.answer.includes("Et aussi ce lien dans une phrase")

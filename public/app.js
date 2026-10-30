@@ -1536,6 +1536,14 @@ async function aiSettings(root, flash = null) {
       <div id="ai-form"></div>
     </div>
 
+    ${d.search ? `<div class="panel set-card" id="ai-search"><h3 style="margin-top:0">🔎 Web search <span class="small muted">· for the chat with the class (resources, documentation)</span></h3>
+      <p class="small muted" style="margin-top:0">The chat looks up real, current pages instead of guessing links. ${d.search.providers.length ? "Your services are asked in order; if one fails or is at its limit, the next one answers." : "No key needed to start:"} The free sources (${d.search.free.map(esc).join(", ")}) are always there${d.search.providers.length ? " too, and take over if every service fails" : ""}.</p>
+      ${d.search.providers.length ? `<ol class="ai-list">${d.search.providers.map((p, i) => `<li class="ai-item"><span class="ai-n">${i + 1}</span><div class="ai-main"><b>${esc(p.label)}</b> <span class="small muted">${i ? "backup" : "first choice"}</span><div class="small"><code>${esc(p.masked)}</code></div></div>
+        <div class="ai-act"><button class="btn small danger" data-sdel="${esc(p.id)}" aria-label="Remove">✕</button></div></li>`).join("")}<li class="ai-item"><span class="ai-n">${d.search.providers.length + 1}</span><div class="ai-main"><b>${d.search.free.map(esc).join(" + ")}</b> <span class="small muted">free, no key · always last</span></div></li></ol>` : ""}
+      <div class="ai-pick">${Object.entries(d.search.presets).map(([k, v], i) => `<button type="button" class="ai-pv" data-stype="${k}" aria-pressed="${!i}"><b>${esc(v.label)}</b><span class="small muted">${esc(v.free)}</span></button>`).join("")}</div>
+      <p class="small" id="ai-shelp"></p>
+      <div class="ai-keyrow"><input type="password" id="ai-skey" autocomplete="off" spellcheck="false" aria-label="Search API key"><button class="btn primary" id="ai-sadd">Test and add</button></div></div>` : ""}
+
     ${d.providers.length && d.classes.length ? `<div class="panel set-card"><h3 style="margin-top:0">Use the same AIs in my other classes</h3>
       <p class="small muted" style="margin-top:0">Copies these AIs (with their keys) to the classes you tick. Only tick your own classes: another teacher should use their own keys.</p>
       <div class="checks">${d.classes.map((c) => `<label class="check small"><input type="checkbox" data-copy="${esc(c.id)}"> ${esc(c.name)}</label>`).join("")}</div>
@@ -1612,6 +1620,27 @@ async function aiSettings(root, flash = null) {
   if ($("#ai-server", root)) $("#ai-server", root).onchange = (e) => put({ server: e.target.checked }, e.target.checked ? "This class may use the ClassBot's key" : "This class no longer uses the ClassBot's key");
   if ($("#ai-workers", root)) $("#ai-workers", root).onchange = (e) => put({ workers: e.target.checked });
   if ($("#ai-legacy", root)) $("#ai-legacy", root).onclick = () => confirmDialog("Delete the old shared key?", "Classes without their own AI then use Cloudflare's free AI (or the Cloudflare secret, for the classes allowed to).", "Delete", async () => { await api("/settings/ai/legacy", { method: "DELETE" }); aiSettings(root); }, true);
+  // web search: one service picked, its key tested before it's saved
+  if ($("#ai-search", root)) {
+    let stype = Object.keys(d.search.presets)[0];
+    const pick = (k) => {
+      stype = k;
+      const v = d.search.presets[k];
+      $$("[data-stype]", root).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.stype === k)));
+      $("#ai-shelp", root).innerHTML = `Create a key on <a href="${esc(v.keyUrl)}" target="_blank" rel="noopener">${esc(v.keyUrl.replace(/^https:\/\//, ""))}</a>${v.keyHint ? ` (it starts with <code>${esc(v.keyHint)}</code>)` : ""}, then paste it here.`;
+      $("#ai-skey", root).placeholder = v.keyHint || "paste the key";
+    };
+    $$("[data-stype]", root).forEach((b) => b.onclick = () => pick(b.dataset.stype));
+    pick(stype);
+    $("#ai-sadd", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const key = $("#ai-skey", root).value.trim();
+      if (!key) throw new Error("Paste the API key.");
+      await api("/settings/ai/search", { method: "POST", body: { type: stype, key } });
+      toast(`${d.search.presets[stype].label} added: it works ✅`);
+      aiSettings(root);
+    });
+    $$("[data-sdel]", root).forEach((b) => b.onclick = () => confirmDialog("Remove this search service?", "Its key is deleted from ClassBot. The next service (or the free sources) takes its place.", "Remove", async () => { await api(`/settings/ai/search/${b.dataset.sdel}`, { method: "DELETE" }); aiSettings(root); }, true));
+  }
   if ($("#ai-copy", root)) $("#ai-copy", root).onclick = (e) => busy(e.currentTarget, async () => {
     const to = $$("[data-copy]:checked", root).map((c) => c.dataset.copy);
     if (!to.length) return toast("Tick at least one class", true);
