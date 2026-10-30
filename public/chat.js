@@ -21,9 +21,11 @@ const chatKey = () => `classbot.chat.${S.g}`;
 const chatLoad = () => { try { const v = JSON.parse(localStorage.getItem(chatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringify(list.slice(-40))); } catch { /* private window: this visit only */ } };
 
-/** The answer's text: escaped, then **bold**, *italic*, lists and line breaks (nothing else from the AI reaches the page). */
+/** The answer's text: escaped, then **bold**, *italic*, links (http/https only, in a new tab), lists and line breaks (nothing else from the AI reaches the page). */
 function chatText(t) {
-  const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, "$1<i>$2</i>").split("\n");
+  const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, "$1<i>$2</i>")
+    .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]{3,500})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]{3,500}?)([.,;:!?]?)(?=\s|\)|$)/gm, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>$3').split("\n");
   let html = "", list = false;
   for (const l of lines) {
     const li = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
@@ -91,7 +93,7 @@ function chatCheckDialog() {
 
 /** Under an answer: what ClassBot read for it, and 👍 / 👎. */
 function chatFoot(m, i) {
-  const src = `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">${CHAT_EYE}<span>${(m.sources || []).length ? `Lu : ${m.sources.map(esc).join(" · ")}` : "Aucune donnée lue"}</span></span>`;
+  const src = `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">${CHAT_EYE}<span>${(m.sources || []).length ? `Lu : ${m.sources.map(esc).join(" · ")}` : m.general ? "Réponse générale, hors données de la classe" : "Aucune donnée lue"}</span></span>`;
   const btn = (v, icon, label) => `<button type="button" class="chat-vote ${v > 0 ? "up" : "down"}${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
   const warn = (m.unverified || []).length ? `<p class="chat-warn" title="Ces chiffres ne sont pas dans les données lues par ClassBot : vérifie-les avant de t'en servir">⚠ Chiffres non vérifiés : ${m.unverified.map(esc).join(", ")}</p>` : "";
   return `${warn}<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
@@ -154,7 +156,7 @@ async function viewChat() {
         status = st.step === "read" ? `Je lis ${st.sources.join(", ") || "les données"}…` : "J'écris la réponse…";
         const el = $("#chat-status"); if (el) el.textContent = status;
       });
-      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], at: Date.now() });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], general: !!r.general, at: Date.now() });
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true, at: Date.now() }); }
     busy = false; status = ""; chatSave(list); draw();
   };
