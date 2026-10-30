@@ -8,6 +8,7 @@ import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, 
 import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, linkBtn, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
+import { SearchKeyError, addSearchProvider, removeSearchProvider, searchView } from "../shared/websearch.ts";
 import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
 import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite, whyWriteFailed } from "../shared/ai.ts";
 import { bankExamples, guildLangs, loadTests, pickGuildLang, regrade, saveGeneratedWrite } from "../shared/challenges.ts";
@@ -603,7 +604,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
     if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
       const g = await guild();
-      const view = async () => ({ ...(await classAiView(env, g.id)), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
+      const view = async () => ({ ...(await classAiView(env, g.id)), search: await searchView(env, g.id), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
       try {
         if (path === "/settings/ai" && method === "GET") return ok(await view());
         if (path === "/settings/ai" && method === "PUT") { await updateClassAi(env, g.id, body); return ok(await view()); }
@@ -612,9 +613,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (am && method === "DELETE") { await removeProvider(env, g.id, am[1]); return ok(await view()); }
         am = path.match(/^\/settings\/ai\/providers\/([\w-]{1,20})\/test$/);
         if (am && method === "POST") return ok({ test: await testSaved(env, g.id, am[1]), ...(await view()) });
+        // web search for the chat (the class's Tavily key; empty: removed)
+        if (path === "/settings/ai/search" && method === "POST") { await addSearchProvider(env, g.id, body); return ok(await view()); }
+        am = path.match(/^\/settings\/ai\/search\/([\w-]{1,20})$/);
+        if (am && method === "DELETE") { await removeSearchProvider(env, g.id, am[1]); return ok(await view()); }
         if (path === "/settings/ai/copy" && method === "POST") return ok(await copyClassAi(env, g.id, Array.isArray(body.to) ? body.to : []));
         if (path === "/settings/ai/legacy" && method === "DELETE") { await saveAiSettings(env, { clear: true }); return ok(await view()); }
-      } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
+      } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError || e instanceof SearchKeyError) throw new HttpError(400, e.message); throw e; }
     }
     // -------------------------------------------------------------- 📚 shared library (with the other classes)
     if (path === "/library" || path.startsWith("/library/")) {

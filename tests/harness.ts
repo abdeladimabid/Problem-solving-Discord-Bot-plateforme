@@ -147,6 +147,21 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
   const method = (init.method ?? "GET").toUpperCase();
+  // web search: Tavily ("tvly-good" works), Brave, MDN's search and pages, Stack Overflow
+  if (url.hostname === "api.tavily.com" || url.hostname === "api.search.brave.com") {
+    ai.searchCalls.push(url.hostname);
+    const auth = String((init.headers || {}).authorization || (init.headers || {})["x-subscription-token"] || "");
+    if (ai.searchDown) return new Response("down", { status: 503 });
+    if (!/tvly-good|BSAgood/.test(auth)) return new Response("{}", { status: 401 });
+    return url.hostname === "api.tavily.com" ? Response.json({ results: [{ title: "Grid guide (Tavily)", url: "https://css-guide.example.org/grid", content: "A complete guide" }] })
+      : Response.json({ web: { results: [{ title: "Grid (Brave)", url: "https://brave-found.example.org/grid", description: "Found by Brave" }] } });
+  }
+  if (url.hostname === "developer.mozilla.org") {
+    if (url.pathname === "/api/v1/search") { ai.searchCalls.push("mdn"); return Response.json({ documents: [{ mdn_url: "/fr/docs/Web/CSS/grid", title: "Propriété CSS grid", summary: "La propriété raccourcie grid" }] }); }
+    return new Response("<html></html>", { status: 200 });
+  }
+  if (url.hostname === "api.stackexchange.com") { ai.searchCalls.push("so"); return Response.json({ items: [{ title: "How CSS grid works", link: "https://stackoverflow.com/questions/1/grid", answer_count: 3, is_answered: true }] }); }
+  if (url.hostname === "css-guide.example.org" || url.hostname === "brave-found.example.org" || url.hostname === "stackoverflow.com") return new Response("<html></html>", { status: 200 });
   // pages the chat's links point at: /ok exists, the rest is a 404
   if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
@@ -414,6 +429,8 @@ export const ai = {
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],
   chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
+  searchDown: false,   // the keyed search services (Tavily, Brave) fail: the free sources answer
+  searchCalls: [] as string[],   // the hosts the web search asked
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
@@ -749,6 +766,19 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        // the teacher's notes on a student; the web for resources (the answer gives the links found)
+        if (/^Notes sur E\d+/.test(String(input.messages[input.messages.length - 1]?.content))) {
+          const code = String(input.messages[input.messages.length - 1].content).match(/E\d+/)![0];
+          return { response: JSON.stringify({ personnes: [code], tools: [{ name: "notes", args: { code } }] }) };
+        }
+        if (String(input.messages[input.messages.length - 1]?.content).startsWith("Cherche sur le web")) return { response: JSON.stringify({ personnes: [], tools: [{ name: "web", args: { q: "css grid E3" } }] }) };
+        { const lastT = String(input.messages[input.messages.length - 1]?.content);
+          if (lastT.startsWith("DONNÉES") && /_(web|notes)(_E\d+)?"/.test(lastT)) {
+            const d = JSON.parse(lastT.split("\n\nLA QUESTION")[0].slice(lastT.indexOf("{")));
+            const v: any = Object.values(d)[0];
+            if (Array.isArray(v)) return { response: JSON.stringify({ answer: `Ressources :\n${v.map((r: any) => `- [${r.titre}](${r.adresse}) (${r.source})`).join("\n")}` }) };
+            return { response: JSON.stringify({ answer: `D'après tes notes (${v.total}) : ${v.textes.map((t: any) => `${t.source} : ${t.texte}`).join(" / ")}` }) };
+          } }
         // who the question names, as written (a name still in clear = not a student of the class)
         { const who = String(input.messages[input.messages.length - 1]?.content).match(/^Que fait (\p{L}+) (?:mtn|en ce moment)/u)?.[1];
           if (who) return { response: JSON.stringify({ personnes: [who], tools: [{ name: "class_overview", args: {} }] }) }; }
