@@ -23,6 +23,7 @@ export interface Ctx {
 }
 
 export interface Env {
+  CHAT_PAUSE_MS?: string;   // the chat's pauses between AI calls of the reliability test (0 in the tests)
   DB: D1;
   AI: AIBinding;
   ASSETS?: { fetch(req: Request): Promise<Response> };

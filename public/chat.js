@@ -85,15 +85,16 @@ const chatTime = (at) => { if (!at) return ""; const d = new Date(at); return d.
 const chatCell = (c) => (/^(excellent|bon|moyen|faible|critique)$/i.test(String(c)) ? `<span class="chat-lv ${String(c).toLowerCase()}">${esc(c)}</span>` : esc(c));
 /** "Is the chat reliable?": ClassBot asks questions it knows the answer to, and shows each result as it comes. */
 function chatCheckDialog() {
-  const d = openDialog("Tester la fiabilité du chat", `<p class="sub">ClassBot pose au chat environ 8 questions dont il calcule lui-même la bonne réponse (nombre d'apprenants, niveaux, points…), avec ta première clé IA. Ça prend 1 à 2 minutes et utilise une trentaine d'appels IA.</p><div id="chk-out"></div>`,
+  const d = openDialog("Tester la fiabilité du chat", `<p class="sub">ClassBot pose au chat 13 questions dont il calcule lui-même la bonne réponse (nombre d'apprenants, niveaux, points, noms absents, actions…), avec ta première clé IA. Une question à la fois, avec des pauses pour ne pas dépasser la limite par minute de ta clé : ça prend 2 à 4 minutes (environ 45 appels IA).</p><div id="chk-out"></div>`,
     [{ label: "Lancer le test", primary: true, action: async () => {
       const out = $("#chk-out", d), rows = [];
-      const draw = (head) => { out.innerHTML = `<p class="chat-chk-head">${head}</p>${rows.map((it) => `<div class="chat-chk ${it.ok ? "ok" : "ko"}"><b>${it.ok ? "✓" : "✗"} ${esc(it.question)}</b>
+      const draw = (head) => { out.innerHTML = `<p class="chat-chk-head">${head}</p>${rows.map((it) => `<div class="chat-chk ${it.skipped ? "skip" : it.ok ? "ok" : "ko"}"><b>${it.skipped ? "⏸" : it.ok ? "✓" : "✗"} ${esc(it.question)}</b>
         <span>Attendu : ${esc(it.expected)}</span>${it.ok ? "" : `<span>Réponse : ${esc(it.got)}</span>`}</div>`).join("")}`; };
       draw("<span class=\"chat-dots\"><i></i><i></i><i></i></span> Question 1…");
       try {
         const r = await chatAsk({}, (m) => { rows.push(m.item); draw(`<span class="chat-dots"><i></i><i></i><i></i></span> Question ${m.i + 2} sur ${m.total}…`); }, "/chat/check");
-        draw(`<b>${r.score} / ${r.total} justes</b> ${r.score === r.total ? "· le chat est fiable avec cette clé." : "· regarde les réponses fausses ; essaie une autre IA en premier dans Réglages → Clés IA."}`);
+        const skip = r.skipped ? ` · ${r.skipped} pas testée${r.skipped > 1 ? "s" : ""} (ta clé IA était à sa limite : relance dans quelques minutes, ou ajoute une 2e clé d'un autre compte)` : "";
+        draw(`<b>${r.score} / ${r.total} justes</b> ${!r.total ? "" : r.score === r.total ? "· le chat est fiable avec cette clé." : "· regarde les réponses fausses ; essaie une autre IA en premier dans Réglages → Clés IA."}${skip}`);
       } catch (e) { draw(`<span class="chat-err">${esc(e.message)}</span>`); }
     } }]);
   return d;

@@ -868,6 +868,7 @@ export async function makeEnv(extra: Partial<Env> = {}) {
     DISCORD_TOKEN: "token",
     PUBLIC_URL: "https://bot.example.workers.dev",
     DASHBOARD_URL: "https://dash.example.workers.dev",
+    CHAT_PAUSE_MS: "0",
     ...extra,
   };
   return { env, privateKey: keys.privateKey };
