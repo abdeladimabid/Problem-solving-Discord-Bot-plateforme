@@ -6851,6 +6851,21 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }
 
+section("no merge conflict left in the code (a stray <<<<<<< line breaks the CSS or the code that follows it)");
+{
+  const left: string[] = [];
+  const walk = (dir: string) => {
+    for (const f of readdirSync(join(ROOT, dir))) {
+      const rel = `${dir}/${f}`;
+      if (statSync(join(ROOT, rel)).isDirectory()) { walk(rel); continue; }
+      if (!/\.(ts|js|mjs|css|html|jsonc?)$/.test(f)) continue;
+      if (/^(<{7} |={7}$|>{7} )/m.test(readFileSync(join(ROOT, rel), "utf8"))) left.push(rel);
+    }
+  };
+  for (const d of ["public", "src", "scripts", "tests"]) walk(d);
+  check(!left.length, `merge conflict lines (<<<<<<< / ======= / >>>>>>>) left in: ${left.join(", ")}`);
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;
