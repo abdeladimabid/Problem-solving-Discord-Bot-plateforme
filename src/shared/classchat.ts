@@ -426,7 +426,7 @@ export async function checkLinks(text: string): Promise<string> {
   let out = text.split("\n").filter((line) => !(/^\s*(?:[-*•]|\d+[.)])\s/.test(line) && isDead(line))).join("\n")
     .replace(LINK, (all, label, url) => (dead.has(url) ? label : all));
   const left = urls.filter((u) => !dead.has(u)).length;
-  out += `\n\n_${dead.size} lien(s) proposé(s) par l'IA n'existai${dead.size > 1 ? "ent" : "t"} pas : retiré(s) par ClassBot.${left ? "" : " Cherche sur MDN (https://developer.mozilla.org/fr/) ou web.dev (https://web.dev/learn)."}*`;
+  out += `\n\n*${dead.size} lien(s) proposé(s) par l'IA n'existai${dead.size > 1 ? "ent" : "t"} pas : retiré(s) par ClassBot.${left ? "" : " Cherche sur MDN (https://developer.mozilla.org/fr/) ou web.dev (https://web.dev/learn)."}*`;
   return out;
 }
 
