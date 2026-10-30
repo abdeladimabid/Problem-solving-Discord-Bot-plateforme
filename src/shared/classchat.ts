@@ -553,7 +553,7 @@ export async function classChat(env: Env, g: GuildRow, students: ChatStudent[], 
       }
     }
     // an answer about the class without having read anything: sent back once, the data first
-    if (!calls.length && !used.length && !bounced && !smallTalk && !last && reply?.answer && reply?.general !== true && !reply?.action) {
+    if (!calls.length && !used.length && !bounced && !smallTalk && !last && reply?.answer && reply?.general !== true && !reply?.action && !(Array.isArray(reply?.actions) && reply.actions.length)) {
       bounced = true;
       msgs.push({ role: "assistant", content: JSON.stringify(reply) });
       msgs.push({ role: "user", content: "Tu as répondu sans lire aucune donnée de ClassBot : tes chiffres ne peuvent pas être justes. Demande d'abord les données nécessaires (JSON \"tools\"), puis réponds uniquement à partir d'elles." });

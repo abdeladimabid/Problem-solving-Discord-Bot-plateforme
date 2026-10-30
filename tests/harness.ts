@@ -768,6 +768,9 @@ function fakeAI() {
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
         // an action asked: proposed (never done by the AI); "E999" isn't in the class
         { const lastA = String(input.messages[input.messages.length - 1]?.content);
+          const both = lastA.match(/^Ajoute (E\d+) au plan et écris-lui/);
+          if (both) return { response: JSON.stringify({ plan: "ajouter au plan, puis un message", personnes: [both[1]], answer: "Je te propose deux actions : confirme ci-dessous.",
+            actions: [{ type: "plan_add", codes: [both[1]], note: "suivi flexbox" }, { type: "message", codes: [both[1]], text: "Salut {prénom} ! On regarde flexbox ensemble demain." }] }) };
           const am = lastA.match(/^Ajoute (E\d+) au plan/);
           if (am) return { response: JSON.stringify({ personnes: [am[1]], answer: `Je te propose d'ajouter ${am[1]} au plan d'action : confirme ci-dessous.`, action: { type: "plan_add", codes: [am[1], "E999"], note: `${am[1]} bloque sur flexbox` } }) };
           if (lastA.startsWith("Action fantôme")) return { response: JSON.stringify({ personnes: [], answer: "Je te propose…", action: { type: "message", codes: ["E999"], text: "Bonjour" } }) }; }
