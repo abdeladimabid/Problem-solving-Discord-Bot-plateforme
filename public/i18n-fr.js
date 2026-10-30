@@ -3964,4 +3964,13 @@ window.CB_FR = {
   "Their questions go to the": "Ses questions arrivent dans la",
   "; your answer reaches them on this page and by DM.": " ; ta réponse lui arrive sur sa page et en DM.",
   "You:": "Toi :",
+  "📚 Their guide": "📚 Son guide",
+  "Their guide": "Son guide",
+  "See it ↗": "Le voir ↗",
+  "↻ Make it again": "↻ Le refaire",
+  "✨ Make it now": "✨ Le faire maintenant",
+  "Made when they first open it.": "Fait la première fois qu’il l’ouvre.",
+  "Being made…": "En préparation…",
+  "Their guide is ready": "Son guide est prêt",
+  "The guide couldn't be made": "Le guide n’a pas pu être fait",
 };

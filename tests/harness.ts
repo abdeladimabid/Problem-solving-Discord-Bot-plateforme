@@ -147,6 +147,23 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
   const method = (init.method ?? "GET").toUpperCase();
+  // web search: Tavily ("tvly-good" works), Brave, MDN's search and pages, Stack Overflow
+  if (url.hostname === "api.tavily.com" || url.hostname === "api.search.brave.com") {
+    ai.searchCalls.push(url.hostname);
+    const auth = String((init.headers || {}).authorization || (init.headers || {})["x-subscription-token"] || "");
+    if (ai.searchDown) return new Response("down", { status: 503 });
+    if (!/tvly-good|BSAgood/.test(auth)) return new Response("{}", { status: 401 });
+    return url.hostname === "api.tavily.com" ? Response.json({ results: [{ title: "Grid guide (Tavily)", url: "https://css-guide.example.org/grid", content: "A complete guide" }] })
+      : Response.json({ web: { results: [{ title: "Grid (Brave)", url: "https://brave-found.example.org/grid", description: "Found by Brave" }] } });
+  }
+  if (url.hostname === "developer.mozilla.org") {
+    if (url.pathname === "/api/v1/search") { ai.searchCalls.push("mdn"); return Response.json({ documents: [{ mdn_url: "/fr/docs/Web/CSS/grid", title: "Propriété CSS grid", summary: "La propriété raccourcie grid" }] }); }
+    return new Response("<html></html>", { status: 200 });
+  }
+  if (url.hostname === "api.stackexchange.com") { ai.searchCalls.push("so"); return Response.json({ items: [{ title: "How CSS grid works", link: "https://stackoverflow.com/questions/1/grid", answer_count: 3, is_answered: true }] }); }
+  if (url.hostname === "css-guide.example.org" || url.hostname === "brave-found.example.org" || url.hostname === "stackoverflow.com") return new Response("<html></html>", { status: 200 });
+  // pages the chat's links point at: /ok exists, the rest is a 404
+  if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
@@ -401,6 +418,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 // ------------------------------------------------------------------- AI
 export const ai = {
   calls: 0,
+  guideUsers: [] as string[],
   mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
@@ -412,6 +430,8 @@ export const ai = {
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
   maxTokens: [] as number[],
   chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
+  searchDown: false,   // the keyed search services (Tavily, Brave) fail: the free sources answer
+  searchCalls: [] as string[],   // the hosts the web search asked
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
@@ -516,6 +536,19 @@ function fakeAI() {
         const wish = ((user.split("CONSIGNE DU FORMATEUR (prioritaire) :\n<<<\n")[1] || "").split("\n>>>")[0] || "");
         return { response: JSON.stringify({ titre: cur.titre || "Mini-projet : portfolio", notion: "Flexbox, Grid", context: (cur.contexte || "Ton portfolio.") + " Il grandit.",
           tasks: [...(cur.taches || []), ...items.map((x) => `Dans la page, ${x.toLowerCase()}`), ...(wish && !items.length ? [`Ajouter : ${wish}`] : [])], deliverable: cur.livrable || "Le lien du dépôt GitHub", hours: (cur.heures || 3) + 1, ajoute: items }) };
+      }
+      // 📚 a plan's guide: one fiche per notion, its resources picked among the ones found (R1…), plus one that doesn't exist
+      if (sys.includes("Tu écris le GUIDE PERSONNEL")) {
+        ai.guideUsers.push(user);
+        const notions = [...user.matchAll(/^NOTION \d+ : (.+) \(priorité \d\)$/gm)].map((m) => m[1]);
+        return { response: JSON.stringify({ intro: "On reprend les bases ensemble.", fiches: notions.map((n) => ({ notion: n, pour_toi: "Dans ton brief, ça bloquait.", explication: `La notion ${n} expliquée simplement.`,
+          points: ["Point 1", "Point 2", "Point 3"], exemple: { langage: "css", code: "nav ul { display: flex; }", note: "Une barre flex." }, erreurs: ["Oublier `display: flex`"], auto_test: "Que fait `justify-content` ?",
+          ressources: [{ id: "R1", note: "La référence" }, { id: "R9", note: "Inventée" }] })) }) };
+      }
+      if (sys.includes("Tu traduis le guide d'un apprenant")) {
+        const src = JSON.parse(user.replace(/^<<<\n/, "").replace(/\n>>>$/, ""));
+        const tag = sys.includes("DARIJA") ? "[ary] " : "[en] ";
+        return { response: JSON.stringify({ intro: tag + src.intro, fiches: src.fiches.map((f: any) => ({ ...f, explication: tag + f.explication, points: f.points.map((x: string) => tag + x), notes: f.notes.map((x: string) => tag + x) })) }) };
       }
       if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("Écris UNE action de type")) {
         const ch = Number((user.match(/^(\d+) · /m) || [])[1] || 0);
@@ -747,19 +780,51 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        // an action asked: proposed (never done by the AI); "E999" isn't in the class
+        { const lastA = String(input.messages[input.messages.length - 1]?.content);
+          const both = lastA.match(/^Ajoute (E\d+) au plan et écris-lui/);
+          if (both) return { response: JSON.stringify({ plan: "ajouter au plan, puis un message", personnes: [both[1]], answer: "Je te propose deux actions : confirme ci-dessous.",
+            actions: [{ type: "plan_add", codes: [both[1]], note: "suivi flexbox" }, { type: "message", codes: [both[1]], text: "Salut {prénom} ! On regarde flexbox ensemble demain." }] }) };
+          const am = lastA.match(/^Ajoute (E\d+) au plan/);
+          if (am) return { response: JSON.stringify({ personnes: [am[1]], answer: `Je te propose d'ajouter ${am[1]} au plan d'action : confirme ci-dessous.`, action: { type: "plan_add", codes: [am[1], "E999"], note: `${am[1]} bloque sur flexbox` } }) };
+          if (lastA.startsWith("Action fantôme")) return { response: JSON.stringify({ personnes: [], answer: "Je te propose…", action: { type: "message", codes: ["E999"], text: "Bonjour" } }) }; }
+        // the teacher's notes on a student; the web for resources (the answer gives the links found)
+        if (/^Notes sur E\d+/.test(String(input.messages[input.messages.length - 1]?.content))) {
+          const code = String(input.messages[input.messages.length - 1].content).match(/E\d+/)![0];
+          return { response: JSON.stringify({ personnes: [code], tools: [{ name: "notes", args: { code } }] }) };
+        }
+        if (String(input.messages[input.messages.length - 1]?.content).startsWith("Cherche sur le web")) return { response: JSON.stringify({ personnes: [], tools: [{ name: "web", args: { q: "css grid E3" } }] }) };
+        { const lastT = String(input.messages[input.messages.length - 1]?.content);
+          if (lastT.startsWith("DONNÉES") && /_(web|notes)(_E\d+)?"/.test(lastT)) {
+            const d = JSON.parse(lastT.split("\n\nLA QUESTION")[0].slice(lastT.indexOf("{")));
+            const v: any = Object.values(d)[0];
+            if (Array.isArray(v)) return { response: JSON.stringify({ answer: `Ressources :\n${v.map((r: any) => `- [${r.titre}](${r.adresse}) (${r.source})`).join("\n")}` }) };
+            return { response: JSON.stringify({ answer: `D'après tes notes (${v.total}) : ${v.textes.map((t: any) => `${t.source} : ${t.texte}`).join(" / ")}` }) };
+          } }
+        // who the question names, as written (a name still in clear = not a student of the class)
+        { const who = String(input.messages[input.messages.length - 1]?.content).match(/^Que fait (\p{L}+) (?:mtn|en ce moment)/u)?.[1];
+          if (who) return { response: JSON.stringify({ personnes: [who], tools: [{ name: "class_overview", args: {} }] }) }; }
+        if (String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES") && input.messages.some((m: any) => String(m.content).includes("Combien de briefs techniques"))) return { response: JSON.stringify({ answer: "La classe a 4 briefs (voir `class_overview.briefs.assigned`), niveaux dans (`students.niveau`)." }) };
+        // a figure made up: corrected when ClassBot points at it (or not, for "Chiffre têtu")
+        if (input.messages.some((m: any) => /Chiffre (inventé|têtu)/.test(String(m.content)))) {
+          const lastText = String(input.messages[input.messages.length - 1]?.content);
+          if (lastText.startsWith("Ces chiffres de ta réponse")) return { response: JSON.stringify({ answer: input.messages.some((m: any) => String(m.content).includes("Chiffre têtu")) ? "Il y a 4242 faibles, j'insiste." : "Il y a bien les faibles de la liste, sans chiffre inventé." }) };
+          if (lastText.startsWith("DONNÉES")) return { response: JSON.stringify({ answer: "Il y a 4242 faibles et (inPlan = non) rien de prévu." }) };
+        }
+        if (String(input.messages[input.messages.length - 1]?.content).includes("Ressources générales")) return { response: JSON.stringify({ answer: "Voir MDN (modules) et javascript.info :\n- [Bon guide](https://links.example.org/ok) : clair\n- [Page inventée](https://links.example.org/invented) : n'existe pas\nEt aussi [ce lien](https://links.example.org/gone) dans une phrase.", general: true }) };
         if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
         if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
         // a model that answers from nowhere the first time
         if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
-        if (last.includes("Tous puis filtre")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
-        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
+        if (last.includes("Tous puis filtre") && !last.startsWith("DONNÉES")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
+        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.split("\n\nLA QUESTION")[0].slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
           table_from: { data: Object.keys(d)[0], where: { niveau: "faible" }, title: "Faibles", columns: { Code: "code", Niveau: "niveau" } }, table: null }) }; }
         if (!last.startsWith("DONNÉES")) {
           const code = (last.match(/\bE\d+\b/) || [])[0];
           return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
         }
-        const data = JSON.parse(last.slice(last.indexOf("{")));
+        const data = JSON.parse(last.split("\n\nLA QUESTION")[0].slice(last.indexOf("{")));
         const st = Object.values(data).find((v: any) => v && v.code) as any;
         if (st) return { response: JSON.stringify({ answer: `**${st.code}** est au niveau ${st.niveau}, ${st.entrainement.resolus} défis résolus.`, table: null }) };
         const faibles = (Object.values(data).find((v) => Array.isArray(v)) as any[]) || [];
@@ -817,6 +882,7 @@ export async function makeEnv(extra: Partial<Env> = {}) {
     DISCORD_TOKEN: "token",
     PUBLIC_URL: "https://bot.example.workers.dev",
     DASHBOARD_URL: "https://dash.example.workers.dev",
+    CHAT_PAUSE_MS: "0",
     ...extra,
   };
   return { env, privateKey: keys.privateKey };

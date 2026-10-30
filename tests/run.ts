@@ -19,6 +19,7 @@ import { finish } from "../src/shared/challenges.ts";
 import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
+import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
@@ -6341,6 +6342,27 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   await api("PUT", `/api/hands/${hand.id}?g=${G}`, { action: "reply", reply: "C'est un attribut pour les lecteurs d'écran." });
   const va = (await wp("data")).data.asks[0];
   check(va.status === "done" && /lecteurs d'écran/.test(va.reply) && va.question === "Je ne comprends pas aria-required", "…the answer is on their page");
+  // 📚 their guide: each lacune explained, with real resources only, in French, darija or English
+  {
+    const n0 = ai.guideUsers.length;
+    const G1 = await wp("guide?lang=fr");
+    const P1 = await api("GET", `/api/wplans/${id}?g=${G}`);
+    const gd = G1.data.guide;
+    check(G1.status === 200 && G1.data.state === "ready" && gd.items.length >= 1 && gd.items.length === P1.data.plan.diag.lacunes.length && /expliquée simplement/.test(gd.items[0].explain), `the guide: one fiche per lacune of the diagnosis (${G1.status} ${JSON.stringify(G1.data).slice(0, 200)})`);
+    check(gd.items.every((x: any) => x.resources.length >= 1 && x.resources.every((r: any) => /^https:\/\/(developer\.mozilla\.org|stackoverflow\.com)\//.test(r.url))) && !JSON.stringify(gd).includes("Inventée"), "…its resources are the ones found by the search, never one the AI made up");
+    check(n0 >= 1 && ai.guideUsers.length === n0 && !/Bob/.test(ai.guideUsers[ai.guideUsers.length - 1]) && P1.data.guide.state === "ready" && P1.data.guide.notions.length === gd.items.length, `…made when the plan was sent (no name sent to the AI); the teacher's page says it's ready (${n0} ${ai.guideUsers.length})`);
+    const G2 = await wp("guide?lang=fr");
+    check(ai.guideUsers.length === n0 && G2.data.guide.items[0].explain === gd.items[0].explain, "…kept: opened again, not made again");
+    const A1 = await wp("guide?lang=ary"), E1 = await wp("guide?lang=en");
+    check(A1.data.lang === "ary" && /^\[ary\] /.test(A1.data.guide.items[0].explain) && A1.data.guide.items[0].example.code === gd.items[0].example.code && A1.data.guide.items[0].resources[0].url === gd.items[0].resources[0].url, "in darija: the texts translated, the code and the links kept");
+    check(E1.data.lang === "en" && /^\[en\] /.test(E1.data.guide.intro), "in English");
+    const calls = ai.calls; await wp("guide?lang=ary");
+    check(ai.calls === calls, "…a translation is made once, then kept");
+    const R = await api("POST", `/api/wplans/${id}/guide?g=${G}`, {});
+    check(R.status === 200 && R.data.guide.state === "ready" && ai.guideUsers.length === n0 + 1 && R.data.guide.langs.length === 0, "the teacher can make it again (the translations are made again too)");
+    const pg2 = await wp();
+    check(/Mes notions/.test(pg2.data) && /data-lang/.test(pg2.data), "their page has the 📚 Mes notions tab and the language buttons");
+  }
   // the teacher follows and validates
   const T1 = await api("GET", `/api/wplans/${id}?g=${G}`);
   const st = (sid: string) => T1.data.status.steps.find((x: any) => x.id === sid).state;
@@ -6779,6 +6801,15 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   check(chkItems[0]?.expected === String(students0) && chkItems[0].ok && chkItems.some((x: any) => x.question.startsWith("Quel est le niveau") && x.ok),
     `…the right answers computed by ClassBot, the chat's compared (${JSON.stringify(chkItems.slice(0, 2)).slice(0, 200)})`);
   check(chkItems.some((x: any) => !x.ok), "…a wrong answer is caught (the fake AI doesn't give the points)");
+  // the AI key at its limit for the whole test: the questions are "not tested", out of the score (not counted wrong)
+  run1("DELETE FROM ai_usage");
+  ai.chatFails = 100000;
+  const lim = await api("POST", "/api/chat/check", { g: G });
+  ai.chatFails = 0;
+  const limDone = String(lim.data).trim().split("\n").map((l) => JSON.parse(l)).at(-1)?.done;
+  run1("DELETE FROM ai_usage");
+  check(limDone?.skipped >= 8 && limDone.score === limDone.total && limDone.items.filter((x: any) => x.skipped).every((x: any) => /limite/.test(x.got)) && limDone.items.filter((x: any) => !x.skipped).every((x: any) => x.ok),
+    `…the AI key at its limit: each question asked again, then "not tested", none counted wrong (${limDone?.score}/${limDone?.total}, ${limDone?.skipped} skipped)`);
   ai.chatFails = 1;
   const flaky = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
   check(flaky.status === 200 && flaky.data.answer.includes("apprenants") && ai.chatFails === 0, `the AI's answer cut short once: asked again, answered (${flaky.data.error ?? flaky.data.answer})`);
@@ -6786,8 +6817,133 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const prose = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
   ai.chatProse = false;
   check(prose.status === 200 && prose.data.answer === "La classe va bien, rien d'inquiétant.", `the AI answering in plain text instead of JSON: its text is the answer (${prose.data.error ?? prose.data.answer})`);
+  {
+    const fake = [{ discord_id: "1", name: "Amine Alaoui" }, { discord_id: "2", name: "Amine Bennani" }, { discord_id: "3", name: "Sara Idrissi" }] as any[];
+    const c = codesOf(fake), h = (t: string) => hideNames(t, fake, c.codeOf);
+    check(/\(E\d ou E\d\)/.test(h("Que fait Amine ?")) && !h("Que fait Amine ?").includes("Amine"), `a first name two students share: both codes, the first name not sent (${h("Que fait Amine ?")})`);
+    check(h("Que fait Karim ?") === "Que fait Karim ?" && /^Et E\d \?$/.test(h("Et Sara ?")), "…a name not in the class stays as it is (the AI says it isn't there); a first name only one student has: their code");
+  }
+  const nobody = await api("POST", "/api/chat", { g: G, question: "Que fait Hamza mtn ?", history: [{ role: "user", text: "comment se fait le débriefing" }, { role: "assistant", text: "Le débriefing…" }] });
+  check(nobody.status === 200 && /Je ne trouve pas \*\*Hamza\*\* dans cette classe/.test(nobody.data.answer) && !nobody.data.used.length, `someone not in the class: said so by ClassBot, nothing else answered (${nobody.data.answer})`);
+  const typo = alice.split(" ")[0].slice(0, -1) || "Alic";
+  const close = await api("POST", "/api/chat", { g: G, question: `Que fait ${typo} mtn ?`, history: [] });
+  check(close.data.answer.includes(`Tu veux dire **${alice}**`), `…a typo: the student meant is proposed (${close.data.answer})`);
+  ai.chatSeen.length = 0;
+  const tech = await api("POST", "/api/chat", { g: G, question: "Combien de briefs techniques ?", history: [] });
+  check(tech.data.answer === "La classe a 4 briefs, niveaux dans.", `the AI's technical references taken out of the answer (${tech.data.answer})`);
+  check(ai.chatSeen.some((m) => m.includes("LA QUESTION À LAQUELLE RÉPONDRE : « Combien de briefs techniques ? »")), "…the question repeated after the data, so the AI answers it and not an earlier one");
+  const sure = await api("POST", "/api/chat", { g: G, question: "are you sure ?", history: [{ role: "user", text: "que fait othman ?" }, { role: "assistant", text: "Je ne trouve pas **othman** dans cette classe (X)." }] });
+  check(/^Oui : j'ai revérifié la liste des \d+ apprenants/.test(sure.data.answer) && sure.data.answer.includes("**othman**"), `"are you sure?" after "I can't find X": about that answer, checked again by ClassBot (${sure.data.answer})`);
+  const made = await api("POST", "/api/chat", { g: G, question: "Chiffre inventé : combien de faibles ?", history: [] });
+  check(made.status === 200 && !made.data.answer.includes("4242") && !made.data.unverified.length, `a figure not in the data: the AI asked to correct it, corrected (${made.data.answer})`);
+  const stubborn = await api("POST", "/api/chat", { g: G, question: "Chiffre têtu : combien de faibles ?", history: [] });
+  check(stubborn.data.unverified?.join() === "4242", `…still wrong after that: flagged to the teacher (${stubborn.data.unverified})`);
+  check(!made.data.answer.includes("inPlan") && !stubborn.data.answer.includes("inPlan"), "…a field name written out (« (inPlan = non) ») taken out");
+  {
+    const big = { r1_1_students: Array.from({ length: 300 }, (_, i) => ({ code: `E${i + 1}`, niveau: i % 3 ? "moyen" : "faible", points: i * 7 })) };
+    const fitted = JSON.parse(fitData(big, 4000));
+    check(fitted.r1_1_students.tronque.endsWith("sur 300") && fitted.r1_1_students.elements.length < 300 && JSON.stringify(fitted).length <= 4000,
+      `data too long for the AI: the list cut and said so, with its exact total (${fitted.r1_1_students.tronque})`);
+    const v = (t: string) => unverifiedNumbers(t, big, "question sur 7 jours");
+    check(!v("Il y a 100 faibles et 200 moyens, E3 a 14 points, sur 7 jours, soit 33 %.").length && v("Il y a 4242 faibles et 12,5 % de moyens.").join() === "4242,12,5",
+      `the numbers of an answer checked against the data: counts, values, the question, percentages fine; the rest flagged (${v("Il y a 4242 faibles et 12,5 % de moyens.")})`);
+  }
+  {
+    // the teacher's notes: read by the chat, with the students' names hidden
+    const bob = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).name as string;
+    run1("INSERT OR REPLACE INTO plan_notes (guild_id, discord_id, note, note_by, note_at, flagged, updated_at) VALUES (?, ?, ?, 'you', ?, 0, ?)", G, U.bob.id, `${bob} bloque sur flexbox, ${alice} l'aide`, 1790000000, 1790000000);
+    ai.chatSeen.length = 0;
+    const notes = await api("POST", "/api/chat", { g: G, question: `Notes sur ${bob}`, history: [] });
+    check(notes.status === 200 && notes.data.answer.includes("plan d'action (ta note)") && notes.data.answer.includes("bloque sur flexbox") && notes.data.answer.includes(alice) && notes.data.sources.join().includes("les notes et commentaires"),
+      `the teacher's notes on a student: read by the chat (${notes.data.error ?? notes.data.answer})`);
+    check(!ai.chatSeen.some((m) => m.includes(bob) || m.includes(alice)), "…the names in the notes are hidden from the AI too");
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  }
+  {
+    // web search: the free sources without any key; the class's services in order; the free ones when they fail
+    ai.searchCalls.length = 0;
+    const free = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    check(free.status === 200 && free.data.answer.includes("(MDN)") && free.data.answer.includes("(Stack Overflow)") && !ai.searchCalls.includes("api.tavily.com") && free.data.sources.some((x: string) => x.startsWith("le web")),
+      `web search with no key: the free sources (MDN, Stack Overflow) (${free.data.error ?? free.data.answer})`);
+    check(!free.data.sources.join().includes("E3"), "…a student's code never goes into the web query");
+    const bad = await api("POST", "/api/settings/ai/search", { g: G, type: "tavily", key: "tvly-bad123456789" });
+    check(bad.status === 400 && /refused/.test(bad.data.error), `a search key that doesn't work: not saved (${bad.data.error})`);
+    const added = await api("POST", "/api/settings/ai/search", { g: G, type: "tavily", key: "tvly-good123456789" });
+    await api("POST", "/api/settings/ai/search", { g: G, type: "brave", key: "BSAgood123456789" });
+    const view = await api("GET", `/api/settings/ai?g=${G}`);
+    check(added.status === 200 && view.data.search.providers.map((p: any) => p.label).join() === "Tavily,Brave Search" && !JSON.stringify(view.data).includes("tvly-good123456789"),
+      "search services saved in order, the keys never sent back to the page");
+    ai.searchCalls.length = 0;
+    const keyed = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    check(keyed.data.answer.includes("(Tavily)") && keyed.data.answer.includes("(MDN)") && !ai.searchCalls.includes("api.search.brave.com"), `…the first service answers, MDN's own pages added (${keyed.data.answer})`);
+    ai.searchDown = true; ai.searchCalls.length = 0;
+    const down = await api("POST", "/api/chat", { g: G, question: "Cherche sur le web des ressources CSS grid", history: [] });
+    ai.searchDown = false;
+    check(ai.searchCalls.includes("api.tavily.com") && ai.searchCalls.includes("api.search.brave.com") && down.data.answer.includes("(MDN)") && down.data.answer.includes("(Stack Overflow)"),
+      `…every service down: the next one tried, then the free sources answer (${down.data.answer})`);
+    for (const p of view.data.search.providers) await api("DELETE", `/api/settings/ai/search/${p.id}?g=${G}`);
+    check((await api("GET", `/api/settings/ai?g=${G}`)).data.search.providers.length === 0, "…services removed");
+  }
+  {
+    // actions: the AI proposes, ClassBot checks, the teacher confirms, ClassBot does it like the dashboard's buttons
+    const bob = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).name as string;
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+    const prop = await api("POST", "/api/chat", { g: G, question: `Ajoute ${bob} au plan d'action, il bloque sur flexbox`, history: [] });
+    const a = prop.data.actions?.[0];
+    check(prop.status === 200 && a?.type === "plan_add" && a.students.length === 1 && a.students[0].id === U.bob.id && a.students[0].name === bob && a.note === `${bob} bloque sur flexbox`,
+      `an action asked: proposed with this class's student only, the names back in the note (${JSON.stringify(a)})`);
+    check(!q1("SELECT 1 AS x FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id), "…nothing done before the teacher confirms");
+    check((await api("POST", "/api/chat", { g: G, question: "Action fantôme", history: [] })).data.actions.length === 0, "…an action on no student of the class: not proposed");
+    const two = await api("POST", "/api/chat", { g: G, question: `Ajoute ${bob} au plan et écris-lui un mot`, history: [] });
+    check(two.data.actions?.map((x: any) => x.type).join() === "plan_add,message" && two.data.actions[1].text.includes("{prénom}") && two.data.actions.every((x: any) => x.students[0].id === U.bob.id),
+      `several actions in one answer (each confirmed on its own, or all at once) (${JSON.stringify(two.data.actions)?.slice(0, 160)})`);
+    const okAdd = await api("POST", "/api/chat/action", { g: G, type: "plan_add", ids: [U.bob.id, "123456789"], note: "bloque sur flexbox (modifié)" });
+    const row = q1("SELECT flagged, note, note_by FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+    check(okAdd.status === 200 && okAdd.data.done.join() === bob && row?.flagged === 1 && row.note === "bloque sur flexbox (modifié)" && row.note_by === "you",
+      `confirmed: added to the plan d'action with the teacher's note, like the plan's own button (${JSON.stringify(row)})`);
+    const undo = await api("POST", "/api/chat/action/undo", { g: G, before: okAdd.data.before });
+    const back = q1("SELECT flagged, note FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+    check(undo.status === 200 && undo.data.back.join() === bob && back?.flagged === 0 && back.note === null, `…taken back: as it was before (${JSON.stringify(back)})`);
+    check((await api("POST", "/api/chat/action/undo", { g: G, before: [{ id: "123456789", flagged: 1 }] })).status === 400, "…taking back a student of another class: refused");
+    await api("POST", "/api/chat/action", { g: G, type: "plan_add", ids: [U.bob.id], note: "bloque sur flexbox (modifié)" });
+    await api("POST", "/api/chat/action", { g: G, type: "plan_remove", ids: [U.bob.id] });
+    check(q1("SELECT flagged FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id)?.flagged === -1, "…taken out of the plan");
+    discordCalls.length = 0;
+    const msg = await api("POST", "/api/chat/action", { g: G, type: "message", ids: [U.bob.id, U.alice.id], text: "Salut {prénom} ! Courage pour le brief !" });
+    const first = (n: string) => n.split(/\s+/)[0].charAt(0).toUpperCase() + n.split(/\s+/)[0].slice(1).toLowerCase();
+    const got = discordCalls.map((c) => c.body?.embeds?.[0]?.description).filter(Boolean);
+    check(msg.status === 200 && msg.data.done.length + msg.data.failed.length === 2 && msg.data.done.length >= 1 && msg.data.done.every((n: string) => got.includes(`Salut ${first(n)} ! Courage pour le brief !`)) && !got.some((x: string) => x.includes("{prénom}")),
+      `…a Discord message to two students: sent to each, like the student page's Message button (${JSON.stringify(msg.data)})`);
+    check((await api("POST", "/api/chat/action", { g: G, type: "message", ids: ["123456789"], text: "x" })).status === 400 && (await api("POST", "/api/chat/action", { g: G, type: "delete_all", ids: [U.bob.id] })).status === 400,
+      "…a student of another class, or an action that doesn't exist: refused");
+    run1("DELETE FROM plan_notes WHERE guild_id = ? AND discord_id = ?", G, U.bob.id);
+  }
+  const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
+  check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0 && general.data.general === true
+    && general.data.answer.includes("[Bon guide](https://links.example.org/ok)") && !general.data.answer.includes("Page inventée") && general.data.answer.includes("Et aussi ce lien dans une phrase")
+    && general.data.answer.includes("2 lien(s) proposé(s) par l'IA n'existaient pas"), `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
+  const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
+  check(sg1.status === 200 && sg1.data.suggestions.length === 6 && [...sg1.data.suggestions, ...sg2.data.suggestions].some((x: string) => names.some((n: string) => x.includes(n)) || x.includes("brief")),
+    `suggestions for this class (${sg1.data.suggestions?.slice(0, 3).join(" | ")})`);
+  check(!sg1.data.suggestions.some((x: string) => /Amine/.test(x) && !names.some((n: string) => n.includes("Amine"))), "…no name from another class");
+  check(sg1.data.suggestions.join("|") !== sg2.data.suggestions.join("|") || (await api("GET", `/api/chat/suggestions?g=${G}`)).data.suggestions.join("|") !== sg1.data.suggestions.join("|"), "…a new draw each time");
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
+}
+
+section("no merge conflict left in the code (a stray <<<<<<< line breaks the CSS or the code that follows it)");
+{
+  const left: string[] = [];
+  const walk = (dir: string) => {
+    for (const f of readdirSync(join(ROOT, dir))) {
+      const rel = `${dir}/${f}`;
+      if (statSync(join(ROOT, rel)).isDirectory()) { walk(rel); continue; }
+      if (!/\.(ts|js|mjs|css|html|jsonc?)$/.test(f)) continue;
+      if (/^(<{7} |={7}$|>{7} )/m.test(readFileSync(join(ROOT, rel), "utf8"))) left.push(rel);
+    }
+  };
+  for (const d of ["public", "src", "scripts", "tests"]) walk(d);
+  check(!left.length, `merge conflict lines (<<<<<<< / ======= / >>>>>>>) left in: ${left.join(", ")}`);
 }
 
 section("slash command definitions are valid for Discord");

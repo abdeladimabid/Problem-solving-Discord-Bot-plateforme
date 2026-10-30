@@ -8,6 +8,7 @@ import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, 
 import { t } from "../shared/i18n.ts";
 import { btn, dapi, dm, linkBtn, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
+import { SearchKeyError, addSearchProvider, removeSearchProvider, searchView } from "../shared/websearch.ts";
 import { AiKeyError, addProvider, classAiView, copyClassAi, removeProvider, testSaved, updateClassAi } from "../shared/aikeys.ts";
 import { aiHealth, aiProviderLabel, chatJson, generateQuick, generateWrite, whyWriteFailed } from "../shared/ai.ts";
 import { bankExamples, guildLangs, loadTests, pickGuildLang, regrade, saveGeneratedWrite } from "../shared/challenges.ts";
@@ -31,7 +32,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
-import { ChatError, chatCheck, chatFeedback, classChat } from "../shared/classchat.ts";
+import { ChatError, chatCheck, chatFeedback, chatSuggestions, classChat, runChatAction, undoChatAction } from "../shared/classchat.ts";
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -65,6 +66,7 @@ import { quietWriters } from "../shared/vscodedb.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
+import { makeGuide } from "../shared/wpguide.ts";
 import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
@@ -465,7 +467,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
     if (path === "/wplans" && method === "POST") return ok(await createPlan(env, await guild(), String(body.student ?? "")));
-    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review))?$/);
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|guide))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
@@ -478,8 +480,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (body.edits) await savePlanEdits(env, g, pid, body.edits);
         const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
         await markSheetDirty(env, g.id);
+        // 📚 their guide (each lacune explained, with resources) is made in the background: ready when they open it
+        ctx.waitUntil(makeGuide(forClass(env, g.id), g, pid).catch((e) => console.error("guide", e)));
         return ok({ ...(await workPlanView(env, g, pid)), dm: r.dm });
       }
+      if (m[2] === "guide" && method === "POST") { await makeGuide(forClass(env, g.id), g, pid); return ok(await workPlanView(env, g, pid)); }
     }
     m = path.match(/^\/plan\/(\d+)$/);
     if (m && method === "PUT") return ok(await savePlan(env, await guild(), m[1], body));
@@ -544,6 +549,10 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild(), list = await students(env, g);
       return chatStream(ctx, (line) => chatCheck(env, g, list, (item, i, total) => line({ item, i, total })));
     }
+    // an action the chat proposed, confirmed by the teacher (checked again, then done like the dashboard's buttons)
+    if (path === "/chat/action" && method === "POST") { const g = await guild(); return ok(await runChatAction(env, g, await students(env, g), body)); }
+    if (path === "/chat/action/undo" && method === "POST") { const g = await guild(); return ok(await undoChatAction(env, g, await students(env, g), body)); }
+    if (path === "/chat/suggestions" && method === "GET") { const g = await guild(); return ok({ suggestions: await chatSuggestions(env, g, await students(env, g)) }); }
     if (path === "/chat/feedback" && method === "POST") { const g = await guild(); return ok(await chatFeedback(env, g.id, body)); }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
     // the students' intranet photos: which ones exist, and each image (from Cloudflare's cache after the first time)
@@ -602,7 +611,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
     if (path === "/settings/ai" || path.startsWith("/settings/ai/")) {
       const g = await guild();
-      const view = async () => ({ ...(await classAiView(env, g.id)), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
+      const view = async () => ({ ...(await classAiView(env, g.id)), search: await searchView(env, g.id), legacy: (await aiSettingsView(env)).source === "settings" ? (await aiSettingsView(env)).masked : null });
       try {
         if (path === "/settings/ai" && method === "GET") return ok(await view());
         if (path === "/settings/ai" && method === "PUT") { await updateClassAi(env, g.id, body); return ok(await view()); }
@@ -611,9 +620,13 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         if (am && method === "DELETE") { await removeProvider(env, g.id, am[1]); return ok(await view()); }
         am = path.match(/^\/settings\/ai\/providers\/([\w-]{1,20})\/test$/);
         if (am && method === "POST") return ok({ test: await testSaved(env, g.id, am[1]), ...(await view()) });
+        // web search for the chat (the class's Tavily key; empty: removed)
+        if (path === "/settings/ai/search" && method === "POST") { await addSearchProvider(env, g.id, body); return ok(await view()); }
+        am = path.match(/^\/settings\/ai\/search\/([\w-]{1,20})$/);
+        if (am && method === "DELETE") { await removeSearchProvider(env, g.id, am[1]); return ok(await view()); }
         if (path === "/settings/ai/copy" && method === "POST") return ok(await copyClassAi(env, g.id, Array.isArray(body.to) ? body.to : []));
         if (path === "/settings/ai/legacy" && method === "DELETE") { await saveAiSettings(env, { clear: true }); return ok(await view()); }
-      } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError) throw new HttpError(400, e.message); throw e; }
+      } catch (e) { if (e instanceof AiKeyError || e instanceof AiSettingsError || e instanceof SearchKeyError) throw new HttpError(400, e.message); throw e; }
     }
     // -------------------------------------------------------------- 📚 shared library (with the other classes)
     if (path === "/library" || path.startsWith("/library/")) {
