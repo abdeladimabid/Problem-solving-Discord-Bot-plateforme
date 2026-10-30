@@ -6803,7 +6803,9 @@ section("Chat with your class: free questions, the class's data read by ClassBot
       `the numbers of an answer checked against the data: counts, values, the question, percentages fine; the rest flagged (${v("Il y a 4242 faibles et 12,5 % de moyens.")})`);
   }
   const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
-  check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0, `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
+  check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0 && general.data.general === true
+    && general.data.answer.includes("[Bon guide](https://links.example.org/ok)") && !general.data.answer.includes("Page inventée") && general.data.answer.includes("Et aussi ce lien dans une phrase")
+    && general.data.answer.includes("2 lien(s) proposé(s) par l'IA n'existaient pas"), `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
   const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
   check(sg1.status === 200 && sg1.data.suggestions.length === 6 && [...sg1.data.suggestions, ...sg2.data.suggestions].some((x: string) => names.some((n: string) => x.includes(n)) || x.includes("brief")),
     `suggestions for this class (${sg1.data.suggestions?.slice(0, 3).join(" | ")})`);

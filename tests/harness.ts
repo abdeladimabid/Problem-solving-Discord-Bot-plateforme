@@ -147,6 +147,8 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
   const url = new URL(typeof input === "string" ? input : input.url);
   const method = (init.method ?? "GET").toUpperCase();
+  // pages the chat's links point at: /ok exists, the rest is a 404
+  if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
@@ -757,7 +759,7 @@ function fakeAI() {
           if (lastText.startsWith("Ces chiffres de ta réponse")) return { response: JSON.stringify({ answer: input.messages.some((m: any) => String(m.content).includes("Chiffre têtu")) ? "Il y a 4242 faibles, j'insiste." : "Il y a bien les faibles de la liste, sans chiffre inventé." }) };
           if (lastText.startsWith("DONNÉES")) return { response: JSON.stringify({ answer: "Il y a 4242 faibles et (inPlan = non) rien de prévu." }) };
         }
-        if (String(input.messages[input.messages.length - 1]?.content).includes("Ressources générales")) return { response: JSON.stringify({ answer: "Voir MDN (modules) et javascript.info : liens à vérifier.", general: true }) };
+        if (String(input.messages[input.messages.length - 1]?.content).includes("Ressources générales")) return { response: JSON.stringify({ answer: "Voir MDN (modules) et javascript.info :\n- [Bon guide](https://links.example.org/ok) : clair\n- [Page inventée](https://links.example.org/invented) : n'existe pas\nEt aussi [ce lien](https://links.example.org/gone) dans une phrase.", general: true }) };
         if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
         if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
