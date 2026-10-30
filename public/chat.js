@@ -3,8 +3,20 @@
 // is kept in this browser (per class); a table in an answer can be downloaded as an Excel file.
 /* global $, api, esc, toast, view, routes, S, XL, saveBlob */
 
-const CHAT_EXAMPLES = ["Comment va la classe cette semaine ?", "Combien de faibles, et qui ?", "Que fait Amine en ce moment ?",
-  "Toutes les statistiques d'Amine cette année", "Écris un bilan de l'année d'Amine pour l'administration", "Mets tous les faibles dans un Excel"];
+// until the class's own suggestions arrive (or if they can't): questions that fit any class
+const CHAT_EXAMPLES = ["Comment va la classe cette semaine ?", "Qui est à surveiller en ce moment, et pourquoi ?", "Mets les apprenants à surveiller dans un Excel"];
+// the questions this teacher asks most in this class: the ones asked again come first among the suggestions
+const askedKey = () => `classbot.chat.asked.${S.g}`;
+const askedLoad = () => { try { const v = JSON.parse(localStorage.getItem(askedKey()) || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; } };
+function askedNote(q) {
+  const k = q.trim().replace(/\s+/g, " ");
+  if (k.length < 8 || k.length > 160) return;
+  const v = askedLoad();
+  v[k] = (v[k] || 0) + 1;
+  const top = Object.entries(v).sort((a, b) => b[1] - a[1]).slice(0, 60);
+  try { localStorage.setItem(askedKey(), JSON.stringify(Object.fromEntries(top))); } catch { /* private window */ }
+}
+const askedTop = (n) => Object.entries(askedLoad()).filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
 const chatKey = () => `classbot.chat.${S.g}`;
 const chatLoad = () => { try { const v = JSON.parse(localStorage.getItem(chatKey()) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringify(list.slice(-40))); } catch { /* private window: this visit only */ } };
@@ -81,7 +93,8 @@ function chatCheckDialog() {
 function chatFoot(m, i) {
   const src = `<span class="chat-src" title="Les données lues par ClassBot pour cette réponse">${CHAT_EYE}<span>${(m.sources || []).length ? `Lu : ${m.sources.map(esc).join(" · ")}` : "Aucune donnée lue"}</span></span>`;
   const btn = (v, icon, label) => `<button type="button" class="chat-vote ${v > 0 ? "up" : "down"}${m.vote === v ? " on" : ""}" data-vote="${v}" data-i="${i}" aria-label="${label}" title="${label}"${m.vote ? " disabled" : ""}>${icon}</button>`;
-  return `<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
+  const warn = (m.unverified || []).length ? `<p class="chat-warn" title="Ces chiffres ne sont pas dans les données lues par ClassBot : vérifie-les avant de t'en servir">⚠ Chiffres non vérifiés : ${m.unverified.map(esc).join(", ")}</p>` : "";
+  return `${warn}<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
 }
 
 async function viewChat() {
@@ -93,7 +106,7 @@ async function viewChat() {
       <button type="button" class="chat-pill" id="chat-new">${CHAT_PLUS} Nouvelle conversation</button></div></div>
     <section class="chat"><div class="chat-thread" id="chat-thread"></div>
       <div class="chat-bottom">
-        <div class="chat-sugg"><span>Suggestions :</span>${CHAT_EXAMPLES.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+        <div class="chat-sugg" id="chat-sugg"></div>
         <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="1" placeholder="Pose une question sur tes apprenants, les briefs, les niveaux…" aria-label="Ta question"></textarea>
           <button class="chat-send" id="chat-send" type="submit" aria-label="Envoyer" title="Envoyer (Entrée)">${chatIcon('<path d="M12 19V5m0 0l-7 7m7-7l7 7"/>', 20)}</button></form>
       </div></section>`;
@@ -134,20 +147,28 @@ async function viewChat() {
     if (!text || busy) return;
     const history = list.filter((m) => !m.error).slice(-8).map((m) => ({ role: m.role, text: m.text }));
     list.push({ role: "user", text });
+    askedNote(text);
     q.value = ""; grow(); busy = true; draw();
     try {
       const r = await chatAsk({ question: text, history }, (st) => {
         status = st.step === "read" ? `Je lis ${st.sources.join(", ") || "les données"}…` : "J'écris la réponse…";
         const el = $("#chat-status"); if (el) el.textContent = status;
       });
-      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], at: Date.now() });
+      list.push({ role: "assistant", text: r.answer, table: r.table || null, sources: r.sources || [], unverified: r.unverified || [], at: Date.now() });
     } catch (e) { list.push({ role: "assistant", text: e.message, error: true, at: Date.now() }); }
     busy = false; status = ""; chatSave(list); draw();
   };
   // the suggestions stay under the thread; the box grows with the question
   const grow = () => { q.style.height = "auto"; q.style.height = `${Math.min(q.scrollHeight, 160)}px`; };
   q.oninput = grow;
-  $(".chat-sugg").querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; grow(); q.focus(); });
+  // the suggestions: this teacher's frequent questions first, then the class's own (a new draw at each visit)
+  const sugg = (list2) => {
+    const all = [...new Set([...askedTop(2), ...list2])].slice(0, 7);
+    $("#chat-sugg").innerHTML = `<span>Suggestions :</span>${all.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}`;
+    $("#chat-sugg").querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; grow(); q.focus(); });
+  };
+  sugg(CHAT_EXAMPLES);
+  api("/chat/suggestions").then((r) => { if (Array.isArray(r.suggestions) && r.suggestions.length) sugg(r.suggestions); }).catch(() => {});
   $("#chat-form").onsubmit = (e) => { e.preventDefault(); send(); };
   q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
   $("#chat-check").onclick = () => chatCheckDialog();

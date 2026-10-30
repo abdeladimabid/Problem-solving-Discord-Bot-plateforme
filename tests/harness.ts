@@ -747,19 +747,30 @@ function fakeAI() {
       if (sys.includes("Il te parle librement de sa classe")) {
         const last: string = input.messages[input.messages.length - 1]?.content ?? "";
         ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        // who the question names, as written (a name still in clear = not a student of the class)
+        { const who = String(input.messages[input.messages.length - 1]?.content).match(/^Que fait (\p{L}+) (?:mtn|en ce moment)/u)?.[1];
+          if (who) return { response: JSON.stringify({ personnes: [who], tools: [{ name: "class_overview", args: {} }] }) }; }
+        if (String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES") && input.messages.some((m: any) => String(m.content).includes("Combien de briefs techniques"))) return { response: JSON.stringify({ answer: "La classe a 4 briefs (voir `class_overview.briefs.assigned`), niveaux dans (`students.niveau`)." }) };
+        // a figure made up: corrected when ClassBot points at it (or not, for "Chiffre têtu")
+        if (input.messages.some((m: any) => /Chiffre (inventé|têtu)/.test(String(m.content)))) {
+          const lastText = String(input.messages[input.messages.length - 1]?.content);
+          if (lastText.startsWith("Ces chiffres de ta réponse")) return { response: JSON.stringify({ answer: input.messages.some((m: any) => String(m.content).includes("Chiffre têtu")) ? "Il y a 4242 faibles, j'insiste." : "Il y a bien les faibles de la liste, sans chiffre inventé." }) };
+          if (lastText.startsWith("DONNÉES")) return { response: JSON.stringify({ answer: "Il y a 4242 faibles et (inPlan = non) rien de prévu." }) };
+        }
+        if (String(input.messages[input.messages.length - 1]?.content).includes("Ressources générales")) return { response: JSON.stringify({ answer: "Voir MDN (modules) et javascript.info : liens à vérifier.", general: true }) };
         if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
         if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
         const all: string = input.messages.map((m: any) => m.content).join(" ");
         // a model that answers from nowhere the first time
         if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
-        if (last.includes("Tous puis filtre")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
-        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
+        if (last.includes("Tous puis filtre") && !last.startsWith("DONNÉES")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
+        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.split("\n\nLA QUESTION")[0].slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
           table_from: { data: Object.keys(d)[0], where: { niveau: "faible" }, title: "Faibles", columns: { Code: "code", Niveau: "niveau" } }, table: null }) }; }
         if (!last.startsWith("DONNÉES")) {
           const code = (last.match(/\bE\d+\b/) || [])[0];
           return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
         }
-        const data = JSON.parse(last.slice(last.indexOf("{")));
+        const data = JSON.parse(last.split("\n\nLA QUESTION")[0].slice(last.indexOf("{")));
         const st = Object.values(data).find((v: any) => v && v.code) as any;
         if (st) return { response: JSON.stringify({ answer: `**${st.code}** est au niveau ${st.niveau}, ${st.entrainement.resolus} défis résolus.`, table: null }) };
         const faibles = (Object.values(data).find((v) => Array.isArray(v)) as any[]) || [];

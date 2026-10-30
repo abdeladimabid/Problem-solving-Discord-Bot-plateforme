@@ -19,6 +19,7 @@ import { finish } from "../src/shared/challenges.ts";
 import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
+import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
 import { assessForAi } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
@@ -6770,6 +6771,44 @@ section("Chat with your class: free questions, the class's data read by ClassBot
   const prose = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
   ai.chatProse = false;
   check(prose.status === 200 && prose.data.answer === "La classe va bien, rien d'inquiétant.", `the AI answering in plain text instead of JSON: its text is the answer (${prose.data.error ?? prose.data.answer})`);
+  {
+    const fake = [{ discord_id: "1", name: "Amine Alaoui" }, { discord_id: "2", name: "Amine Bennani" }, { discord_id: "3", name: "Sara Idrissi" }] as any[];
+    const c = codesOf(fake), h = (t: string) => hideNames(t, fake, c.codeOf);
+    check(/\(E\d ou E\d\)/.test(h("Que fait Amine ?")) && !h("Que fait Amine ?").includes("Amine"), `a first name two students share: both codes, the first name not sent (${h("Que fait Amine ?")})`);
+    check(h("Que fait Karim ?") === "Que fait Karim ?" && /^Et E\d \?$/.test(h("Et Sara ?")), "…a name not in the class stays as it is (the AI says it isn't there); a first name only one student has: their code");
+  }
+  const nobody = await api("POST", "/api/chat", { g: G, question: "Que fait Hamza mtn ?", history: [{ role: "user", text: "comment se fait le débriefing" }, { role: "assistant", text: "Le débriefing…" }] });
+  check(nobody.status === 200 && /Je ne trouve pas \*\*Hamza\*\* dans cette classe/.test(nobody.data.answer) && !nobody.data.used.length, `someone not in the class: said so by ClassBot, nothing else answered (${nobody.data.answer})`);
+  const typo = alice.split(" ")[0].slice(0, -1) || "Alic";
+  const close = await api("POST", "/api/chat", { g: G, question: `Que fait ${typo} mtn ?`, history: [] });
+  check(close.data.answer.includes(`Tu veux dire **${alice}**`), `…a typo: the student meant is proposed (${close.data.answer})`);
+  ai.chatSeen.length = 0;
+  const tech = await api("POST", "/api/chat", { g: G, question: "Combien de briefs techniques ?", history: [] });
+  check(tech.data.answer === "La classe a 4 briefs, niveaux dans.", `the AI's technical references taken out of the answer (${tech.data.answer})`);
+  check(ai.chatSeen.some((m) => m.includes("LA QUESTION À LAQUELLE RÉPONDRE : « Combien de briefs techniques ? »")), "…the question repeated after the data, so the AI answers it and not an earlier one");
+  const sure = await api("POST", "/api/chat", { g: G, question: "are you sure ?", history: [{ role: "user", text: "que fait othman ?" }, { role: "assistant", text: "Je ne trouve pas **othman** dans cette classe (X)." }] });
+  check(/^Oui : j'ai revérifié la liste des \d+ apprenants/.test(sure.data.answer) && sure.data.answer.includes("**othman**"), `"are you sure?" after "I can't find X": about that answer, checked again by ClassBot (${sure.data.answer})`);
+  const made = await api("POST", "/api/chat", { g: G, question: "Chiffre inventé : combien de faibles ?", history: [] });
+  check(made.status === 200 && !made.data.answer.includes("4242") && !made.data.unverified.length, `a figure not in the data: the AI asked to correct it, corrected (${made.data.answer})`);
+  const stubborn = await api("POST", "/api/chat", { g: G, question: "Chiffre têtu : combien de faibles ?", history: [] });
+  check(stubborn.data.unverified?.join() === "4242", `…still wrong after that: flagged to the teacher (${stubborn.data.unverified})`);
+  check(!made.data.answer.includes("inPlan") && !stubborn.data.answer.includes("inPlan"), "…a field name written out (« (inPlan = non) ») taken out");
+  {
+    const big = { r1_1_students: Array.from({ length: 300 }, (_, i) => ({ code: `E${i + 1}`, niveau: i % 3 ? "moyen" : "faible", points: i * 7 })) };
+    const fitted = JSON.parse(fitData(big, 4000));
+    check(fitted.r1_1_students.tronque.endsWith("sur 300") && fitted.r1_1_students.elements.length < 300 && JSON.stringify(fitted).length <= 4000,
+      `data too long for the AI: the list cut and said so, with its exact total (${fitted.r1_1_students.tronque})`);
+    const v = (t: string) => unverifiedNumbers(t, big, "question sur 7 jours");
+    check(!v("Il y a 100 faibles et 200 moyens, E3 a 14 points, sur 7 jours, soit 33 %.").length && v("Il y a 4242 faibles et 12,5 % de moyens.").join() === "4242,12,5",
+      `the numbers of an answer checked against the data: counts, values, the question, percentages fine; the rest flagged (${v("Il y a 4242 faibles et 12,5 % de moyens.")})`);
+  }
+  const general = await api("POST", "/api/chat", { g: G, question: "Ressources générales sur les modules JavaScript", history: [] });
+  check(general.status === 200 && general.data.answer.includes("MDN") && general.data.used.length === 0, `a general question (resources): answered from what the AI knows, not sent back for data (${general.data.error ?? general.data.answer})`);
+  const sg1 = await api("GET", `/api/chat/suggestions?g=${G}`), sg2 = await api("GET", `/api/chat/suggestions?g=${G}`);
+  check(sg1.status === 200 && sg1.data.suggestions.length === 6 && [...sg1.data.suggestions, ...sg2.data.suggestions].some((x: string) => names.some((n: string) => x.includes(n)) || x.includes("brief")),
+    `suggestions for this class (${sg1.data.suggestions?.slice(0, 3).join(" | ")})`);
+  check(!sg1.data.suggestions.some((x: string) => /Amine/.test(x) && !names.some((n: string) => n.includes("Amine"))), "…no name from another class");
+  check(sg1.data.suggestions.join("|") !== sg2.data.suggestions.join("|") || (await api("GET", `/api/chat/suggestions?g=${G}`)).data.suggestions.join("|") !== sg1.data.suggestions.join("|"), "…a new draw each time");
   check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
   run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }
