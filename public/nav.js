@@ -22,9 +22,10 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
   if (!nav || nav.dataset.grouped) return;
   nav.dataset.grouped = "1";
   const links = new Map($$("a", nav).map((a) => [a.getAttribute("href"), a]));
-  const used = new Set(["#/overview"]);
+  const used = new Set(["#/overview", "#/chat"]);
   const frag = document.createDocumentFragment();
   if (links.get("#/overview")) frag.append(links.get("#/overview"));
+  if (links.get("#/chat")) frag.append(links.get("#/chat"));
   for (const g of NAV_GROUPS) {
     const items = g.items.map((h) => links.get(h)).filter(Boolean);
     if (!items.length) continue;

@@ -75,7 +75,8 @@ export const leagueFake = { status: 200, body: null as any, calls: 0 };
 // a fake YouCode intranet: checks each request's signature like VerifyClassbotSignature.php, then answers
 export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", allowed: [12], calls: 0, nonces: new Set<string>(),
   classrooms: [{ id: 12, name: "DWWM 2026", learners: 0 }, { id: 99, name: "Other class", learners: 0 }],
-  learners: {} as Record<number, { id: number; first_name: string; last_name: string }[]>,
+  learners: {} as Record<number, { id: number; first_name: string; last_name: string; photo?: string | null }[]>,
+  photoCalls: 0,
   dists: [] as { id: number; classroom: number; name: string; groups: { id: number; name: string; learners: number[] }[] }[], nextId: 900,
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
@@ -285,6 +286,14 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.pathname === "/api/classbot/classrooms") return Response.json({ success: true, classrooms: intranetFake.classrooms.filter((c) => intranetFake.allowed.includes(c.id)) });
     const lm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners$/);
     if (lm) return intranetFake.allowed.includes(Number(lm[1])) ? Response.json({ success: true, learners: intranetFake.learners[Number(lm[1])] || [] }) : deny("classroom_not_allowed", 403);
+    // a learner's photo (an image, not JSON)
+    const pm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/learners\/(\d+)\/photo$/);
+    if (pm) {
+      intranetFake.photoCalls++;
+      if (!intranetFake.allowed.includes(Number(pm[1]))) return deny("classroom_not_allowed", 403);
+      const l = (intranetFake.learners[Number(pm[1])] || []).find((x) => x.id === Number(pm[2]));
+      return l?.photo ? new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), { headers: { "content-type": "image/jpeg" } }) : deny("no_photo", 404);
+    }
     const sm = url.pathname.match(/^\/api\/classbot\/classrooms\/(\d+)\/squads$/);
     if (sm && init.method === "POST") {
       const cid = Number(sm[1]), b = JSON.parse(body || "{}");
@@ -392,7 +401,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 // ------------------------------------------------------------------- AI
 export const ai = {
   calls: 0,
-  mode: "good" as "good" | "lying" | "broken" | "badwrite",
+  mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
   images: [] as number[],
@@ -401,8 +410,11 @@ export const ai = {
   levelAnswer: "",   // the level the AI gives in "Generate the level" (empty = "Bon")   // the mise en situation names techniques the brief doesn't ask (Flexbox, @media), until asked again
   actBad: 0,         // Activités: the next N live codings break the template (a déroulé of 40 min, fetch before it's taught)
   wsBad: 0,          // Activités: the next N workshops have a déroulé that doesn't add up to their duration
-  maxTokens: [] as number[],   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  maxTokens: [] as number[],
+  chatFails: 0,   // the chat's next AI answers cut short (a broken JSON)
+  chatProse: false,   // the chat's AI answers in plain text once it has the data
+  chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -731,6 +743,32 @@ function fakeAI() {
       if (sys.includes("Écris le code de départ")) return { response: JSON.stringify({ starter: "# 1. créer le dépôt\n# 2. …", expected: "git init\ngit add .\ngit commit -m \"init\"\ngit switch -c feature/home-layout\ngit push -u origin feature/home-layout\ngh pr create" }) };
       if (sys.includes("Écris 4 choix")) return { response: JSON.stringify({ choices: ["git push", "git pull", "git fetch", "git clone"], answer: [0] }) };
       if (sys.includes("Écris la réponse attendue")) return { response: JSON.stringify({ expected: "- le dépôt distant\n- la branche suivie" }) };
+      // Chat with your class: asks for the data first, then answers from it (keeping the students' codes)
+      if (sys.includes("Il te parle librement de sa classe")) {
+        const last: string = input.messages[input.messages.length - 1]?.content ?? "";
+        ai.chatSeen.push(input.messages.map((m: any) => m.content).join(" "));
+        if (ai.chatFails > 0) { ai.chatFails--; return { response: '{"answer": "La classe a' }; }
+        if (ai.chatProse && String(input.messages[input.messages.length - 1]?.content).startsWith("DONNÉES")) return { response: "La classe va bien, rien d'inquiétant." };
+        const all: string = input.messages.map((m: any) => m.content).join(" ");
+        // a model that answers from nowhere the first time
+        if (last.includes("Devine") && !all.includes("sans lire aucune donnée")) return { response: JSON.stringify({ answer: "Il y a 42 faibles.", table: null }) };
+        if (last.includes("Tous puis filtre")) return { response: JSON.stringify({ tools: [{ name: "students", args: {} }] }) };
+        if (all.includes("Tous puis filtre") && last.startsWith("DONNÉES")) { const d = JSON.parse(last.slice(last.indexOf("{"))); return { response: JSON.stringify({ answer: "Les faibles.",
+          table_from: { data: Object.keys(d)[0], where: { niveau: "faible" }, title: "Faibles", columns: { Code: "code", Niveau: "niveau" } }, table: null }) }; }
+        if (!last.startsWith("DONNÉES")) {
+          const code = (last.match(/\bE\d+\b/) || [])[0];
+          return { response: JSON.stringify({ tools: code ? [{ name: "student", args: { code } }] : [{ name: "class_overview", args: {} }, { name: "students", args: { level: "faible" } }] }) };
+        }
+        const data = JSON.parse(last.slice(last.indexOf("{")));
+        const st = Object.values(data).find((v: any) => v && v.code) as any;
+        if (st) return { response: JSON.stringify({ answer: `**${st.code}** est au niveau ${st.niveau}, ${st.entrainement.resolus} défis résolus.`, table: null }) };
+        const faibles = (Object.values(data).find((v) => Array.isArray(v)) as any[]) || [];
+        // a table pointed at the data (and a wrong one written by hand: the data's wins)
+        if (all.includes("Tableau des faibles")) return { response: JSON.stringify({ answer: "Voici les faibles.",
+          table_from: { data: Object.keys(data).find((k) => Array.isArray(data[k])), title: "Faibles", columns: { Apprenant: "code", Niveau: "niveau" } },
+          table: { title: "Faux", columns: ["X"], rows: [["inventé"]] } }) };
+        return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
+      }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
         if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
           { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },

@@ -880,7 +880,7 @@ async function briefsWithProgress(env: Env, g: GuildRow, items: any[]) {
   const extra = new Map((await all<{ id: number; kind: string | null; squads: string | null; link: string | null; summary: string | null; tags: string | null }>(env,
     "SELECT id, kind, squads, json_extract(data, '$.link') AS link, json_extract(data, '$.summary') AS summary, json_extract(data, '$.tags') AS tags FROM briefs WHERE guild_id = ?", g.id)).map((r) => [r.id, r]));
   const reviews = await all<{ brief_id: number; who: string; status: string }>(env, "SELECT brief_id, who, status FROM brief_reviews WHERE guild_id = ?", g.id);
-  const hand = new Map((await all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_handins WHERE guild_id = ? GROUP BY brief_id", g.id).catch(() => [])).map((r) => [r.brief_id, r.n]));
+  const hand = new Map((await all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_handins WHERE guild_id = ? GROUP BY brief_id", g.id).catch(() => [])).map((r) => [r.brief_id, r.n] as const));
   const ids = new Set(students.map((r) => r.discord_id));
   return items.map((b) => {
     const x = extra.get(b.id);

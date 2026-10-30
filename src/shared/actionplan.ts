@@ -66,7 +66,7 @@ export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
     "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []);
   const notes = await all<NoteRow>(env, "SELECT discord_id, note, note_by, note_at, flagged FROM plan_notes WHERE guild_id = ?", g.id).catch(() => []);
   const asg = await all<AsgRow>(env, "SELECT discord_id, status, due_at, created_at, completed_at FROM assignments WHERE guild_id = ? AND status != 'cancelled'", g.id);
-  const noteOf = new Map(notes.map((n) => [n.discord_id, n]));
+  const noteOf = new Map(notes.map((n) => [n.discord_id, n] as const));
   const asgOf = new Map<string, AsgRow[]>();
   for (const a of asg) { if (!asgOf.has(a.discord_id)) asgOf.set(a.discord_id, []); asgOf.get(a.discord_id)!.push(a); }
   const briefNo = new Map(P.briefs.map((b, i) => [b.id, i + 1]));

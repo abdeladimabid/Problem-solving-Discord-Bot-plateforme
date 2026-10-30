@@ -104,7 +104,7 @@ Setup prints what came in and what's left: each student runs `/github` once, and
 npm run setup
 ```
 
-On a ClassBot already installed, this installs the new packages, applies the new migrations and deploys both Workers without asking anything. `npm run setup -- --full` redoes the whole setup, and `npm run update` (migrate + deploy) does the same without the checks. Slash commands reach Discord by themselves within a minute: the cron compares a fingerprint of the command list and re-registers when it changes. Dashboard → Settings → **Diagnostics** shows a missing migration.
+On a ClassBot already installed, this installs the new packages, applies the new migrations and deploys both Workers without asking anything. `npm run setup -- --full` redoes the whole setup, and `npm run update` (type check + migrate + deploy) does the same without the checks. A deploy stops if `npm run typecheck` finds an error. Slash commands reach Discord by themselves within a minute: the cron compares a fingerprint of the command list and re-registers when it changes. Dashboard → Settings → **Diagnostics** shows a missing migration.
 
 ### Manual setup
 

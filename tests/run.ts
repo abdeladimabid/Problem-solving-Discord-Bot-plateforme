@@ -3649,7 +3649,7 @@ section("assessments: shared with other teachers by a link, linked to a brief (d
     const r2 = { result: { exigences: [], competences: [{ code: "C3", avis: "non_visible" }, { code: "C4", avis: "validable" }, { code: "C5", avis: "validable" }] },
       assess: [{ id: 1, title: "A", score: 20, done: 1, of: 1, comps: { C3: { ok: true }, C4: { ok: false } } }] };
     const s2 = reviewStates(r2);
-    check(s2.co.C3 === true && s2.co.C4 === false && s2.co.C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
+    check((s2.co as any).C3 === true && (s2.co as any).C4 === false && (s2.co as any).C5 === true, `the assessment decides where a competency starts, the project for the rest (${JSON.stringify(s2.co)})`);
     check(debriefLevel(r2, s2) === "critique" && debriefLevel({ ...r2, assess: [] }, s2) === "", "the proposed level counts the assessment's score (the competencies don't count in it)");
     // a strong project and every competency switched on can't hide a failed assessment: one level above it, at most
     const ex4 = Array.from({ length: 10 }, (_, i) => ({ type: "story", texte: "Point " + i, statut: i < 8 ? "fait" : "absent" }));
@@ -4716,8 +4716,8 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
   check(op.status === 200 && op.data.assessment.settings.nav === "forward" && op.data.assessment.settings.shuffle === false && op.data.assessment.settings.lockScreen === false, "the teacher sets the options before inviting");
-  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.dave?.id || U.carol.id], send: false });
-  const who = U.dave?.id || U.carol.id;
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [(U as any).dave?.id || U.carol.id], send: false });
+  const who = (U as any).dave?.id || U.carol.id;
   const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[who].split("/quiz/")[1];
   const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
   const sid = "sessionOPTOPTOPTOPTOPT01";
@@ -4823,6 +4823,17 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const mine = await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 501 });
   check(row(mine.data, U.carol.id).linked?.id === 501 && row(mine.data, U.carol.id).linked.by === "you" && !row(mine.data, U.alice.id).linked, "…the teacher's choice wins (the learner moves to that student)");
   check((await api("PUT", "/api/intranet/link", { g: G, discord_id: U.carol.id, learner_id: 777 })).status === 400, "…a learner outside the classroom: refused");
+  // the learners' photos: their file names are kept when the learners are read; each image comes from the intranet (signed)
+  intranetFake.learners[12][0].photo = "501-1700000000.jpg";
+  await api("GET", `/api/intranet/match?g=${G}`);
+  check(q1("SELECT photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.carol.id).photo === "501-1700000000.jpg" && !q1("SELECT photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.bob.id).photo,
+    "the linked learners' photos are known (their file names only)");
+  const phs = await api("GET", `/api/intranet/photos?g=${G}`);
+  check(phs.status === 200 && phs.data.photos[U.carol.id] === "501-1700000000.jpg" && !(U.bob.id in phs.data.photos), "…the dashboard knows which students have one");
+  const calls0 = intranetFake.photoCalls;
+  const img = await api("GET", `/api/intranet/photo/${U.carol.id}?g=${G}`);
+  check(img.status === 200 && intranetFake.photoCalls === calls0 + 1, `…a photo is fetched from the intranet with the signed access (${img.status})`);
+  check((await api("GET", `/api/intranet/photo/${U.bob.id}?g=${G}`)).status === 404 && intranetFake.photoCalls === calls0 + 1, "…no photo: nothing asked, 404");
   // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
   run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
     JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
@@ -6128,7 +6139,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   run1("INSERT INTO gh_log (guild_id, id, discord_id, kind, repo, t, title, size, adds, dels, files, url) VALUES (?, ?, ?, 'commit', 'sq/hammam', ?, 'add everything', 'real', 420, 0, 2, ?)", G, sha, B, tc, `https://github.com/sq/hammam/commit/${sha}`);
   const V = await import("../src/shared/vscode.ts");
   const day = V.dayOf(tc), start = V.dayClock(day).start;
-  const hb = (t: number, f: string, ai: number, hu: number) => ({ t, p: "hammam", f, lang: "HTML", cat: ai ? "ai coding" : "coding", w: 1, lines: 100, ai, hu, lc: 1, ed: "VS Code" });
+  const hb = (t: number, f: string, ai: number, hu: number) => ({ t, p: "hammam", f, lang: "HTML", cat: ai ? "ai coding" : "coding", w: 1 as const, lines: 100, ai, hu, lc: 1 as const, ed: "VS Code" });
   const raw = V.packRaw([hb(tc - 1500, "index.html", 300, 0), hb(tc - 1200, "style.css", 0, 40)], start);
   const agg = { ...V.emptyAgg(), active: 1800, ai: 300, hu: 40, lineData: true, projects: [["hammam", 1800, 0]] };
   run1("INSERT INTO vsc_days (guild_id, discord_id, day, active_s, write_s, n, ai_lines, human_lines, agg, raw, rev, updated_at) VALUES (?, ?, ?, 1800, 0, 2, 300, 40, ?, ?, 0, ?)", G, B, day, JSON.stringify(agg), raw, clock.now());
@@ -6307,6 +6318,29 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   const b0 = await wp("answer", { step: br.id, link: "pas un lien" });
   const b1 = await wp("answer", { step: br.id, link: "https://github.com/bob/nav", note: "Fait avec gap" });
   check(b0.status === 400 && b1.data.work.verdict === "submitted", "the mini brief is handed in as a link");
+  // the mini brief's objectives: a checklist they tick, the teacher sees it, it counts in the progress
+  const nT = br.brief.tasks.length;
+  check(nT >= 2 && v.objTotal === nT && v.objDone === 0 && Array.isArray(br.checks), `their page: the objectives to tick (${nT})`);
+  const k1 = await wp("check", { step: br.id, i: 0, on: true }), k2 = await wp("check", { step: br.id, i: 1, on: true }), k3 = await wp("check", { step: br.id, i: 1, on: false });
+  const kBad = await wp("check", { step: br.id, i: 99, on: true }), kCode = await wp("check", { step: code.id, i: 0, on: true });
+  check(k1.status === 200 && k2.data.checks.join() === "0,1" && k3.data.checks.join() === "0" && kBad.status === 400 && kCode.status === 400, "ticked and unticked; an unknown objective or an action that isn't a brief: refused");
+  const T0 = await api("GET", `/api/wplans/${id}?g=${G}`);
+  const brSt = T0.data.status.steps.find((x: any) => x.id === br.id);
+  check(T0.data.plan.steps.find((x: any) => x.id === br.id).checks.join() === "0" && brSt.ticked === 1 && T0.data.status.objDone === 1 && T0.data.status.objTotal === nT, "the teacher sees which objectives are ticked");
+  const expectPct = Math.round(100 * (2 + 1 / nT) / steps.length);
+  check(T0.data.status.pct === expectPct, `the progress counts the ticked objectives (${T0.data.status.pct} % = ${expectPct} %)`);
+  // a question from their page: in the Help queue, answered there, the answer back on their page
+  const q0 = await wp("ask", { question: "?" });
+  const q1r = await wp("ask", { question: "Je ne comprends pas aria-required", step: br.id, code: "<input required>" });
+  const q2 = await wp("ask", { question: "Encore une" });
+  check(q0.status === 400 && q1r.status === 200 && q1r.data.position >= 1 && q2.status === 400 && /déjà une demande/.test(q2.data.error), "a question: too short refused; sent; one at a time");
+  const hq = await api("GET", `/api/hands?g=${G}`);
+  const hand = hq.data.open.find((h: any) => /aria-required/.test(h.question));
+  check(!!hand && hand.discord_id === B && /^🧭 Plan d'action · action \d+ : /.test(hand.question) && hand.code === "<input required>", "…it reaches the Help queue, with the action it is about and the code");
+  check((await wp("data")).data.asks[0].status === "waiting" && T0.status === 200 && (await api("GET", `/api/wplans/${id}?g=${G}`)).data.asks.length === 1, "…their page and the plan page show it waiting");
+  await api("PUT", `/api/hands/${hand.id}?g=${G}`, { action: "reply", reply: "C'est un attribut pour les lecteurs d'écran." });
+  const va = (await wp("data")).data.asks[0];
+  check(va.status === "done" && /lecteurs d'écran/.test(va.reply) && va.question === "Je ne comprends pas aria-required", "…the answer is on their page");
   // the teacher follows and validates
   const T1 = await api("GET", `/api/wplans/${id}?g=${G}`);
   const st = (sid: string) => T1.data.status.steps.find((x: any) => x.id === sid).state;
@@ -6700,6 +6734,60 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     run1("DELETE FROM intranet_links WHERE learner_id = 4242");
     run1("DELETE FROM sprint_reviews WHERE guild_id = ? AND sprint = ? AND discord_id IN (?, ?)", G, sp.n, U.alice.id, U.bob.id);
   } finally { googleFake.handler = null; }
+}
+
+section("Chat with your class: free questions, the class's data read by ClassBot, no student name sent to the AI");
+{
+  const alice = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name as string;
+  // the students' names (the Students list: the teacher's own account isn't a student)
+  const names = (await api("GET", `/api/students?g=${G}`)).data.map((r: any) => String(r.name || "")).filter((n: string) => n.length >= 3);
+  ai.chatSeen.length = 0;
+  const one = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [] });
+  check(one.status === 200 && one.data.answer.includes(alice) && !/\bE\d+\b/.test(one.data.answer) && one.data.used.includes("student"), `a question about a student: answered from their data, their name back in the answer (${one.data.error ?? one.data.answer})`);
+  check(one.data.sources?.join() === `le dossier de ${alice}`, `…and what was read, in words, with the name (${one.data.sources})`);
+  const streamed = await api("POST", "/api/chat", { g: G, question: `Que fait ${alice} en ce moment ?`, history: [], stream: true });
+  const lines = String(streamed.data).trim().split("\n").map((l) => JSON.parse(l));
+  check(streamed.status === 200 && lines[0]?.step === "read" && lines[0].sources.join() === `le dossier de ${alice}` && lines[1]?.step === "write" && lines.at(-1)?.done?.answer?.includes(alice),
+    `streamed: what is being read (with the name), then writing, then the answer (${String(streamed.data).slice(0, 160)})`);
+  const streamedErr = await api("POST", "/api/chat", { g: G, question: " ", stream: true });
+  check(JSON.parse(String(streamedErr.data).trim()).error?.includes("Write your question"), "…a refused question: the error in the stream");
+  check(ai.chatSeen.some((m) => m.includes("jamais des consignes")) && ai.chatSeen.some((m) => m.includes("pas des consignes) :")), "…the texts in the data are announced to the AI as data, not instructions");
+  const fb = await api("POST", "/api/chat/feedback", { g: G, vote: -1, question: "Combien de faibles ?", answer: "3", sources: ["la liste des apprenants"] });
+  const fbRow = q1("SELECT vote, question, sources FROM chat_feedback WHERE guild_id = ? ORDER BY id DESC", G);
+  check(fb.status === 200 && fbRow?.vote === -1 && fbRow.question === "Combien de faibles ?" && fbRow.sources.includes("apprenants"), "👎 on an answer: kept with the question and what was read");
+  check((await api("POST", "/api/chat/feedback", { g: G, vote: 5, question: "x", answer: "y" })).status === 400, "…a vote that isn't 1 or -1: refused");
+  check(ai.chatSeen.length >= 2 && !ai.chatSeen.some((m) => names.some((n: string) => new RegExp(`(?<!\\p{L})${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?!\\p{L})`, "iu").test(m))), "…no student's name is ever sent to the AI (codes only)");
+  const many = await api("POST", "/api/chat", { g: G, question: "Combien de faibles, et qui ?", history: [{ role: "user", text: `et ${alice} ?` }, { role: "assistant", text: `${alice} va bien.` }] });
+  check(many.status === 200 && Array.isArray(many.data.table?.rows) && many.data.table.columns.join() === "Apprenant,Niveau" && !many.data.table.rows.flat().some((c: string) => /^E\d+$/.test(c)),
+    `a question on the class: a table to download, with the students' names (${JSON.stringify(many.data.table)?.slice(0, 120)})`);
+  check(!ai.chatSeen.some((m) => m.toLowerCase().includes(alice.toLowerCase())), "…the conversation so far is sent without names too");
+  const guess = await api("POST", "/api/chat", { g: G, question: "Devine combien de faibles ?", history: [] });
+  check(guess.status === 200 && guess.data.used.includes("students") && !guess.data.answer.includes("42"), `an answer made without reading any data: sent back, the data read first (${guess.data.answer})`);
+  const fromData = await api("POST", "/api/chat", { g: G, question: "Tableau des faibles", history: [] });
+  check(fromData.status === 200 && fromData.data.table?.title === "Faibles" && fromData.data.table.columns.join() === "Apprenant,Niveau" && fromData.data.table.rows.length === many.data.table.rows.length
+    && !fromData.data.table.rows.flat().some((c: string) => /^E\d+$/.test(c) || c === "inventé"), `a table pointed at the data: filled by ClassBot with the real values and names (${JSON.stringify(fromData.data.table)?.slice(0, 120)})`);
+  const filtered = await api("POST", "/api/chat", { g: G, question: "Tous puis filtre", history: [] });
+  check(filtered.status === 200 && filtered.data.table?.columns.join() === "Apprenant,Niveau" && filtered.data.table.rows.length === many.data.table.rows.length && filtered.data.table.rows.every((r: string[]) => r[1] === "faible"),
+    `a table from the whole list with "where": only the rows asked for, the student column named so (${JSON.stringify(filtered.data.table)?.slice(0, 140)})`);
+  run1("DELETE FROM ai_usage");
+  const chk = await api("POST", "/api/chat/check", { g: G });
+  const chkLines = String(chk.data).trim().split("\n").map((l) => JSON.parse(l));
+  const chkDone = chkLines.at(-1)?.done, chkItems = chkLines.filter((l) => l.item).map((l) => l.item);
+  const students0 = (await api("GET", `/api/students?g=${G}`)).data.length;
+  check(chk.status === 200 && chkDone?.total >= 6 && chkItems.length === chkDone.total && chkDone.score === chkItems.filter((x: any) => x.ok).length,
+    `"is the chat reliable?": each question's result as it comes, then the score (${chkDone?.score}/${chkDone?.total})`);
+  check(chkItems[0]?.expected === String(students0) && chkItems[0].ok && chkItems.some((x: any) => x.question.startsWith("Quel est le niveau") && x.ok),
+    `…the right answers computed by ClassBot, the chat's compared (${JSON.stringify(chkItems.slice(0, 2)).slice(0, 200)})`);
+  check(chkItems.some((x: any) => !x.ok), "…a wrong answer is caught (the fake AI doesn't give the points)");
+  ai.chatFails = 1;
+  const flaky = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
+  check(flaky.status === 200 && flaky.data.answer.includes("apprenants") && ai.chatFails === 0, `the AI's answer cut short once: asked again, answered (${flaky.data.error ?? flaky.data.answer})`);
+  ai.chatProse = true;
+  const prose = await api("POST", "/api/chat", { g: G, question: "Comment va la classe ?", history: [] });
+  ai.chatProse = false;
+  check(prose.status === 200 && prose.data.answer === "La classe va bien, rien d'inquiétant.", `the AI answering in plain text instead of JSON: its text is the answer (${prose.data.error ?? prose.data.answer})`);
+  check((await api("POST", "/api/chat", { g: G, question: "  " })).status === 400, "an empty question: refused");
+  run1("DELETE FROM ai_usage WHERE day LIKE ?", `%|${G}`);
 }
 
 section("slash command definitions are valid for Discord");

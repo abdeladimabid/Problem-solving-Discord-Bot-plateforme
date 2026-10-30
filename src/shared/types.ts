@@ -62,6 +62,7 @@ export type Kind = "code" | "write" | "mcq" | "output" | "bug" | "complexity" | 
 
 export interface GuildRow {
   id: string;
+  league?: string | null;
   name: string | null;
   lang: Lang;
   season: string;

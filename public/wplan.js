@@ -45,7 +45,7 @@ async function giveWorkDialog(preStudents = [], rows = []) {
 // ------------------------------------------------------------------ the builder
 async function viewWorkPlan(id) {
   const r = await api(`/wplans/${id}`);
-  Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url });
+  Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] });
   if (WPS.lastId !== id) { WPS.open = new Set(); WPS.lastId = id; }
   drawWorkPlan();
 }
@@ -61,7 +61,7 @@ function drawWorkPlan() {
         <h1>🧭 ${esc(p.title)}</h1>
         <p class="sub">${draft ? `A draft for ${esc(p.name)}: understand their lacunes, choose the actions, then send. Nothing is sent before you press Send.`
           : `Sent to <b>${esc(p.name)}</b> ${fmtAgo(p.sent_at)}${p.due_at ? ` · due ${fmtDateTime(p.due_at)}` : ""}. Follow each action below.`}</p></div>
-      <div class="actions"><button class="btn" id="wp-gaps">🔎 Weak points</button>${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
+      <div class="actions">${draft ? "" : `<button class="btn primary" id="wp-give">${icon("clipboard")}Give work</button>`}<button class="btn" id="wp-gaps">🔎 Weak points</button>${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
     <div class="wp-grid">
       <div class="stack">
         ${draft ? `<section class="panel wp-diag" id="wp-diag">${diagHtml()}</section>`
@@ -164,15 +164,20 @@ function chListHtml(s, q) {
   return lib.slice(0, 60).map((c) => `<label class="wp-cho ${c.id === s.challenge_id ? "on" : ""}"><input type="radio" name="ch-${esc(s.id)}" value="${c.id}" ${c.id === s.challenge_id ? "checked" : ""}><b>${esc(c.title)}</b> ${diffTag(c.difficulty)} <span class="muted small">${esc(KIND[c.kind] || c.kind)}</span></label>`).join("") || `<p class="muted small">No challenge matches.</p>`;
 }
 function peekHtml(s, st) {
-  if (!s.work && !s.review) return `<span class="muted small">${s.kind === "challenge" ? (st?.asg === "open" ? "Not solved yet (in Discord)" : "") : "Not answered yet"}</span>`;
-  return trackHtml(s, st, true);
+  const n = s.kind === "brief" ? (s.brief?.tasks || []).length : 0, ticks = n ? `<span class="wp-objpeek"><span class="ap-wpbar"><i style="width:${Math.round((100 * (s.checks || []).length) / n)}%"></i></span>${(s.checks || []).length}/${n} objectives ticked</span>` : "";
+  if (!s.work && !s.review) return ticks || `<span class="muted small">${s.kind === "challenge" ? (st?.asg === "open" ? "Not solved yet (in Discord)" : "") : "Not answered yet"}</span>`;
+  return ticks + trackHtml(s, st, true);
 }
 function trackHtml(s, st, short = false) {
   const w = s.work, V = { correct: ["up", "✓ Right"], partial: ["warn", "Almost"], wrong: ["down", "Wrong"], submitted: ["blue", "Handed in"] };
   let h = "";
   if (!short) {
     if (s.kind === "challenge") h += `<p><b>${esc(s.challenge?.title || "")}</b> ${s.challenge ? diffTag(s.challenge.difficulty) : ""} <span class="muted small">· assignment ${esc(st?.asg || "")}</span></p>`;
-    else if (s.kind === "brief") h += `<div class="wp-ctx">${wpCtx(s.brief?.context || "")}</div><div class="wp-h">Objectives</div><ul class="wp-objl">${(s.brief?.tasks || []).map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`;
+    else if (s.kind === "brief") {
+      const ck = new Set(s.checks || []), n = (s.brief?.tasks || []).length;
+      h += `<div class="wp-ctx">${wpCtx(s.brief?.context || "")}</div><div class="wp-h">Objectives ${WPS.plan.status === "draft" ? "" : `<span class="wp-objn">${ck.size}/${n} ticked by ${wpFirst()}${s.checked_at ? ` · ${esc(fmtAgo(s.checked_at))}` : ""}</span>`}</div>
+        <ul class="wp-objl ${WPS.plan.status === "draft" ? "" : "ticks"}">${(s.brief?.tasks || []).map((t, k) => `<li class="${ck.has(k) ? "on" : ""}"><span class="wp-tick" aria-label="${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</span>${esc(t)}</li>`).join("")}</ul>`;
+    }
     else h += `<p class="wp-q">${esc(s.prompt)}</p>`;
   }
   if (w) {
@@ -215,11 +220,22 @@ function progressPanelHtml(st) {
   const toReview = p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length;
   return `<section class="panel wp-prog"><h2>${p.status === "done" ? "🎉 Done" : "Progress"}</h2>
     <div class="wp-ring"><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${r}" class="bg"/><circle cx="55" cy="55" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct / 100)}"/></svg>
-      <div><b>${st?.done ?? 0}/${st?.total ?? p.steps.length}</b><span>actions done</span></div></div>
+      <div><b>${pct}%</b><span>${st?.done ?? 0}/${st?.total ?? p.steps.length} action${(st?.total ?? p.steps.length) > 1 ? "s" : ""} done${st?.objTotal ? `<br>${st.objDone}/${st.objTotal} objectives ticked` : ""}</span></div></div>
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
     <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
-    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}</section>`;
+    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}</section>${asksPanelHtml()}`;
+}
+const WP_ASK = { waiting: ["warn", "Waiting"], helping: ["blue", "You're on it"], done: ["up", "Answered"], cancelled: ["", "Cancelled"] };
+/** The student's questions from their page: they are in the Help queue, answered there. */
+function asksPanelHtml() {
+  const a = WPS.asks || [];
+  if (!a.length) return "";
+  const open = a.filter((x) => x.status === "waiting" || x.status === "helping").length;
+  return `<section class="panel wp-asks"><div class="panel-head"><h2>✋ Their questions</h2>${open ? `<a class="btn small primary" href="#/hands">Answer (${open})</a>` : ""}</div>
+    ${a.map((x) => `<div class="wp-ask"><div class="wp-ask-h"><span class="wp-state ${WP_ASK[x.status]?.[0] || ""}">${WP_ASK[x.status]?.[1] || esc(x.status)}</span><span class="muted small">${esc(fmtAgo(x.at))}${x.stepTitle ? ` · ${esc(x.stepTitle)}` : ""}</span></div>
+      <p>${esc(x.question)}</p>${x.reply ? `<p class="small muted"><b>You:</b> ${esc(x.reply)}</p>` : ""}</div>`).join("")}
+    <p class="small muted" style="margin:6px 0 0">Their questions go to the <a href="#/hands">Help queue</a>; your answer reaches them on this page and by DM.</p></section>`;
 }
 
 // ------------------------------------------------------------------ wiring
@@ -279,6 +295,7 @@ async function wpIntegrate(adds, wish = "") {
 
 function wireWorkPlan() {
   const p = WPS.plan, draft = wpDraft();
+  if ($("#wp-give")) $("#wp-give").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog([p.sid]));
   $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
   $("#wp-del").onclick = () => confirmDialog(draft ? "Delete this draft?" : `Delete ${p.name}'s plan?`, draft ? "Its diagnosis and actions are lost." : "Their page stops working and its open challenges are cancelled. What they did stays in their history.", "Delete",
     async () => { await api(`/wplans/${p.id}`, { method: "DELETE", confirmed: true }); toast("Plan deleted"); location.hash = "#/assignments"; }, true);
@@ -326,7 +343,7 @@ function wireWorkPlan() {
     $$("[data-rv]").forEach((b) => b.onclick = () => busy(b, async () => {
       const c = $(`[data-rvc="${CSS.escape(b.dataset.rv)}"]`)?.value || "";
       const r = await api(`/wplans/${p.id}/review`, { method: "POST", body: { step: b.dataset.rv, ok: b.dataset.ok === "1", comment: c } });
-      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Validated" : `${p.name} will see it's to redo`);
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Validated" : `${p.name} will see it's to redo`);
     }));
     return;
   }
@@ -379,7 +396,7 @@ function wireWorkPlan() {
     if (!go) return;
     clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving;
     const r = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title").value, message: $("#wp-msg").value, due_at: wpDueValue() } } });
-    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url });
+    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [] });
     toast(r.dm ? `Sent: ${p.name} got their page by DM` : `Sent, but the DM couldn't go (closed DMs?): copy their link`, !r.dm);
     drawWorkPlan();
   });

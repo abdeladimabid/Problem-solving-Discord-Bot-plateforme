@@ -39,7 +39,7 @@ export class DebriefError extends Error {}
 // ------------------------------------------------------------------ the AI
 /** Groq first with a compact prompt (its free tier is small), then Workers AI with the full one. */
 export async function askReview(env: Env, system: string, user: string | ((compact: boolean) => string), cost = 3,
-  o: { maxTokens?: number; read?: (text: string) => any } = {}): Promise<{ ok: true; data: any; model: string } | { ok: false; msg: string }> {
+  o: { maxTokens?: number; read?: (text: string) => any } = {}): Promise<{ ok: boolean; data?: any; model?: string; msg?: string }> {
   if (!(await aiBudgetOk(env, cost))) return { ok: false, msg: "ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow." };
   await aiBudgetUse(env, cost);
   const text = (compact: boolean) => (typeof user === "function" ? user(compact) : user);
@@ -486,7 +486,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   ].filter(Boolean).join("\n");
 
   const ask = await askReview(env, system, user);
-  if (!ask.ok) return ask;
+  if (!ask.ok) return { ok: false, msg: ask.msg };
   let result: any;
   try { result = cleanAi(ask.data, commits, skills, items); } catch { return { ok: false, msg: "The AI answer could not be read. Click Analyze again." }; }
   result.exigences = rescueFound(reconcile(result.exigences, snap.checks), snap);
@@ -686,7 +686,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
   const user = [
     assessForAi(rec.assess) ? `ÉVALUATION (en classe, sans aide) :\n${assessForAi(rec.assess)}` : "ÉVALUATION : aucune évaluation liée à ce brief.",
     `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus ni les critères de performance)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
-    co.length ? `COMPÉTENCES : validées ${co.filter((c) => st.co[c]).map(skillText).join(", ") || "aucune"} ; non validées ${co.filter((c) => !st.co[c]).map(skillText).join(", ") || "aucune"}` : "",
+    co.length ? `COMPÉTENCES : validées ${co.filter((c) => st.co[c]).map((c) => skillText(c)).join(", ") || "aucune"} ; non validées ${co.filter((c) => !st.co[c]).map((c) => skillText(c)).join(", ") || "aucune"}` : "",
     oral.length ? `QUESTIONS ORALES : ${st.oral.filter(Boolean).length}/${oral.length} réussies${st.oral.some((v: boolean) => !v) ? ` ; notions à revoir : ${oral.filter((q: any, i: number) => !st.oral[i]).map((q: any) => q.notion || q.q).join(", ")}` : ""}` : "",
     st.mes.r ? `MISE EN SITUATION : ${MES[st.mes.r]}${st.mes.note ? ` (${oneLine(st.mes.note, 200)})` : ""}` : "",
     calc ? `NIVEAU CALCULÉ À PARTIR DES VALIDATIONS : ${calc}` : "",
@@ -888,7 +888,7 @@ export async function progressView(env: Env, g: GuildRow, o: { finalOnly?: boole
   const linked = await all<{ id: number; brief_id: number }>(env, "SELECT id, brief_id FROM assessments WHERE guild_id = ? AND brief_id IS NOT NULL", g.id).catch(() => []);
   const takers = linked.length ? await all<{ assessment_id: number; discord_id: string; status: string; score: number | null }>(env,
     `SELECT assessment_id, discord_id, status, score FROM assessment_takers WHERE assessment_id IN (${linked.map(() => "?").join(",")})`, ...linked.map((a) => a.id)) : [];
-  const briefOfAssess = new Map(linked.map((a) => [a.id, a.brief_id]));
+  const briefOfAssess = new Map(linked.map((a) => [a.id, a.brief_id] as const));
   const assessCount: Record<number, number> = {};
   for (const a of linked) assessCount[a.brief_id] = (assessCount[a.brief_id] || 0) + 1;
   const assess: Record<string, { st: "graded" | "open"; score: number | null; n: number }> = {};

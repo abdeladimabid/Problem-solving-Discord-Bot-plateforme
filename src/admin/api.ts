@@ -1,7 +1,7 @@
 // JSON API behind the teacher dashboard.
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
-import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview } from "../shared/intranet.ts";
+import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
@@ -31,6 +31,7 @@ import { examGrades } from "../shared/sessions.ts";
 import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/create.ts";
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
+import { ChatError, chatCheck, chatFeedback, classChat } from "../shared/classchat.ts";
 import { WorkPlanError, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -74,6 +75,18 @@ class HttpError extends Error {
   }
 }
 const ok = (data: unknown) => Response.json(data);
+/** A chat's work sent as it goes: one JSON line per step, then {"done": result} or {"error": "…"}. */
+function chatStream(ctx: Ctx, run: (line: (o: any) => void) => Promise<unknown>): Response {
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const line = (o: unknown) => { w.write(enc.encode(JSON.stringify(o) + "\n")).catch(() => {}); };
+  ctx.waitUntil((async () => {
+    try { line({ done: await run(line) }); }
+    catch (e) { line({ error: e instanceof ChatError ? e.message : "The chat failed. Try again in a moment." }); if (!(e instanceof ChatError)) console.error("chat", e); }
+    finally { w.close().catch(() => {}); }
+  })());
+  return new Response(readable, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+}
 const DIFFS = ["easy", "medium", "hard"];
 const KINDS = ["code", "write", "mcq", "output", "bug", "complexity"];
 
@@ -518,7 +531,31 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // -------------------------------------------------------------- teams
     // -------------------------------------------------------------- 🤖 AI: this class's AIs (keys), in order, with backups
     // the YouCode intranet: what is set (never the secret), and "Test the connection" (a signed ping)
+    // Chat with your class: a message (and the last turns) → the answer from the class's data
+    if (path === "/chat" && method === "POST") {
+      const g = await guild(), list = await students(env, g);
+      const question = String(body.question ?? ""), history = Array.isArray(body.history) ? body.history : [];
+      if (!body.stream) return ok(await classChat(env, g, list, question, history));
+      // streamed: one JSON line per step (what is being read, then writing), then the answer, so the teacher sees it work
+      return chatStream(ctx, (line) => classChat(env, g, list, question, history, line));
+    }
+    // "Is the chat reliable?": questions with a known answer, each result as it comes, then the score
+    if (path === "/chat/check" && method === "POST") {
+      const g = await guild(), list = await students(env, g);
+      return chatStream(ctx, (line) => chatCheck(env, g, list, (item, i, total) => line({ item, i, total })));
+    }
+    if (path === "/chat/feedback" && method === "POST") { const g = await guild(); return ok(await chatFeedback(env, g.id, body)); }
     if (path === "/intranet" && method === "GET") { const g = await guild(); return ok(await intranetSetup(env, g.id)); }
+    // the students' intranet photos: which ones exist, and each image (from Cloudflare's cache after the first time)
+    if (path === "/intranet/photos" && method === "GET") { const g = await guild(); return ok({ photos: await intranetPhotos(env, g.id) }); }
+    if ((m = path.match(/^\/intranet\/photo\/(\d{1,25})$/)) && method === "GET") {
+      const g = await guild();
+      const img = await intranetPhoto(env, g.id, m[1]);
+      if (!img) return new Response(null, { status: 404 });
+      const h = new Headers(img.headers);
+      h.set("cache-control", "private, max-age=86400");
+      return new Response(img.body, { status: 200, headers: h });
+    }
     if (path.startsWith("/intranet/")) {
       const g = await guild();
       try {
@@ -983,7 +1020,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     throw new HttpError(404, "not found");
   } catch (e) {
     if (e instanceof HttpError) return Response.json({ error: e.message }, { status: e.status });
-    if (e instanceof HandError || e instanceof PlanError || e instanceof WorkPlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof ChatError || e instanceof HandError || e instanceof PlanError || e instanceof WorkPlanError || e instanceof FaqError || e instanceof GenError) return Response.json({ error: e.message }, { status: 400 });
     console.error(e);
     if (/no such (table|column)|has no column named/i.test(String((e as Error)?.message))) {
       return Response.json({ error: "The database hasn't been updated for this version. In the classbot folder run: npm run db:migrate", code: "migrate" }, { status: 500 });

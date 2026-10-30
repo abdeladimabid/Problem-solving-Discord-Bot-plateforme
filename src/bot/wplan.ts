@@ -2,9 +2,12 @@
 //   GET  /wp/<t>          the page
 //   GET  /wp/<t>/data     the plan: the actions, what they answered, the corrections (never the expected answers)
 //   POST /wp/<t>/answer   their answer to one action (checked at once: the AI for code and written answers)
+//   POST /wp/<t>/check    a mini brief's objective ticked or unticked (the teacher sees it, it counts in the progress)
+//   POST /wp/<t>/ask      a question for the teacher (✋ the Help queue; the answer comes back here and by DM)
 import type { Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
-import { WorkPlanError, readPlanToken, studentAnswer, studentView } from "../shared/workplan.ts";
+import { WorkPlanError, readPlanToken, studentAnswer, studentAsk, studentCheck, studentView } from "../shared/workplan.ts";
+import { getGuild } from "../shared/db.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const HTML = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" };
@@ -18,10 +21,14 @@ export async function handleWorkPlan(request: Request, env: Env, token: string, 
     const v = await studentView(env, t.gid, t.id);
     return v ? json(v) : json({ error: "Ce plan n'est plus disponible." }, 404);
   }
-  if (action === "answer" && request.method === "POST") {
+  if ((action === "answer" || action === "check" || action === "ask") && request.method === "POST") {
     let b: any = {};
     try { b = await request.json(); } catch { b = {}; }
-    try { return json(await studentAnswer(env, t.gid, t.id, b)); }
+    try {
+      if (action === "check") return json(await studentCheck(env, t.gid, t.id, b));
+      if (action === "ask") return json(await studentAsk(env, await getGuild(env, t.gid), t.id, b));
+      return json(await studentAnswer(env, t.gid, t.id, b));
+    }
     catch (e) { if (e instanceof WorkPlanError) return json({ error: e.message }, 400); throw e; }
   }
   return json({ error: "method" }, 405);
@@ -64,7 +71,16 @@ textarea:focus,input:focus{outline:2px solid var(--blue);outline-offset:1px}
 .fb.correct{background:var(--good50);border-color:transparent}.fb.partial{background:var(--warn50);border-color:transparent}.fb.wrong{background:var(--bad50);border-color:transparent}.fb.submitted{background:var(--blue50);border-color:transparent}
 .fb b{display:block;margin-bottom:2px}
 .tasks{list-style:none;padding:0;margin:10px 0 12px;display:grid;gap:8px}.tasks li{display:flex;gap:10px;padding:10px 12px;border-radius:12px;background:var(--bg)}
-.tasks li:before{content:"";width:18px;height:18px;flex:none;border:2px solid var(--kc);border-radius:6px;margin-top:2px}
+.tasks li{padding:0;background:none}.tasks label{display:flex;gap:12px;align-items:flex-start;width:100%;padding:10px 12px;border-radius:12px;background:var(--bg);cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s}
+.tasks label:hover{border-color:var(--kc)}.tasks input{appearance:none;-webkit-appearance:none;width:20px;height:20px;flex:none;border:2px solid var(--kc);border-radius:6px;margin:2px 0 0;display:grid;place-items:center;cursor:pointer;background:var(--card)}
+.tasks input:checked{background:var(--good);border-color:var(--good)}.tasks input:checked:after{content:"✓";color:#fff;font-size:13px;font-weight:800;line-height:1}
+.tasks input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.tasks li.on label{background:var(--good50)}.tasks li.on span{color:var(--soft);text-decoration:line-through;text-decoration-color:var(--faint)}
+.objc{font-size:13px;font-weight:700;color:var(--soft);margin-left:6px;text-transform:none;letter-spacing:0}
+.help{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px;margin:22px 0 14px;box-shadow:0 4px 18px #0f1d3a0c}
+.help h2{font-size:19px;margin:0 0 4px}.help select{width:100%;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:15px Inter,system-ui,sans-serif;background:var(--card);color:var(--ink);margin:6px 0 8px}
+.asks{display:grid;gap:10px;margin-top:14px}.ask{border:1px solid var(--line);border-radius:14px;padding:12px 14px}.ask .q{white-space:pre-wrap}.ask .st{font-size:13px;font-weight:700;color:var(--soft);margin-bottom:4px}
+.ask .rep{margin-top:8px;border-left:4px solid var(--blue);background:var(--blue50);border-radius:0 12px 12px 0;padding:8px 12px;white-space:pre-wrap}
+.ask.waiting .st{color:var(--warn)}.ask.helping .st{color:var(--blue)}.ask.done .st{color:var(--good)}
 .meta{display:flex;gap:16px;flex-wrap:wrap;color:var(--soft);font-size:14px}.lbl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:14px 0 6px}
 .hint{background:var(--blue50);border-radius:12px;padding:12px 14px;font-size:15px}
 .teacher{margin-top:12px;border-left:4px solid var(--kc);padding:8px 12px;background:var(--bg);border-radius:0 12px 12px 0;font-size:15px}
@@ -113,7 +129,10 @@ function stepHtml(s, i) {
     h += '<div class="hint">Ce défi' + (c.difficulty ? ' (' + esc({ easy: "facile", medium: "moyen", hard: "difficile" }[c.difficulty] || c.difficulty) + ')' : "") + ' se fait dans <b>Discord</b> : tape <code>/assignments</code> sur le serveur de la classe, ou appuie sur <b>Start</b> dans le message que ClassBot t\\'a envoyé. Il est validé ici tout seul quand tu le réussis.</div>';
   } else if (s.kind === "brief") {
     var b = s.brief || {};
-    h += (b.context ? '<div class="ctx">' + ctxHtml(b.context) + '</div>' : "") + '<div class="lbl">Tes objectifs</div><ul class="tasks">' + (b.tasks || []).map(function (t) { return "<li>" + rich(t) + "</li>"; }).join("") + '</ul>'
+    var ck = s.checks || [], nt = (b.tasks || []).length;
+    h += (b.context ? '<div class="ctx">' + ctxHtml(b.context) + '</div>' : "") + '<div class="lbl">Tes objectifs <span class="objc" data-objc>' + ck.length + ' / ' + nt + ' faits</span></div>'
+      + '<p class="muted" style="margin:-2px 0 8px;font-size:14px">Coche chaque objectif quand tu l\\'as terminé : ton formateur voit où tu en es.</p><ul class="tasks">'
+      + (b.tasks || []).map(function (t, k) { var on = ck.indexOf(k) >= 0; return '<li' + (on ? ' class="on"' : "") + '><label><input type="checkbox" data-chk="' + s.id + '" data-i="' + k + '"' + (on ? " checked" : "") + '><span>' + rich(t) + '</span></label></li>'; }).join("") + '</ul>'
       + '<div class="meta">' + (b.deliverable ? '<span>📦 À rendre : ' + rich(b.deliverable) + '</span>' : "") + (b.hours ? '<span>⏱️ Environ ' + b.hours + ' h</span>' : "") + '</div>';
     if (!done) h += '<div class="lbl">Rendre ton travail</div><input type="url" data-link placeholder="https://github.com/…" value="' + esc(s.work && s.work.link || "") + '">'
       + '<textarea class="prose" data-note style="min-height:80px;margin-top:8px" placeholder="Un mot pour ton formateur (facultatif) : ce que tu as fait, ce qui t\\'a bloqué…">' + esc(s.work && s.work.note || "") + '</textarea>'
@@ -141,17 +160,50 @@ function stepHtml(s, i) {
   return h + '</article>';
 }
 function draw() {
-  var pct = P.total ? Math.round(100 * P.done / P.total) : 0;
+  var pct = P.pct != null ? P.pct : P.total ? Math.round(100 * P.done / P.total) : 0;
   app.innerHTML = '<header class="hero"><div class="eyebrow">🧭 Mon plan d\\'action</div><h1>' + esc(P.title) + '</h1>'
     + '<div>' + P.total + ' action' + (P.total > 1 ? "s" : "") + ' choisie' + (P.total > 1 ? "s" : "") + ' pour toi' + (P.due_at ? ', à faire avant le ' + esc(when(P.due_at)) : "") + '.</div>'
     + (P.message ? '<div class="msg">' + rich(P.message) + '</div>' : "")
-    + '<div class="prog"><div class="bar"><i style="width:' + pct + '%"></i></div><b>' + P.done + ' / ' + P.total + ' faites</b></div>'
+    + '<div class="prog"><div class="bar"><i style="width:' + pct + '%"></i></div><b data-pct>' + pct + ' %</b></div><div style="font-size:14px;opacity:.9;margin-top:6px">' + P.done + ' / ' + P.total + ' action' + (P.total > 1 ? "s" : "") + ' validée' + (P.done > 1 ? "s" : "") + (P.objTotal ? ' · <span data-objall>' + P.objDone + ' / ' + P.objTotal + '</span> objectifs cochés' : "") + '</div>'
     + (P.status === "done" ? '<div class="confetti">🎉 Bravo, tout est fait !</div>' : "") + '</header>'
-    + P.steps.map(stepHtml).join("") + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
+    + P.steps.map(stepHtml).join("") + helpHtml() + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
+  Array.prototype.forEach.call(app.querySelectorAll("[data-chk]"), function (c) { c.onchange = function () { tick(c); }; });
+  var ab = document.getElementById("ask-go"); if (ab) ab.onclick = function () { ask(ab); };
   Array.prototype.forEach.call(app.querySelectorAll("[data-send]"), function (b) { b.onclick = function () { send(b); }; });
   Array.prototype.forEach.call(app.querySelectorAll("textarea[data-ans]"), function (t) {
     t.addEventListener("keydown", function (e) { if (e.key === "Tab" && !t.classList.contains("prose")) { e.preventDefault(); var a = t.selectionStart; t.value = t.value.slice(0, a) + "  " + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = a + 2; } });
   });
+}
+var ASK_ST = { waiting: "⏳ En attente", helping: "🙋 Ton formateur s'en occupe", done: "✓ Répondu", cancelled: "Annulée" };
+function helpHtml() {
+  var open = (P.asks || []).filter(function (a) { return a.status === "waiting" || a.status === "helping"; }).length;
+  var h = '<section class="help" id="help"><h2>✋ Une question ? Besoin d\\'aide ?</h2><p class="muted" style="margin:0 0 10px;font-size:15px">Écris à ton formateur : ta question arrive dans sa file d\\'aide, il te répond ici et sur Discord.</p>';
+  if (open) h += '<p class="hint">Ta demande est en cours : tu pourras en poser une autre quand ton formateur y aura répondu.</p>';
+  else h += '<label class="lbl" for="ask-step" style="display:block">À propos de</label><select id="ask-step"><option value="">Mon plan en général</option>' + P.steps.map(function (s, i) { return '<option value="' + s.id + '">Action ' + (i + 1) + ' · ' + esc(s.title || s.notion) + '</option>'; }).join("") + '</select>'
+    + '<textarea class="prose" id="ask-q" style="min-height:100px" maxlength="900" placeholder="Ce que tu ne comprends pas, ce que tu as déjà essayé, où tu bloques…"></textarea>'
+    + '<details class="mine"><summary>Ajouter du code (facultatif)</summary><textarea id="ask-code" spellcheck="false" style="min-height:120px;margin-top:8px" placeholder="Colle ici le morceau de code qui pose problème"></textarea></details>'
+    + '<div class="row"><button class="btn" id="ask-go">✋ Envoyer à mon formateur</button><span class="err" id="ask-err"></span></div>';
+  if ((P.asks || []).length) h += '<div class="lbl">Mes questions</div><div class="asks">' + P.asks.map(function (a) {
+    return '<div class="ask ' + a.status + '"><div class="st">' + (ASK_ST[a.status] || a.status) + (a.status === "waiting" && a.place ? ' · ' + (a.place === 1 ? "tu es le prochain" : a.place + "e dans la file") : "") + (a.stepTitle ? ' · ' + esc(a.stepTitle) : "") + '</div>'
+      + '<div class="q">' + esc(a.question) + '</div>' + (a.reply ? '<div class="rep"><b>Ton formateur :</b> ' + rich(a.reply) + '</div>' : "") + '</div>'; }).join("") + '</div>';
+  return h + '</section>';
+}
+function ask(b) {
+  var q = document.getElementById("ask-q").value.trim(), err = document.getElementById("ask-err");
+  if (q.length < 3) { err.textContent = "Écris ta question d'abord."; return; }
+  b.disabled = true; b.textContent = "Envoi…";
+  api("/ask", { question: q, step: document.getElementById("ask-step").value, code: document.getElementById("ask-code").value }).then(function () { return api("/data"); })
+    .then(function (d) { P = d; draw(); document.getElementById("help").scrollIntoView({ block: "start", behavior: "smooth" }); })
+    .catch(function (e) { b.disabled = false; b.textContent = "✋ Envoyer à mon formateur"; err.textContent = e.message; });
+}
+function tick(c) {
+  var id = c.getAttribute("data-chk"), k = Number(c.getAttribute("data-i")), on = c.checked, li = c.closest("li");
+  li.classList.toggle("on", on); c.disabled = true;
+  api("/check", { step: id, i: k, on: on }).then(function (r) {
+    var s = P.steps.filter(function (x) { return x.id === id; })[0]; s.checks = r.checks; c.disabled = false;
+    var card = document.getElementById("s-" + id); card.querySelector("[data-objc]").textContent = r.checks.length + " / " + ((s.brief && s.brief.tasks) || []).length + " faits";
+    return api("/data").then(function (d) { P.pct = d.pct; P.objDone = d.objDone; var b = app.querySelector(".bar i"); if (b) b.style.width = d.pct + "%"; var t = app.querySelector("[data-pct]"); if (t) t.textContent = d.pct + " %"; var o = app.querySelector("[data-objall]"); if (o) o.textContent = d.objDone + " / " + d.objTotal; });
+  }).catch(function (e) { c.checked = !on; li.classList.toggle("on", !on); c.disabled = false; var cd = document.getElementById("s-" + id); if (cd) cd.querySelector("[data-objc]").textContent = e.message; });
 }
 function send(b) {
   var id = b.getAttribute("data-send"), card = document.getElementById("s-" + id), s = P.steps.filter(function (x) { return x.id === id; })[0], body = { step: id };

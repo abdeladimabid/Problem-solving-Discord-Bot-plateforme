@@ -1,5 +1,6 @@
 // Runs every minute (Cron Trigger): contests, duel timeouts, assignment
 // reminders, the daily challenge and the Monday recap.
+import { syncIntranetProfiles } from "../shared/intranet.ts";
 import { seasonCron } from "../shared/season.ts";
 import type { ChallengeRow, Difficulty, DuelRow, Env, GuildRow } from "../shared/types.ts";
 import { all, boardHidden, getGuild, inClass, now, one, run } from "../shared/db.ts";
@@ -62,6 +63,7 @@ export async function runCron(env: Env) {
   await safe("assessments", () => assessCron(env));
   // VS Code activity: once a night, the raw heartbeats past each class's retention days go (the day totals stay)
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 17) await safe("vscode retention", () => purgeRaw(env)); }
+  { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 23) await safe("intranet profiles", () => syncIntranetProfiles(env)); }
   // the trainers' Google Sheets: after a change, every Monday, the day after a sprint ends
   if (!generated) await safe("google sheet", () => sheetCron(env));
   await safe("seasons", () => seasonCron(env));
