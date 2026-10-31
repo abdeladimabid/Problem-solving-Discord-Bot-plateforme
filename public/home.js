@@ -19,15 +19,29 @@ const hmDelta = (a, b) => (b == null || a === b ? "" : `<span class="hm-dl ${a >
 // ------------------------------------------------------------------ figures
 function hmStats(h) {
   const s = h.stats;
-  const tile = (ic, v, label, sub, href) => `<a class="hm-k" href="${href}"><span class="hm-ki">${ic}</span><span class="hm-kv">${v}</span><span class="hm-kl">${label}</span><span class="hm-ks">${sub}</span></a>`;
+  const tile = (ic, v, label, sub, href, tone = "") => `<a class="hm-k ${tone}" href="${href}"><span class="hm-ki">${ic}</span><span class="hm-kv">${v}</span><span class="hm-kl">${label}</span><span class="hm-ks">${sub}</span></a>`;
+  // a change against last week: ▲ / ▼ and by how much (in points for a %)
+  const vs = (a, b, unit = "", pct = false) => {
+    if (a == null || b == null) return `<span class="muted">no data last week</span>`;
+    if (a === b) return `= same as last week`;
+    const d = pct ? a - b : b ? Math.round((100 * (a - b)) / b) : null;
+    return `<span class="hm-dl ${a > b ? "up" : "down"}">${a > b ? "▲" : "▼"} ${d == null ? Math.abs(a - b) : Math.abs(d) + (pct ? " pts" : "%")}</span> vs last week (${b}${unit})`;
+  };
+  const lv = s.lastBrief && s.prevBrief && s.lastBrief.avg != null && s.prevBrief.avg != null ? s.lastBrief.avg - s.prevBrief.avg : null;
   return `<section class="hm-kpis" aria-label="Key figures">
-    ${tile("👥", s.students, "students", `<b>${s.active7}</b> pushed code this week ${hmDelta(s.active7, s.activePrev7)}`, "#/students")}
-    ${tile("💻", s.commits7, "commits this week", `${hmDelta(s.commits7, s.commitsPrev7) || "same as"} vs last week (${s.commitsPrev7})`, "#/github")}
-    ${tile("📥", s.handinRate == null ? "—" : s.handinRate + "%", "hand-in rate", s.briefsPast ? `on ${s.briefsPast} brief${s.briefsPast > 1 ? "s" : ""} past their deadline` : "no deadline passed yet", "#/briefs")}
-    ${tile("✅", s.debriefRate == null ? "—" : s.debriefRate + "%", "hand-ins debriefed", "finalized debriefs", "#/progress")}
-    ${tile("🎓", s.avgLevel ? HM_LV[s.avgLevel][1] : "—", "average level", `<b>${s.low}</b> Faible or Critique`, "#/students")}
-    ${tile("🧭", h.plans.live, "plans d'action running", s.plansPct == null ? (h.plans.drafts ? `${h.plans.drafts} draft${h.plans.drafts > 1 ? "s" : ""}` : "none yet") : `<b>${s.plansPct}%</b> done on average`, "#/assignments")}
+    ${tile("🟢", `${s.active}<small>/${s.students}</small>`, "active this week", vs(s.active, s.activePrev), "#/students", s.activePrev && s.active < s.activePrev * 0.75 ? "warn" : "")}
+    ${tile("🧩", s.solved, "problems solved this week", vs(s.solved, s.solvedPrev), "#/challenges", s.solvedPrev >= 10 && s.solved <= s.solvedPrev * 0.7 ? "warn" : "")}
+    ${tile("🎯", s.accuracy == null ? "—" : s.accuracy + "%", "accuracy this week", s.accuracy == null ? "too few answers this week" : vs(s.accuracy, s.accuracyPrev, "%", true), "#/challenges", s.accuracy != null && s.accuracyPrev != null && s.accuracyPrev - s.accuracy >= 10 ? "warn" : "")}
+    ${tile("🔍", s.left, "left to debrief", s.left ? `<b>${s.toDebrief}</b> not started · <b>${s.drafts}</b> to finalize` : "all debriefed ✓", "#/progress", s.left ? "todo" : "")}
+    ${tile("🎓", s.avgLevel ? HM_LV[s.avgLevel][1] : "—", "class level", lv == null ? `<b>${s.low}</b> Faible or Critique` : `<span class="hm-dl ${lv > 0 ? "up" : lv < 0 ? "down" : ""}">${lv > 0 ? "▲ better" : lv < 0 ? "▼ lower" : "= same"}</span> on B${s.lastBrief.b} than B${s.prevBrief.b} · <b>${s.low}</b> weak`, "#/progress", lv != null && lv <= -0.25 ? "warn" : "")}
+    ${tile("🧭", s.plansPct == null ? "—" : s.plansPct + "%", "plans d'action done", h.plans.live ? `on <b>${h.plans.live}</b> running${s.plansLate ? ` · <b>${s.plansLate}</b> late` : ""}` : "none running", "#/assignments", s.plansLate ? "warn" : "")}
   </section>`;
+}
+/** ⚠️ The clear signs to watch out for, else a calm line. */
+function hmAlerts(h) {
+  return h.alerts.length
+    ? `<section class="hm-alerts" aria-label="Watch out"><b>⚠️ Watch out</b>${h.alerts.map((a) => `<a href="${a.href}">${esc(a.t)}</a>`).join("")}</section>`
+    : `<section class="hm-alerts calm"><b>✅ Nothing alarming</b><span>activity, accuracy and levels hold steady against last week.</span></section>`;
 }
 /** One bar: what waits for you (to the left), then the pages you open most. */
 function hmBar(h) {
@@ -38,53 +52,45 @@ function hmBar(h) {
 }
 
 // ------------------------------------------------------------------ charts
-/** Active students per day, 4 weeks: one bar a day (weekends lighter), this week's figures in the head. */
-function hmActivity(h) {
-  const A = h.activity, max = Math.max(1, ...A.map((a) => a.active)), W = 560, H = 200, pad = 22, bw = (W - pad) / A.length;
-  const ticks = [0, Math.ceil(max / 2), max].filter((v, i, a) => a.indexOf(v) === i);
-  const y = (v) => H - 18 - (v / max) * (H - 30);
-  const bars = A.map((a, i) => {
-    const wd = new Date(a.day + "T12:00:00Z").getUTCDay(), we = wd === 0 || wd === 6;
-    const x = pad + i * bw + 2, top = y(a.active), hh = Math.max(a.active ? 3 : 0, H - 18 - top);
-    return `<g class="hm-hit" data-tip="${esc(hmD(a.day))} · ${a.active} student${a.active === 1 ? "" : "s"} pushed · ${a.commits} commit${a.commits === 1 ? "" : "s"}">
-      <rect x="${pad + i * bw}" y="0" width="${bw}" height="${H - 18}" fill="transparent"/>
-      ${hh ? `<rect class="hm-bar-m${we ? " we" : ""}" x="${x}" y="${H - 18 - hh}" width="${Math.max(2, bw - 4)}" height="${hh}" rx="3"/>` : ""}</g>`;
-  }).join("");
-  const labels = A.map((a, i) => (i % 7 === 0 || i === A.length - 1 ? `<text x="${i === A.length - 1 ? W : pad + i * bw + bw / 2}" y="${H - 3}" text-anchor="${i === A.length - 1 ? "end" : "middle"}">${esc(hmD(a.day))}</text>` : "")).join("");
-  const total = A.reduce((s, a) => s + a.commits, 0), days = A.filter((a) => a.active).length;
-  return `<section class="panel hm-act"><div class="panel-head"><h2>📈 Activity on GitHub <span class="muted">4 weeks</span></h2><a class="small" href="#/github">GitHub →</a></div>
-    <p class="small muted hm-sub">Students who pushed code each day · <b>${total}</b> commits that count · active ${days} day${days === 1 ? "" : "s"} out of 28</p>
-    ${A.some((a) => a.active) ? `<svg class="hm-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Students who pushed code each day, last 4 weeks">
-      ${ticks.map((v) => `<line class="hm-gl" x1="${pad}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="hm-yt" x="${pad - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join("")}
-      ${bars}${labels}</svg>` : `<p class="hm-empty">No push in the last 4 weeks. Students connect their GitHub with <code>/github</code>.</p>`}</section>`;
-}
-/** The class's levels now, then debrief after debrief: one 100% bar each. */
-function hmLevels(h) {
-  const bar = (counts, label, sub, href) => {
-    const tot = HM_ORDER.reduce((a, k) => a + (counts[k] || 0), 0);
-    return `<a class="hm-lrow" href="${href}"><span class="hm-ll" title="${esc(sub)}">${esc(label)}</span><span class="hm-lbar">${tot ? HM_ORDER.filter((k) => counts[k]).map((k) =>
-      `<i class="hm-hit" style="flex:${counts[k]};background:${HM_LV[k][0]}" data-tip="${esc(sub)} · ${HM_LV[k][1]}: ${counts[k]} (${Math.round((100 * counts[k]) / tot)}%)"></i>`).join("") : `<i style="flex:1;background:var(--line)"></i>`}</span>
-      <span class="hm-ln">${tot}</span></a>`;
+/** Week by week (8 weeks): problems solved, accuracy, students active — one small chart each, same weeks. */
+function hmWeeks(h) {
+  const W = h.weeks, lbl = (w) => (w.w === 7 ? "this week" : w.w === 6 ? "last week" : hmD(w.from));
+  const mini = (title, key, unit, max, fmt) => {
+    const vals = W.map((w) => w[key]), have = vals.filter((v) => v != null);
+    const top = max ?? Math.max(1, ...have), H = 74, bw = 100 / W.length;
+    const last = vals[7], prev = vals[6];
+    const trend = last == null || prev == null || last === prev ? "" : `<span class="hm-dl ${last > prev ? "up" : "down"}">${last > prev ? "▲" : "▼"}</span>`;
+    return `<div class="hm-m"><div class="hm-mh"><span>${title}</span><b>${last == null ? "—" : fmt(last)}${trend}</b></div>
+      <div class="hm-mc">${W.map((w, i) => { const v = vals[i]; const hh = v == null ? 0 : Math.max(v ? 3 : 0, (v / top) * H);
+        return `<span class="hm-hit hm-mb" style="width:${bw}%" data-tip="${esc(lbl(w))} · ${title.toLowerCase()}: ${v == null ? "too few answers" : fmt(v)}">${v == null ? `<i class="na"></i>` : `<i class="${i === 7 ? "now" : ""}" style="height:${hh}px"></i>`}</span>`; }).join("")}</div><div class="hm-mx"><span>${esc(hmD(W[0].from))}</span><span>now</span></div></div>`;
   };
+  const first = W.findIndex((w) => w.solved + w.failed + w.active);
+  return `<section class="panel hm-weeks"><div class="panel-head"><h2>📈 Week by week <span class="muted">8 weeks</span></h2><a class="small" href="#/students">Students →</a></div>
+    <p class="small muted hm-sub">Are they practising more, and getting it right more often? Each bar is a week; the darker one is this week.</p>
+    ${first < 0 ? `<p class="hm-empty">No practice or push in the last 8 weeks yet.</p>` : `<div class="hm-ms">
+      ${mini("Problems solved", "solved", "", null, (v) => v)}
+      ${mini("Accuracy", "accuracy", "%", 100, (v) => v + "%")}
+      ${mini("Students active", "active", "", h.stats.students || null, (v) => v)}</div>`}</section>`;
+}
+/** The class's levels now, then debrief after debrief from the latest back (each one: better or worse than the one before it). */
+function hmLevels(h) {
+  const bar = (counts, label, sub, href, delta = "", draft = 0) => {
+    const tot = HM_ORDER.reduce((a, k) => a + (counts[k] || 0), 0);
+    return `<a class="hm-lrow${draft ? " draft" : ""}" href="${href}"><span class="hm-ll" title="${esc(sub)}">${esc(label)}${draft ? `<small title="Not finalized yet: the level proposed so far">draft</small>` : ""}</span><span class="hm-lbar">${tot ? HM_ORDER.filter((k) => counts[k]).map((k) =>
+      `<i class="hm-hit" style="flex:${counts[k]};background:${HM_LV[k][0]}" data-tip="${esc(sub)} · ${HM_LV[k][1]}: ${counts[k]} (${Math.round((100 * counts[k]) / tot)}%)"></i>`).join("") : `<i style="flex:1;background:var(--line)"></i>`}</span>
+      <span class="hm-ln">${delta}</span></a>`;
+  };
+  const B = [...h.byBrief].reverse();   // the latest first: from now, back in time
+  const delta = (b, i) => { const older = B[i + 1]; if (!older || b.avg == null || older.avg == null) return ""; const d = b.avg - older.avg;
+    return Math.abs(d) < 0.05 ? `<span title="Same average as B${older.b}">=</span>` : `<span class="hm-dl ${d > 0 ? "up" : "down"}" title="${d > 0 ? "Better" : "Lower"} than B${older.b} on average">${d > 0 ? "▲" : "▼"}</span>`; };
   const tot = Math.max(1, h.total);
   return `<section class="panel hm-levels"><div class="panel-head"><h2>🎓 Levels</h2><a class="small" href="#/progress">Debriefs →</a></div>
     <div class="hm-lnow">${bar(h.levels, "Now", "Their level now (yours, else their last debrief)", "#/students")}</div>
-    ${h.byBrief.length ? `<p class="hm-cap">Debrief after debrief</p>${h.byBrief.map((b) => bar(b.counts, "B" + b.b, b.title, `#/brief/${b.bid}`)).join("")}` : `<p class="hm-empty small">The levels of each debrief show here once debriefs are finalized.</p>`}
+    ${B.length ? `<p class="hm-cap">Debrief by debrief, latest first <span title="Better or lower than the debrief before it, on average">▲▼ vs the one before</span></p>${B.map((b, i) => bar(b.counts, "B" + b.b, b.title + (b.draft ? ` · ${b.draft} debrief${b.draft > 1 ? "s" : ""} not finalized yet` : ""), `#/brief/${b.bid}`, delta(b, i), b.draft)).join("")}` : `<p class="hm-empty small">The levels of each debrief show here once debriefs are finalized.</p>`}
     <div class="hm-legend">${HM_ORDER.map((k) => `<span><i style="background:${HM_LV[k][0]}"></i>${HM_LV[k][1]} <b>${h.levels[k] || 0}</b></span>`).join("")}${h.levels.none ? `<span><i style="background:${HM_LV.none[0]}"></i>No level <b>${h.levels.none}</b></span>` : ""}</div>
     <div class="hm-tr"><span class="up" title="Their levels went up lately"><b>${h.trends.up}</b>↑ going up</span><span title="Steady"><b>${h.trends.flat}</b>→ steady</span><span class="down" title="Their levels went down lately"><b>${h.trends.down}</b>↓ going down</span></div>
     <p class="small muted hm-foot">${Math.round((100 * (h.levels.faible + h.levels.critique)) / tot)}% Faible or Critique now</p></section>`;
 }
-/** The briefs given lately: how many handed in, how many debriefed. */
-function hmBriefs(h) {
-  if (!h.recent.length) return `<section class="panel hm-br"><div class="panel-head"><h2>📥 Briefs: hand-ins & debriefs</h2><a class="small" href="#/briefs">Briefs →</a></div><p class="hm-empty">No brief given with a deadline yet.</p></section>`;
-  return `<section class="panel hm-br"><div class="panel-head"><h2>📥 Briefs: hand-ins & debriefs</h2><a class="small" href="#/briefs">Briefs →</a></div>
-    <div class="hm-bl">${h.recent.map((b) => { const hp = Math.min(100, Math.round((100 * b.handins) / Math.max(1, b.units))), dp = Math.min(100, Math.round((100 * b.debriefed) / Math.max(1, b.units)));
-      return `<a class="hm-bi" href="#/brief/${b.id}"><span class="hm-bt"><b title="${esc(b.title)}">${esc(b.title)}</b><small>${b.past ? "ended" : "due"} ${esc(fmtDate(b.due_at))} · ${b.debriefed} debriefed</small></span>
-        <span class="hm-bb hm-hit" data-tip="${esc(b.title)} · handed in ${b.handins}/${b.units} · debriefed ${b.debriefed}/${b.units}"><i class="h" style="width:${hp}%"></i><i class="d" style="width:${dp}%"></i></span>
-        <span class="hm-bn">${b.handins}/${b.units}</span></a>`; }).join("")}</div>
-    <div class="hm-legend"><span><i class="hk"></i>Handed in</span><span><i class="dk"></i>Debriefed</span></div></section>`;
-}
-
 // ------------------------------------------------------------------ people & sprint
 function hmPerson(p, kind) {
   const why = kind === "quiet" ? [`no activity for ${p.idle} days`] : kind === "noplan" ? [`${HM_LV[p.level]?.[1] || ""} level, no plan d'action yet`, ...p.reasons.filter((r) => !/level/.test(r))].slice(0, 2) : p.reasons;
@@ -108,15 +114,44 @@ function hmSprint(h) {
   const s = h.sprint;
   if (!s) return `<section class="panel hm-sprint"><h2>🗓️ Sprint</h2><p class="hm-empty">No sprint in the programme. <a href="#/settings/programme">Settings → Programme</a></p></section>`;
   const when = s.state === "now" ? `<b>${s.daysLeft} day${s.daysLeft === 1 ? "" : "s"} left</b>` : s.state === "soon" ? `<b>starts in ${s.startsIn} day${s.startsIn === 1 ? "" : "s"}</b>` : `<b>ended</b>`;
-  const hand = s.briefs.reduce((a, b) => a + Math.min(b.units, b.handins), 0), units = s.briefs.reduce((a, b) => a + b.units, 0), deb = s.briefs.reduce((a, b) => a + Math.min(b.units, b.debriefed), 0);
-  return `<section class="panel hm-sprint"><div class="panel-head"><h2>🗓️ Sprint ${s.n} ${s.state === "ended" ? `<span class="pill">ended</span>` : s.state === "soon" ? `<span class="pill">soon</span>` : ""}</h2><a class="small" href="#/sprints/${s.n}">Sprint page →</a></div>
+  return `<section class="panel hm-sprint" data-sprint="${s.n}"><div class="panel-head"><h2>🗓️ Sprint ${s.n} ${s.state === "ended" ? `<span class="pill">ended</span>` : s.state === "soon" ? `<span class="pill">soon</span>` : `<span class="pill">running</span>`}</h2><a class="small" href="#/sprints/${s.n}">Full diagnosis →</a></div>
     <p class="hm-st">${esc(s.title)}</p>
     <div class="hm-time"><i style="width:${s.state === "soon" ? 0 : s.elapsed}%"></i></div>
-    <p class="small muted hm-dates">${esc(hmD(s.start))} → ${esc(hmD(s.end))} · ${when}</p>
-    ${s.briefs.length ? `<div class="hm-sfig"><span><b>${s.briefs.length}</b> brief${s.briefs.length > 1 ? "s" : ""}</span><span><b>${units ? Math.round((100 * hand) / units) : 0}%</b> handed in</span><span><b>${units ? Math.round((100 * deb) / units) : 0}%</b> debriefed</span></div>
-      <ul class="hm-briefs">${s.briefs.map((b) => `<li><a href="#/brief/${b.id}"><b>${esc(b.title)}</b></a><span class="hm-bm"><span title="Handed in">📥 ${b.handins}/${b.units}</span><span title="Debriefs finalized">✅ ${b.debriefed}/${b.units}</span>${b.due_at ? `<span>${b.past ? "ended" : "due"} ${esc(fmtDate(b.due_at))}</span>` : ""}</span></li>`).join("")}</ul>`
-      : `<p class="hm-empty small">No brief in this sprint yet. <a href="#/briefs">Briefs →</a></p>`}
+    <p class="small muted hm-dates">${esc(hmD(s.start))} → ${esc(hmD(s.end))} · ${when} · ${s.briefs.length} brief${s.briefs.length === 1 ? "" : "s"}${s.briefs.length ? `: ${s.briefs.map((b) => `<a href="#/brief/${b.id}">${esc(b.title)}</a>`).join(", ")}` : ""}</p>
+    <div class="hm-sd" id="hm-sd"><div class="hm-skel" style="height:150px"></div></div>
     ${s.next ? `<div class="hm-next"><span>Next</span><b>Sprint ${s.next.n} · ${esc(s.next.title)}</b><small>${s.next.startsIn ? `in ${s.next.startsIn} day${s.next.startsIn === 1 ? "" : "s"}` : "today"} · ${esc(hmD(s.next.start))}</small></div>` : ""}</section>`;
+}
+/** The sprint's objectives reached or not, its levels, its shared lacunes (the sprint's diagnosis, read after the page). */
+async function hmSprintDiag(n) {
+  const box = $("#hm-sd");
+  if (!box) return;
+  let D;
+  try { D = await api(`/sprints/${n}/diag`); } catch (e) { box.innerHTML = `<p class="hm-empty small">Couldn't read the sprint's objectives: ${esc(e.message)}</p>`; return; }
+  if (!box.isConnected) return;
+  if (!D.evaluated) { box.innerHTML = `<p class="hm-empty small">No debrief analyzed or assessment graded in this sprint yet: its objectives show here as soon as there is one.</p>`; return; }
+  const items = (D.goals || []).flatMap((g) => g.items);
+  const covered = items.filter((i) => i.covered), reached = covered.filter((i) => i.share === "few"), notYet = covered.filter((i) => i.share !== "few").sort((a, b) => b.n - a.n);
+  const notEval = items.length - covered.length;
+  const reach = covered.length ? Math.round(covered.reduce((a, i) => a + 100 * (1 - i.n / D.evaluated), 0) / covered.length) : null;
+  const comps = (D.objectives || []).filter((o) => o.pct != null);
+  const compPct = comps.length ? Math.round(comps.reduce((a, o) => a + o.pct, 0) / comps.length) : null;
+  const tot = HM_ORDER.reduce((a, k) => a + (D.levels?.[k] || 0), 0);
+  const lvBar = tot ? `<div class="hm-lrow hm-slv"><span class="hm-ll">Levels</span><span class="hm-lbar">${HM_ORDER.filter((k) => D.levels[k]).map((k) => `<i class="hm-hit" style="flex:${D.levels[k]};background:${HM_LV[k][0]}" data-tip="${HM_LV[k][1]}: ${D.levels[k]} (${Math.round((100 * D.levels[k]) / tot)}%)"></i>`).join("")}</span><span class="hm-ln">${tot}</span></div>
+    <div class="hm-legend">${HM_ORDER.filter((k) => D.levels[k]).map((k) => `<span><i style="background:${HM_LV[k][0]}"></i>${HM_LV[k][1]} <b>${Math.round((100 * D.levels[k]) / tot)}%</b></span>`).join("")}</div>` : "";
+  const chip = (i, ok) => `<span class="hm-oc ${ok ? "ok" : i.share}" title="${ok ? "Reached by the class" : `${i.n} of ${D.evaluated} students still have a lacune here`}">${ok ? "✓" : "✗"} ${esc(i.name)}${ok ? "" : ` <small>${i.n}/${D.evaluated}</small>`}</span>`;
+  const lac = (D.lacunes || []).filter((l) => l.n >= 2).slice(0, 4);
+  box.innerHTML = `<div class="hm-sfig">
+      <span><b>${covered.length ? `${reached.length}/${covered.length}` : "—"}</b>objectives reached</span>
+      <span><b>${reach == null ? "—" : reach + "%"}</b>of the class reaches them</span>
+      <span><b>${compPct == null ? "—" : compPct + "%"}</b>competencies validated</span>
+      <span><b>${D.evaluated}<small>/${D.students}</small></b>students evaluated</span></div>
+    ${lvBar}
+    ${notYet.length ? `<p class="hm-cap">Not reached yet</p><div class="hm-ocs">${notYet.slice(0, 8).map((i) => chip(i, false)).join("")}${notYet.length > 8 ? `<span class="hm-oc more">+${notYet.length - 8}</span>` : ""}</div>` : ""}
+    ${reached.length ? `<p class="hm-cap">Reached</p><div class="hm-ocs">${reached.slice(0, 10).map((i) => chip(i, true)).join("")}${reached.length > 10 ? `<span class="hm-oc more">+${reached.length - 10}</span>` : ""}</div>` : ""}
+    ${notEval ? `<p class="small muted" style="margin:8px 0 0">${notEval} objective${notEval > 1 ? "s" : ""} not evaluated yet (no question or lacune about ${notEval > 1 ? "them" : "it"}).</p>` : ""}
+    ${!items.length && comps.length ? `<p class="hm-cap">Competencies</p><div class="hm-ocs">${comps.map((o) => `<span class="hm-oc ${o.pct >= 70 ? "ok" : o.pct >= 40 ? "group" : "majority"}" title="${esc(o.name)}">${esc(o.label)}N${o.level} <small>${o.pct}%</small></span>`).join("")}</div>` : ""}
+    ${(() => { const d = (D.briefs || []).reduce((x, b) => x + b.debriefs, 0), f = (D.briefs || []).reduce((x, b) => x + b.final, 0); return d > f ? `<p class="small muted" style="margin:8px 0 0">From ${d} debrief${d > 1 ? "s" : ""}, ${d - f} not finalized yet: the figures can still change.</p>` : ""; })()}
+    ${lac.length ? `<p class="hm-cap">Most shared lacunes</p><ul class="hm-lac">${lac.map((l) => `<li><span>${esc(l.notion)}</span><span class="hm-lacb"><i style="width:${Math.round((100 * l.n) / Math.max(1, l.of))}%"></i></span><b>${l.n}/${l.of}</b></li>`).join("")}</ul>` : ""}`;
 }
 function hmUp(h) {
   const up = h.improving.slice(0, 5), well = (h.strong || []).slice(0, Math.max(0, 5 - up.length));
@@ -134,11 +169,12 @@ async function loadHome(pre) {
   let h;
   try { h = pre ? await pre : await api("/home"); if (h && h.__error) throw h.__error; } catch (e) { box.innerHTML = `<div class="notice">Couldn't load the class overview: ${esc(e.message)}</div>`; return; }
   if (!box.isConnected) return;
-  box.innerHTML = `${hmStats(h)}${hmBar(h)}
-    <div class="hm-row">${hmActivity(h)}${hmLevels(h)}</div>
+  box.innerHTML = `${hmStats(h)}${hmAlerts(h)}${hmBar(h)}
+    <div class="hm-row">${hmSprint(h)}${hmLevels(h)}</div>
     ${hmWatch(h)}
-    <div class="hm-row hm-r3">${hmSprint(h)}${hmBriefs(h)}${hmUp(h)}</div>
+    <div class="hm-row">${hmWeeks(h)}${hmUp(h)}</div>
     <div class="hm-tip" id="hm-tip" role="tooltip" hidden></div>`;
+  if (h.sprint) hmSprintDiag(h.sprint.n);
   $$("[data-hmplan]", box).forEach((b) => b.onclick = () => busy(b, () => insBuildPlan(b.dataset.hmplan)));
   $$("[data-hmmsg]", box).forEach((b) => b.onclick = () => insMessage(b.dataset.hmmsg, b.dataset.name));
   // the charts' hover: what a bar or a segment is

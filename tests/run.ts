@@ -6381,9 +6381,15 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     check(everyone.every((p: any) => p.id && p.name && Array.isArray(p.reasons)) && H.data.noPlan.every((p: any) => ["faible", "critique"].includes(p.level) && !p.plan)
       && H.data.decline.every((p: any) => p.way === "down"), "…the students to watch: the ones heading down, the weak ones without a plan");
     check(new Set(everyone.map((p: any) => p.id)).size === everyone.length, "…each student in one list only");
-    check(H.data.activity.length === 28 && H.data.activity.every((d: any) => typeof d.active === "number" && typeof d.commits === "number") && typeof H.data.stats.active7 === "number"
-      && H.data.stats.students === H.data.total && Array.isArray(H.data.byBrief) && Array.isArray(H.data.recent) && H.data.trends.up + H.data.trends.flat + H.data.trends.down <= H.data.total,
-      `…the figures, 4 weeks of activity, the levels debrief after debrief, the briefs handed in (${JSON.stringify(H.data.stats)})`);
+    check(H.data.weeks.length === 8 && H.data.weeks.every((w: any) => typeof w.solved === "number" && typeof w.active === "number" && (w.accuracy === null || (w.accuracy >= 0 && w.accuracy <= 100)))
+      && H.data.stats.solved === H.data.weeks[7].solved && H.data.stats.active === H.data.weeks[7].active && H.data.stats.left === H.data.stats.toDebrief + H.data.stats.drafts
+      && H.data.stats.students === H.data.total && Array.isArray(H.data.byBrief) && Array.isArray(H.data.alerts) && H.data.trends.up + H.data.trends.flat + H.data.trends.down <= H.data.total,
+      `…the figures (active, solved, accuracy, left to debrief), 8 weeks, the levels debrief after debrief, the alerts (${JSON.stringify(H.data.stats)})`);
+    check(H.data.weeks.reduce((a: number, w: any) => a + w.active, 0) > 0 && H.data.alerts.every((x: any) => x.t && x.href.startsWith("#/")), "…students active in the last weeks; each alert says what and links to its page");
+    check(H.data.byBrief.every((b: any) => typeof b.draft === "number" && b.draft <= Object.values(b.counts).reduce((x: number, v: any) => x + v, 0)) && H.data.byBrief.some((b: any) => b.draft > 0),
+      "…the levels debrief after debrief count the debriefs in progress too (marked as drafts)");
+    const SD = await api("GET", `/api/sprints/1/diag?g=${G}`);
+    check(SD.status === 200 && typeof SD.data.levels === "object" && Object.values(SD.data.levels).every((v: any) => typeof v === "number"), "…the sprint's levels in its diagnosis (for the home's sprint card)");
     check(!H.data.sprint || ["now", "soon", "ended"].includes(H.data.sprint.state), "…the sprint: running, soon or just ended");
     check((await api("GET", `/api/students/${B}/insight?g=${G}`)).data.teacherLevel === null, "…and removed");
     const { proposeLevel, forecast } = await import("../src/shared/stuinsight.ts");
