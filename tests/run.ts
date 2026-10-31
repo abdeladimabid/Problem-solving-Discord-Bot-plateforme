@@ -6381,6 +6381,10 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     check(everyone.every((p: any) => p.id && p.name && Array.isArray(p.reasons)) && H.data.noPlan.every((p: any) => ["faible", "critique"].includes(p.level) && !p.plan)
       && H.data.decline.every((p: any) => p.way === "down"), "…the students to watch: the ones heading down, the weak ones without a plan");
     check(new Set(everyone.map((p: any) => p.id)).size === everyone.length, "…each student in one list only");
+    check(H.data.activity.length === 28 && H.data.activity.every((d: any) => typeof d.active === "number" && typeof d.commits === "number") && typeof H.data.stats.active7 === "number"
+      && H.data.stats.students === H.data.total && Array.isArray(H.data.byBrief) && Array.isArray(H.data.recent) && H.data.trends.up + H.data.trends.flat + H.data.trends.down <= H.data.total,
+      `…the figures, 4 weeks of activity, the levels debrief after debrief, the briefs handed in (${JSON.stringify(H.data.stats)})`);
+    check(!H.data.sprint || ["now", "soon", "ended"].includes(H.data.sprint.state), "…the sprint: running, soon or just ended");
     check((await api("GET", `/api/students/${B}/insight?g=${G}`)).data.teacherLevel === null, "…and removed");
     const { proposeLevel, forecast } = await import("../src/shared/stuinsight.ts");
     check(proposeLevel(["critique", "faible", "moyen"], 9, 10)!.level === "moyen" && proposeLevel(["bon", "excellent"], 10, 10)!.level === "excellent" && proposeLevel(["moyen", "critique"], 2, 10)!.level === "critique" && proposeLevel([], 0, 0) === null,

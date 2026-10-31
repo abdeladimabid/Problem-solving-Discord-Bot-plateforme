@@ -478,7 +478,6 @@ async function viewOverview() {
         <section class="panel"><div class="panel-head"><h2>Latest answers</h2><span class="muted small">${d.movers.length ? `Top this week: ${esc(d.movers[0].name || "?")} +${d.movers[0].pts}` : ""}</span></div>
           ${d.feed.length ? `<ul class="feed">${d.feed.map((f) => `<li><time>${fmtAgo(f.at)}</time><span><a href="#/student/${f.discord_id}">${esc(f.name || "?")}</a> ${status(f.status)} <b>${esc(f.title)}</b> ${diffTag(f.difficulty)}${f.points ? ` <span class="muted">+${f.points}</span>` : ""}</span></li>`).join("")}</ul>` : `<p class="empty">No answers yet. Students start with /practice.</p>`}</section>
       </div>
-      </div></details>
       <section class="panel"><h2>Quick actions</h2>
         <div class="quick">
           <a href="#/assignments"><span class="ico">${icon("clipboard")}</span><span><b>Plan d'action</b><small>the students who need help, and the work given to them</small></span></a>
@@ -488,6 +487,7 @@ async function viewOverview() {
           <a href="#/students"><span class="ico">${icon("users")}</span><span><b>Check on students</b><small>trends, code, gaps</small></span></a>
           <a href="#/settings/scoring"><span class="ico">${icon("gear")}</span><span><b>Scoring & checks</b><small>points per type, diagnostics</small></span></a>
         </div></section>
+      </div></details>
       ${d.claimList?.length ? `<section class="panel"><h2>Self-reported HackerRank solves</h2><p class="muted small">HackerRank couldn't be reached when these students pressed Check. They get no points until you approve. Open their HackerRank profile to check.</p>
         <div class="table-wrap"><table>${d.claimList.map((c) => `<tr><td><a href="#/student/${c.discord_id}">${esc(c.name || "?")}</a>${c.hr_display ? `<div class="small"><a href="https://www.hackerrank.com/profile/${encodeURIComponent(c.hr_display)}" target="_blank" rel="noopener">${esc(c.hr_display)}</a>${c.hr_verified ? "" : " (not verified)"}</div>` : ""}</td><td>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title)}</a>` : esc(c.title)}</td>
           <td class="small">${/^https?:\/\//i.test(c.answer_given || "") ? `<a href="${esc(c.answer_given)}" target="_blank" rel="noopener noreferrer">their link</a>` : c.answer_given ? `<code>${esc(c.answer_given).slice(0, 60)}</code>` : '<span class="muted">no link</span>'}</td><td class="muted small">${fmtAgo(c.finished_at)}</td>

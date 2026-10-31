@@ -16,7 +16,8 @@ const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
 export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & { name: string | null })[]) {
   const t0 = now(), today = day(t0);
   const n = (sql: string, ...a: unknown[]) => one<{ n: number }>(env, sql, ...a).then((r) => r?.n ?? 0).catch(() => 0);
-  const [pv, tlRows, plans, handsWaiting, oldestHand, faq, drafts, toDebrief, toGrade, flagged, briefRows, prog, handins, finals] = await Promise.all([
+  const d28 = day(t0 - 27 * 86400), d7 = day(t0 - 6 * 86400), d14 = day(t0 - 13 * 86400);
+  const [pv, tlRows, plans, handsWaiting, oldestHand, faq, drafts, toDebrief, toGrade, flagged, briefRows, prog, handins, finals, gh] = await Promise.all([
     planView(env, g, students),
     all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `stulevel:${g.id}:%`).catch(() => []),
     plansSummary(env, g).catch(() => []),
@@ -33,6 +34,9 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     programOf(env, g),
     all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_handins WHERE guild_id = ? GROUP BY brief_id", g.id).catch(() => []),
     all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_reviews WHERE guild_id = ? AND status = 'final' GROUP BY brief_id", g.id).catch(() => []),
+    // their GitHub work, day by day (4 weeks): commits that count, and who pushed
+    all<{ day: string; discord_id: string; commits: number }>(env,
+      "SELECT day, discord_id, SUM(real) AS commits FROM gh_activity WHERE guild_id = ? AND day >= ? GROUP BY day, discord_id", g.id, d28).catch(() => []),
   ]);
   const teacherLv = new Map<string, string>();
   for (const r of tlRows) { try { const v = JSON.parse(r.v); if (v?.level) teacherLv.set(r.k.split(":").pop()!, v.level); } catch { /* skip */ } }
@@ -62,16 +66,56 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
 
   // the sprint now (or the next one), its days, its briefs: handed in and debriefed
   const sps = sprintsOf(prog, briefRows);
-  const cur = sps.find((x) => x.start <= today && today <= x.end) || sps.find((x) => x.start > today) || sps[sps.length - 1] || null;
+  // the sprint running now; between two sprints, the one that just ended (its briefs are still being handed in and debriefed)
+  const running = sps.find((x) => x.start <= today && today <= x.end);
+  const cur = running || [...sps].reverse().find((x) => x.start <= today) || sps.find((x) => x.start > today) || null;
   const hand = new Map(handins.map((r) => [r.brief_id, r.n] as const)), fin = new Map(finals.map((r) => [r.brief_id, r.n] as const));
   const units = (b: (typeof briefRows)[number]) => { if (b.kind === "squad") { try { const q = JSON.parse(b.squads || "[]"); if (Array.isArray(q) && q.length) return q.length; } catch { /* solo */ } } return students.length; };
   const sprint = cur ? {
-    n: cur.n, title: cur.title, start: cur.start, end: cur.end,
+    n: cur.n, title: cur.title, start: cur.start, end: cur.end, state: running ? "now" : cur.start > today ? "soon" : "ended",
+    startsIn: Math.max(0, Math.round((Date.parse(cur.start + "T00:00:00Z") / 1000 - t0) / 86400)),
     daysLeft: Math.max(0, Math.round((Date.parse(cur.end + "T23:59:59Z") / 1000 - t0) / 86400)),
     elapsed: Math.min(100, Math.max(0, Math.round(100 * (t0 - Date.parse(cur.start + "T00:00:00Z") / 1000) / Math.max(1, Date.parse(cur.end + "T23:59:59Z") / 1000 - Date.parse(cur.start + "T00:00:00Z") / 1000)))),
     briefs: briefRows.filter((b) => cur.briefs.includes(b.id)).sort((a, b) => (a.due_at ?? 0) - (b.due_at ?? 0)).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at, units: units(b), handins: hand.get(b.id) || 0, debriefed: fin.get(b.id) || 0, past: !!(b.due_at && b.due_at < t0) })),
-    next: sps.find((x) => x.start > (cur.end || today)) ? { n: sps.find((x) => x.start > cur.end)!.n, title: sps.find((x) => x.start > cur.end)!.title, start: sps.find((x) => x.start > cur.end)!.start } : null,
+    next: (() => { const x = sps.find((y) => y.start > cur.end); return x ? { n: x.n, title: x.title, start: x.start, startsIn: Math.max(0, Math.round((Date.parse(x.start + "T00:00:00Z") / 1000 - t0) / 86400)) } : null; })(),
   } : null;
+
+  // 📈 activity: per day, who pushed and how many commits count (4 weeks), and this week against the one before
+  const days = Array.from({ length: 28 }, (_, i) => day(t0 - (27 - i) * 86400));
+  const byDay = new Map(days.map((d) => [d, { day: d, active: 0, commits: 0 }]));
+  for (const r of gh) { const x = byDay.get(r.day); if (x) { x.active++; x.commits += r.commits || 0; } }
+  const who = (from: string, to: string) => new Set(gh.filter((r) => r.day >= from && r.day < to).map((r) => r.discord_id)).size;
+  const commits = (from: string, to: string) => gh.filter((r) => r.day >= from && r.day < to).reduce((a, r) => a + (r.commits || 0), 0);
+  const tomorrow = day(t0 + 86400);
+
+  // 🎓 the class's levels debrief after debrief (the last 6 briefs debriefed)
+  const perBrief = new Map<number, { b: number; bid: number; title: string; counts: Record<string, number> }>();
+  for (const r of [...pv.plan, ...pv.others]) for (const d of r.debriefs) {
+    if (!perBrief.has(d.bid)) perBrief.set(d.bid, { b: d.b, bid: d.bid, title: d.title, counts: { excellent: 0, bon: 0, moyen: 0, faible: 0, critique: 0 } });
+    const c = perBrief.get(d.bid)!.counts; if (d.lv in c) c[d.lv]++;
+  }
+  const byBrief = [...perBrief.values()].sort((a, b) => a.b - b.b).slice(-6);
+
+  // 📥 the briefs given so far: handed in, debriefed (the last 6 whose deadline passed or is near)
+  const given = briefRows.filter((b) => b.status === "assigned" && b.due_at).sort((a, b) => (a.due_at ?? 0) - (b.due_at ?? 0));
+  const recent = given.filter((b) => (b.due_at ?? 0) < t0 + 7 * 86400).slice(-6).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at, units: units(b), handins: hand.get(b.id) || 0, debriefed: fin.get(b.id) || 0, past: (b.due_at ?? 0) < t0 }));
+  const past = given.filter((b) => (b.due_at ?? 0) < t0);
+  const pastUnits = past.reduce((a, b) => a + units(b), 0), pastHand = past.reduce((a, b) => a + Math.min(units(b), hand.get(b.id) || 0), 0);
+  const allHand = given.reduce((a, b) => a + (hand.get(b.id) || 0), 0), allFin = given.reduce((a, b) => a + (fin.get(b.id) || 0), 0);
+  const RANKS: Record<string, number> = { critique: 0, faible: 1, moyen: 2, bon: 3, excellent: 4 };
+  const ranked = people.filter((p) => p.level && p.level in RANKS);
+  const avgRank = ranked.length ? ranked.reduce((a, p) => a + RANKS[p.level!], 0) / ranked.length : null;
+  const live = plans.filter((p) => p.status === "sent");
+  const stats = {
+    students: people.length,
+    active7: who(d7, tomorrow), activePrev7: who(d14, d7),
+    commits7: commits(d7, tomorrow), commitsPrev7: commits(d14, d7),
+    handinRate: pastUnits ? Math.round((100 * pastHand) / pastUnits) : null, briefsPast: past.length,
+    debriefRate: allHand ? Math.round((100 * allFin) / allHand) : null,
+    avgLevel: avgRank == null ? null : (["critique", "faible", "moyen", "bon", "excellent"][Math.round(avgRank)]), avgRank: avgRank == null ? null : Math.round(avgRank * 10) / 10,
+    low: people.filter((p) => LOW.has(p.level || "")).length,
+    plansPct: live.length ? Math.round(live.reduce((a, p) => a + (p.pct || 0), 0) / live.length) : null,
+  };
 
   const todo = [
     handsWaiting ? { k: "hands", n: handsWaiting, since: oldestHand } : null,
@@ -83,6 +127,10 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     faq ? { k: "faq", n: faq } : null,
     flagged ? { k: "integrity", n: flagged } : null,
   ].filter(Boolean);
-  return { todo, decline: decline.slice(0, 8), noPlan: noPlan.slice(0, 6), quiet: quiet.slice(0, 6), improving: improving.slice(0, 6), levels, total: people.length, sprint,
-    plans: { live: plans.filter((p) => p.status === "sent").length, drafts: plans.filter((p) => p.status === "draft").length } };
+  // doing well: a solid level and nothing pointing down (to fill « Improving » when few move up)
+  const strong = people.filter((p) => (p.level === "excellent" || p.level === "bon") && p.way !== "down" && !improving.includes(p) && !quiet.includes(p))
+    .sort((a, b) => (a.level === "excellent" ? 0 : 1) - (b.level === "excellent" ? 0 : 1) || b.score - a.score);
+  return { todo, decline: decline.slice(0, 8), noPlan: noPlan.slice(0, 6), quiet: quiet.slice(0, 6), improving: improving.slice(0, 6), strong: strong.slice(0, 6), levels, total: people.length, sprint,
+    trends: { up: people.filter((p) => p.trend === "up").length, flat: people.filter((p) => p.trend === "flat").length, down: people.filter((p) => p.trend === "down").length },
+    plans: { live: live.length, drafts: plans.filter((p) => p.status === "draft").length }, stats, activity: [...byDay.values()], byBrief, recent };
 }
