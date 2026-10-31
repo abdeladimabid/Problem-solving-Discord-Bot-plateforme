@@ -2834,7 +2834,7 @@ body.sl-open { overflow: hidden; }
 .hm-sprint .hm-next { margin-top: auto; } .hm-sd { margin-bottom: 12px; }
 .hm-cap span { text-transform: none; letter-spacing: 0; font-weight: 500; float: right; }
 .hm-ln .hm-dl { font-size: 13px; }
-.hm-ms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: auto; }
+.hm-ms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 640px) { .hm-ms { grid-template-columns: 1fr; } }
 .hm-m { padding: 12px; border-radius: 12px; background: var(--surface-2); }
 .hm-mh { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--ink-soft); font-weight: 600; margin-bottom: 8px; }
@@ -2847,3 +2847,7 @@ body.sl-open { overflow: hidden; }
 .hm-mx { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-faint); margin-top: 6px; }
 .hm-lrow.draft .hm-lbar { opacity: .55; background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.35) 4px 6px); }
 .hm-ll small { display: block; font-size: 9.5px; font-weight: 600; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; line-height: 1; }
+/* the right column: Levels, then Doing well filling the height left (next to the sprint) */
+.hm-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.hm-col > .hm-levels { flex: none; } .hm-col > .hm-up { flex: 1; }
+.hm-col .hm-levels .hm-foot { margin-top: 8px; padding-top: 4px; }

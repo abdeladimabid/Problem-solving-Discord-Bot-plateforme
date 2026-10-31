@@ -170,9 +170,9 @@ async function loadHome(pre) {
   try { h = pre ? await pre : await api("/home"); if (h && h.__error) throw h.__error; } catch (e) { box.innerHTML = `<div class="notice">Couldn't load the class overview: ${esc(e.message)}</div>`; return; }
   if (!box.isConnected) return;
   box.innerHTML = `${hmStats(h)}${hmAlerts(h)}${hmBar(h)}
-    <div class="hm-row">${hmSprint(h)}${hmLevels(h)}</div>
+    <div class="hm-row">${hmSprint(h)}<div class="hm-col">${hmLevels(h)}${hmUp(h)}</div></div>
     ${hmWatch(h)}
-    <div class="hm-row">${hmWeeks(h)}${hmUp(h)}</div>
+    ${hmWeeks(h)}
     <div class="hm-tip" id="hm-tip" role="tooltip" hidden></div>`;
   if (h.sprint) hmSprintDiag(h.sprint.n);
   $$("[data-hmplan]", box).forEach((b) => b.onclick = () => busy(b, () => insBuildPlan(b.dataset.hmplan)));
