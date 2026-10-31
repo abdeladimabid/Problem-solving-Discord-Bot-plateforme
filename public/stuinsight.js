@@ -105,7 +105,7 @@ function svStandHtml(I) {
         <span class="sv-k">Outlook <span class="sv-conf" title="${esc(f.confidence)} confidence: how much data it rests on">${f.confidence === "high" ? "●●●" : f.confidence === "medium" ? "●●○" : "●○○"}</span></span>
         <b class="sv-way">${w[1]} ${w[2]}</b>
         <ul class="sv-rs">${f.reasons.slice(0, 3).map((r) => `<li class="${r.good ? "good" : "bad"}">${esc(r.t)}</li>`).join("") || `<li>Not enough data yet.</li>`}</ul>
-        ${f.blockers.length ? `<p class="small sv-blk"><b>Blocks what comes next:</b> ${f.blockers.slice(0, 3).map((b) => esc(b.text)).join(" · ")}</p>` : ""}
+        ${f.blockers.length ? `<p class="small sv-blk"><b>Basics the next sprints build on:</b> ${f.blockers.slice(0, 3).map((b) => `${esc(b.text)} <span class="muted">(${esc(b.needs.join(", "))})</span>`).join(" · ")}</p>` : ""}
       </div>
     </div>
     <div class="sv-charts">
@@ -122,7 +122,7 @@ function svThemeRow(t, i, full = false) {
   return `<li class="sv-th ${t.blocks.length ? "blocks" : ""}">
     <span class="sv-thn">${i + 1}</span>
     <div class="sv-thb">
-      <div class="sv-tht"><b>${esc(t.label)}</b>${t.blocks.length ? `<span class="sv-tag bad">needed in ${esc(t.blocks.join(", "))}</span>` : ""}${t.plan ? `<span class="sv-tag plan" title="${esc(t.plan.notion)}">🧭 in their plan</span>` : ""}</div>
+      <div class="sv-tht"><b>${esc(t.label)}</b>${t.blocks.length ? `<span class="sv-tag bad" title="A basic the next sprint builds on">${esc(t.blocks.join(", "))} builds on it</span>` : (t.next || []).length ? `<span class="sv-tag" title="It comes back in a coming sprint, without blocking it">back in ${esc(t.next.join(", "))}</span>` : ""}${t.plan ? `<span class="sv-tag plan" title="${esc(t.plan.notion)}">🧭 in their plan</span>` : ""}</div>
       ${t.plan?.why ? `<p class="small sv-thw">${esc(t.plan.why)}</p>` : ""}
       <p class="small muted sv-thm">${n ? `${n} sign${n > 1 ? "s" : ""}` : ""}${t.where.length ? `${n ? " · " : ""}seen in ${esc(t.where.slice(0, 4).join(", "))}${t.where.length > 4 ? "…" : ""}` : ""}</p>
       ${n ? (full ? ev(t.items) : `<details class="sv-evd"><summary>What we saw</summary>${ev(t.items.slice(0, 5))}${n > 5 ? `<p class="small muted" style="margin:4px 0 0">+ ${n - 5} more in « See all »</p>` : ""}</details>`) : ""}
@@ -134,7 +134,7 @@ function svLacHtml(I, d) {
   const top = th.slice(0, 4);
   const total = th.length + comps.length;
   return `<div class="panel-head"><h2>🧩 What they don't master yet</h2>${total ? `<span class="muted small">${total} in all</span>` : ""}</div>
-    ${top.length ? `<p class="small muted sv-sub">The most important first: what the next sprints need, what their plan targets, what keeps coming back.</p><ol class="sv-ths">${top.map((t, i) => svThemeRow(t, i)).join("")}</ol>`
+    ${top.length ? `<p class="small muted sv-sub">The most important first: the basics the next sprints build on, what their plan targets, what keeps coming back.</p><ol class="sv-ths">${top.map((t, i) => svThemeRow(t, i)).join("")}</ol>`
       : `<p class="muted">Nothing found yet: no debrief analyzed and no assessment graded, or everything is fine.</p>`}
     ${comps.length ? `<div class="sv-cnv"><span class="sv-k">Competencies not validated</span><span>${comps.slice(0, 5).map((c) => `<span class="sv-tag comp" title="${esc(cname.get(c.code) || "")}${c.why ? " · " + esc(c.why) : ""}">${esc(c.code)}${c.times > 1 ? ` ×${c.times}` : ""}</span>`).join("")}${comps.length > 5 ? `<span class="muted small"> +${comps.length - 5}</span>` : ""}</span></div>` : ""}
     <div class="sv-foot">${total > top.length ? `<button class="btn small primary" id="ins-all">See all ${total} →</button>` : ""}<button class="btn small" id="ins-gaps">🔎 Debrief by debrief</button>
@@ -143,7 +143,7 @@ function svLacHtml(I, d) {
 function svAllLacunes(I, d, sid) {
   const cname = new Map((d.learning?.competencies || []).map((c) => [String(c.label || c.code), c.name]));
   openDialog(`What ${d.player?.name || "they"} don't master yet`, `
-    <p class="muted small" style="margin-top:0">Grouped by concept, the most important first: what the next sprints need (${esc((I.next || []).map((n) => "S" + n.sprint).join(", ") || "—")}), what their plan d'action targets, what keeps coming back. With what we saw each time.</p>
+    <p class="muted small" style="margin-top:0">Grouped by concept, the most important first: the basics the next sprints build on (${esc((I.next || []).map((n) => "S" + n.sprint).join(", ") || "—")}), what their plan d'action targets, what keeps coming back. With what we saw each time.</p>
     <ol class="sv-ths full">${(I.themes || []).map((t, i) => svThemeRow(t, i, true)).join("")}</ol>
     ${(I.comps || []).length ? `<h3 style="margin:16px 0 6px">🎓 Competencies not validated</h3><ul class="sv-ev">${I.comps.map((c) => `<li><span>🎓</span><span><b>${esc(c.code)}</b> ${esc(cname.get(c.code) || "")} <span class="muted">· ${esc(c.where.join(", "))}</span>${c.why ? `<span class="small muted" style="display:block">${esc(c.why)}</span>` : ""}</span></li>`).join("")}</ul>` : ""}
     ${(I.objectives?.missed || []).length ? `<h3 style="margin:16px 0 6px">🎯 Sprint objectives not mastered yet</h3><p class="small" style="display:flex;flex-wrap:wrap;gap:4px">${I.objectives.missed.map((o) => `<span class="sv-tag">S${o.sprint} · ${esc(o.item)}</span>`).join("")}</p>` : ""}`,

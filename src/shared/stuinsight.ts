@@ -39,24 +39,56 @@ export function proposeLevel(debriefLevels: string[], objOk: number, objAll: num
   return { level, score: Math.round(score * 100), debriefs: r.length, debAvg: deb != null ? LEVELS[Math.round(deb * 4)] : null, objOk, objAll };
 }
 
-/** Where they're heading: what they don't understand, how much it blocks what comes next (the coming sprints'
- *  objectives), and what they do about it. A forecast to discuss, not a verdict. */
-export function forecast(o: { trend: string; lacunes: Lacune[]; next: { sprint: number; items: string[] }[]; engagement: string; planPct: number | null; idleDays: number | null; assess: number[] }) {
+// ------------------------------------------------------------------ what blocks what
+// How much each concept is a foundation for what comes after, and what it feeds. Only a foundation the coming sprints
+// build on can block a student: Git, the semantic tags or the alt text are worth working on, but they never stop anyone
+// from following the next sprint.
+const C = {
+  page: "la structure d’une page HTML (doctype, head, body)", link: "le lien entre une page HTML et sa feuille CSS (<link>)", form: "les formulaires HTML (form, input, label, button)",
+  img: "les images et le texte alternatif (img, alt)", a: "les liens hypertextes (a, href, target)", list: "les listes et les tableaux HTML", sem: "les balises sémantiques",
+  sel: "les sélecteurs CSS (balise, classe, id)", box: "le modèle de boîte et le centrage (margin, padding)", display: "la propriété display (block, inline)", flex: "Flexbox", grid: "CSS Grid",
+  resp: "le responsive (media queries)", text: "la mise en forme du texte et des couleurs en CSS", pos: "le positionnement en CSS", anim: "les transitions et les animations CSS",
+  ev: "les événements JavaScript (addEventListener)", dom: "la manipulation du DOM", api: "les appels d’API (fetch, async / await)", loop: "les boucles", cond: "les conditions",
+  arr: "les tableaux et leurs méthodes", fn: "les fonctions", vars: "les variables", ls: "le localStorage", sql: "les requêtes SQL", poo: "la programmation orientée objet", git: "Git (commit, branches)",
+};
+const CSS = [C.sel, C.box, C.display, C.flex, C.grid, C.resp, C.text, C.pos, C.anim];
+const JS = [C.vars, C.cond, C.loop, C.fn, C.arr, C.dom, C.ev, C.api, C.ls, C.poo];
+export const FOUNDATION: Record<string, { w: number; feeds: string[] }> = {
+  [C.page]: { w: 3, feeds: [...CSS, ...JS, C.form] }, [C.link]: { w: 2, feeds: CSS }, [C.sel]: { w: 3, feeds: [...CSS.slice(1), C.dom] },
+  [C.box]: { w: 2, feeds: [C.flex, C.grid, C.resp, C.pos] }, [C.display]: { w: 2, feeds: [C.flex, C.grid, C.resp] }, [C.flex]: { w: 2, feeds: [C.resp, C.grid] }, [C.grid]: { w: 1, feeds: [C.resp] },
+  [C.resp]: { w: 1, feeds: [] }, [C.pos]: { w: 1, feeds: [C.anim] }, [C.form]: { w: 1, feeds: [C.ev, C.dom] },
+  [C.vars]: { w: 3, feeds: JS.slice(1) }, [C.cond]: { w: 3, feeds: [C.loop, C.fn, C.arr, C.dom, C.ev, C.api, C.poo] }, [C.loop]: { w: 3, feeds: [C.arr, C.dom, C.api, C.ls] },
+  [C.fn]: { w: 3, feeds: [C.arr, C.dom, C.ev, C.api, C.poo] }, [C.arr]: { w: 2, feeds: [C.dom, C.api, C.ls] }, [C.dom]: { w: 3, feeds: [C.ev, C.api, C.ls] }, [C.ev]: { w: 2, feeds: [C.api] },
+  [C.api]: { w: 1, feeds: [] }, [C.poo]: { w: 1, feeds: [] }, [C.sql]: { w: 2, feeds: [] },
+  // worth working on, never blocking
+  [C.git]: { w: 0, feeds: [] }, [C.sem]: { w: 0, feeds: [] }, [C.img]: { w: 0, feeds: [] }, [C.a]: { w: 0, feeds: [] }, [C.list]: { w: 0, feeds: [] }, [C.text]: { w: 0, feeds: [] },
+  [C.anim]: { w: 0, feeds: [] }, [C.ls]: { w: 0, feeds: [] },
+};
+/** The sprints that need this concept to go on: they teach something it feeds (or build on it directly). */
+export function blockedSprints(concept: string | null, next: { sprint: number; items: string[] }[]) {
+  const f = concept ? FOUNDATION[concept] : null;
+  if (!f || f.w < 2) return [];
+  return next.filter((n) => n.items.some((it) => conceptsOf(it).some((c) => f.feeds.includes(c) || (c === concept && f.w >= 3)))).map((n) => `S${n.sprint}`);
+}
+
+/** Where they're heading: their level, its trend, the lacunes that are real foundations of what comes next, and what
+ *  they do about it. A forecast to discuss, not a verdict: it says « decline » only on clear signs. */
+export function forecast(o: { level: string | null; trend: string; themes: Theme[]; engagement: string; planPct: number | null; idleDays: number | null; assess: number[] }) {
   const reasons: { t: string; w: number }[] = [];
   let s = 0;
+  const lv = o.level ? RANK[o.level] : null;
+  if (lv != null && lv >= 3) { s += 0.75; reasons.push({ t: `a solid level (${o.level === "excellent" ? "Excellent" : "Bon"})`, w: 0.75 }); }
+  if (lv != null && lv <= 1) { s -= 0.75; reasons.push({ t: `a ${o.level === "critique" ? "critical" : "weak"} level`, w: -0.75 }); }
   if (o.trend === "up") { s += 1; reasons.push({ t: "their levels went up lately", w: 1 }); }
   if (o.trend === "down") { s -= 1; reasons.push({ t: "their levels went down lately", w: -1 }); }
-  // the lacunes that block what comes next: needed in the coming sprints, or at the root of the rest (priority 1), or seen again and again
-  const blockers = o.lacunes.map((l) => {
-    const needs = o.next.filter((n) => n.items.some((it) => touches(it, l.text))).map((n) => `S${n.sprint}`);
-    const weight = (needs.length ? 2 : 0) + (l.priority === 1 ? 2 : l.priority === 2 ? 1 : 0) + (l.times >= 3 ? 2 : l.times === 2 ? 1 : 0) + (l.kind === "comp" ? 0.5 : 0);
-    return { text: l.text, needs, weight };
-  }).filter((b) => b.weight >= 2).sort((a, b) => b.weight - a.weight);
-  const heavy = blockers.filter((b) => b.weight >= 3).length;
-  if (heavy >= 3) { s -= 1.5; reasons.push({ t: `${heavy} lacunes block what comes next`, w: -1.5 }); }
-  else if (heavy || blockers.length >= 2) { s -= 0.75; reasons.push({ t: `${blockers.length} lacune${blockers.length > 1 ? "s" : ""} will slow the next steps`, w: -0.75 }); }
-  else if (o.lacunes.length <= 2) { s += 0.5; reasons.push({ t: "few lacunes, none blocking the next sprints", w: 0.5 }); }
-  if (o.engagement === "engaged") { s += 0.75; reasons.push({ t: "they do the work given", w: 0.75 }); }
+  // only real foundations needed by the coming sprints count, the more basic the more
+  const blockers = o.themes.filter((t) => t.blocks.length).map((t) => ({ text: t.label, needs: t.blocks, weight: (FOUNDATION[t.concept || ""]?.w || 0) + (t.items.length >= 3 ? 1 : 0) + (t.priority === 1 ? 1 : 0) }))
+    .sort((a, b) => b.weight - a.weight);
+  const heavy = blockers.filter((b) => b.weight >= 4).length;
+  if (heavy >= 2 || blockers.length >= 3) { s -= 1.25; reasons.push({ t: `${blockers.length} basics the next sprints build on aren't mastered`, w: -1.25 }); }
+  else if (blockers.length) { s -= 0.5; reasons.push({ t: `${blockers[0].text} isn't mastered and ${blockers[0].needs.join(", ")} builds on it`, w: -0.5 }); }
+  else if (o.themes.length) { s += 0.25; reasons.push({ t: "their lacunes don't block the next sprints", w: 0.25 }); }
+  if (o.engagement === "engaged") { s += 0.5; reasons.push({ t: "they do the work given", w: 0.5 }); }
   if (o.engagement === "not") { s -= 1; reasons.push({ t: "the work given isn't done", w: -1 }); }
   if (o.planPct != null && o.planPct >= 50) { s += 0.5; reasons.push({ t: `their plan d'action is ${o.planPct}% done`, w: 0.5 }); }
   if (o.idleDays != null && o.idleDays >= 7) { s -= 1; reasons.push({ t: `no activity for ${o.idleDays} days`, w: -1 }); }
@@ -65,10 +97,12 @@ export function forecast(o: { trend: string; lacunes: Lacune[]; next: { sprint: 
     if (last - before >= 12) { s += 0.5; reasons.push({ t: "their last assessment is better than the ones before", w: 0.5 }); }
     if (before - last >= 12) { s -= 0.5; reasons.push({ t: "their last assessment is worse than the ones before", w: -0.5 }); }
   }
-  const way = s >= 1 ? "up" : s <= -1 ? "down" : "flat";
-  const data = (o.trend !== "unknown" ? 1 : 0) + (o.lacunes.length ? 1 : 0) + (o.engagement !== "none" ? 1 : 0) + (o.assess.length ? 1 : 0);
-  return { way, confidence: data >= 3 ? "high" : data >= 2 ? "medium" : "low", reasons: reasons.sort((a, b) => Math.abs(b.w) - Math.abs(a.w)).slice(0, 4).map((r) => ({ t: r.t, good: r.w > 0 })),
-    blockers: blockers.slice(0, 4) };
+  // « improving » needs a sign of movement (levels up, a better assessment, their plan moving), not only a good level
+  const moving = o.trend === "up" || reasons.some((r) => /better than|plan d'action is/.test(r.t));
+  const way = s >= 1 && moving ? "up" : s <= -1.25 ? "down" : "flat";
+  const data = (o.trend !== "unknown" ? 1 : 0) + (o.themes.length ? 1 : 0) + (o.engagement !== "none" ? 1 : 0) + (o.assess.length ? 1 : 0) + (lv != null ? 1 : 0);
+  return { way, score: Math.round(s * 100) / 100, confidence: data >= 4 ? "high" : data >= 2 ? "medium" : "low",
+    reasons: reasons.sort((a, b) => Math.abs(b.w) - Math.abs(a.w)).slice(0, 4).map((r) => ({ t: r.t, good: r.w > 0 })), blockers: blockers.slice(0, 4) };
 }
 
 const LOW = new Set(["faible", "critique"]);
@@ -98,7 +132,8 @@ export function gatherLacunes(gp: Awaited<ReturnType<typeof gapsOf>>, diag: { no
     if (d.mes) add("mes", `Mise en situation : ${d.mes.title}`, at);
   }
   // requirements missed: only the last analyzed debrief's (older briefs are behind them)
-  const lastDeb = [...gp.debriefs].reverse().find((d) => d.analyzed);
+  // requirements not done: only a finalized debrief's (checked by the teacher), the last one
+  const lastDeb = [...gp.debriefs].reverse().find((d) => d.analyzed && d.final);
   for (const r of (lastDeb?.req || []).slice(0, 6)) add("req", r, `B${lastDeb.b}`);
   for (const a of gp.assess) for (const m of a.missed.filter((x: any) => x.verdict === "wrong" || x.verdict === "empty" || (x.score ?? 100) < 50).slice(0, 4)) add("assess", m.prompt, a.title);
   const rest = [...map.values()].sort((a, b) => b.times - a.times || b.last - a.last);
@@ -106,7 +141,7 @@ export function gatherLacunes(gp: Awaited<ReturnType<typeof gapsOf>>, diag: { no
   return [...plan, ...rest].slice(0, 60);
 }
 
-export interface Theme { label: string; kind: "concept" | "req" | "other"; plan: { notion: string; why: string } | null; items: { text: string; kind: Lacune["kind"]; where: string[] }[];
+export interface Theme { label: string; concept: string | null; next: string[]; kind: "concept" | "req" | "other"; plan: { notion: string; why: string } | null; items: { text: string; kind: Lacune["kind"]; where: string[] }[];
   where: string[]; priority: number | null; blocks: string[]; score: number }
 const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 /** The lacunes grouped by concept (« les boucles », « Flexbox »…): what the teacher can work on, with the evidence
@@ -120,7 +155,7 @@ export function themesOf(lac: Lacune[], next: { sprint: number; items: string[] 
     let t = map.get(key);
     if (!t) {
       t = { label: l.kind === "req" && !c ? "Fonctionnalités du brief non faites" : c ? cap(c.replace(/^(les?|la|l’|l')\s*/i, "")) : l.text, kind: l.kind === "req" && !c ? "req" : c ? "concept" : "other",
-        plan: null, items: [], where: [], priority: null, blocks: [], score: 0 };
+        concept: c, next: [], plan: null, items: [], where: [], priority: null, blocks: [], score: 0 };
       map.set(key, t);
     }
     if (l.kind === "plan") { t.plan = t.plan || { notion: l.text, why: l.why || "" }; t.priority = Math.min(t.priority ?? 9, l.priority ?? 2); }
@@ -130,9 +165,10 @@ export function themesOf(lac: Lacune[], next: { sprint: number; items: string[] 
   }
   const out = [...map.values()];
   for (const t of out) {
-    const probe = [t.label, t.plan?.notion || "", ...t.items.slice(0, 3).map((x) => x.text)];
-    t.blocks = next.filter((n) => n.items.some((it) => probe.some((p) => p && touches(it, p)))).map((n) => `S${n.sprint}`);
-    t.score += (t.priority === 1 ? 4 : t.priority === 2 ? 2 : t.priority === 3 ? 1 : 0) + t.blocks.length * 3 + (t.where.length >= 2 ? 2 : 0) + (t.kind === "other" ? -1 : 0);
+    // blocks: a foundation the coming sprints build on; next: it simply comes back in a coming sprint (not blocking)
+    t.blocks = t.kind === "concept" ? blockedSprints(t.concept, next) : [];
+    t.next = t.kind === "concept" ? next.filter((n) => n.items.some((it) => conceptsOf(it).includes(t.concept!) || touches(it, t.label))).map((n) => `S${n.sprint}`).filter((x) => !t.blocks.includes(x)) : [];
+    t.score += (t.priority === 1 ? 4 : t.priority === 2 ? 2 : t.priority === 3 ? 1 : 0) + t.blocks.length * 3 + (FOUNDATION[t.concept || ""]?.w ?? 1) + (t.where.length >= 2 ? 2 : 0) + (t.kind === "other" ? -1 : 0) + (t.kind === "req" ? -2 : 0);
   }
   return out.sort((a, b) => b.score - a.score).slice(0, 10);
 }
@@ -180,8 +216,7 @@ export async function studentInsight(env: Env, g: GuildRow, st: PlanStudent) {
   try { teacherLevel = tl ? JSON.parse(tl.v) : null; } catch { teacherLevel = null; }
   const themes = themesOf(lacunes, next);
   const comps = lacunes.filter((l) => l.kind === "comp").map((l) => ({ code: l.text, where: l.where, times: l.times, why: l.why || "" }));
-  const asLac: Lacune[] = themes.map((t, i) => ({ text: t.label, kind: t.plan ? "plan" : "assess", where: t.where, times: Math.max(1, t.items.length), priority: t.priority ?? (t.score >= 6 ? 1 : t.score >= 3 ? 2 : 3), last: 100 - i }));
-  const fc = forecast({ trend: row.trend, lacunes: asLac, next, engagement: row.engagement.state, planPct: planInfo?.status === "sent" ? planInfo.pct : null,
+  const fc = forecast({ level: teacherLevel?.level || proposed?.level || row.current || null, trend: row.trend, themes, engagement: row.engagement.state, planPct: planInfo?.status === "sent" ? planInfo.pct : null,
     idleDays: lastActive ? Math.floor((t0 - lastActive) / 86400) : null, assess: gp.assess.filter((a) => a.score != null).map((a) => a.score as number) });
   return {
     current: row.current || null, trend: row.trend, why: row.why, inPlan: row.inPlan, severity: row.severity,

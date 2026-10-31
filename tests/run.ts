@@ -6377,16 +6377,21 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     const { proposeLevel, forecast } = await import("../src/shared/stuinsight.ts");
     check(proposeLevel(["critique", "faible", "moyen"], 9, 10)!.level === "moyen" && proposeLevel(["bon", "excellent"], 10, 10)!.level === "excellent" && proposeLevel(["moyen", "critique"], 2, 10)!.level === "critique" && proposeLevel([], 0, 0) === null,
       "the proposed level: the debriefs (the recent ones count more) and the objectives mastered");
-    const lac = (text: string, priority?: number, times = 1) => ({ text, kind: "plan" as const, where: [], times, priority, last: 0 });
-    const down = forecast({ trend: "down", lacunes: [lac("Variables et conditions", 1, 3), lac("Boucles", 1), lac("Fonctions", 1)], next: [{ sprint: 3, items: ["Fonctions", "Boucles"] }], engagement: "not", planPct: null, idleDays: 9, assess: [60, 30] });
-    const up = forecast({ trend: "up", lacunes: [lac("Grid", 3)], next: [{ sprint: 3, items: ["DOM"] }], engagement: "engaged", planPct: 80, idleDays: 1, assess: [40, 70] });
     const { themesOf } = await import("../src/shared/stuinsight.ts");
-    const th = themesOf([{ text: "Que fait une boucle for ?", kind: "assess", where: ["Quiz"], times: 1, last: 1 }, { text: "Écris une boucle while", kind: "assess", where: ["Éval 2"], times: 1, last: 2 },
-      { text: "Les boucles", kind: "plan", where: ["Plan d'action"], times: 1, priority: 1, why: "Il oublie la condition d'arrêt.", last: 3 }, { text: "C3", kind: "comp", where: ["B1"], times: 1, last: 4 }, { text: "Page Contact faite", kind: "req", where: ["B2"], times: 1, last: 5 }],
-      [{ sprint: 3, items: ["Boucles et conditions"] }]);
-    check(th[0].label === "Boucles" && th[0].items.length === 2 && th[0].plan?.why && th[0].blocks.join() === "S3" && th.some((t: any) => t.kind === "req") && !th.some((t: any) => t.label === "C3"),
-      `lacunes grouped by concept: the evidence inside, the plan's note, what the next sprint needs; competencies apart (${JSON.stringify(th.map((t: any) => [t.label, t.items.length, t.blocks]))})`);
-    check(down.way === "down" && down.blockers.some((b: any) => b.text === "Boucles" && b.needs.includes("S3")) && up.way === "up" && !up.blockers.length, "the outlook: blocking lacunes (needed in the next sprint), the trend and the work done");
+    const L1 = (text: string, kind: any = "assess", where = ["Quiz"]) => ({ text, kind, where, times: 1, last: 1 });
+    const nextS3 = [{ sprint: 3, items: ["DOM : querySelector, événements", "Git : branches"] }];
+    const th = themesOf([L1("Que fait une boucle for ?"), L1("Écris une boucle while", "assess", ["Éval 2"]), { text: "Les boucles", kind: "plan", where: ["Plan d'action"], times: 1, priority: 1, why: "Il oublie la condition d'arrêt.", last: 3 },
+      L1("C3", "comp", ["B1"]), L1("Page Contact faite", "req", ["B2"]), L1("Crée une branche feature avec git"), L1("Utilise les balises header et nav")], nextS3);
+    const T = (x: string) => th.find((t: any) => t.label.toLowerCase().includes(x));
+    check(T("boucle").items.length === 2 && T("boucle").plan?.why && T("boucle").blocks.join() === "S3" && th.some((t: any) => t.kind === "req") && !th.some((t: any) => t.label === "C3"),
+      `lacunes grouped by concept: the evidence inside, the plan's note; a basic the next sprint builds on blocks it (${JSON.stringify(th.map((t: any) => [t.label, t.items.length, t.blocks, t.next]))})`);
+    check(!T("git").blocks.length && T("git").next.join() === "S3" && !T("sémantiques").blocks.length, "…Git or the semantic tags never block (Git just comes back in S3)");
+    const good = forecast({ level: "bon", trend: "flat", themes: th.filter((t: any) => !t.blocks.length), engagement: "engaged", planPct: null, idleDays: 1, assess: [50, 66] });
+    const calm = forecast({ level: "bon", trend: "flat", themes: th.filter((t: any) => !t.blocks.length), engagement: "engaged", planPct: null, idleDays: 1, assess: [55, 58] });
+    check(calm.way === "flat", "…a good level that doesn't move: steady, not « improving »");
+    const worse = forecast({ level: "faible", trend: "down", themes: th, engagement: "not", planPct: null, idleDays: 9, assess: [60, 30] });
+    const mid = forecast({ level: "bon", trend: "flat", themes: th, engagement: "partial", planPct: null, idleDays: 1, assess: [] });
+    check(good.way === "up" && worse.way === "down" && mid.way === "flat", `the outlook: decline only on clear signs, a solid student with lacunes that don't block isn't « declining » (${good.way} ${worse.way} ${mid.way} ${mid.score})`);
   }
   const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
