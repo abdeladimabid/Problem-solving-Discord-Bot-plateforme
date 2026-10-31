@@ -72,7 +72,7 @@ async function load(env: Env, g: GuildRow) {
 type Loaded = Awaited<ReturnType<typeof load>>;
 
 /** One sprint, every student: competencies reached (✓ at the level asked, lower, ✗, —), briefs evaluated, grid %, steps, proposal, decisions. */
-function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
+function sprintRows(L: Loaded, sp: SprintInfo, only?: string): Row[] {
   const ids = new Set(sp.briefs);
   const from = Date.parse(sp.start + "T00:00:00Z") / 1000, to = Date.parse(sp.end + "T23:59:59Z") / 1000 + 7 * 86400;
   const squadsOf = new Map(L.briefRows.map((b) => [b.id, (() => { try { return JSON.parse(b.squads || "[]"); } catch { return []; } })()]));
@@ -80,7 +80,7 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     const sq = (squadsOf.get(bid) || []).find((s: any) => (s.members || []).map(String).includes(uid));
     return sq ? `s:${sq.id}` : `u:${uid}`;
   };
-  return L.students.map((s) => {
+  return (only ? L.students.filter((s) => s.discord_id === only) : L.students).map((s) => {
     const uid = s.discord_id;
     const mine = L.results.filter((r) => r.discord_id === uid && ((r.source === "brief" && ids.has(r.ref)) || (r.source !== "brief" && r.at >= from && r.at <= to)));
     const cells: Record<string, Cell> = {};
@@ -183,7 +183,7 @@ export async function sheetLevels(env: Env, g: GuildRow) {
 export async function studentSprints(env: Env, g: GuildRow, uid: string) {
   const L = await load(env, g);
   return L.sprints.map((sp) => {
-    const r = sprintRows(L, sp).find((x) => x.discord_id === uid);
+    const r = sprintRows(L, sp, uid)[0];   // only this student's row (the class's would be read for nothing)
     return r ? { sprint: sp.n, title: sp.title, level: r.level || null, plevel: r.plevel || null, why: r.why, decision: r.decision || null, note: r.note || null, drafts: r.drafts } : null;
   }).filter((x) => x && (x.level || x.plevel || x.decision || x.note || x.drafts));
 }

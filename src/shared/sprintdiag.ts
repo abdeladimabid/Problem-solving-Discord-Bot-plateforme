@@ -57,9 +57,28 @@ export function parseGoals(text: string): { group: string; items: string[] }[] {
 const STOPW = new Set(["les", "des", "une", "aux", "avec", "dans", "pour", "base", "mise", "page", "pages", "bonne", "bonnes", "pratique", "pratiques", "structure", "structuration",
   "donnee", "donnees", "gestion", "utilisation", "classe", "classes", "unite", "unites", "design", "web", "outil", "outils", "projet", "projets", "creation", "dynamique", "moderne",
   "notion", "notions", "css", "html", "code", "client", "cote", "fonctionnalite", "fonctionnalites", "lecture", "different", "differents", "simple", "simples", "selon", "entre"]);
-const wordsOf = (t: string) => new Set(key(t).split(" ").map((w) => w.replace(/s$/, "")).filter((w) => w.length >= 3 && !STOPW.has(w)));
+const wordMemo = new Map<string, Set<string>>();
+const wordsOf = (t: string) => {
+  let w = wordMemo.get(t);
+  if (!w) {
+    w = new Set(key(t).split(" ").map((x) => x.replace(/s$/, "")).filter((x) => x.length >= 3 && !STOPW.has(x)));
+    if (wordMemo.size > 4000) wordMemo.clear();
+    wordMemo.set(t, w);
+  }
+  return w;
+};
 /** Does a lacune (a notion) touch an objective (an item of the planning)? Same concept, or a distinctive word in common. */
+const touchMemo = new Map<string, boolean>();
 export function touches(item: string, notion: string): boolean {
+  const k = item + "\u0000" + notion;
+  const hit = touchMemo.get(k);
+  if (hit !== undefined) return hit;
+  const r = touches0(item, notion);
+  if (touchMemo.size > 20000) touchMemo.clear();
+  touchMemo.set(k, r);
+  return r;
+}
+function touches0(item: string, notion: string): boolean {
   const ci = new Set(conceptsOf(item)), cn = conceptsOf(notion);
   if (cn.some((c) => ci.has(c)) || ci.has(notion)) return true;
   // the same word, or the same stem (« form » / « formulaire », « selecteur » / « selecteurs »)
