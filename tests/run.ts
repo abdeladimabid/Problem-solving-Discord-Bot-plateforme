@@ -6373,6 +6373,14 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     const IN2 = await api("GET", `/api/students/${B}/insight?g=${G}`);
     check(sl.status === 200 && bad.status === 400 && IN2.data.teacherLevel?.level === "bon", "your own level for them is kept (an unknown one refused)");
     await api("PUT", `/api/students/${B}/level?g=${G}`, { level: "" });
+    // 🏠 the home page: what waits, who to watch, the sprint, the levels
+    const H = await api("GET", `/api/home?g=${G}`);
+    const everyone = [...H.data.decline, ...H.data.noPlan, ...H.data.quiet, ...H.data.improving];
+    check(H.status === 200 && Array.isArray(H.data.todo) && H.data.todo.every((t: any) => typeof t.n === "number" && t.n > 0) && typeof H.data.total === "number"
+      && Object.values(H.data.levels).reduce((a: number, b: any) => a + b, 0) === H.data.total, `the home page: the to-do, the levels add up to the class (${H.status} ${JSON.stringify(H.data).slice(0, 300)})`);
+    check(everyone.every((p: any) => p.id && p.name && Array.isArray(p.reasons)) && H.data.noPlan.every((p: any) => ["faible", "critique"].includes(p.level) && !p.plan)
+      && H.data.decline.every((p: any) => p.way === "down"), "…the students to watch: the ones heading down, the weak ones without a plan");
+    check(new Set(everyone.map((p: any) => p.id)).size === everyone.length, "…each student in one list only");
     check((await api("GET", `/api/students/${B}/insight?g=${G}`)).data.teacherLevel === null, "…and removed");
     const { proposeLevel, forecast } = await import("../src/shared/stuinsight.ts");
     check(proposeLevel(["critique", "faible", "moyen"], 9, 10)!.level === "moyen" && proposeLevel(["bon", "excellent"], 10, 10)!.level === "excellent" && proposeLevel(["moyen", "critique"], 2, 10)!.level === "critique" && proposeLevel([], 0, 0) === null,
@@ -6986,6 +6994,19 @@ section("slash command definitions are valid for Discord");
   for (const c of captured ?? []) walk(c, c.name);
   check(captured?.length >= 12, "commands captured");
   check(!problems.length, "command problems: " + problems.join("; "));
+}
+
+section("the assistant knows the app: its pages and how to set up");
+{
+  const { APP_GUIDE } = await import("../src/shared/classchat.ts");
+  const routes = [...APP_GUIDE.matchAll(/\(#\/([\w-]+)/g)].map((m) => m[1]);
+  const fs = await import("node:fs");
+  const front = ["public/app.js", ...fs.readdirSync("public").filter((f: string) => f.endsWith(".js")).map((f: string) => "public/" + f)].map((f) => fs.readFileSync(f, "utf8")).join("\n");
+  const known = new Set([...front.matchAll(/(?:^|[\s{,])"?([\w-]+)"?:\s*(?:view\w+|wBriefs|\(|async|\()/gm)].map((m) => m[1]));
+  const missing = [...new Set(routes)].filter((r) => !known.has(r));
+  check(routes.length >= 20 && !missing.length, `every page the guide links to exists (${missing.join(", ")})`);
+  const tabs = [...APP_GUIDE.matchAll(/#\/settings\/([\w-]+)/g)].map((m) => m[1]);
+  check(tabs.length >= 10 && tabs.every((t) => front.includes(`["${t}", `)), "…and every Settings tab it names");
 }
 
 console.log(`\n${passes} passed, ${failures} failed`);

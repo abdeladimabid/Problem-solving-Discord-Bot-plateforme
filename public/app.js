@@ -408,14 +408,15 @@ function viewNoGuild() {
 
 // ========================================================== overview
 async function viewOverview() {
+  // the class's state (what waits, who to watch) is asked at the same time as the rest
+  const homeP = typeof loadHome === "function" ? api("/home").catch((e) => ({ __error: e })) : null;
   const d = await api("/overview");
   S.guild = d.guild;
   const pill = $("#pill-reports");
   pill.hidden = !d.reports;
   pill.textContent = d.reports;
   setIntegrityPill(d.flagged);
-  setTimeout(() => loadWeekSummary(), 0);
-  setTimeout(() => (typeof loadLive === "function" ? loadLive() : null), 0);
+  setTimeout(() => { if (homeP) loadHome(homeP); const pr = $(".ov-practice"); if (pr) pr.ontoggle = () => { if (pr.open && !pr.dataset.loaded) { pr.dataset.loaded = 1; loadWeekSummary(); } }; }, 0);
   setTimeout(() => { const sel = $("#ov-track"); if (sel) sel.onchange = () => busy(sel, () => changeTrack(sel.value, () => viewOverview())); }, 0);
   const days = d.activity.map((a) => fmtDate(Date.parse(a.day) / 1000));
   const last7 = (arr) => arr.slice(-7);
@@ -431,11 +432,14 @@ async function viewOverview() {
           <p class="sub">${esc(d.guild.season)} · bot speaks ${d.guild.lang === "fr" ? "French" : "English"}</p>
           <div class="actions">
             <a class="btn primary" href="#/assignments">${icon("clipboard")}Plan d'action</a>
-            <a class="btn" href="#/challenges/new">${icon("plus")}New challenge</a>
+            <a class="btn" href="#/briefs">📚 Briefs</a>
             <a class="btn" href="/api/export.csv?g=${encodeURIComponent(S.g)}" download>${icon("download")}Export grades</a>
           </div></div>
         ${langs}
       </section>
+      <div id="ov-home" class="stack"><div class="hm-skel"></div><div class="hm-skel big"></div></div>
+      <details class="panel ov-practice"><summary><span>🧩 Practice</span><span class="muted small">challenges, duels, contests: activity, success, leaderboard, latest answers</span></summary>
+      <div class="stack" style="margin-top:14px">
       <div class="figures">
         <div class="figure"><div class="ico">${icon("users")}</div><b>${d.students}</b><span>students · ${d.linked} verified on HackerRank</span></div>
         <div class="figure"><div class="ico">${icon("activity")}</div>${delta(d.active7, d.active_prev7)}<b>${d.active7}</b><span>active this week</span>${sparkline(last7(d.activity.map((a) => a.active ?? 0)))}</div>
@@ -445,10 +449,8 @@ async function viewOverview() {
         <div class="figure"><div class="ico">${icon("trophy")}</div><b>${d.live_contests}</b><span>live contest${d.live_contests === 1 ? "" : "s"} · ${d.contests} finished</span></div>
       </div>
       ${d.missingMigrations?.length ? `<div class="notice danger"><b>Your database needs an update.</b> Some bot features will fail until you run <code>npm run update</code> in the classbot folder (missing: ${esc(d.missingMigrations.slice(0, 3).join(", "))}${d.missingMigrations.length > 3 ? "…" : ""}).</div>` : ""}
-      <section class="panel" id="ov-live"><p class="muted small">Loading what's happening in class…</p></section>
-      <section class="panel" id="ov-week"><p class="muted small">Loading this week's summary…</p></section>
       ${!d.guild.arena_channel ? `<div class="notice warn">📣 <b>No #arena channel yet.</b> Duels need one, and other public bot messages land in the channel where you ran setup. Create a channel named <code>arena</code>, or pick one in <a href="#/settings">Settings</a>.</div>` : ""}
-      ${d.flagged || d.live_sessions ? `<div class="notice">${d.live_sessions ? `🟢 <a href="#/sessions">${d.live_sessions} class session${d.live_sessions > 1 ? "s" : ""} running now</a>. ` : ""}${d.flagged ? `🛡️ <a href="#/integrity">${d.flagged} submission${d.flagged > 1 ? "s" : ""} with warning signs</a> to review (pasting, leaving the page, code copied from a classmate…).` : ""}</div>` : ""}
+      ${d.live_sessions ? `<div class="notice">${d.live_sessions ? `🟢 <a href="#/sessions">${d.live_sessions} class session${d.live_sessions > 1 ? "s" : ""} running now</a>. ` : ""}</div>` : ""}
       ${d.reports || d.claims ? `<div class="notice warn">${d.reports ? `🚩 <a href="#/challenges">${d.reports} challenge${d.reports > 1 ? "s" : ""} reported by students</a> need${d.reports > 1 ? "" : "s"} a look. ` : ""}${d.claims ? `🙋 ${d.claims} self-reported HackerRank solve${d.claims > 1 ? "s" : ""} wait for your approval (below).` : ""}</div>` : ""}
       <div class="grid cols-2">
         <section class="panel"><div class="panel-head"><h2>Activity <span class="muted">last 30 days</span></h2></div>
@@ -457,9 +459,7 @@ async function viewOverview() {
             { name: "Not solved", color: "#f59e0b", values: d.activity.map((a) => a.failed) },
           ])}
           <h3>Students active per day</h3>${heatStrip(d.activity.map((a) => a.active ?? 0), (i, v) => `${days[i]}: ${v} active`)}</section>
-        <section class="panel"><div class="panel-head"><h2>Needs your attention</h2><a class="small" href="#/students">All students →</a></div>
-          ${d.attention.length ? `<ul class="attention">${d.attention.map((s) => `<li><a class="who-cell" href="#/student/${s.discord_id}">${avatar(s.name, s.discord_id)}<b>${esc(s.name || s.discord_id)}</b></a><span class="muted small" style="text-align:right">${esc(s.attention.join(" · "))}</span></li>`).join("")}</ul>`
-            : `<p class="empty">Everyone is on track. 🎉</p>`}</section>
+        <section class="panel" id="ov-week"><p class="muted small">Loading this week's summary…</p></section>
       </div>
       <div class="grid cols-3">
         <section class="panel"><h2>Solved by type <span class="muted">30 days</span></h2>
@@ -478,6 +478,7 @@ async function viewOverview() {
         <section class="panel"><div class="panel-head"><h2>Latest answers</h2><span class="muted small">${d.movers.length ? `Top this week: ${esc(d.movers[0].name || "?")} +${d.movers[0].pts}` : ""}</span></div>
           ${d.feed.length ? `<ul class="feed">${d.feed.map((f) => `<li><time>${fmtAgo(f.at)}</time><span><a href="#/student/${f.discord_id}">${esc(f.name || "?")}</a> ${status(f.status)} <b>${esc(f.title)}</b> ${diffTag(f.difficulty)}${f.points ? ` <span class="muted">+${f.points}</span>` : ""}</span></li>`).join("")}</ul>` : `<p class="empty">No answers yet. Students start with /practice.</p>`}</section>
       </div>
+      </div></details>
       <section class="panel"><h2>Quick actions</h2>
         <div class="quick">
           <a href="#/assignments"><span class="ico">${icon("clipboard")}</span><span><b>Plan d'action</b><small>the students who need help, and the work given to them</small></span></a>
@@ -675,6 +676,8 @@ async function viewStudent(arg) {
   // #/student/<id>?tab=github opens a tab directly
   const [id, qs] = String(arg || "").split("?");
   let current = new URLSearchParams(qs || "").get("tab") || "overview";
+  // the overview's insight is asked at the same time as the rest (not after it)
+  let insight = current === "overview" ? api(`/students/${id}/insight`).catch((e) => ({ __error: e })) : null;
   const [d, list, blk] = await Promise.all([api(`/students/${id}`), loadStudents(), api(`/students/${id}/blocks`).catch(() => ({ blocks: [] })), loadSkillDefs()]);
   const row = list.find((r) => r.discord_id === id) || { attention: [], trend: "flat" };
   const p = d.player;
@@ -824,7 +827,7 @@ async function viewStudent(arg) {
     const pane = $("#stu-pane");
     pane.innerHTML = panes[k]();
     try { history.replaceState(null, "", `#/student/${id}${k === "overview" ? "" : `?tab=${k}`}`); } catch { /* ignore */ }
-    if (k === "overview" && typeof renderOverview === "function") renderOverview($("#stu-ov-pane"), d, id, { intOpen, practice: workOnPanel(d.coach, id) + coachPanel(d.coach) });
+    if (k === "overview" && typeof renderOverview === "function") { renderOverview($("#stu-ov-pane"), d, id, { intOpen, practice: workOnPanel(d.coach, id) + coachPanel(d.coach), insight }); insight = null; }
     if (k === "comps" && typeof wireLearning === "function") wireLearning(d, id);
     if (k === "github" && typeof studentGithubTab === "function") studentGithubTab($("#gh-tab"), id, d);
     if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); if (typeof blockPanel === "function") blockPanel($("#blk-slot"), id, p.name).catch((e) => toast(e.message, true)); }

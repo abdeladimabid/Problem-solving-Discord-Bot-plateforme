@@ -238,15 +238,32 @@ export async function studentBriefs(env: Env, g: GuildRow, uid: string) {
   const briefs = await all<{ id: number; title: string; status: string; start_at: number | null; due_at: number | null; created_at: number; kind: string; squads: string | null; competencies: string | null }>(env,
     "SELECT id, title, status, start_at, due_at, created_at, kind, squads, competencies FROM briefs WHERE guild_id = ? AND status IN ('assigned', 'archived') ORDER BY COALESCE(due_at, created_at) DESC LIMIT 30", g.id);
   if (!briefs.length) return [];
-  const out = [];
-  for (const b of briefs) {
+  // the briefs read together: their hand-ins and debriefs in two queries, the pushes in one (not 3 queries per brief)
+  const whoOf = (b: (typeof briefs)[number]) => {
     let squads: any[] = [];
     try { squads = JSON.parse(b.squads || "[]"); } catch { squads = []; }
     const sq = b.kind === "squad" ? squads.find((s) => (s.members || []).map(String).includes(uid)) : null;
-    const who = sq ? `s:${sq.id}` : `u:${uid}`;
-    const handin = await one<{ repo: string; plan: string | null; at: number }>(env, "SELECT repo, plan, at FROM brief_handins WHERE brief_id = ? AND who = ?", b.id, who);
-    const push = await one<{ first: number | null }>(env, "SELECT MIN(t) AS first FROM gh_activity WHERE guild_id = ? AND discord_id = ? AND t >= ? AND commits > 0", g.id, uid, b.start_at ?? b.created_at);
-    const rv = await one<{ status: string; final_at: number | null; sent_at: number | null; record: string; level: string | null; plevel: string | null }>(env, "SELECT status, final_at, sent_at, record, level, plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", b.id, who);
+    return { sq, who: sq ? `s:${sq.id}` : `u:${uid}` };
+  };
+  const ws = briefs.map(whoOf);
+  const pairs = briefs.map((b, i) => [b.id, ws[i].who] as const);
+  const cond = pairs.map(() => "(brief_id = ? AND who = ?)").join(" OR ");
+  const args = pairs.flat();
+  const [hands, revs, pushes] = await Promise.all([
+    all<{ brief_id: number; who: string; repo: string; plan: string | null; at: number }>(env, `SELECT brief_id, who, repo, plan, at FROM brief_handins WHERE ${cond}`, ...args),
+    all<{ brief_id: number; who: string; status: string; final_at: number | null; sent_at: number | null; record: string; level: string | null; plevel: string | null }>(env,
+      `SELECT brief_id, who, status, final_at, sent_at, record, level, plevel FROM brief_reviews WHERE ${cond}`, ...args),
+    all<{ t: number }>(env, "SELECT t FROM gh_activity WHERE guild_id = ? AND discord_id = ? AND commits > 0 AND t >= ? ORDER BY t", g.id, uid, Math.min(...briefs.map((b) => b.start_at ?? b.created_at))),
+  ]);
+  const out = [];
+  for (const [i, b] of briefs.entries()) {
+    const { sq, who } = ws[i];
+    const h = hands.find((x) => x.brief_id === b.id && x.who === who);
+    const handin = h ? { repo: h.repo, plan: h.plan, at: h.at } : null;
+    const from = b.start_at ?? b.created_at;
+    const first = pushes.find((x) => x.t >= from)?.t ?? null;
+    const push = { first };
+    const rv = revs.find((x) => x.brief_id === b.id && x.who === who) || null;
     let summary: any = null;
     let own = { lvl: rv?.level || "", prop: rv?.plevel || "" };   // in a squad: the member's own level
     if (rv) {

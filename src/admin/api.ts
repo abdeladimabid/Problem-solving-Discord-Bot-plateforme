@@ -68,6 +68,7 @@ import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
 import { makeGuide } from "../shared/wpguide.ts";
 import { setTeacherLevel, studentInsight } from "../shared/stuinsight.ts";
+import { classHome } from "../shared/home.ts";
 import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
@@ -368,7 +369,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     m = path.match(/^\/students\/(\d+)\/insight$/);
     if (m && method === "GET") {
       const g = await guild();
-      const st = (await students(env, g)).find((r: any) => r.discord_id === m![1]);
+      const st = (await students(env, g, m[1]))[0];
       if (!st) throw new HttpError(404, "This student isn't in the class.");
       return ok(await studentInsight(env, g, st));
     }
@@ -950,20 +951,25 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const t = await setTrack(env, g, String(body.track));
       return ok({ track: t, guild: await getGuild(env, g.id) });
     }
+    // 🏠 the home page: what waits for the teacher, the students to watch, the levels, the sprint now
+    if (path === "/home" && method === "GET") { const g = await guild(); return ok(await classHome(env, g, await students(env, g))); }
     if (path === "/pills" && method === "GET") {
       const g = await guild();
-      const h = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id);
-      const f = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id);
-      const sh = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND status = 'pending'", g.id);
-      // students stopped during an assessment (they left full screen) and waiting to be let back in
-      const lk = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
-        WHERE t.guild_id = ? AND t.status = 'locked' AND t.resume_ok = 0 AND a.status = 'open'`, g.id);
-      // work handed in for a brief whose deadline passed, not debriefed yet
-      const db = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM brief_handins h JOIN briefs b ON b.id = h.brief_id
-        WHERE h.guild_id = ? AND b.status = 'assigned' AND b.due_at < ? AND NOT EXISTS (SELECT 1 FROM brief_reviews r WHERE r.brief_id = h.brief_id AND r.who = h.who AND r.status = 'final')`, g.id, now());
-      // presentations: requests to approve, and presentations already held that wait for their grade
-      const pr = await one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM activity_claims c JOIN activities a ON a.id = c.activity_id
-        WHERE c.guild_id = ? AND (c.status = 'pending' OR (c.status = 'approved' AND a.day <= ?))`, g.id, new Date().toISOString().slice(0, 10)).catch(() => null);
+      // asked on every page: the counts read together, in one round of waiting
+      const [h, f, sh, lk, db, pr] = await Promise.all([
+        one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id),
+        one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id),
+        one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM purchases WHERE guild_id = ? AND status = 'pending'", g.id),
+        // students stopped during an assessment (they left full screen) and waiting to be let back in
+        one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+          WHERE t.guild_id = ? AND t.status = 'locked' AND t.resume_ok = 0 AND a.status = 'open'`, g.id),
+        // work handed in for a brief whose deadline passed, not debriefed yet
+        one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM brief_handins h JOIN briefs b ON b.id = h.brief_id
+          WHERE h.guild_id = ? AND b.status = 'assigned' AND b.due_at < ? AND NOT EXISTS (SELECT 1 FROM brief_reviews r WHERE r.brief_id = h.brief_id AND r.who = h.who AND r.status = 'final')`, g.id, now()),
+        // presentations: requests to approve, and presentations already held that wait for their grade
+        one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM activity_claims c JOIN activities a ON a.id = c.activity_id
+          WHERE c.guild_id = ? AND (c.status = 'pending' OR (c.status = 'approved' AND a.day <= ?))`, g.id, new Date().toISOString().slice(0, 10)).catch(() => null),
+      ]);
       return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0 });
     }
     // -------------------------------------------------- ✨ AI generation
@@ -1084,7 +1090,7 @@ async function discordInfo(env: Env, g: GuildRow) {
 }
 
 // ============================================================== students
-async function students(env: Env, g: GuildRow) {
+async function students(env: Env, g: GuildRow, only?: string) {
   // the trend: this week's points against last week's (a class only needs two weeks of history)
   const t0 = now(), d7 = t0 - 7 * 86400, d14 = t0 - 14 * 86400;
   // the class's students only: the teacher (who also uses the bot) is never one
@@ -1100,8 +1106,8 @@ async function students(env: Env, g: GuildRow) {
        (SELECT COUNT(*) FROM assignments s WHERE s.guild_id = p.guild_id AND s.discord_id = p.discord_id AND s.status = 'open') AS open_asg,
        (SELECT COUNT(*) FROM assignments s WHERE s.guild_id = p.guild_id AND s.discord_id = p.discord_id AND s.status = 'missed') AS missed_asg,
        (SELECT t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = p.guild_id AND m.discord_id = p.discord_id) AS team
-     FROM players p WHERE p.guild_id = ? ORDER BY season_pts DESC`,
-    g.season, d7, d14, d7, g.id));
+     FROM players p WHERE p.guild_id = ?${only ? " AND p.discord_id = ?" : ""} ORDER BY season_pts DESC`,
+    g.season, d7, d14, d7, g.id, ...(only ? [only] : [])));
   // VS Code: connected, and no writing time at all for the last 2 working days while a brief runs
   const quiet = new Set((await quietWriters(env, g).catch(() => ({ learners: [] as { id: string }[] }))).learners.map((l) => l.id));
   return rows.map((r) => {
@@ -1129,52 +1135,56 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
   if (!s.player) throw new HttpError(404, "unknown student");
   const t0 = now();
   const weekStart = t0 - 12 * 7 * 86400;
-  const weekly = await all<{ w: number; pts: number }>(env,
-    "SELECT CAST((created_at - ?) / 604800 AS INTEGER) AS w, SUM(amount) AS pts FROM ledger WHERE guild_id = ? AND discord_id = ? AND created_at >= ? GROUP BY w",
-    weekStart, g.id, did, weekStart);
+  // everything below is independent: asked together (one round trip of waiting instead of twenty)
+  const [weekly, byReason, attempts, matrix, contests, asg, duels, ledger, team, prof, path, workOnR, program, actAll, arows, acomps, sprints, briefsL] = await Promise.all([
+    all<{ w: number; pts: number }>(env,
+      "SELECT CAST((created_at - ?) / 604800 AS INTEGER) AS w, SUM(amount) AS pts FROM ledger WHERE guild_id = ? AND discord_id = ? AND created_at >= ? GROUP BY w",
+      weekStart, g.id, did, weekStart),
+    all(env, "SELECT reason, SUM(amount) AS pts, COUNT(*) AS n FROM ledger WHERE guild_id = ? AND discord_id = ? AND season = ? GROUP BY reason ORDER BY pts DESC", g.id, did, g.season),
+    all(env,
+      `SELECT a.id, a.origin, a.status, a.tries, a.used_hint, a.verified, a.points, a.started_at, a.finished_at, a.answer_given, a.lang, a.result, a.feedback, a.integrity, a.reviewed, a.held, a.explain,
+              c.id AS challenge_id, c.title, c.kind, c.difficulty, c.url, c.source
+         FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+        WHERE a.guild_id = ? AND a.discord_id = ? ORDER BY a.id DESC LIMIT 300`, g.id, did),
+    all(env,
+      `SELECT c.difficulty, c.kind, SUM(a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) AS solved, SUM(a.status = 'failed') AS failed
+         FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.discord_id = ? GROUP BY c.difficulty, c.kind`, g.id, did),
+    all(env,
+      `SELECT r.contest_id, c.name, c.finished_at, r.rank, r.score, r.participants FROM contest_results r JOIN contests c ON c.id = r.contest_id
+        WHERE r.guild_id = ? AND r.discord_id = ? ORDER BY r.contest_id`, g.id, did),
+    all(env,
+      `SELECT s.id, s.status, s.due_at, s.note, s.created_at, s.completed_at, c.title, c.difficulty, c.kind
+         FROM assignments s JOIN challenges c ON c.id = s.challenge_id WHERE s.guild_id = ? AND s.discord_id = ? ORDER BY s.id DESC`, g.id, did),
+    all(env,
+      `SELECT d.id, d.mode, d.difficulty, d.stake, d.status, d.winner_id, d.finished_at,
+              CASE WHEN d.challenger_id = ? THEN d.opponent_id ELSE d.challenger_id END AS opponent_id,
+              (SELECT name FROM players p WHERE p.guild_id = d.guild_id AND p.discord_id = CASE WHEN d.challenger_id = ? THEN d.opponent_id ELSE d.challenger_id END) AS opponent
+         FROM duels d WHERE d.guild_id = ? AND d.status = 'finished' AND (d.challenger_id = ? OR d.opponent_id = ?) ORDER BY d.id DESC LIMIT 30`,
+      did, did, g.id, did, did),
+    all(env, "SELECT amount, reason, note, created_at FROM ledger WHERE guild_id = ? AND discord_id = ? ORDER BY id DESC LIMIT 40", g.id, did),
+    one(env, "SELECT t.id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = ? AND m.discord_id = ?", g.id, did),
+    studentProfile(env, g, did),
+    pathProgress(env, g, did),
+    workOn(env, g, did).then((list) => ({ workOn: list, workOnError: null }), (e) => { console.error("workOn", e); return { workOn: [], workOnError: String(e?.message ?? e).slice(0, 300) }; }),
+    programOf(env, g),
+    (s.player as any)?.github_id ? activityOf(env, g, 14) : Promise.resolve(null),
+    all<{ id: number; title: string; status: string; score: number | null; submitted_at: number | null; summary: string | null; taker: number; grades: string | null; questions: string; brief_id: number | null; brief: string | null; settings: string | null }>(env,
+      `SELECT a.id, a.title, t.status, t.score, t.submitted_at, t.summary, t.id AS taker, t.grades, a.questions, a.brief_id, a.settings, b.title AS brief
+         FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id LEFT JOIN briefs b ON b.id = a.brief_id
+        WHERE t.guild_id = ? AND t.discord_id = ? ORDER BY t.id DESC LIMIT 20`, g.id, did),
+    all<{ ref: number; code: string; ok: number; level: number | null; note: string | null }>(env,
+      "SELECT ref, code, ok, level, note FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'assessment'", g.id, did),
+    studentSprints(env, g, did).catch(() => []),
+    studentBriefs(env, g, did),
+  ]);
   const weeks = Array.from({ length: 12 }, (_, i) => ({ start: weekStart + i * 604800, pts: weekly.find((w) => w.w === i)?.pts ?? 0 }));
-  const byReason = await all(env, "SELECT reason, SUM(amount) AS pts, COUNT(*) AS n FROM ledger WHERE guild_id = ? AND discord_id = ? AND season = ? GROUP BY reason ORDER BY pts DESC", g.id, did, g.season);
-  const attempts = await all(env,
-    `SELECT a.id, a.origin, a.status, a.tries, a.used_hint, a.verified, a.points, a.started_at, a.finished_at, a.answer_given, a.lang, a.result, a.feedback, a.integrity, a.reviewed, a.held, a.explain,
-            c.id AS challenge_id, c.title, c.kind, c.difficulty, c.url, c.source
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id
-      WHERE a.guild_id = ? AND a.discord_id = ? ORDER BY a.id DESC LIMIT 300`, g.id, did);
-  const matrix = await all(env,
-    `SELECT c.difficulty, c.kind, SUM(a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) AS solved, SUM(a.status = 'failed') AS failed
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.discord_id = ? GROUP BY c.difficulty, c.kind`, g.id, did);
-  const contests = await all(env,
-    `SELECT r.contest_id, c.name, c.finished_at, r.rank, r.score, r.participants FROM contest_results r JOIN contests c ON c.id = r.contest_id
-      WHERE r.guild_id = ? AND r.discord_id = ? ORDER BY r.contest_id`, g.id, did);
-  const asg = await all(env,
-    `SELECT s.id, s.status, s.due_at, s.note, s.created_at, s.completed_at, c.title, c.difficulty, c.kind
-       FROM assignments s JOIN challenges c ON c.id = s.challenge_id WHERE s.guild_id = ? AND s.discord_id = ? ORDER BY s.id DESC`, g.id, did);
-  const duels = await all(env,
-    `SELECT d.id, d.mode, d.difficulty, d.stake, d.status, d.winner_id, d.finished_at,
-            CASE WHEN d.challenger_id = ? THEN d.opponent_id ELSE d.challenger_id END AS opponent_id,
-            (SELECT name FROM players p WHERE p.guild_id = d.guild_id AND p.discord_id = CASE WHEN d.challenger_id = ? THEN d.opponent_id ELSE d.challenger_id END) AS opponent
-       FROM duels d WHERE d.guild_id = ? AND d.status = 'finished' AND (d.challenger_id = ? OR d.opponent_id = ?) ORDER BY d.id DESC LIMIT 30`,
-    did, did, g.id, did, did);
-  const ledger = await all(env, "SELECT amount, reason, note, created_at FROM ledger WHERE guild_id = ? AND discord_id = ? ORDER BY id DESC LIMIT 40", g.id, did);
-  const team = await one(env, "SELECT t.id, t.name FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.guild_id = ? AND m.discord_id = ?", g.id, did);
-  const prof = await studentProfile(env, g, did);
-  const path = await pathProgress(env, g, did);
   const coach = {
     skills: prof.skills.filter((x) => x.evidence > 0), mistakes: prof.mistakes, focus: focusSkills(prof.skills, 2).map((x) => x.key),
-    ...(await workOn(env, g, did).then((list) => ({ workOn: list, workOnError: null }), (e) => { console.error("workOn", e); return { workOn: [], workOnError: String(e?.message ?? e).slice(0, 300) }; })),
+    ...workOnR,
     path: { done: path.steps.filter((x) => x.done).length, total: path.steps.length, current: path.current >= 0 ? path.steps[path.current] : null },
     plan: { streak: (s.player as any)?.plan_streak ?? 0, best: (s.player as any)?.plan_best ?? 0, remind: !!(s.player as any)?.plan_dm },
   };
-  // the learning record beyond challenges: GitHub, competencies, briefs and their debriefs, assessments
-  const program = await programOf(env, g);
-  const actAll = (s.player as any)?.github_id ? await activityOf(env, g, 14) : null;
   const act = actAll?.students.find((x) => x.discord_id === did) ?? null;
-  // each assessment: score, the competencies it validated or not, question by question (verdict and points)
-  const arows = await all<{ id: number; title: string; status: string; score: number | null; submitted_at: number | null; summary: string | null; taker: number; grades: string | null; questions: string; brief_id: number | null; brief: string | null; settings: string | null }>(env,
-    `SELECT a.id, a.title, t.status, t.score, t.submitted_at, t.summary, t.id AS taker, t.grades, a.questions, a.brief_id, a.settings, b.title AS brief
-       FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id LEFT JOIN briefs b ON b.id = a.brief_id
-      WHERE t.guild_id = ? AND t.discord_id = ? ORDER BY t.id DESC LIMIT 20`, g.id, did);
-  const acomps = await all<{ ref: number; code: string; ok: number; level: number | null; note: string | null }>(env,
-    "SELECT ref, code, ok, level, note FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'assessment'", g.id, did);
   const assessments = arows.map((r) => {
     let qs: any[] = [], gr: Record<string, any> = {}, st: any = {};
     try { qs = JSON.parse(r.questions || "[]"); } catch { qs = []; }
@@ -1185,12 +1195,10 @@ async function studentDetail(env: Env, g: GuildRow, did: string) {
       questions: qs.map((q, i) => ({ n: i + 1, type: q.type, prompt: String(q.prompt || "").slice(0, 140), points: q.points || 1, verdict: gr[q.id]?.verdict ?? null, score: gr[q.id]?.score ?? null })),
       comps: acomps.filter((c) => c.ref === r.id).map((c) => ({ code: c.code, ok: !!c.ok, level: c.level, note: c.note })) };
   });
-  // the sprint reviews (level and decision per sprint), as the Sprints page shows them
-  const sprints = await studentSprints(env, g, did).catch(() => []);
   const learning = {
     github: { login: (s.player as any)?.github_login ?? null, linkedAt: (s.player as any)?.gh_linked_at ?? null, activity: act, days: actAll?.days ?? [] },
     competencies: await competencyMap(env, g, did, program), levels: program.levels, program: program.name,
-    briefs: await studentBriefs(env, g, did), assessments,
+    briefs: briefsL, assessments,
     sprints,
   };
   return {
@@ -1555,20 +1563,24 @@ async function teams(env: Env, g: GuildRow) {
 async function overview(env: Env, g: GuildRow) {
   const t0 = now(), d7 = t0 - 7 * 86400, d14 = t0 - 14 * 86400, d30 = t0 - 30 * 86400;
   const SOLVED = "(status = 'solved' OR (status = 'claimed' AND verified = 1))";
-  const prev = await one<any>(env,
+  const dayStart = Math.floor(t0 / 86400) * 86400 - 29 * 86400;
+  const hidden = await boardHidden(env, g.id);
+  // the reads don't depend on each other: one round trip of time for all
+  const [prev, byKind, byDiff, langs, counts, act, movers, feedA, claimList, studentsList, migs] = await Promise.all([
+    one<any>(env,
     `SELECT (SELECT COUNT(DISTINCT discord_id) FROM attempts WHERE guild_id = ? AND started_at >= ? AND started_at < ?) AS active_prev7,
             (SELECT COUNT(*) FROM attempts WHERE guild_id = ? AND finished_at >= ? AND finished_at < ? AND ${SOLVED}) AS solved_prev7,
             (SELECT COUNT(*) FROM duels WHERE guild_id = ? AND finished_at >= ? AND finished_at < ?) AS duels_prev7`,
-    g.id, d14, d7, g.id, d14, d7, g.id, d14, d7);
-  const byKind = await all(env,
+    g.id, d14, d7, g.id, d14, d7, g.id, d14, d7),
+    all(env,
     `SELECT c.kind, SUM(a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) AS solved, SUM(a.status = 'failed') AS failed
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.finished_at >= ? GROUP BY c.kind`, g.id, d30);
-  const byDiff = await all(env,
+       FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.finished_at >= ? GROUP BY c.kind`, g.id, d30),
+    all(env,
     `SELECT c.difficulty, SUM(a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) AS solved, SUM(a.status = 'failed') AS failed
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.finished_at >= ? GROUP BY c.difficulty`, g.id, d30);
-  const langs = await all(env,
-    "SELECT lang, COUNT(*) AS n FROM attempts WHERE guild_id = ? AND lang IS NOT NULL AND answer_given IS NOT NULL GROUP BY lang ORDER BY n DESC", g.id);
-  const counts = await one<any>(env,
+       FROM attempts a JOIN challenges c ON c.id = a.challenge_id WHERE a.guild_id = ? AND a.finished_at >= ? GROUP BY c.difficulty`, g.id, d30),
+    all(env,
+    "SELECT lang, COUNT(*) AS n FROM attempts WHERE guild_id = ? AND lang IS NOT NULL AND answer_given IS NOT NULL GROUP BY lang ORDER BY n DESC", g.id),
+    one<any>(env,
     `SELECT (SELECT COUNT(*) FROM players WHERE guild_id = ?) AS students,
             (SELECT COUNT(*) FROM players WHERE guild_id = ? AND hr_username IS NOT NULL AND hr_verified = 1) AS linked,
             (SELECT COUNT(DISTINCT discord_id) FROM attempts WHERE guild_id = ? AND started_at >= ?) AS active7,
@@ -1583,29 +1595,30 @@ async function overview(env: Env, g: GuildRow) {
             (SELECT COUNT(*) FROM assignments WHERE guild_id = ? AND status = 'open') AS open_asg,
             (SELECT COUNT(*) FROM attempts WHERE guild_id = ? AND integrity IS NOT NULL AND reviewed = 0 AND json_extract(integrity, '$.level') > 0) AS flagged,
             (SELECT COUNT(*) FROM sessions WHERE guild_id = ? AND status = 'active') AS live_sessions`,
-    g.id, g.id, g.id, d7, g.id, d7, g.id, d30, g.id, d30, g.id, d7, g.id, g.id, g.id, g.id, g.id, g.id, g.id);
-  const dayStart = Math.floor(t0 / 86400) * 86400 - 29 * 86400;
-  const act = await all<{ d: number; solved: number; failed: number; active: number }>(env,
+    g.id, g.id, g.id, d7, g.id, d7, g.id, d30, g.id, d30, g.id, d7, g.id, g.id, g.id, g.id, g.id, g.id, g.id),
+    all<{ d: number; solved: number; failed: number; active: number }>(env,
     `SELECT CAST((COALESCE(finished_at, started_at) - ?) / 86400 AS INTEGER) AS d, SUM(status = 'solved' OR (status = 'claimed' AND verified = 1)) AS solved,
             SUM(status = 'failed') AS failed, COUNT(DISTINCT discord_id) AS active
-       FROM attempts WHERE guild_id = ? AND COALESCE(finished_at, started_at) >= ? GROUP BY d`, dayStart, g.id, dayStart);
+       FROM attempts WHERE guild_id = ? AND COALESCE(finished_at, started_at) >= ? GROUP BY d`, dayStart, g.id, dayStart),
+    all(env,
+    `SELECT l.discord_id, p.name, SUM(l.amount) AS pts FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
+      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? AND ${inClass("l.discord_id", "l.guild_id")} GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7, hidden),
+    all<any>(env,
+    `SELECT a.finished_at AS at, a.discord_id, p.name, a.status, a.origin, a.points, c.title, c.difficulty
+       FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
+      WHERE a.guild_id = ? AND a.finished_at IS NOT NULL AND a.status IN ('solved', 'claimed', 'failed') ORDER BY a.finished_at DESC LIMIT 15`, g.id),
+    all(env,
+    `SELECT a.id, a.discord_id, p.name, p.hr_display, p.hr_verified, a.answer_given, a.finished_at, c.title, c.url, c.difficulty
+       FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
+      WHERE a.guild_id = ? AND a.status = 'claimed' AND a.verified = 0 ORDER BY a.finished_at DESC LIMIT 20`, g.id),
+    students(env, g),
+    all<{ name: string }>(env, "SELECT name FROM d1_migrations").catch(() => [] as { name: string }[]),
+  ]);
+  const applied = new Set(migs.map((r) => r.name));
   const activity = Array.from({ length: 30 }, (_, i) => {
     const r = act.find((a) => a.d === i);
     return { day: new Date((dayStart + i * 86400) * 1000).toISOString().slice(0, 10), solved: r?.solved ?? 0, failed: r?.failed ?? 0, active: r?.active ?? 0 };
   });
-  const movers = await all(env,
-    `SELECT l.discord_id, p.name, SUM(l.amount) AS pts FROM ledger l LEFT JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
-      WHERE l.guild_id = ? AND l.created_at >= ? AND l.discord_id IS NOT NULL AND l.discord_id != ? AND ${inClass("l.discord_id", "l.guild_id")} GROUP BY l.discord_id ORDER BY pts DESC LIMIT 5`, g.id, d7, await boardHidden(env, g.id));
-  const feedA = await all<any>(env,
-    `SELECT a.finished_at AS at, a.discord_id, p.name, a.status, a.origin, a.points, c.title, c.difficulty
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
-      WHERE a.guild_id = ? AND a.finished_at IS NOT NULL AND a.status IN ('solved', 'claimed', 'failed') ORDER BY a.finished_at DESC LIMIT 15`, g.id);
-  const claimList = await all(env,
-    `SELECT a.id, a.discord_id, p.name, p.hr_display, p.hr_verified, a.answer_given, a.finished_at, c.title, c.url, c.difficulty
-       FROM attempts a JOIN challenges c ON c.id = a.challenge_id LEFT JOIN players p ON p.guild_id = a.guild_id AND p.discord_id = a.discord_id
-      WHERE a.guild_id = ? AND a.status = 'claimed' AND a.verified = 0 ORDER BY a.finished_at DESC LIMIT 20`, g.id);
-  const studentsList = await students(env, g);
-  const applied = new Set((await all<{ name: string }>(env, "SELECT name FROM d1_migrations").catch(() => [])).map((r) => r.name));
   return {
     guild: g, ...counts, ...prev, byKind, byDiff, langs,
     top: studentsList.slice(0, 8),

@@ -4,7 +4,7 @@
 import type { Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, run } from "./db.ts";
 import { chat } from "./ai.ts";
-import { getReview, progressView, statesOf } from "./review/debrief.ts";
+import { briefAssessments, progressView, statesOf } from "./review/debrief.ts";
 import { compLabel } from "./program.ts";
 
 export class PlanError extends Error {}
@@ -102,7 +102,7 @@ export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
     const severity = debLevel === "critique" ? 0 : debLevel === "faible" ? 1 : 2;
     return {
       discord_id: id, name: s.name || id, team: s.team ?? null, current: debLevel || current, lowCount, severity, manual: n?.flagged === 1,
-      debriefs: debriefs.slice(-6), sprints: sp.slice(-4), lastScore: lastScore ?? null, avgScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+      debriefs: debriefs.slice(-6), sprints: sp.slice(-4), lastScore: lastScore ?? null, scores: scores.slice(-6), avgScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
       trend: levelTrend(levels.length >= 2 ? levels : [...sp.map((x) => x.lv), ...levels], s.trend),
       activity: s.trend, lastActive: s.last_active, accuracy: s.accuracy, why, auto, inPlan, flagged: n?.flagged ?? 0,
       engagement: eng, note: n?.note ? { text: n.note, by: n.note_by || "you", at: n.note_at } : null,
@@ -196,11 +196,22 @@ export async function niveaux(env: Env, g: GuildRow) {
 export async function gapsOf(env: Env, g: GuildRow, sid: string) {
   const P = await progressView(env, g);
   const out: any[] = [];
+  // their debriefs read together (one query), the assessments of the drafts in parallel
+  const cells = P.briefs.map((b, i) => ({ b, i, c: P.cells[`${b.id}:${sid}`] })).filter((x) => x.c).slice(-40);
+  const rows = cells.length ? await all<{ brief_id: number; who: string; status: string; record: string | null }>(env,
+    `SELECT brief_id, who, status, record FROM brief_reviews WHERE ${cells.map(() => "(brief_id = ? AND who = ?)").join(" OR ")}`, ...cells.flatMap((x) => [x.b.id, x.c.who])).catch(() => []) : [];
+  const recs = new Map(await Promise.all(cells.map(async (x) => {
+    const r = rows.find((y) => y.brief_id === x.b.id && y.who === x.c.who);
+    if (!r) return [x.b.id, null] as const;
+    let rec: any = {};
+    try { rec = JSON.parse(r.record || "{}"); } catch { rec = {}; }
+    if (!(r.status === "final" && Array.isArray(rec.assess))) rec.assess = await briefAssessments(env, x.b.id, x.c.who, rec).catch(() => []);
+    return [x.b.id, rec] as const;
+  })));
   for (const [i, b] of P.briefs.entries()) {
     const c = P.cells[`${b.id}:${sid}`];
     if (!c) continue;
-    const r = await getReview(env, b.id, c.who).catch(() => null);
-    const rec = r?.rec;
+    const rec = recs.get(b.id);
     if (!rec?.result) { out.push({ b: i + 1, bid: b.id, who: c.who, title: b.title, lv: c.lv || c.plv, final: c.final, analyzed: false }); continue; }
     const st = statesOf(rec)!;
     const ex = (rec.result.exigences || []) as any[];

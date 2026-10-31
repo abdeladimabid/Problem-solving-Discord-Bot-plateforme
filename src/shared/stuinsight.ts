@@ -176,10 +176,19 @@ export function themesOf(lac: Lacune[], next: { sprint: number; items: string[] 
 export async function studentInsight(env: Env, g: GuildRow, st: PlanStudent) {
   const sid = st.discord_id;
   const t0 = now();
-  const pv = await planView(env, g, [st]);
+  // the reads are independent: asked together
+  const [pv, gp, plans, hands, lastActiveRow, prog, bRows, tl] = await Promise.all([
+    planView(env, g, [st]),
+    gapsOf(env, g, sid),
+    listPlans(env, g.id, sid),
+    all<{ id: number; status: string; question: string; created_at: number }>(env,
+      "SELECT id, status, question, created_at FROM hands WHERE guild_id = ? AND discord_id = ? AND created_at > ? ORDER BY id DESC LIMIT 5", g.id, sid, t0 - 30 * 86400).catch(() => []),
+    one<{ t: number | null }>(env, "SELECT last_active AS t FROM players WHERE guild_id = ? AND discord_id = ?", g.id, sid),
+    programOf(env, g),
+    all<{ id: number; week: number | null; due_at: number | null; status: string; sprint: number | null }>(env, "SELECT id, week, due_at, status, sprint FROM briefs WHERE guild_id = ?", g.id).catch(() => []),
+    one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", LKEY(g.id, sid)).catch(() => null),
+  ]);
   const row = [...pv.plan, ...pv.others][0];
-  const gp = await gapsOf(env, g, sid);
-  const plans = await listPlans(env, g.id, sid);
   const live = plans.filter((p) => p.status !== "done").sort((a, b) => b.updated_at - a.updated_at)[0] || null;
   const lastSent = plans.filter((p) => p.status !== "draft" && p.diag).sort((a, b) => (b.sent_at || 0) - (a.sent_at || 0))[0] || null;
   let planInfo = null;
@@ -194,13 +203,9 @@ export async function studentInsight(env: Env, g: GuildRow, st: PlanStudent) {
   const seen = new Map(gp.debriefs.map((d: any) => [d.bid, d]));
   const toFinalize = gp.debriefs.filter((d: any) => !d.final).map((d: any) => ({ bid: d.bid, who: d.who, title: d.title, n: d.b }));
   const notDebriefed = gp.briefs.filter((b) => b.due_at && b.due_at < t0 && !seen.has(b.id)).slice(-3).map((b) => ({ bid: b.id, title: b.title, n: b.n }));
-  const hands = await all<{ id: number; status: string; question: string; created_at: number }>(env,
-    "SELECT id, status, question, created_at FROM hands WHERE guild_id = ? AND discord_id = ? AND created_at > ? ORDER BY id DESC LIMIT 5", g.id, sid, t0 - 30 * 86400).catch(() => []);
   const assess = gp.assess.filter((a) => a.score != null).map((a) => ({ title: a.title, score: Math.round(a.score as number) }));
-  const lastActive = (await one<{ t: number | null }>(env, "SELECT last_active AS t FROM players WHERE guild_id = ? AND discord_id = ?", g.id, sid))?.t ?? null;
+  const lastActive = lastActiveRow?.t ?? null;
   // the sprints' objectives: the ones started so far (mastered: none of their lacunes on it), and the coming ones
-  const prog = await programOf(env, g);
-  const bRows = await all<{ id: number; week: number | null; due_at: number | null; status: string; sprint: number | null }>(env, "SELECT id, week, due_at, status, sprint FROM briefs WHERE guild_id = ?", g.id).catch(() => []);
   const today = new Date(t0 * 1000).toISOString().slice(0, 10);
   const sprints = sprintsOf(prog, bRows).map((sp) => ({ n: sp.n, start: sp.start, end: sp.end, briefs: sp.briefs, items: parseGoals(goalsText(prog.sprints.find((x) => x.n === sp.n) as any)).flatMap((x) => x.items) }));
   const allLac = [...lacunes, ...gp.debriefs.flatMap((d: any) => (d.req || []).map((r: string) => ({ text: r })))];
@@ -211,7 +216,6 @@ export async function studentInsight(env: Env, g: GuildRow, st: PlanStudent) {
   const hasWork = gp.debriefs.length > 0 || gp.assess.length > 0;
   const proposed = proposeLevel(row.debriefs.length ? gp.debriefs.map((d: any) => d.lv).filter(Boolean) : [], hasWork ? objs.filter((o) => o.ok).length : 0, hasWork ? objs.length : 0);
   const next = sprints.filter((sp) => sp.end && sp.end >= today && sp.items.length).slice(0, 2).map((sp) => ({ sprint: sp.n, items: sp.items }));
-  const tl = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", LKEY(g.id, sid)).catch(() => null);
   let teacherLevel: { level: string; note: string; at: number } | null = null;
   try { teacherLevel = tl ? JSON.parse(tl.v) : null; } catch { teacherLevel = null; }
   const themes = themesOf(lacunes, next);

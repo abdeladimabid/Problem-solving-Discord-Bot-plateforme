@@ -861,12 +861,16 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
  * random picks, balanced squads, the class report): a debrief still being worked on never moves their level.
  */
 export async function progressView(env: Env, g: GuildRow, o: { finalOnly?: boolean } = {}) {
-  const briefs = await all<{ id: number; title: string; due_at: number | null; squads: string | null; kind: string | null }>(env,
-    "SELECT id, title, due_at, squads, kind FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id);
-  // a squad's record too: each member has their own level
-  const rows = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string; record: string | null }>(env,
-    `SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?${o.finalOnly ? " AND status = 'final'" : ""}`, g.id);
-  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id));
+  // independent reads, asked together
+  const [briefs, rows, students, linked] = await Promise.all([
+    all<{ id: number; title: string; due_at: number | null; squads: string | null; kind: string | null }>(env,
+      "SELECT id, title, due_at, squads, kind FROM briefs WHERE guild_id = ? AND status != 'draft' ORDER BY COALESCE(due_at, created_at), id", g.id),
+    // a squad's record too: each member has their own level
+    all<{ brief_id: number; who: string; level: string | null; plevel: string | null; status: string; record: string | null }>(env,
+      `SELECT brief_id, who, level, plevel, status, CASE WHEN who LIKE 's:%' THEN record END AS record FROM brief_reviews WHERE guild_id = ?${o.finalOnly ? " AND status = 'final'" : ""}`, g.id),
+    all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name COLLATE NOCASE", g.id).then((r) => withoutStaff(env, g.id, r)),
+    all<{ id: number; brief_id: number }>(env, "SELECT id, brief_id FROM assessments WHERE guild_id = ? AND brief_id IS NOT NULL", g.id).catch(() => []),
+  ]);
   const squadsOf = new Map(briefs.map((b) => [b.id, cleanSquads(b.squads || "[]")]));
   const cells: Record<string, { lv: string; plv: string; who: string; final: boolean }> = {};
   for (const r of rows.sort((a, b) => (a.who < b.who ? 1 : -1))) {
@@ -885,7 +889,6 @@ export async function progressView(env: Env, g: GuildRow, o: { finalOnly?: boole
   const squadOfMember: Record<string, string> = {};
   for (const b of briefs) if (b.kind === "squad") for (const s of squadsOf.get(b.id) || []) for (const m of s.members) squadOfMember[`${b.id}:${m}`] = `s:${s.id}`;
   // the assessments linked to each brief, and where each student is with them (graded: the average score)
-  const linked = await all<{ id: number; brief_id: number }>(env, "SELECT id, brief_id FROM assessments WHERE guild_id = ? AND brief_id IS NOT NULL", g.id).catch(() => []);
   const takers = linked.length ? await all<{ assessment_id: number; discord_id: string; status: string; score: number | null }>(env,
     `SELECT assessment_id, discord_id, status, score FROM assessment_takers WHERE assessment_id IN (${linked.map(() => "?").join(",")})`, ...linked.map((a) => a.id)) : [];
   const briefOfAssess = new Map(linked.map((a) => [a.id, a.brief_id] as const));

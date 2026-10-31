@@ -210,7 +210,11 @@ async function renderOverview(pane, d, sid, o = {}) {
   const name = d.player?.name || "the student";
   if (typeof wireWorkOn === "function") wireWorkOn(sid, d.player?.name);
   let I;
-  try { I = await api(`/students/${sid}/insight`); }
+  try {
+    const pre = o.insight; o.insight = null;   // asked with the page: used once, then asked again on a change
+    I = pre ? await pre : await api(`/students/${sid}/insight`);
+    if (I && I.__error) throw I.__error;
+  }
   catch (e) { $("#sv-stand", pane).innerHTML = `<div class="notice">Couldn't gather their overview: ${esc(e.message)}</div>`; ["#sv-lac", "#sv-next", "#sv-notes"].forEach((s) => { const el = $(s, pane); if (el) el.remove(); }); return; }
   if (!pane.isConnected || !$("#sv-stand", pane)) return;
   const again = () => renderOverview(pane, d, sid, o);
