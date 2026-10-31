@@ -38,7 +38,7 @@
 .w-brief-cell { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .sp-table td, .sp-table th { white-space: nowrap; }
 .sp-table td:first-child, .sp-table th:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
-.sp-decs { display: flex; align-items: center; gap: 4px; } .sp-decs input { width: 140px; }
+.sp-decs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; } .sp-decs input { width: 140px; }
 .sp-dec { width: 30px; height: 30px; border-radius: 999px; border: 1.5px solid var(--line-strong); background: transparent; color: var(--ink-soft); cursor: pointer; font: inherit; padding: 0; }
 .sp-dec.ok.prop { border: 1.5px dashed var(--up); color: var(--up); } .sp-dec.ko.prop { border: 1.5px dashed var(--down); color: var(--down); }
 .sp-dec.ok.on { background: var(--up); border-color: var(--up); color: #fff; } .sp-dec.ko.on { background: var(--down); border-color: var(--down); color: #fff; }
@@ -309,6 +309,7 @@ async function openWatchStudent(D, id) {
 // the count per level for the administration's report, and one comment for the whole sprint.
 const SP_LVL = [["excellent", "Excellent"], ["bon", "Bon"], ["moyen", "Moyen"], ["faible", "Faible"], ["critique", "Critique"]];
 const SP_LVL_NAME = Object.fromEntries(SP_LVL);
+const SP_LVL_C = { excellent: "#2563eb", bon: "#16a34a", moyen: "#d97706", faible: "#ef4444", critique: "#b91c1c" };
 let SPR = null;
 
 async function viewSprints(arg) {
@@ -340,7 +341,7 @@ function spCell(c) {
 }
 
 // where the level shown comes from: the last finalized debrief (by default), or ✨ Propose levels
-const spFrom = (r) => (r.dlevel && r.plevel === r.dlevel && /^last finalized debrief/.test(r.why || "") ? "Last debrief" : "Proposed");
+const spFrom = (r) => (r.dlevel && r.plevel === r.dlevel && /^last debrief/.test(r.why || "") ? (r.ddraft ? "Last debrief (in progress)" : "Last debrief") : "✨ Proposed");
 function renderSprint() {
   const { D } = SPR;
   const codes = D.sprint.codes, tech = codes.filter((c) => !/^T/.test(c)), soft = codes.filter((c) => /^T/.test(c));
@@ -357,14 +358,20 @@ function renderSprint() {
   };
   const dec = (r) => ["valide", "non_valide"].map((v) => {
     const on = r.decision === v, prop = !r.decision && r.prop === v;
-    return `<button type="button" class="sp-dec ${v === "valide" ? "ok" : "ko"} ${on ? "on" : ""} ${prop ? "prop" : ""}" data-dec="${v}" title="${v === "valide" ? "Validated" : "Not validated"}${prop ? " (proposed)" : ""}">${v === "valide" ? "✓" : "✗"}</button>`;
+    return `<button type="button" class="sp-dec ${v === "valide" ? "ok" : "ko"} ${on ? "on" : ""} ${prop ? "prop" : ""}" data-dec="${v}" title="${v === "valide" ? "Validated" : "Not validated"}${prop ? " (proposed)" : ""}" aria-pressed="${on}">${v === "valide" ? "✓ Validé" : "✗ Non"}</button>`;
   }).join("");
   const sum = SP_LVL.map(([v, l]) => { const list = D.rows.filter((r) => lvlOf(r) === v); return { v, l, list }; });
+  const noLvl = D.rows.filter((r) => !lvlOf(r)).length, nVal = D.rows.filter((r) => (r.decision || "") === "valide").length, nNot = D.rows.filter((r) => (r.decision || "") === "non_valide").length;
   view.querySelector("#sp-body").innerHTML = `
     <section class="panel"><div class="panel-head"><h2>Sprint ${D.sprint.n} · ${esc(D.sprint.title)}</h2><span class="muted small">${dayLabelOf(D.sprint.start)} → ${dayLabelOf(D.sprint.end)}</span></div>
       <p class="small" style="margin:0"><b>Briefs:</b> ${D.briefs.length ? D.briefs.map((b) => `<a href="#/brief/${b.id}">${esc(b.title)}</a>`).join(" · ") : `<span class="muted">none yet</span>`}</p>
       <p class="small"><b>Competencies:</b> ${codes.map((c) => compChip(c)).join(" ") || `<span class="muted">none</span>`}</p>
-      ${D.rows.some((r) => r.drafts) ? `<div class="notice warn small" style="margin:0 0 10px">${D.rows.reduce((a, r) => a + r.drafts, 0)} debrief(s) of this sprint are not finalized: a student's level is their <b>last finalized debrief</b>'s, so finalize them (Progress) to count them. You can still choose a level yourself.</div>` : ""}
+      <div class="sp-dist">
+        <div class="sp-distbar" role="img" aria-label="${esc(sum.map((x) => `${x.l} ${x.list.length}`).join(", "))}">${sum.filter((x) => x.list.length).map((x) => `<i style="flex:${x.list.length};background:${SP_LVL_C[x.v]}" title="${esc(x.l)}: ${x.list.length}"></i>`).join("") || `<i style="flex:1;background:var(--surface-2)"></i>`}${noLvl ? `<i style="flex:${noLvl};background:var(--surface-2)" title="No level yet: ${noLvl}"></i>` : ""}</div>
+        <div class="sp-distk">${sum.map((x) => `<span><i style="background:${SP_LVL_C[x.v]}"></i><b>${x.list.length}</b> ${esc(x.l)}</span>`).join("")}${noLvl ? `<span><i style="background:var(--line-strong)"></i><b>${noLvl}</b> no level yet</span>` : ""}
+          <span class="sp-decsum"><b class="ok">${nVal}</b> validated · <b class="ko">${nNot}</b> not · <b>${D.rows.length - nVal - nNot}</b> to decide</span></div>
+      </div>
+      ${D.rows.some((r) => r.drafts) ? `<p class="small muted" style="margin:8px 0 10px">⏳ ${D.rows.reduce((a, r) => a + r.drafts, 0)} debrief(s) of this sprint aren't finalized yet: their level already counts by default (marked ⏳). Finalize them in Progress to make it final, or choose a level yourself.</p>` : ""}
       <div class="toolbar" style="margin:0">${segHtml("spf", FILTERS, SPR.filter)}
         <select id="sp-sort"><option value="name">Name</option><option value="level" ${SPR.sort === "level" ? "selected" : ""}>Level</option><option value="most" ${SPR.sort === "most" ? "selected" : ""}>Most validated</option></select></div>
     </section>
@@ -375,10 +382,12 @@ function renderSprint() {
         <td>${avatar(r.name, r.discord_id)} <a href="#/student/${esc(r.discord_id)}">${esc(r.name)}</a></td>
         ${tech.map((c) => spCell(r.cells[c])).join("")}${soft.length ? ctCell(r) : ""}
         <td class="num">${r.evald}/${D.briefs.length}</td><td class="num">${r.pct == null ? "—" : r.pct + "%"}</td>
-        <td><select data-lvl title="${esc(r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "No finalized debrief in this sprint yet")}"><option value="">${r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}` : "—"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select>
-          ${r.drafts ? `<div class="small" style="color:var(--warn,#b45309)" title="Their level counts once finalized">⚠ ${r.drafts} debrief(s) to finalize</div>` : ""}</td>
-        <td class="sp-decs">${dec(r)}<button type="button" class="sp-dec note ${r.note ? "has" : ""}" data-note title="${esc(r.note || "Note")}">📝</button>
-          <input type="text" data-notein value="${esc(r.note)}" placeholder="Note" ${r.note ? "" : "hidden"}></td></tr>`).join("") || `<tr><td colspan="${tech.length + 6}" class="empty">No students.</td></tr>`}</tbody>
+        <td><div class="sp-lv" style="--c:${SP_LVL_C[lvlOf(r)] || "var(--line-strong)"}"><select data-lvl class="${lvlOf(r) ? "has" : ""}" title="${esc(r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "No debrief in this sprint yet")}">
+            <option value="">${r.plevel ? `${SP_LVL_NAME[r.plevel]}` : "No level yet"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <span class="sp-lsrc">${r.level ? "👤 yours" : r.plevel ? `${r.ddraft && spFrom(r).startsWith("Last") ? "⏳ " : ""}${esc(spFrom(r).replace(" (in progress)", ""))}${r.dfrom && spFrom(r).startsWith("Last") ? ` · ${esc(r.dfrom)}` : ""}` : ""}</span></div>
+          ${r.drafts ? `<div class="small sp-drafts" title="Finalize them in Progress">⏳ ${r.drafts} to finalize</div>` : ""}</td>
+        <td><div class="sp-decs">${dec(r)}<button type="button" class="sp-dec note ${r.note ? "has" : ""}" data-note title="${esc(r.note || "Note")}">📝</button>
+          <input type="text" data-notein value="${esc(r.note)}" placeholder="Note" ${r.note ? "" : "hidden"}></div></td></tr>`).join("") || `<tr><td colspan="${tech.length + 6}" class="empty">No students.</td></tr>`}</tbody>
     </table></div></section>
     <div class="grid cols-2-even">
       <section class="panel"><div class="panel-head"><h2>Levels</h2><span class="toolbar" style="margin:0"><button class="btn small primary" id="sp-prop">✨ Propose levels</button><button class="btn small" id="sp-copy">Copy</button></span></div>

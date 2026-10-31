@@ -716,45 +716,19 @@ async function viewStudent(arg) {
           ${p.hr_display ? `<a class="stu-chip ${p.hr_verified ? "" : "off"}" href="https://www.hackerrank.com/profile/${encodeURIComponent(p.hr_display)}" target="_blank" rel="noopener">HackerRank ${esc(p.hr_display)}${p.hr_verified ? " ✓" : ` · not verified${p.hr_code ? ` (code ${esc(p.hr_code)})` : ""}`}</a>` : `<span class="stu-chip off">HackerRank not linked</span>`}
         </div></div></div>
       <div class="stu-actions">
-        <button class="btn primary" id="assign">Assign a challenge</button><button class="btn" id="give">Give points</button>
+        <button class="btn primary" id="st-work">${icon("clipboard")}Give work</button><button class="btn" id="st-msg">💬 Message</button>
         <details class="menu"><summary class="btn" aria-label="More actions">⋯</summary><div class="menu-list">
+          <button class="btn small" id="assign">🎯 Assign a challenge</button><button class="btn small" id="give">🎁 Give points</button>
           <button class="btn small" id="st-name">✏️ Edit name</button>
           ${p.hr_display ? `${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button>` : ""}
           <button class="btn small danger" id="st-del">Remove from class</button></div></details>
       </div>
     </div>
-    ${row.attention.length ? `<div class="notice" style="margin-bottom:12px"><b>Worth a check-in:</b> ${esc(row.attention.join(", "))}.</div>` : ""}
-    <div class="stu-kpis">
-      <button type="button" data-go="points"><b>${d.seasonPoints}</b><span>season points${d.seasonRank ? ` · #${d.seasonRank} of ${d.seasonSize}` : ""}</span></button>
-      <button type="button" data-go="comps"><b>${compOk.length}<small>/${comps.length}</small></b><span>competencies validated</span></button>
-      <button type="button" data-go="learning"><b ${avgPct != null ? `style="color:${typeof masteryInk === "function" ? masteryInk(avgPct) : "inherit"}"` : ""}>${avgPct != null ? avgPct + "%" : "—"}</b><span>brief requirements met${finals.length ? ` · ${finals.length} debriefed` : ""}</span></button>
-      <button type="button" data-go="github"><b>${act?.last ? fmtAgo(act.last).replace(/ ago$/, "") : gh?.login ? "—" : "off"}</b><span>${act?.last ? "since the last push" : gh?.login ? "no push yet" : "GitHub not linked"}${act?.idle >= 3 ? ` · <span style="color:var(--down)">${act.idle} days idle</span>` : ""}</span></button>
-      <button type="button" data-go="challenges"><b>${d.solved.total}</b><span>challenges solved · ${pct(d.accuracy)} accuracy</span></button>
-      <button type="button" data-go="challenges"><b>${p.daily_streak}</b><span>day daily streak</span></button>
-    </div>
     <nav class="stu-tabs" role="tablist">${TABS.map(([k, l]) => `<button role="tab" data-stab="${k}">${l}${k === "challenges" && intOpen ? ` <span class="pill">${intOpen}</span>` : ""}</button>`).join("")}</nav>
     <div id="stu-pane" class="stack"></div>`;
 
   const panes = {
-    overview: () => `
-      <div class="stu-ov">
-        <div class="stack">
-          ${typeof githubSnapshot === "function" ? githubSnapshot(d, id) : ""}
-          ${L ? latestBriefHtml(L, id) : ""}
-          <section class="panel"><h2>Points per week</h2>${lineChart(d.weeks.map((w) => fmtDate(w.start)), [{ name: "Points", color: "var(--s1)", values: d.weeks.map((w) => w.pts) }])}</section>
-        </div>
-        <div class="stack">
-          ${L ? `<section class="panel"><div class="panel-head"><h2>🎓 Competencies</h2><a class="btn small" href="#/student/${esc(id)}?tab=comps">Details →</a></div>
-            <div class="stu-comp-bar"><i style="width:${comps.length ? Math.round((100 * compOk.length) / comps.length) : 0}%"></i></div>
-            <p class="small"><b>${compOk.length}</b> of ${comps.length} validated${comps.filter((c) => c.status === "not_yet").length ? ` · <span style="color:var(--down)">${comps.filter((c) => c.status === "not_yet").length} not yet</span>` : ""}</p>
-            <div class="stu-comp-mini">${comps.map((c) => `<span class="cmm ${c.status}" title="${esc(c.name)}">${esc(c.label)}</span>`).join("")}</div></section>` : ""}
-          ${L ? `<section class="panel"><div class="panel-head"><h2>📝 Assessments</h2><a class="btn small" href="#/student/${esc(id)}?tab=assess">All →</a></div>
-            ${L.assessments.length ? `<ul class="ov-assess">${L.assessments.slice(0, 3).map((a) => `<li><a href="#/assessment/${a.id}">${esc(a.title)}</a>
-              <span>${a.score != null ? `<b style="color:${masteryInk(a.score)}">${a.score}%</b>` : `<span class="muted small">${esc(STATUS[a.status] || a.status)}</span>`}</span></li>`).join("")}</ul>` : `<p class="muted small">No assessment yet.</p>`}</section>` : ""}
-          ${workOnPanel(d.coach, id)}
-        </div>
-      </div>
-      ${coachPanel(d.coach)}`,
+    overview: () => `<div id="stu-ov-pane"></div>`,
     learning: () => (typeof learningPanel === "function" ? learningPanel(d, id, "briefs") : `<p class="muted">—</p>`),
     assess: () => (typeof learningPanel === "function" ? learningPanel(d, id, "assess") : `<p class="muted">—</p>`),
     comps: () => (typeof learningPanel === "function" ? learningPanel(d, id, "comps") : `<p class="muted">—</p>`),
@@ -850,7 +824,7 @@ async function viewStudent(arg) {
     const pane = $("#stu-pane");
     pane.innerHTML = panes[k]();
     try { history.replaceState(null, "", `#/student/${id}${k === "overview" ? "" : `?tab=${k}`}`); } catch { /* ignore */ }
-    if (k === "overview") { wireWorkOn(id, p.name); }
+    if (k === "overview" && typeof renderOverview === "function") renderOverview($("#stu-ov-pane"), d, id, { intOpen, practice: workOnPanel(d.coach, id) + coachPanel(d.coach) });
     if (k === "comps" && typeof wireLearning === "function") wireLearning(d, id);
     if (k === "github" && typeof studentGithubTab === "function") studentGithubTab($("#gh-tab"), id, d);
     if (k === "challenges") { $$("[data-tab]").forEach((b) => b.onclick = () => showTab(b.dataset.tab)); showTab("solved"); if (typeof blockPanel === "function") blockPanel($("#blk-slot"), id, p.name).catch((e) => toast(e.message, true)); }
@@ -861,6 +835,8 @@ async function viewStudent(arg) {
   $$("[data-go]").forEach((b) => b.onclick = () => { showPane(b.dataset.go); $(".stu-tabs").scrollIntoView({ behavior: "smooth", block: "start" }); });
   showPane(current);
   $("#assign").onclick = () => assignDialog([id]);
+  $("#st-work").onclick = (e) => busy(e.currentTarget, () => (typeof giveWorkDialog === "function" ? giveWorkDialog([id]) : assignDialog([id])));
+  $("#st-msg").onclick = () => (typeof insMessage === "function" ? insMessage(id, p.name || "the student") : null);
   const hrAction = (action, msg) => async () => { await api(`/students/${id}/hackerrank`, { method: "POST", body: { action } }); toast(msg); S.students = null; viewStudent(`${id}?tab=${current}`); };
   $("#st-name").onclick = () => {
     openDialog("Edit name", `<label for="st-nm">Name</label><input type="text" id="st-nm" maxlength="60" value="${esc(p.name || "")}" style="width:100%">

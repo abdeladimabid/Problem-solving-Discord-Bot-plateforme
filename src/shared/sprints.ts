@@ -57,7 +57,10 @@ async function load(env: Env, g: GuildRow) {
   const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
     "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id);
   const reviews = await all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);
-  const drafts = await all<{ brief_id: number; who: string }>(env, "SELECT brief_id, who FROM brief_reviews WHERE guild_id = ? AND status != 'final'", g.id);
+  // the debriefs in progress: their level counts too (the last debrief gives the default level, finalized or not)
+  const drafts = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; mem: string | null; contrib: string | null }>(env,
+    `SELECT brief_id, who, level, plevel, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.members') END AS mem, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.contrib') END AS contrib
+      FROM brief_reviews WHERE guild_id = ? AND status != 'final'`, g.id);
   const steps = await all<{ brief_id: number; who: string; final: string | null }>(env, "SELECT brief_id, who, final FROM brief_steps WHERE guild_id = ?", g.id);
   const dec = await all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
     "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id);
@@ -93,12 +96,25 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     // part of each finalized debrief's grid that is valid (the student's own, or their squad's)
     const pcts: number[] = [], blv: string[] = [];
     let dlevel = "", dfrom = "";
-    // in the briefs' order (due date): the last finalized debrief gives the default level
+    // in the briefs' order (due date): the last debrief gives the default level (a finalized one, else one in progress)
+    let dDraft = false;
     const order = [...sp.briefs].sort((a, b) => (L.briefRows.find((x) => x.id === a)?.due_at ?? 0) - (L.briefRows.find((x) => x.id === b)?.due_at ?? 0) || a - b);
     const drafts = order.filter((bid) => L.drafts.some((r) => r.brief_id === bid && r.who === whoOf(bid, uid))).length;
     for (const bid of order) {
       const rv = L.reviews.find((r) => r.brief_id === bid && r.who === whoOf(bid, uid));
-      if (!rv) continue;
+      if (!rv) {
+        const dr = L.drafts.find((r) => r.brief_id === bid && r.who === whoOf(bid, uid));
+        if (dr) {
+          let lv = "";
+          if (dr.who.startsWith("s:")) {
+            try { const own = memberLevelOf({ members: JSON.parse(dr.mem || "{}"), contrib: JSON.parse(dr.contrib || "[]") }, uid, { lvl: dr.level, prop: dr.plevel }); lv = own.lvl || own.prop; }
+            catch { lv = dr.level || dr.plevel || ""; }
+          }
+          else lv = dr.level || dr.plevel || "";
+          if (lv && SPRINT_LEVELS.includes(lv)) { dlevel = lv; dDraft = true; dfrom = L.briefRows.find((x) => x.id === bid)?.title || ""; }
+        }
+        continue;
+      }
       try {
         const pk = `${rv.brief_id}|${rv.who}`;
         if (!L.parsed.has(pk)) { try { const r0 = JSON.parse(rv.record); L.parsed.set(pk, { rec: r0, st: reviewStates(r0) }); } catch { L.parsed.set(pk, null); } }
@@ -108,7 +124,7 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
         const own = rv.who.startsWith("s:") ? memberLevelOf(rec, uid, { lvl: rv.level, prop: rv.plevel }) : { lvl: rv.level || "", prop: rv.plevel || "" };
         // a finalized debrief with no level saved (older ones): the level its switches give
         const lv = own.lvl || own.prop || (rv.who.startsWith("u:") ? debriefLevel(rec, st) || "" : "");
-        if (lv) { blv.push(lv); dlevel = lv; dfrom = L.briefRows.find((x) => x.id === bid)?.title || ""; }
+        if (lv) { blv.push(lv); dlevel = lv; dDraft = false; dfrom = L.briefRows.find((x) => x.id === bid)?.title || ""; }
         const main = (rec.result?.exigences ?? []).map((e: any, i: number) => [e, st.ex[i]]).filter(([e]: any) => !/bonus|crit|oral/i.test(String(e.type || "")));
         if (main.length) pcts.push(main.filter(([, v]: any) => v).length / main.length);
       } catch { /* old record */ }
@@ -122,7 +138,7 @@ function sprintRows(L: Loaded, sp: SprintInfo): Row[] {
     const d = L.dec.find((x) => x.sprint === sp.n && x.discord_id === uid);
     // the level proposed: "Propose levels" when it was used, else the last finalized debrief's; the teacher's level wins
     return { discord_id: uid, name: s.name || uid, cells, ok: okN, evald, pct: pcts.length ? Math.round((100 * pcts.reduce((a, b) => a + b, 0)) / pcts.length) : null, st,
-      prop, plevel: d?.plevel || dlevel, why: d?.plevel ? d?.why || "" : dlevel ? `last finalized debrief: ${dfrom}` : "", level: d?.level || "", decision: d?.decision || "", note: d?.note || "", blv, dlevel, dfrom, drafts };
+      prop, plevel: d?.plevel || dlevel, why: d?.plevel ? d?.why || "" : dlevel ? `last debrief${dDraft ? " (not finalized yet)" : ""}: ${dfrom}` : "", ddraft: dDraft, level: d?.level || "", decision: d?.decision || "", note: d?.note || "", blv, dlevel, dfrom, drafts };
   });
 }
 

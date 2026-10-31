@@ -67,6 +67,7 @@ import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
 import { competencyMap, studentBriefs } from "../shared/learning.ts";
 import { makeGuide } from "../shared/wpguide.ts";
+import { setTeacherLevel, studentInsight } from "../shared/stuinsight.ts";
 import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
@@ -363,6 +364,20 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       return ok({ ok: true });
     }
     // 🚫 practice blocks (practiceblock.ts): one student can't practice a type of challenge (some levels, for some days)
+    // 🔭 the top of a student's page: level journey, lacunes, how to help them
+    m = path.match(/^\/students\/(\d+)\/insight$/);
+    if (m && method === "GET") {
+      const g = await guild();
+      const st = (await students(env, g)).find((r: any) => r.discord_id === m![1]);
+      if (!st) throw new HttpError(404, "This student isn't in the class.");
+      return ok(await studentInsight(env, g, st));
+    }
+    m = path.match(/^\/students\/(\d+)\/level$/);
+    if (m && method === "PUT") {
+      const g = await guild();
+      if (!(await one(env, "SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", g.id, m[1]))) throw new HttpError(404, "This student isn't in the class.");
+      try { return ok({ teacherLevel: await setTeacherLevel(env, g.id, m[1], body.level, body.note) }); } catch (e) { throw new HttpError(400, (e as Error).message); }
+    }
     m = path.match(/^\/students\/(\d+)\/blocks$/);
     if (m) {
       const g = await guild(), id = m[1];

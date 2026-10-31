@@ -4060,11 +4060,11 @@ section("sprints: competencies reached in the sprint's briefs, levels for the re
   run1("UPDATE brief_reviews SET level = 'bon' WHERE brief_id = ? AND who = ?", bid, `u:${U.alice.id}`);
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, level, updated_at) VALUES (?, ?, ?, ?, 'draft', 'excellent', ?)", bid, G, `u:${U.bob.id}`, JSON.stringify(rec), clock.now());
   V = await api("GET", `/api/sprints/${sp.n}?g=${G}`);
-  check(row(U.alice.id).plevel === "bon" && /last finalized debrief: Brief du sprint/.test(row(U.alice.id).why) && !row(U.alice.id).level, `the sprint level is the last finalized debrief's by default (${row(U.alice.id).plevel} · ${row(U.alice.id).why})`);
-  check(!row(U.bob.id).plevel && row(U.bob.id).drafts === 1, "…a debrief not finalized doesn't count, and the page says it's to finalize");
+  check(row(U.alice.id).plevel === "bon" && /last debrief: Brief du sprint/.test(row(U.alice.id).why) && !row(U.alice.id).level, `the sprint level is the last debrief's by default (${row(U.alice.id).plevel} · ${row(U.alice.id).why})`);
+  check(row(U.bob.id).plevel === "excellent" && /not finalized yet/.test(row(U.bob.id).why) && row(U.bob.id).ddraft && row(U.bob.id).drafts === 1, `…a debrief not finalized gives the level too (said so), and the page says it's to finalize (${row(U.bob.id).plevel} ${row(U.bob.id).why})`);
   const sp1 = (await api("GET", `/api/students/${U.alice.id}?g=${G}`)).data.learning.sprints.find((x: any) => x.sprint === sp.n);
   const spB = (await api("GET", `/api/students/${U.bob.id}?g=${G}`)).data.learning.sprints.find((x: any) => x.sprint === sp.n);
-  check(sp1?.plevel === "bon" && !sp1.level && /last finalized debrief/.test(sp1.why) && spB?.drafts === 1 && !spB.plevel, `…the student's page shows the same sprint level, and the debriefs to finalize (${JSON.stringify(sp1)})`);
+  check(sp1?.plevel === "bon" && !sp1.level && /last debrief/.test(sp1.why) && spB?.drafts === 1 && spB.plevel === "excellent", `…the student's page shows the same sprint level, and the debriefs to finalize (${JSON.stringify(sp1)})`);
   run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bid, `u:${U.bob.id}`);
   // levels: one AI call for the class, without the names
   const lv = await api("POST", `/api/sprints/${sp.n}/levels`, { g: G });
@@ -6361,6 +6361,33 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   if (ans) await wp("answer", { step: ans.id, answer: "justify-content agit sur l'axe principal, align-items sur l'axe secondaire" });
   const T2 = await api("GET", `/api/wplans/${id}?g=${G}`);
   check(T2.data.plan.status === "done" && T2.data.status.pct === 100, `all done: the plan is done (${T2.data.status.done}/${T2.data.status.total})`);
+  {
+    // 🔭 the top of their page: level journey, lacunes (the plan's diagnosis first), how to help
+    const IN = await api("GET", `/api/students/${B}/insight?g=${G}`);
+    check(IN.status === 200 && Array.isArray(IN.data.journey) && IN.data.lacunes.length >= 1 && IN.data.lacunes[0].kind === "plan" && (IN.data.plan === null || IN.data.plan.id === id) && typeof IN.data.engagement.total === "number",
+      `the student's overview: their journey, their lacunes (the plan d'action's diagnosis first), their plan (${IN.status} ${JSON.stringify(IN.data).slice(0, 300)})`);
+    check(IN.data.hands.length >= 1 && Array.isArray(IN.data.toFinalize) && Array.isArray(IN.data.notDebriefed), "…their questions and the debriefs to do");
+    check((await api("GET", `/api/students/999999/insight?g=${G}`)).status === 404, "…an unknown student: 404");
+    check((IN.data.proposed === null || ["excellent", "bon", "moyen", "faible", "critique"].includes(IN.data.proposed.level)) && ["up", "down", "flat"].includes(IN.data.forecast.way) && IN.data.teacherLevel === null, "…a proposed level, an outlook, no level of yours yet");
+    const sl = await api("PUT", `/api/students/${B}/level?g=${G}`, { level: "bon" }), bad = await api("PUT", `/api/students/${B}/level?g=${G}`, { level: "super" });
+    const IN2 = await api("GET", `/api/students/${B}/insight?g=${G}`);
+    check(sl.status === 200 && bad.status === 400 && IN2.data.teacherLevel?.level === "bon", "your own level for them is kept (an unknown one refused)");
+    await api("PUT", `/api/students/${B}/level?g=${G}`, { level: "" });
+    check((await api("GET", `/api/students/${B}/insight?g=${G}`)).data.teacherLevel === null, "…and removed");
+    const { proposeLevel, forecast } = await import("../src/shared/stuinsight.ts");
+    check(proposeLevel(["critique", "faible", "moyen"], 9, 10)!.level === "moyen" && proposeLevel(["bon", "excellent"], 10, 10)!.level === "excellent" && proposeLevel(["moyen", "critique"], 2, 10)!.level === "critique" && proposeLevel([], 0, 0) === null,
+      "the proposed level: the debriefs (the recent ones count more) and the objectives mastered");
+    const lac = (text: string, priority?: number, times = 1) => ({ text, kind: "plan" as const, where: [], times, priority, last: 0 });
+    const down = forecast({ trend: "down", lacunes: [lac("Variables et conditions", 1, 3), lac("Boucles", 1), lac("Fonctions", 1)], next: [{ sprint: 3, items: ["Fonctions", "Boucles"] }], engagement: "not", planPct: null, idleDays: 9, assess: [60, 30] });
+    const up = forecast({ trend: "up", lacunes: [lac("Grid", 3)], next: [{ sprint: 3, items: ["DOM"] }], engagement: "engaged", planPct: 80, idleDays: 1, assess: [40, 70] });
+    const { themesOf } = await import("../src/shared/stuinsight.ts");
+    const th = themesOf([{ text: "Que fait une boucle for ?", kind: "assess", where: ["Quiz"], times: 1, last: 1 }, { text: "Écris une boucle while", kind: "assess", where: ["Éval 2"], times: 1, last: 2 },
+      { text: "Les boucles", kind: "plan", where: ["Plan d'action"], times: 1, priority: 1, why: "Il oublie la condition d'arrêt.", last: 3 }, { text: "C3", kind: "comp", where: ["B1"], times: 1, last: 4 }, { text: "Page Contact faite", kind: "req", where: ["B2"], times: 1, last: 5 }],
+      [{ sprint: 3, items: ["Boucles et conditions"] }]);
+    check(th[0].label === "Boucles" && th[0].items.length === 2 && th[0].plan?.why && th[0].blocks.join() === "S3" && th.some((t: any) => t.kind === "req") && !th.some((t: any) => t.label === "C3"),
+      `lacunes grouped by concept: the evidence inside, the plan's note, what the next sprint needs; competencies apart (${JSON.stringify(th.map((t: any) => [t.label, t.items.length, t.blocks]))})`);
+    check(down.way === "down" && down.blockers.some((b: any) => b.text === "Boucles" && b.needs.includes("S3")) && up.way === "up" && !up.blockers.length, "the outlook: blocking lacunes (needed in the next sprint), the trend and the work done");
+  }
   const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);

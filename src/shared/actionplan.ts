@@ -222,5 +222,5 @@ export async function gapsOf(env: Env, g: GuildRow, sid: string) {
       .map((x) => ({ n: x.n, prompt: x.prompt, verdict: x.g.verdict, score: x.g.score, comment: String(x.g.comment || "").slice(0, 300) }));
     return { id: p.id, title: p.title, score: p.score, missed };
   });
-  return { debriefs: out, assess };
+  return { debriefs: out, assess, briefs: P.briefs.map((b, i) => ({ n: i + 1, id: b.id, title: b.title, due_at: b.due_at })) };
 }
