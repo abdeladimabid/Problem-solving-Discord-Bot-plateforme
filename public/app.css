@@ -2806,6 +2806,47 @@ body.sl-open { overflow: hidden; }
 .hm-tr b { font-size: 18px; color: var(--ink); } .hm-tr .up b { color: var(--up); } .hm-tr .down b { color: var(--down); }
 .hm-upw { font-size: 12px; color: var(--ink-soft); } .hm-upw.up { color: var(--up); font-weight: 600; }
 #ov-home > * { margin: 0 !important; }
+
+/* ---------- Mises en situation (mises.js) ---------- */
+.mes-wiz { margin-bottom: 18px; border-left: 4px solid var(--blue); }
+.mes-steps { margin: 0; padding-left: 22px; display: grid; gap: 18px; }
+.mes-steps > li { padding-left: 4px; }
+.mes-steps > li::marker { font-weight: 800; color: var(--blue); }
+.mes-steps > li > b { display: inline-block; margin-bottom: 6px; }
+.mes-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.mes-chip { border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; max-width: 100%; }
+.mes-chip b { color: var(--blue); margin-right: 2px; }
+.mes-chip.soft b { color: #6d28d9; }
+.mes-chip[aria-pressed="true"] { background: var(--blue-50); border-color: var(--blue); color: var(--ink); box-shadow: inset 0 0 0 1px var(--blue); }
+.mes-chip:focus-visible, .mes-filters .btn:focus-visible { outline: 3px solid var(--blue-100); outline-offset: 1px; }
+.seg-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mes-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 14px; max-height: 280px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--surface-2); }
+.mes-people label { padding: 4px 6px; border-radius: 8px; cursor: pointer; }
+.mes-people label:hover { background: var(--surface); }
+.mes-people label[hidden] { display: none; }
+.res-table th .mes-w { display: block; text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 600; color: var(--ink-faint); }
+.res-table .mes-gain { display: block; font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+.mes-note { margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius-m); background: var(--blue-50); border: 1px solid var(--blue-100); }
+.mes-test { margin-top: 10px; padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: var(--radius-m); display: grid; gap: 6px; }
+.mes-groups { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 8px; }
+.mes-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.mes-filters .btn[aria-pressed="true"] { background: var(--blue-50); border-color: var(--blue); color: var(--blue); }
+.mes-sit .panel-head h2 { font-size: 16px; }
+.mes-sit details { margin-top: 8px; }
+.mes-qcm + .mes-qcm { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+.mes-qcm .mcq-res li.right { border-color: var(--up); background: var(--up-bg); }
+.mes-learner { align-items: start; }
+.mes-h { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); margin: 14px 0 8px; }
+.mes-ans { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 8px 12px; margin-bottom: 8px; background: var(--surface); }
+.mes-ans summary { cursor: pointer; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.mes-ck { list-style: none; padding: 0; margin: 0; display: grid; gap: 3px; }
+.mes-ck li.ok { color: var(--up); } .mes-ck li.ko { color: var(--down); }
+.mes-tl { max-height: 520px; overflow: auto; }
+.mes-tl li.ev-leave, .mes-tl li.ev-paste, .mes-tl li.ev-paste-blocked { color: var(--warn); }
+.mes-paste { max-height: 120px; white-space: pre-wrap; font-size: 12px; }
+.mes-qlist { padding-left: 0; list-style: none; display: grid; gap: 6px; }
+.mes-figs { margin-bottom: 10px; }
+@media (max-width: 860px) { .mes-learner { grid-template-columns: 1fr; } }
 .hm-kv small { font-size: 15px; color: var(--ink-faint); font-weight: 700; }
 .hm-k.warn { border-color: color-mix(in srgb, var(--down) 40%, var(--line)); background: color-mix(in srgb, var(--down) 4%, var(--surface)); }
 .hm-k.todo { border-color: color-mix(in srgb, #f59e0b 45%, var(--line)); }

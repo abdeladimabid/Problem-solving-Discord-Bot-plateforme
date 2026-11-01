@@ -386,7 +386,7 @@ async function route() {
   // most pages take one segment; a page with tabs (#/sprints/3/review) gets the rest too
   const arg = name === "sprints" ? more.join("/") : more[0];
   const fn = routes[name] || viewOverview;
-  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", wplan: "assignments", assessment: "assessments", battle: "games", battles: "games", game: "games" }[name] || name;
+  const parent = { student: "students", contest: "contests", session: "sessions", brief: "briefs", debrief: "progress", wplan: "assignments", assessment: "assessments", mise: "mises-en-situation", battle: "games", battles: "games", game: "games" }[name] || name;
   $$("#nav a").forEach((a) => a.setAttribute("aria-current", a.getAttribute("href") === `#/${parent}` ? "page" : "false"));
   if (dlg.open) dlg.close();
   if (!S.g) return viewNoGuild();
@@ -2437,7 +2437,10 @@ function setIntegrityPill(n) {
 // ------------------------------------------------------------- replay
 /** Rebuild the code step by step from the editor's change log and play it back. */
 async function replayDialog(id, meta = null) {
-  const d = await api(`/attempts/${id}/log`);
+  replayShow(await api(`/attempts/${id}/log`), meta);
+}
+/** The typing replay of a record { code, sessions: [{ changes, focus, pastes, openMs, lang, at, label? }] } (also used by Mises en situation). */
+function replayShow(d, meta = null) {
   const sessions = (d.sessions || []).filter((s) => Array.isArray(s.changes) && s.changes.length);
   if (!sessions.length) {
     openDialog("Submitted code", `<p class="muted small">No typing record for this submission${meta?.editor === false ? " (it was sent without the code editor)" : ""}.</p><pre class="code-view">${esc(d.code || "")}</pre>`);
@@ -2445,7 +2448,7 @@ async function replayDialog(id, meta = null) {
   }
   let si = sessions.length - 1;
   openDialog(`Typing replay${meta ? ` · ${meta.name || ""} · ${meta.title || ""}` : ""}`, `
-    ${sessions.length > 1 ? `<div class="tabs" role="tablist" id="rp-tabs">${sessions.map((s, i) => `<button role="tab" data-s="${i}" aria-selected="${i === si}">Visit ${i + 1} · ${fmtDateTime(s.at)}</button>`).join("")}</div>` : ""}
+    ${sessions.length > 1 ? `<div class="tabs" role="tablist" id="rp-tabs">${sessions.map((s, i) => `<button role="tab" data-s="${i}" aria-selected="${i === si}">${s.label ? esc(s.label) : `Visit ${i + 1} · ${fmtDateTime(s.at)}`}</button>`).join("")}</div>` : ""}
     <div class="replay">
       <div class="replay-bar">
         <button class="btn small" id="rp-play">▶ Play</button>

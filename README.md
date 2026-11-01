@@ -171,6 +171,7 @@ Teacher commands are in [Teacher commands in Discord](#teacher-commands-in-disco
 - **🙋 Ask a classmate** (under a write-code or SQL challenge, after a wrong submission): their code and result are posted in #arena, and a classmate explains in words (pasted solutions are refused). A 👍 gives the helper +8 points and 5 coins. Limits: 3 requests a day, 3 rewarded helps a day, and not in exams, sessions, duels, bounties or bosses.
 - **📘 Model solution** after solving, **🚩 Report** a wrong challenge, and **🌐** to read it in the other language.
 - **Assessment link** (by DM): full screen, one question at a time in their own order. Leaving full screen, switching tab or reloading stops them until you let them back in. Pasting is blocked and logged. العربية / FR / EN buttons translate the question (never the code).
+- **Mise en situation link** (by DM, in French): 5 situations with a real code editor and 5 QCM, a progress bar, ▶ Exécuter and 🔎 Vérifier mon code (the *kind* of problem only). Leaving the page is allowed and only recorded. See [Mises en situation](#mises-en-situation).
 - **Class games and squad battles:** their own signed link from 🎮 Join or `/play`.
 - **Live quiz, boss battles and bounties** in #arena (see [Events](#events)).
 
@@ -402,6 +403,111 @@ Scores feed the skills and competencies of each question.
 5. **Import the grading (JSON)** (Results tab), **Check**: every problem, or a preview (paper → student, score before → after, questions graded; the papers not in the file stay as they are). **Apply the grading**: the grades become **your** grades (✎), so ↻ Grade with AI never changes them. Multiple choice stays as it was, the scores, competencies and skills follow, and the papers of a finalized debrief are left alone.
 6. Check the results, then **Send results by DM** (never automatic).
 
+#### Mises en situation
+Live practical tests for the whole class (or some learners), written with Claude outside the app, taken in the browser with a code editor, and followed live. Page **Evaluation → Mises en situation** (`#/mises-en-situation`).
+
+**＋ New mise en situation**, in 5 steps:
+1. The programme **sprint** and **week** (this week is pre-selected).
+2. The **competencies** to test: chips from the week and its sprint (C#N# and CT#N#), several at once.
+3. The **learners**: the whole class, or a selection (search, select all / none, add a team or a squad).
+4. **✨ Generate the prompt for Claude** (copied at once). It holds the week's title, objective and notions, the chosen competencies with their labels, the technologies seen so far, **HORS PÉRIMÈTRE** (the next weeks), the job or theme, the error categories and the exact JSON format.
+5. Paste Claude's JSON (or its `.json` file) and click **Check**. You get every problem with where it is (`situation 2`, `QCM 4`) and the field, or a preview. Then **Save as a draft**. A draft's JSON can still be edited (and is checked again) until you launch it.
+
+**The format** is `classbot-mise-en-situation@1`. It's checked strictly:
+- exactly 5 situations, with a difficulty going up from 1–2 to 4–5;
+- exactly 5 QCM with 3–4 choices and ONE right answer;
+- only the languages and technologies seen up to that week, and only the competencies chosen;
+- sizes capped, valid regexes, checks that fit the runtime, and a starter that isn't the solution.
+
+```json
+{
+  "format": "classbot-mise-en-situation@1", "title": "La coopérative Tifawin", "week": 3, "metier": "Coopérative d'argan (Agadir)", "competencies": ["C3N1", "C4N1"],
+  "situations": [{
+    "title": "Le bon titre", "context": "Fatima gère la page de la coopérative…", "difficulty": 1, "competencies": ["C3N1"], "notions": ["querySelector", "textContent"],
+    "runtime": "web",
+    "files": [{ "name": "index.html", "lang": "html", "starter": "<h1 id=\"titre\">Bienvenue</h1>\n<script src=\"script.js\"></script>" },
+              { "name": "script.js", "lang": "javascript", "starter": "// 1. Sélectionne le titre\n" }],
+    "questions": ["1. Sélectionne le titre dans une constante titre.", "2. Remplace son texte par « Coopérative Tifawin »."],
+    "expected": "Le titre affiché est « Coopérative Tifawin ».",
+    "solution": [{ "name": "script.js", "content": "const titre = document.querySelector('#titre');\ntitre.textContent = 'Coopérative Tifawin';" }],
+    "checks": [{ "type": "dom-text", "selector": "h1", "contains": "Coopérative Tifawin", "label": "Le titre affiché a changé" },
+               { "type": "source", "file": "script.js", "pattern": "querySelector|getElementById", "label": "Le titre est sélectionné en JavaScript" }],
+    "errorHints": ["selection", "syntax", "naming"], "points": 3
+  }],
+  "qcm": [{ "question": "Que renvoie document.querySelector(\".prix\") s'il y en a trois ?", "choices": ["Le premier", "Une liste des trois", "Le dernier", "null"], "correct": 0, "competencies": ["C3N1"], "notion": "querySelector" }]
+}
+```
+(The example shows one situation and one QCM; a real file has 5 of each.)
+
+- `runtime`: `web` (HTML/CSS/JS in the browser), `node` and `php` (the code runner, like practice), `sql` (sql.js in the browser, on the situation's `schema`).
+- `checks`: the labels are neutral and never give the answer.
+  - `source`: a regex found in the code, or, with `absent`, not found;
+  - `dom-exists`, and `dom-text` (after optional `actions`: click, type);
+  - `css`: the value the browser computes (colours as `#hex` or `rgb()`);
+  - `console`;
+  - `js`: an `expr` evaluated after the code, compared with `equals`;
+  - `output`: PHP or Node.js, with optional `stdin`;
+  - `sql-rows`: in any order, unless `ordered`.
+- `errorHints`: the likely mistakes, among `selection`, `naming`, `syntax`, `event`, `logic`, `html`, `css`, `output`, `sql`. Only the AI check reads them; the learner never sees them.
+- `points`: 3 per situation and 1 per QCM by default.
+
+**🚀 Launch for the class**:
+- start now or at a set time;
+- a duration, or open until you close it;
+- **Block copy-paste**: off by default, so pastes are allowed and recorded with what was pasted;
+- a short message in the class channel (optional);
+- each learner gets their personal link by DM.
+
+Once it's running: **＋ Add learners**, **Resend** one learner's link, **⏱ More time** (this also reopens a closed one), and **Close for everyone**. Closing hands in the open papers as they are; the cron does the same when the time is up.
+
+**The learner's page** is in French, light or dark, and works on a laptop and a tablet.
+- **Progress:** a bar of the 10 items (not started / in progress / answered). They move with Previous / Next (Alt+← / Alt+→) or by clicking any item, and can come back to any item until they hand in.
+- **A situation** shows its context and difficulty, then the **starter code as code** (highlighted, with line numbers and a tab per file), then the numbered sub-questions. Below is a **code editor** (CodeMirror, like the practice editor), pre-filled with the starter code.
+- **▶ Exécuter** (Ctrl+Entrée) runs the code:
+  - HTML/CSS/JS runs in a sandboxed frame with scripts only and its own empty origin: no cookies, no access to the page or the dashboard, and a CSP that blocks all network access. The console and errors show as the browser gives them.
+  - PHP and Node.js run on the code runner.
+  - SQL runs with sql.js.
+- **The automatic checks** show ✓ / ✗ with their labels. The expected values stay on the server, which compares them with what the page measured.
+- **🔎 Vérifier mon code** (3 per situation) is a small AI call that returns **only the category** of the problem (« Problème de sélection d'élément », « Erreur de syntaxe »…) or « Aucun problème détecté ». It never gives a line, code, a fix or a hint:
+  - the server keeps only category ids from the fixed list, and the page shows fixed labels;
+  - the learner's code is fenced as data;
+  - a failed call shows « Vérification indisponible, réessaie plus tard » and isn't counted.
+- **QCM:** radio choices.
+- **Saving:** everything is saved as they go (and kept on the device while offline), and a reload continues where they were. **Terminer et envoyer** first lists the items without an answer.
+- **Leaving the page** is **never** blocked: it's only recorded.
+- **Typing** is recorded per situation and per file, for your replay.
+
+**Live** (refreshes every 5 s) shows one row per learner:
+- status: not started, working, done, or absent (away from the page, or silent for 2 minutes);
+- the current item and how long they've been on it;
+- progress x/10 and time spent;
+- runs and AI checks;
+- **how many times they left the page, and the time away**;
+- **pastes and characters pasted** (and blocked pastes);
+- last activity.
+
+Filters: left the page, pasted, stuck (10 min+ on one item), absent, finished, not started. Every column sorts, and **⬇ CSV** exports the table. Click a learner to see:
+- their answers item by item;
+- the checks, and the AI categories they got;
+- a timeline: leaving and coming back, each paste with what was pasted, runs, AI checks;
+- the **⏯ typing replay**.
+
+**Statistics**, per item:
+- the % of checks passed, or of right QCM answers;
+- the average time;
+- the most frequent AI categories (each learner counted once);
+- the most chosen wrong QCM answer.
+
+The success by competency and by notion (weakest first) shows the class's lacunes at a glance, for the debriefing. When papers are handed in, one AI check runs per situation done; it feeds these statistics only.
+
+**Results:**
+- **The score** comes from the checks passed in each situation and the QCM answers, weighted by the points. A situation without checks waits for your grade.
+- **Your grades:** click a score to change it (✎). Click a learner to write their comment; a short, professional one is proposed from their score and weak notions.
+- **The record:** once nothing is left to grade, the results go to their competencies (source `mise`) and skills, like an assessment.
+- **By DM:** **Send the results by DM** sends only when you click (to everyone, or one learner). **⬇ CSV** exports the results.
+
+Code: `src/shared/mises.ts` (pure: format, checks, prompt, scoring, the AI filter, statistics), `src/shared/misesdb.ts` (D1), `src/bot/mises.ts` (the learner page), `src/admin/misesapi.ts`, `public/mises.js`. Migration `0075_mises.sql`.
+
 #### Competencies
 - The whole class on the référentiel: the highest level each student validated, and the % of the class that validated each competency.
 - Click a cell to **validate it at a level or invalidate it yourself** (✍️, with a note). Your decision replaces earlier results; later briefs and assessments still count on top. *Back to automatic* removes it.
@@ -525,7 +631,7 @@ The bot Worker's cron runs every minute and does the following:
 - contests, class sessions, duel timeouts, assignment reminders, expired practice attempts
 - the daily challenge, the Monday recap in #arena, automatic roles
 - the morning plans (`/today remind`), the weekly report DM to each active student (Mondays) and the teacher's summary
-- events, shop expiry, GitHub (reports, brief reminders, idle students), assessments, and the league (other ClassBots' links every 30 minutes, the Monday results)
+- events, shop expiry, GitHub (reports, brief reminders, idle students), assessments, mises en situation (closed when their time is up), and the league (other ClassBots' links every 30 minutes, the Monday results)
 
 ---
 
@@ -718,7 +824,7 @@ Every price, limit and duration can be changed or switched off, and you can add 
 
 ### Layout
 ```
-src/bot/        the public Worker: Discord interactions, cron, editor, assessment, games, battle and public pages
+src/bot/        the public Worker: Discord interactions, cron, editor, assessment, mises en situation, games, battle and public pages
 src/admin/      the dashboard Worker: API (api.ts, learnapi.ts, actapi.ts), Access and password login
 src/shared/     everything both use: rules (game.ts), challenges, AI, GitHub, briefs, activities, library, i18n…
 src/shared/review/  debriefs: engine (checks, grid, states), debrief (AI steps), comment, members, task, steps, gh
