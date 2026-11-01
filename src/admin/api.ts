@@ -62,6 +62,7 @@ import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
 import { activitiesApi } from "./actapi.ts";
 import { vscodeApi } from "./vscapi.ts";
+import { misesApi } from "./misesapi.ts";
 import { quietWriters } from "../shared/vscodedb.ts";
 import { TECHS, programOf } from "../shared/program.ts";
 import { activityOf } from "../shared/github.ts";
@@ -127,6 +128,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // « Suivi VS Code »: the learners' coding time (WakaTime extension)
     const vsc = await vscodeApi(env, ctx, path, method, body, url, guild);
     if (vsc) return vsc;
+    // « Mises en situation »: live practical tests written with Claude
+    const mes = await misesApi(env, ctx, path, method, body, guild);
+    if (mes) return mes;
 
     // -------------------------------------------------------------- daily
     if (path === "/daily" && method === "GET") return ok(await dailyOverview(env, await guild()));
@@ -362,6 +366,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         env.DB.prepare("DELETE FROM brief_reviews WHERE guild_id = ? AND who = ?").bind(g.id, who),
         env.DB.prepare("DELETE FROM players WHERE guild_id = ? AND discord_id = ?").bind(g.id, id),
       ]);
+      // their mises en situation (apart: the table comes with migration 0075)
+      await run(env, "DELETE FROM mise_takers WHERE guild_id = ? AND discord_id = ?", g.id, id).catch(() => null);
       return ok({ ok: true });
     }
     // 🚫 practice blocks (practiceblock.ts): one student can't practice a type of challenge (some levels, for some days)
