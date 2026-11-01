@@ -9,6 +9,7 @@ import { forecast } from "./stuinsight.ts";
 import { plansSummary } from "./workplan.ts";
 import { programOf } from "./program.ts";
 import { sprintsOf } from "./sprints.ts";
+import { progressView } from "./review/debrief.ts";
 
 const LOW = new Set(["faible", "critique"]);
 const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
@@ -16,11 +17,12 @@ const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
 export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & { name: string | null })[]) {
   const t0 = now(), today = day(t0);
   const n = (sql: string, ...a: unknown[]) => one<{ n: number }>(env, sql, ...a).then((r) => r?.n ?? 0).catch(() => 0);
-  const d28 = day(t0 - 27 * 86400), d7 = day(t0 - 6 * 86400), d14 = day(t0 - 13 * 86400);
-  const [pv, tlRows, plans, handsWaiting, oldestHand, faq, drafts, toDebrief, toGrade, flagged, briefRows, prog, handins, finals, gh] = await Promise.all([
+  // 8 weeks back from now: week 7 = the last 7 days, week 6 = the 7 before…
+  const W0 = t0 - 8 * 7 * 86400, wk = 7 * 86400;
+  const [pv, tlRows, plans, handsWaiting, oldestHand, faq, drafts, toDebrief, toGrade, flagged, briefRows, prog, handins, finals, att, act, PA] = await Promise.all([
     planView(env, g, students),
     all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `stulevel:${g.id}:%`).catch(() => []),
-    plansSummary(env, g).catch(() => []),
+    plansSummary(env, g).catch(() => [] as Awaited<ReturnType<typeof plansSummary>>),
     n("SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id),
     one<{ t: number | null }>(env, "SELECT MIN(created_at) AS t FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id).then((r) => r?.t ?? null).catch(() => null),
     n("SELECT COUNT(*) AS n FROM faq WHERE guild_id = ? AND status = 'pending'", g.id),
@@ -34,9 +36,15 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     programOf(env, g),
     all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_handins WHERE guild_id = ? GROUP BY brief_id", g.id).catch(() => []),
     all<{ brief_id: number; n: number }>(env, "SELECT brief_id, COUNT(*) AS n FROM brief_reviews WHERE guild_id = ? AND status = 'final' GROUP BY brief_id", g.id).catch(() => []),
-    // their GitHub work, day by day (4 weeks): commits that count, and who pushed
-    all<{ day: string; discord_id: string; commits: number }>(env,
-      "SELECT day, discord_id, SUM(real) AS commits FROM gh_activity WHERE guild_id = ? AND day >= ? GROUP BY day, discord_id", g.id, d28).catch(() => []),
+    // week by week (8 weeks): the problems solved and failed by each student, and who was active (practice or GitHub)
+    all<{ discord_id: string; w: number; solved: number; failed: number }>(env,
+      `SELECT discord_id, CAST((finished_at - ?) / ? AS INTEGER) AS w, SUM(status = 'solved' OR (status = 'claimed' AND verified = 1)) AS solved, SUM(status = 'failed') AS failed
+         FROM attempts WHERE guild_id = ? AND finished_at >= ? GROUP BY discord_id, w`, W0, wk, g.id, W0).catch(() => []),
+    all<{ discord_id: string; w: number }>(env,
+      `SELECT discord_id, CAST((t - ?) / ? AS INTEGER) AS w FROM (SELECT discord_id, started_at AS t FROM attempts WHERE guild_id = ? AND started_at >= ?
+         UNION ALL SELECT discord_id, t FROM gh_activity WHERE guild_id = ? AND t >= ?) GROUP BY discord_id, w`, W0, wk, g.id, W0, g.id, W0).catch(() => []),
+    // every debrief, the ones in progress too (the levels debrief after debrief)
+    progressView(env, g).catch(() => null),
   ]);
   const teacherLv = new Map<string, string>();
   for (const r of tlRows) { try { const v = JSON.parse(r.v); if (v?.level) teacherLv.set(r.k.split(":").pop()!, v.level); } catch { /* skip */ } }
@@ -80,42 +88,60 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     next: (() => { const x = sps.find((y) => y.start > cur.end); return x ? { n: x.n, title: x.title, start: x.start, startsIn: Math.max(0, Math.round((Date.parse(x.start + "T00:00:00Z") / 1000 - t0) / 86400)) } : null; })(),
   } : null;
 
-  // 📈 activity: per day, who pushed and how many commits count (4 weeks), and this week against the one before
-  const days = Array.from({ length: 28 }, (_, i) => day(t0 - (27 - i) * 86400));
-  const byDay = new Map(days.map((d) => [d, { day: d, active: 0, commits: 0 }]));
-  for (const r of gh) { const x = byDay.get(r.day); if (x) { x.active++; x.commits += r.commits || 0; } }
-  const who = (from: string, to: string) => new Set(gh.filter((r) => r.day >= from && r.day < to).map((r) => r.discord_id)).size;
-  const commits = (from: string, to: string) => gh.filter((r) => r.day >= from && r.day < to).reduce((a, r) => a + (r.commits || 0), 0);
-  const tomorrow = day(t0 + 86400);
+  // 📈 week by week (8 weeks, students only): problems solved, accuracy, students active
+  const isStudent = new Set(students.map((x) => x.discord_id));
+  const weeks = Array.from({ length: 8 }, (_, w) => ({ w, from: day(W0 + w * wk), solved: 0, failed: 0, active: 0, accuracy: null as number | null }));
+  for (const r of att) if (isStudent.has(r.discord_id) && weeks[r.w]) { weeks[r.w].solved += r.solved || 0; weeks[r.w].failed += r.failed || 0; }
+  for (const r of act) if (isStudent.has(r.discord_id) && weeks[r.w]) weeks[r.w].active++;
+  for (const x of weeks) x.accuracy = x.solved + x.failed >= 5 ? Math.round((100 * x.solved) / (x.solved + x.failed)) : null;
+  const [prevW, thisW] = [weeks[6], weeks[7]];
 
-  // 🎓 the class's levels debrief after debrief (the last 6 briefs debriefed)
-  const perBrief = new Map<number, { b: number; bid: number; title: string; counts: Record<string, number> }>();
-  for (const r of [...pv.plan, ...pv.others]) for (const d of r.debriefs) {
-    if (!perBrief.has(d.bid)) perBrief.set(d.bid, { b: d.b, bid: d.bid, title: d.title, counts: { excellent: 0, bon: 0, moyen: 0, faible: 0, critique: 0 } });
-    const c = perBrief.get(d.bid)!.counts; if (d.lv in c) c[d.lv]++;
-  }
-  const byBrief = [...perBrief.values()].sort((a, b) => a.b - b.b).slice(-6);
+  // 🎓 the class's levels debrief after debrief: finalized or in progress (a draft's level is the one proposed so far)
+  const perBrief = new Map<number, { b: number; bid: number; title: string; draft: number; counts: Record<string, number> }>();
+  if (PA) PA.briefs.forEach((b, i) => {
+    const counts: Record<string, number> = { excellent: 0, bon: 0, moyen: 0, faible: 0, critique: 0 };
+    let n = 0, draft = 0;
+    for (const p of people) { const c = PA.cells[`${b.id}:${p.id}`]; const lv = c ? c.lv || c.plv : ""; if (lv && lv in counts) { counts[lv]++; n++; if (!c!.final) draft++; } }
+    if (n) perBrief.set(b.id, { b: i + 1, bid: b.id, title: b.title, draft, counts });
+  });
+  const RK: Record<string, number> = { critique: 0, faible: 1, moyen: 2, bon: 3, excellent: 4 };
+  const byBrief = [...perBrief.values()].sort((a, b) => a.b - b.b).slice(-8).map((x) => {
+    const n = Object.values(x.counts).reduce((a, v) => a + v, 0);
+    return { ...x, n, avg: n ? Math.round((100 * Object.entries(x.counts).reduce((a, [k, v]) => a + RK[k] * v, 0)) / n) / 100 : null, low: n ? Math.round((100 * (x.counts.faible + x.counts.critique)) / n) : null };
+  });
 
-  // 📥 the briefs given so far: handed in, debriefed (the last 6 whose deadline passed or is near)
+  // the briefs given with a deadline
   const given = briefRows.filter((b) => b.status === "assigned" && b.due_at).sort((a, b) => (a.due_at ?? 0) - (b.due_at ?? 0));
-  const recent = given.filter((b) => (b.due_at ?? 0) < t0 + 7 * 86400).slice(-6).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at, units: units(b), handins: hand.get(b.id) || 0, debriefed: fin.get(b.id) || 0, past: (b.due_at ?? 0) < t0 }));
-  const past = given.filter((b) => (b.due_at ?? 0) < t0);
-  const pastUnits = past.reduce((a, b) => a + units(b), 0), pastHand = past.reduce((a, b) => a + Math.min(units(b), hand.get(b.id) || 0), 0);
-  const allHand = given.reduce((a, b) => a + (hand.get(b.id) || 0), 0), allFin = given.reduce((a, b) => a + (fin.get(b.id) || 0), 0);
   const RANKS: Record<string, number> = { critique: 0, faible: 1, moyen: 2, bon: 3, excellent: 4 };
   const ranked = people.filter((p) => p.level && p.level in RANKS);
   const avgRank = ranked.length ? ranked.reduce((a, p) => a + RANKS[p.level!], 0) / ranked.length : null;
   const live = plans.filter((p) => p.status === "sent");
+  const lastB = byBrief[byBrief.length - 1], prevB = byBrief[byBrief.length - 2];
   const stats = {
     students: people.length,
-    active7: who(d7, tomorrow), activePrev7: who(d14, d7),
-    commits7: commits(d7, tomorrow), commitsPrev7: commits(d14, d7),
-    handinRate: pastUnits ? Math.round((100 * pastHand) / pastUnits) : null, briefsPast: past.length,
-    debriefRate: allHand ? Math.round((100 * allFin) / allHand) : null,
+    active: thisW.active, activePrev: prevW.active,
+    solved: thisW.solved, solvedPrev: prevW.solved,
+    accuracy: thisW.accuracy, accuracyPrev: prevW.accuracy,
+    toDebrief, drafts, left: toDebrief + drafts,
     avgLevel: avgRank == null ? null : (["critique", "faible", "moyen", "bon", "excellent"][Math.round(avgRank)]), avgRank: avgRank == null ? null : Math.round(avgRank * 10) / 10,
     low: people.filter((p) => LOW.has(p.level || "")).length,
+    lastBrief: lastB ? { b: lastB.b, avg: lastB.avg, low: lastB.low } : null, prevBrief: prevB ? { b: prevB.b, avg: prevB.avg, low: prevB.low } : null,
     plansPct: live.length ? Math.round(live.reduce((a, p) => a + (p.pct || 0), 0) / live.length) : null,
+    plansLate: plans.filter((p) => p.status === "sent" && p.due_at && p.due_at < t0).length,
   };
+  // ⚠️ what to watch out for: only clear signs (enough data, a real gap)
+  const down = people.filter((p) => p.trend === "down").length, up = people.filter((p) => p.trend === "up").length;
+  const oldHandins = given.filter((b) => (b.due_at ?? 0) < t0 - 7 * 86400).reduce((a, b) => a + Math.max(0, (hand.get(b.id) || 0) - (fin.get(b.id) || 0)), 0);
+  const alerts = [
+    thisW.accuracy != null && prevW.accuracy != null && prevW.accuracy - thisW.accuracy >= 10 ? { k: "accuracy", t: `Accuracy fell from ${prevW.accuracy}% to ${thisW.accuracy}% this week`, href: "#/challenges" } : null,
+    prevW.solved >= 10 && thisW.solved <= prevW.solved * 0.7 ? { k: "solved", t: `${thisW.solved} problems solved this week, ${prevW.solved} the week before`, href: "#/students" } : null,
+    prevW.active >= 4 && thisW.active <= prevW.active * 0.75 ? { k: "active", t: `${prevW.active - thisW.active} fewer students active than last week`, href: "#/students" } : null,
+    lastB && prevB && lastB.low != null && prevB.low != null && lastB.low - prevB.low >= 10 ? { k: "low", t: `More Faible or Critique on B${lastB.b} (${lastB.low}%) than on B${prevB.b} (${prevB.low}%)`, href: "#/progress" } : null,
+    down >= 3 && down > up ? { k: "down", t: `${down} students going down, ${up} going up`, href: "#/assignments" } : null,
+    oldHandins ? { k: "debrief", t: `${oldHandins} hand-in${oldHandins > 1 ? "s" : ""} from over a week ago not debriefed yet`, href: "#/progress" } : null,
+    stats.plansLate ? { k: "plans", t: `${stats.plansLate} plan${stats.plansLate > 1 ? "s" : ""} d'action past their due date`, href: "#/assignments" } : null,
+  ].filter(Boolean);
+
 
   const todo = [
     handsWaiting ? { k: "hands", n: handsWaiting, since: oldestHand } : null,
@@ -132,5 +158,5 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     .sort((a, b) => (a.level === "excellent" ? 0 : 1) - (b.level === "excellent" ? 0 : 1) || b.score - a.score);
   return { todo, decline: decline.slice(0, 8), noPlan: noPlan.slice(0, 6), quiet: quiet.slice(0, 6), improving: improving.slice(0, 6), strong: strong.slice(0, 6), levels, total: people.length, sprint,
     trends: { up: people.filter((p) => p.trend === "up").length, flat: people.filter((p) => p.trend === "flat").length, down: people.filter((p) => p.trend === "down").length },
-    plans: { live: live.length, drafts: plans.filter((p) => p.status === "draft").length }, stats, activity: [...byDay.values()], byBrief, recent };
+    plans: { live: live.length, drafts: plans.filter((p) => p.status === "draft").length }, stats, alerts, weeks, byBrief };
 }

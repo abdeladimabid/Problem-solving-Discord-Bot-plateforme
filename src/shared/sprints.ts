@@ -49,22 +49,27 @@ interface Row {
 }
 /** Everything about one class, loaded once: students, briefs, results, debriefs, steps, the teacher's sprint decisions. */
 async function load(env: Env, g: GuildRow) {
-  const p = await programOf(env, g);
-  const briefRows = await all<{ id: number; week: number | null; due_at: number | null; status: string; title: string; kind: string; squads: string | null; data: string; sprint: number | null }>(env,
-    "SELECT id, week, due_at, status, title, kind, squads, data, sprint FROM briefs WHERE guild_id = ?", g.id);
+  // the reads don't depend on each other (but on the programme for the decisions): in parallel
+  const [p, briefRows, students, results, reviews, drafts, steps] = await Promise.all([
+    programOf(env, g),
+    all<{ id: number; week: number | null; due_at: number | null; status: string; title: string; kind: string; squads: string | null; data: string; sprint: number | null }>(env,
+      "SELECT id, week, due_at, status, title, kind, squads, data, sprint FROM briefs WHERE guild_id = ?", g.id),
+    all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id).then((r) => withoutStaff(env, g.id, r)),
+    all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
+      "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id),
+    all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id),
+    // the debriefs in progress: their level counts too (the last debrief gives the default level, finalized or not)
+    all<{ brief_id: number; who: string; level: string | null; plevel: string | null; mem: string | null; contrib: string | null }>(env,
+      `SELECT brief_id, who, level, plevel, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.members') END AS mem, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.contrib') END AS contrib
+        FROM brief_reviews WHERE guild_id = ? AND status != 'final'`, g.id),
+    all<{ brief_id: number; who: string; final: string | null }>(env, "SELECT brief_id, who, final FROM brief_steps WHERE guild_id = ?", g.id),
+  ]);
   const sprints = sprintsOf(p, briefRows);
-  const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
-  const results = await all<{ discord_id: string; code: string; level: number | null; ok: number; source: string; ref: number; at: number }>(env,
-    "SELECT discord_id, code, level, ok, source, ref, at FROM competency_results WHERE guild_id = ?", g.id);
-  const reviews = await all<{ brief_id: number; who: string; record: string; level: string | null; plevel: string | null }>(env, "SELECT brief_id, who, record, level, plevel FROM brief_reviews WHERE guild_id = ? AND status = 'final'", g.id);
-  // the debriefs in progress: their level counts too (the last debrief gives the default level, finalized or not)
-  const drafts = await all<{ brief_id: number; who: string; level: string | null; plevel: string | null; mem: string | null; contrib: string | null }>(env,
-    `SELECT brief_id, who, level, plevel, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.members') END AS mem, CASE WHEN who LIKE 's:%' THEN json_extract(record, '$.contrib') END AS contrib
-      FROM brief_reviews WHERE guild_id = ? AND status != 'final'`, g.id);
-  const steps = await all<{ brief_id: number; who: string; final: string | null }>(env, "SELECT brief_id, who, final FROM brief_steps WHERE guild_id = ?", g.id);
-  const dec = await all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
-    "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id);
-  const comments = await all<{ sprint: number; comment: string }>(env, "SELECT sprint, comment FROM sprint_comments WHERE guild_id = ? AND program = ?", g.id, p.id);
+  const [dec, comments] = await Promise.all([
+    all<{ sprint: number; discord_id: string; plevel: string | null; why: string | null; level: string | null; decision: string | null; note: string | null }>(env,
+      "SELECT sprint, discord_id, plevel, why, level, decision, note FROM sprint_reviews WHERE guild_id = ? AND program = ?", g.id, p.id),
+    all<{ sprint: number; comment: string }>(env, "SELECT sprint, comment FROM sprint_comments WHERE guild_id = ? AND program = ?", g.id, p.id),
+  ]);
   // each debrief read once (the class's page reads them for every student: a squad's for each of its members)
   const parsed = new Map<string, { rec: any; st: any } | null>();
   return { p, briefRows, sprints, students, results, reviews, drafts, steps, dec, comments, parsed };

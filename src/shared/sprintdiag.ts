@@ -256,6 +256,8 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
       state: today < sp.start ? "upcoming" : today > sp.end ? "done" : "running" },
     briefs: briefs.map((b) => ({ id: b.id, title: b.title, due: day(b.due_at), debriefs: reviews.filter((r) => r.brief_id === b.id).length, final: reviews.filter((r) => r.brief_id === b.id && r.status === "final").length, assessed: takers.filter((t) => assessments.some((a) => a.id === t.assessment_id && a.brief_id === b.id)).length })),
     students: students.length, evaluated: E,
+    // the levels of the students evaluated in this sprint (their last debrief of it)
+    levels: Object.fromEntries(["excellent", "bon", "moyen", "faible", "critique"].map((l) => [l, people.filter((x) => x.level === l).length])),
     objectives: objs, goals, lacunes, features: feats, follow: follow.slice(0, 40), next,
     comment: (await one<{ comment: string }>(env, "SELECT comment FROM sprint_comments WHERE guild_id = ? AND program = ? AND sprint = ?", g.id, p.id, n).catch(() => null))?.comment || "",
     actions: parse<any>(saved?.v, null),

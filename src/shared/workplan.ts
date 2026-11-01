@@ -428,14 +428,15 @@ function guideInfo(p: WorkPlan) {
 /** Every plan of the class (or of one student), short. */
 export async function plansSummary(env: Env, g: GuildRow, sid?: string) {
   const ps = await listPlans(env, g.id, sid);
-  const out = [];
-  for (const p of ps) {
-    const st = p.status === "draft" ? null : await planStatus(env, p);
-    out.push({ id: p.id, sid: p.sid, name: p.name, title: p.title, status: p.status, due_at: p.due_at, created_at: p.created_at, sent_at: p.sent_at, updated_at: p.updated_at,
-      steps: p.steps.length, kinds: p.steps.map((s) => s.kind), done: st?.done ?? 0, pct: st?.pct ?? 0,
-      toReview: p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length });
-  }
-  return out;
+  // each plan's progress at the same time (one read each)
+  const sts = await Promise.all(ps.map((p) => (p.status === "draft" ? null : planStatus(env, p))));
+  return ps.map((p, i) => {
+    const st = sts[i];
+    const at = Math.max(0, ...p.steps.map((s) => s.work?.at || 0)) || null;
+    return { id: p.id, sid: p.sid, name: p.name, title: p.title, status: p.status, due_at: p.due_at, created_at: p.created_at, sent_at: p.sent_at, updated_at: p.updated_at,
+      steps: p.steps.length, kinds: p.steps.map((s) => s.kind), done: st?.done ?? 0, pct: st?.pct ?? 0, objDone: st?.objDone ?? 0, objTotal: st?.objTotal ?? 0, lastWork: at,
+      toReview: p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length };
+  });
 }
 
 // ------------------------------------------------------------------ the student's side
