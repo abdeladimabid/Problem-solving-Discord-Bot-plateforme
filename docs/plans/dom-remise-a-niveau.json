@@ -1,0 +1,107 @@
+{
+  "title": "Remise à niveau : manipuler le DOM",
+  "message": "On reprend le DOM ensemble, pas à pas. Fais les actions dans l'ordre : chaque exercice prépare le mini projet de la fin (un CRUD). Tu peux réessayer autant de fois que tu veux, et l'onglet « Mes notions » t'explique chaque notion. Si tu bloques, pose ta question depuis ta page.",
+  "steps": [
+    {
+      "kind": "mcq",
+      "title": "Échauffement : le bon sélecteur",
+      "notion": "Sélecteurs du DOM",
+      "why": "Avant de modifier une page, il faut savoir attraper le bon élément.",
+      "prompt": "Voici le HTML :\n\n<ul id=\"menu\">\n  <li class=\"item\">Accueil</li>\n  <li class=\"item\">Contact</li>\n</ul>\n\nQuelle ligne sélectionne TOUS les <li class=\"item\"> ?",
+      "choices": [
+        "document.querySelector(\".item\")",
+        "document.querySelectorAll(\".item\")",
+        "document.getElementById(\"item\")",
+        "document.querySelectorAll(\"item\")"
+      ],
+      "answer": [1]
+    },
+    {
+      "kind": "code",
+      "title": "Exercice 1 : sélectionner et modifier",
+      "notion": "Sélecteurs du DOM, Modification du DOM",
+      "why": "Sélectionner un élément, puis changer son texte, ses classes, son style, et en créer un nouveau : c'est la base de tout le JavaScript du web.",
+      "lang": "javascript",
+      "prompt": "Voici le HTML de la page :\n\n<h1 id=\"titre\">Ma boutique</h1>\n<p class=\"intro\">Bienvenue !</p>\n<ul id=\"produits\">\n  <li class=\"produit\">Clavier</li>\n  <li class=\"produit promo\">Souris</li>\n  <li class=\"produit\">Écran</li>\n</ul>\n\nÉcris le JavaScript qui :\n1. change le texte du titre en « Ma super boutique » (getElementById + textContent) ;\n2. ajoute la classe \"important\" au paragraphe .intro (querySelector + classList.add) ;\n3. met le produit en promo en rouge (querySelector + style.color) ;\n4. affiche dans la console le nombre de produits (querySelectorAll + length) ;\n5. ajoute un 4e produit « Casque » à la fin de la liste, avec la classe \"produit\" (createElement, textContent, classList.add, append).",
+      "starter": "// 1. Le titre\nconst titre = \n\n// 2. Le paragraphe .intro\n\n// 3. Le produit en promo\n\n// 4. Le nombre de produits\n\n// 5. Un nouveau produit « Casque »\n",
+      "expected": "Solution attendue :\nconst titre = document.getElementById(\"titre\");\ntitre.textContent = \"Ma super boutique\";\nconst intro = document.querySelector(\".intro\");\nintro.classList.add(\"important\");\nconst promo = document.querySelector(\".promo\");\npromo.style.color = \"red\";\nconst produits = document.querySelectorAll(\".produit\");\nconsole.log(produits.length);\nconst li = document.createElement(\"li\");\nli.textContent = \"Casque\";\nli.classList.add(\"produit\");\ndocument.getElementById(\"produits\").append(li);\n\nCorrection : les 5 points doivent y être. Accepter querySelector(\"#titre\") à la place de getElementById, appendChild à la place de append, innerText à la place de textContent (conseiller textContent). Refuser : un sélecteur sans # ou sans . (ex. querySelector(\"intro\")), className = \"important\" qui efface les autres classes (le signaler), un nouveau produit ajouté avec innerHTML += (accepter mais conseiller createElement). Le nombre de produits doit venir de querySelectorAll(...).length, pas être écrit à la main."
+    },
+    {
+      "kind": "code",
+      "title": "Exercice 2 : sélecteurs + événements, un compteur",
+      "notion": "Événements",
+      "why": "Une page vivante réagit aux clics : addEventListener relie une action de l'utilisateur à ton code.",
+      "lang": "javascript",
+      "prompt": "Voici le HTML :\n\n<p>Compteur : <span id=\"valeur\">0</span></p>\n<button id=\"moins\">−</button>\n<button id=\"plus\">+</button>\n<button id=\"reset\">Remettre à 0</button>\n\nÉcris le JavaScript qui :\n1. garde la valeur dans une variable let compteur = 0 ;\n2. au clic sur + : ajoute 1 et met à jour le <span> ;\n3. au clic sur − : enlève 1, sans jamais descendre sous 0 ;\n4. au clic sur « Remettre à 0 » : revient à 0 ;\n5. met le <span> en rouge (classe \"alerte\") quand le compteur atteint 10 ou plus, et l'enlève en dessous (classList.toggle).\n\nAstuce : écris une petite fonction afficher() que tu appelles après chaque changement.",
+      "starter": "const valeur = document.getElementById(\"valeur\");\nlet compteur = 0;\n\nfunction afficher() {\n  // mets à jour le texte et la classe \"alerte\"\n}\n\n// les trois boutons et leurs addEventListener\n",
+      "expected": "Solution attendue :\nconst valeur = document.getElementById(\"valeur\");\nlet compteur = 0;\nfunction afficher() {\n  valeur.textContent = compteur;\n  valeur.classList.toggle(\"alerte\", compteur >= 10);\n}\ndocument.getElementById(\"plus\").addEventListener(\"click\", () => { compteur++; afficher(); });\ndocument.getElementById(\"moins\").addEventListener(\"click\", () => { if (compteur > 0) compteur--; afficher(); });\ndocument.getElementById(\"reset\").addEventListener(\"click\", () => { compteur = 0; afficher(); });\n\nCorrection : addEventListener(\"click\", ...) obligatoire (refuser onclick dans le HTML ; accepter element.onclick = ... mais conseiller addEventListener). Le − ne descend jamais sous 0. Le texte est mis à jour après chaque clic. Pour la classe : accepter if / classList.add / classList.remove à la place de toggle. Erreur fréquente à signaler : addEventListener(\"click\", afficher()) avec des parenthèses, qui appelle la fonction tout de suite au lieu de la donner."
+    },
+    {
+      "kind": "code",
+      "title": "Exercice 3 : un formulaire qui ajoute dans une liste",
+      "notion": "Événements, Modification du DOM",
+      "why": "C'est le « C » (Create) du CRUD : lire un champ, empêcher le rechargement, ajouter un élément à la page.",
+      "lang": "javascript",
+      "prompt": "Voici le HTML :\n\n<form id=\"form\">\n  <input id=\"tache\" placeholder=\"Nouvelle tâche\">\n  <button>Ajouter</button>\n</form>\n<p id=\"erreur\"></p>\n<ul id=\"liste\"></ul>\n\nÉcris le JavaScript qui, à l'envoi du formulaire (événement \"submit\") :\n1. empêche la page de se recharger (event.preventDefault()) ;\n2. lit le texte tapé, sans les espaces autour (value.trim()) ;\n3. si le texte est vide : écrit « Écris une tâche » dans #erreur et s'arrête ;\n4. sinon : vide #erreur, crée un <li> avec ce texte (textContent) et l'ajoute à #liste ;\n5. vide le champ et remet le curseur dedans (value = \"\" puis focus()).",
+      "starter": "const form = document.getElementById(\"form\");\nconst input = document.getElementById(\"tache\");\nconst erreur = document.getElementById(\"erreur\");\nconst liste = document.getElementById(\"liste\");\n\nform.addEventListener(\"submit\", (event) => {\n  // 1. ...\n});\n",
+      "expected": "Solution attendue :\nform.addEventListener(\"submit\", (event) => {\n  event.preventDefault();\n  const texte = input.value.trim();\n  if (!texte) { erreur.textContent = \"Écris une tâche\"; return; }\n  erreur.textContent = \"\";\n  const li = document.createElement(\"li\");\n  li.textContent = texte;\n  liste.append(li);\n  input.value = \"\";\n  input.focus();\n});\n\nCorrection : l'écouteur est sur le FORMULAIRE avec \"submit\" (accepter \"click\" sur le bouton seulement si preventDefault est là, mais conseiller submit, qui marche aussi avec Entrée). preventDefault obligatoire. trim() et le refus du texte vide obligatoires. Le texte de l'utilisateur va dans textContent : si l'apprenant utilise innerHTML avec ce texte, le signaler (une balise tapée serait interprétée)."
+    },
+    {
+      "kind": "mcq",
+      "title": "NodeList : vrai ou faux ?",
+      "notion": "NodeList et boucles",
+      "why": "querySelectorAll ne renvoie pas un tableau : savoir ce qu'on peut en faire évite beaucoup d'erreurs.",
+      "prompt": "const items = document.querySelectorAll(\"li\");\n\nCoche les phrases VRAIES.",
+      "choices": [
+        "items.forEach((li) => ...) fonctionne",
+        "items.map((li) => ...) fonctionne",
+        "Array.from(items).map((li) => ...) fonctionne",
+        "Si j'ajoute un <li> après cette ligne, items le contient automatiquement",
+        "items[0] est le premier <li> de la page",
+        "Si aucun <li> n'existe, items vaut null"
+      ],
+      "answer": [0, 2, 4]
+    },
+    {
+      "kind": "code",
+      "title": "Exercice 4 : sélecteurs + événements + boucle sur un tableau",
+      "notion": "NodeList et boucles",
+      "why": "Afficher une liste à partir d'un tableau, puis la filtrer avec des boutons : c'est le « R » (Read) du CRUD.",
+      "lang": "javascript",
+      "prompt": "Voici le HTML :\n\n<div id=\"filtres\">\n  <button data-genre=\"tous\">Tous</button>\n  <button data-genre=\"SF\">SF</button>\n  <button data-genre=\"Animation\">Animation</button>\n</div>\n<ul id=\"liste\"></ul>\n<p id=\"total\"></p>\n\nEt les données (dans le starter).\n\nÉcris le JavaScript qui :\n1. définit une fonction afficher(tableau) : elle vide #liste, puis crée avec forEach un <li> « Titre (année) » par film, et écrit « X film(s) » dans #total ;\n2. appelle afficher(films) au chargement ;\n3. sélectionne tous les boutons de #filtres (querySelectorAll) et ajoute à chacun un écouteur \"click\" (forEach) ;\n4. au clic : lit le genre du bouton (dataset.genre), filtre le tableau (filter) et réaffiche (\"tous\" affiche tout) ;\n5. bonus : le bouton cliqué a la classe \"actif\", et seulement lui.",
+      "starter": "const films = [\n  { titre: \"Inception\", annee: 2010, genre: \"SF\" },\n  { titre: \"Coco\", annee: 2017, genre: \"Animation\" },\n  { titre: \"Interstellar\", annee: 2014, genre: \"SF\" },\n  { titre: \"Le Roi Lion\", annee: 1994, genre: \"Animation\" },\n];\n\nconst liste = document.getElementById(\"liste\");\nconst total = document.getElementById(\"total\");\n\nfunction afficher(tableau) {\n  // ...\n}\n\nafficher(films);\n\n// les boutons de filtre\n",
+      "expected": "Solution attendue :\nfunction afficher(tableau) {\n  liste.innerHTML = \"\";\n  tableau.forEach((film) => {\n    const li = document.createElement(\"li\");\n    li.textContent = `${film.titre} (${film.annee})`;\n    liste.append(li);\n  });\n  total.textContent = `${tableau.length} film(s)`;\n}\nafficher(films);\nconst boutons = document.querySelectorAll(\"#filtres button\");\nboutons.forEach((bouton) => {\n  bouton.addEventListener(\"click\", () => {\n    const genre = bouton.dataset.genre;\n    afficher(genre === \"tous\" ? films : films.filter((f) => f.genre === genre));\n    boutons.forEach((b) => b.classList.remove(\"actif\"));\n    bouton.classList.add(\"actif\");\n  });\n});\n\nCorrection : la liste est VIDÉE avant d'être recréée (sinon les films s'ajoutent en double à chaque clic : le signaler). Une boucle (forEach ou for...of) sur le tableau, createElement + textContent + append (accepter innerHTML += avec un conseil). Le total vient de tableau.length. Les écouteurs sont posés avec une boucle sur la NodeList, pas un par un à la main (accepter mais conseiller la boucle). Le genre est lu avec dataset.genre (accepter getAttribute(\"data-genre\")). Le bonus n'est pas obligatoire."
+    },
+    {
+      "kind": "answer",
+      "title": "Pourquoi mes nouveaux boutons ne marchent pas ?",
+      "notion": "Événements",
+      "why": "Dans un CRUD, les boutons « Supprimer » et « Modifier » sont créés après le chargement : il faut comprendre la délégation d'événements.",
+      "prompt": "Au chargement, tu fais :\n\ndocument.querySelectorAll(\".supprimer\").forEach((b) => b.addEventListener(\"click\", supprimer));\n\nPuis l'utilisateur ajoute un contact : un nouveau <li> avec son bouton « Supprimer » apparaît. Ce nouveau bouton ne fait rien.\n\nExplique avec tes mots :\n1. pourquoi le nouveau bouton ne marche pas ;\n2. comment le régler avec UN SEUL addEventListener posé sur la liste (<ul id=\"liste\">). Donne les 3-4 lignes de code.",
+      "expected": "1. querySelectorAll ne voit que les éléments qui existent au moment où la ligne s'exécute : la NodeList est figée, et addEventListener n'a été posé que sur ces boutons-là. Un bouton créé plus tard n'a aucun écouteur.\n2. La délégation : on écoute le parent qui existe toujours, et l'événement « remonte » (bubbling) depuis le bouton cliqué jusqu'à lui. On regarde event.target pour savoir ce qui a été cliqué :\ndocument.getElementById(\"liste\").addEventListener(\"click\", (event) => {\n  if (event.target.matches(\".supprimer\")) {\n    const id = Number(event.target.dataset.id);\n    // supprimer ce contact puis réafficher\n  }\n});\nAccepter event.target.classList.contains(\"supprimer\") ou event.target.closest(\".supprimer\"). Autre solution acceptée mais moins bonne : ajouter l'écouteur au bouton au moment où on le crée (le dire). Il faut les deux parties : la cause (l'écouteur posé avant que le bouton existe) et la solution avec event.target."
+    },
+    {
+      "kind": "brief",
+      "title": "Mini brief : mon carnet de contacts (CRUD)",
+      "notion": "CRUD dans le DOM",
+      "why": "Tout ce que tu viens de pratiquer, réuni dans un vrai petit projet : ajouter, afficher, modifier et supprimer, sans recharger la page.",
+      "brief": {
+        "context": "🎯 Le projet\nTu codes un petit carnet de contacts en HTML, CSS et JavaScript, sans framework et sans base de données. On peut ajouter un contact, voir la liste, en modifier un et en supprimer un. C'est le schéma de presque toutes les applications : Create, Read, Update, Delete (CRUD).\n🧠 L'idée qui rend tout simple\n- Les données vivent dans un tableau : `let contacts = []`. Chaque contact est un objet `{ id, nom, tel }`.\n- Une seule fonction `afficher()` vide la liste (`liste.innerHTML = \"\"`) puis recrée un `<li>` par contact avec `forEach`.\n- Règle d'or : tu ne modifies jamais les `<li>` à la main. Tu modifies le TABLEAU, puis tu appelles `afficher()`.\n🗂️ Les fichiers\n- `index.html` : un formulaire `<form id=\"form\">` (nom, téléphone, bouton), un champ de recherche, une liste `<ul id=\"liste\">`, un compteur.\n- `style.css` : simple et lisible.\n- `script.js` : chargé avec `<script src=\"script.js\" defer></script>`.\n🪜 Pas à pas\n- 1. En haut de `script.js`, sélectionne tout ce dont tu as besoin : `const form = document.querySelector(\"#form\")`, etc.\n- 2. READ : écris `afficher()`. Teste-la avec deux contacts écrits à la main dans le tableau.\n- 3. CREATE : `form.addEventListener(\"submit\", (e) => { e.preventDefault(); ... })`. Lis `input.value.trim()`, refuse un nom vide, ajoute `{ id: Date.now(), nom, tel }` avec `push`, vide le formulaire, appelle `afficher()`.\n- 4. DELETE : chaque `<li>` a un bouton « Supprimer » avec `data-id`. Un SEUL écouteur sur `#liste` : si `e.target.matches(\".supprimer\")`, alors `contacts = contacts.filter((c) => c.id !== id)` puis `afficher()`.\n- 5. UPDATE : le bouton « Modifier » remplit le formulaire avec ce contact et garde son id dans une variable `enEdition`. Au submit, si `enEdition` existe, tu modifies ce contact (`find`) au lieu d'en ajouter un, puis le bouton redevient « Ajouter ».\n- 6. Le compteur et la recherche : l'événement `input` sur le champ de recherche, puis `filter` + `includes` en minuscules, puis `afficher()` avec la liste filtrée.\n⚠️ Les pièges\n- `querySelector` renvoie `null` si le sélecteur est faux : `#` pour un id, `.` pour une classe.\n- Ton script s'exécute avant le HTML : ajoute `defer`.\n- `dataset.id` est un texte : fais `Number(e.target.dataset.id)` avant de comparer.\n- Sans `e.preventDefault()`, la page se recharge et tout disparaît.\n- Ce que l'utilisateur a tapé s'affiche avec `textContent`, pas avec `innerHTML`.\n⭐ Pour aller plus loin\n- Garde les contacts dans le `localStorage` (`JSON.stringify` pour écrire, `JSON.parse` pour lire).\n- Un message d'erreur sous le champ si le téléphone n'est pas valide (une REGEX).",
+        "tasks": [
+          "Structure HTML : un formulaire (nom, téléphone, bouton), un champ de recherche, une liste `<ul id=\"liste\">` et un compteur ; `script.js` chargé avec `defer`.",
+          "Tous les éléments utiles sont sélectionnés en haut de `script.js` (`querySelector` / `getElementById`).",
+          "READ : un tableau `contacts` et une fonction `afficher()` qui recrée la liste avec `forEach`, `createElement`, `textContent` et `append`.",
+          "CREATE : au `submit` du formulaire (avec `preventDefault`), le contact est ajouté au tableau, le formulaire est vidé et la liste réaffichée. Un nom vide est refusé avec un message.",
+          "DELETE : un bouton « Supprimer » sur chaque contact, géré par UN seul `addEventListener` sur la liste (délégation avec `event.target`).",
+          "UPDATE : un bouton « Modifier » remplit le formulaire ; à l'enregistrement, le contact est modifié (pas dupliqué) et le bouton redevient « Ajouter ».",
+          "Un compteur « X contact(s) » toujours juste, après chaque ajout, modification et suppression.",
+          "Une recherche en direct (événement `input`) qui filtre les contacts par nom, sans tenir compte des majuscules.",
+          "Bonus : les contacts restent après un rechargement de la page (`localStorage`).",
+          "Code propre : des noms clairs, des petites fonctions, aucun `onclick` dans le HTML, des commits réguliers sur GitHub."
+        ],
+        "deliverable": "Le lien du dépôt GitHub (avec un README et une capture d'écran), et le lien GitHub Pages si tu l'as mis en ligne.",
+        "hours": 6
+      }
+    }
+  ]
+}

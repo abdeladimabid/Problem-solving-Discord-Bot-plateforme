@@ -6412,6 +6412,19 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     const mid = forecast({ level: "bon", trend: "flat", themes: th, engagement: "partial", planPct: null, idleDays: 1, assess: [] });
     check(good.way === "up" && worse.way === "down" && mid.way === "flat", `the outlook: decline only on clear signs, a solid student with lacunes that don't block isn't « declining » (${good.way} ${worse.way} ${mid.way} ${mid.score})`);
   }
+  // the same plan for other students: a clean draft each, or sent at once
+  const cp0 = await api("POST", `/api/wplans/${id}/copy?g=${G}`, { students: [B] });
+  check(cp0.status === 400, "copy: the plan's own student is not a target");
+  const cp = await api("POST", `/api/wplans/${id}/copy?g=${G}`, { students: [U.carol.id, U.carol.id] });
+  const cd = cp.status === 200 ? (await api("GET", `/api/wplans/${cp.data.made[0].id}?g=${G}`)).data.plan : null;
+  check(cp.status === 200 && cp.data.made.length === 1 && cd?.status === "draft" && cd.sid === U.carol.id && cd.title === "Reprendre Flexbox" && cd.message === "Fais-les dans l'ordre."
+    && cd.steps.length === T2.data.plan.steps.length && cd.steps.every((s: any) => !s.work && !s.review && !s.asg_id) && !cd.diag, `copy: a clean draft for Carol, same actions, none of Bob's work (${cp.status} ${cp.data.error ?? ""})`);
+  const c1 = discordCalls.length, a1 = q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id = ?", U.alice.id).n;
+  const cs = await api("POST", `/api/wplans/${id}/copy?g=${G}`, { students: [U.alice.id], send: true });
+  const sentCopy = cs.status === 200 ? (await api("GET", `/api/wplans/${cs.data.made[0].id}?g=${G}`)).data.plan : null;
+  check(cs.status === 200 && cs.data.made[0].dm === true && sentCopy?.status === "sent" && discordCalls.slice(c1).some((c) => JSON.stringify(c.body ?? {}).includes("/wp/"))
+    && q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id = ?", U.alice.id).n === a1 + 1, "copy and send: Alice gets her page by DM, and her challenge");
+  for (const c of [...(cp.data.made || []), ...(cs.data.made || [])]) await api("DELETE", `/api/wplans/${c.id}?g=${G}`);
   const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);

@@ -2892,3 +2892,8 @@ body.sl-open { overflow: hidden; }
 .hm-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .hm-col > .hm-levels { flex: none; } .hm-col > .hm-up { flex: 1; }
 .hm-col .hm-levels .hm-foot { margin-top: 8px; padding-top: 4px; }
+/* the same plan for other students */
+.wpc-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0 8px; } .wpc-bar input { flex: 1; min-width: 160px; }
+.wpc-list { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 4px; }
+.wpc-row { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--radius-s); cursor: pointer; }
+.wpc-row:hover { background: var(--surface-2); } .wpc-row .niv { margin-left: auto; }
