@@ -1,0 +1,218 @@
+{
+  "title": "DOM : 9 docs, 9 QCM, puis un lab",
+  "message": "On reprend le DOM depuis la base. Pour chaque doc : lis-la tranquillement (essaie les exemples dans la console de ton navigateur), puis réponds au QCM en bas. Il y a souvent PLUSIEURS bonnes réponses : coche toutes celles qui sont vraies. À la fin, le lab : tu le fais toi-même, sans IA, et tu dois pouvoir l'expliquer.",
+  "steps": [
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 1 : les sélecteurs",
+      "notion": "Sélecteurs du DOM",
+      "why": "Tout commence par attraper le bon élément. Lis la doc, puis réponds au QCM en bas.",
+      "prompt": "📌 C'est quoi ?\nPour modifier un élément de la page en JavaScript, il faut d'abord le SÉLECTIONNER, c'est-à-dire le récupérer dans une variable.\n\n🧰 Les 4 façons à connaître\n`document.getElementById(\"titre\")`  → l'élément qui a id=\"titre\", ou null (sans # !)\n`document.querySelector(\".carte\")`  → le PREMIER élément qui correspond, ou null\n`document.querySelectorAll(\".carte\")`  → TOUS les éléments, dans une NodeList (vide si aucun, jamais null)\n`document.getElementsByClassName(\"carte\")`  → tous, dans une HTMLCollection (doc 3)\n\n🎯 querySelector accepte n'importe quel sélecteur CSS\n`\"#menu\"`  → l'id menu\n`\".actif\"`  → la classe actif\n`\"li\"`  → les balises li\n`\"#menu li\"`  → les li à l'intérieur de #menu\n`\"#menu > li\"`  → seulement les li enfants directs de #menu\n`\"input[type='email']\"`  → les input de type email\n`\"li:first-child\"`  → le premier li de son parent\n\n🔍 Chercher DANS un élément\n`const menu = document.getElementById(\"menu\");`\n`const liens = menu.querySelectorAll(\"a\");`  → seulement les a de #menu\n\n⚠️ Les pièges\n- `querySelector(\"intro\")` cherche une balise <intro> : pour une classe, c'est `\".intro\"`.\n- `getElementById(\"#titre\")` renvoie null : le # est seulement pour querySelector.\n- Si le résultat est null, `titre.textContent = \"...\"` plante : « Cannot set properties of null ». Vérifie ton sélecteur, et que ton script a `defer`.\n\n✅ À retenir\nUn seul élément → querySelector / getElementById. Plusieurs → querySelectorAll.\n\n❓ Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`document.querySelector(\".btn\")` renvoie tous les éléments qui ont la classe btn",
+        "`document.getElementById(\"#titre\")` trouve <h1 id=\"titre\">",
+        "`document.querySelectorAll(\".absent\")` renvoie une NodeList vide, pas null",
+        "`menu.querySelector(\"li\")` cherche seulement à l'intérieur de menu",
+        "`document.querySelector(\"#form input[type='email']\")` est un sélecteur valide",
+        "Si querySelector ne trouve rien, il renvoie undefined"
+      ],
+      "answer": [
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 2 : la NodeList",
+      "notion": "NodeList",
+      "why": "querySelectorAll ne renvoie pas un tableau : savoir ce qu'on peut en faire évite beaucoup d'erreurs.",
+      "prompt": "📌 C'est quoi ?\n`document.querySelectorAll(\".carte\")` renvoie une NodeList : une LISTE d'éléments qui ressemble à un tableau, mais qui n'est PAS un tableau (Array).\n\n✅ Ce qui marche sur une NodeList\n`cartes.length`  → le nombre d'éléments\n`cartes[0]`  → le premier élément\n`cartes.forEach((carte) => carte.classList.add(\"visible\"));`\n`for (const carte of cartes) { console.log(carte.textContent); }`\n\n❌ Ce qui ne marche PAS\n`cartes.map(...)`, `cartes.filter(...)`, `cartes.reduce(...)`  → TypeError : ce n'est pas un tableau.\nPour les utiliser, transforme-la d'abord en vrai tableau :\n`const tableau = Array.from(cartes);`\n`const tableau2 = [...cartes];`\n`const textes = Array.from(cartes).map((c) => c.textContent);`\n\n📸 Une NodeList de querySelectorAll est STATIQUE\nC'est une photo de la page au moment où la ligne s'exécute.\n`const items = document.querySelectorAll(\"li\");`  → 3 li\n`liste.append(document.createElement(\"li\"));`  → on ajoute un 4e li\n`console.log(items.length);`  → toujours 3 ! Il faut refaire querySelectorAll pour voir le nouveau.\n\n💡 Exception à connaître : `element.childNodes` (doc 4) est aussi une NodeList, mais elle est vivante.\n\n✅ À retenir\nNodeList = forEach, length, [i], for...of. Pour map / filter : Array.from. Et c'est une photo : les éléments ajoutés après ne sont pas dedans.\n\n❓ On a `const items = document.querySelectorAll(\"li\");`. Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`items.forEach((li) => ...)` fonctionne",
+        "`items.filter((li) => ...)` fonctionne",
+        "`[...items].filter((li) => ...)` fonctionne",
+        "Si on ajoute un <li> après cette ligne, `items.length` augmente tout seul",
+        "`for (const li of items) { ... }` fonctionne",
+        "querySelectorAll renvoie un vrai tableau (Array)"
+      ],
+      "answer": [
+        0,
+        2,
+        4
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 3 : la HTMLCollection",
+      "notion": "HTMLCollection",
+      "why": "Une autre liste d'éléments, avec deux pièges : elle est vivante, et elle n'a pas forEach.",
+      "prompt": "📌 C'est quoi ?\nUne HTMLCollection est une autre liste d'éléments. Tu l'obtiens avec :\n`document.getElementsByClassName(\"carte\")`\n`document.getElementsByTagName(\"li\")`\n`element.children`  → les éléments enfants (doc 4)\n`form.elements`  → les champs d'un formulaire\n\n🔴 Différence n°1 : elle est VIVANTE\nElle se met à jour toute seule quand la page change.\n`const lis = document.getElementsByTagName(\"li\");`  → 3\n`liste.append(document.createElement(\"li\"));`\n`console.log(lis.length);`  → 4, sans rien refaire\n\n🔴 Différence n°2 : PAS de forEach\n`document.getElementsByClassName(\"carte\").forEach(...)`  → TypeError\nCe qui marche : `length`, `[i]`, `for...of`, une boucle `for` classique, ou `Array.from(collection).forEach(...)`.\n\n⚠️ Le piège de la collection vivante\nOn veut enlever la classe actif de tous les éléments :\n`const actifs = document.getElementsByClassName(\"actif\");`\n`for (let i = 0; i < actifs.length; i++) { actifs[i].classList.remove(\"actif\"); }`\nRésultat : un élément sur deux garde sa classe ! À chaque remove, l'élément SORT de la collection, la liste rétrécit et la boucle saute le suivant.\nSolution : `Array.from(actifs).forEach((el) => el.classList.remove(\"actif\"));` ou utiliser querySelectorAll (statique).\n\n📊 Résumé\nquerySelectorAll → NodeList, statique, a forEach\ngetElementsBy... / children → HTMLCollection, vivante, pas de forEach\n\n✅ À retenir\nEn cas de doute, utilise querySelectorAll. Si tu as une HTMLCollection et que tu veux forEach ou map : Array.from.\n\n❓ Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`document.getElementsByClassName(\"x\").forEach(...)` fonctionne",
+        "Une HTMLCollection se met à jour toute seule quand la page change",
+        "`Array.from(collection).forEach(...)` fonctionne",
+        "`element.children` renvoie une HTMLCollection",
+        "querySelectorAll et getElementsByClassName renvoient le même type de liste",
+        "`for (const el of collection) { ... }` fonctionne sur une HTMLCollection"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 4 : childNodes ou children",
+      "notion": "childNodes et children",
+      "why": "Les enfants d'un élément : avec ou sans les nœuds texte, ce n'est pas le même compte.",
+      "prompt": "📌 Tout est un nœud\nDans le DOM, la page est un arbre de NŒUDS : les éléments (les balises), mais aussi le TEXTE (y compris les espaces et retours à la ligne entre les balises) et les commentaires.\n\n🧪 Exemple\n`<ul id=\"liste\">`\n`  <li>Pain</li>`\n`  <li>Lait</li>`\n`</ul>`\n\n`liste.children.length`  → 2 (seulement les éléments li)\n`liste.childNodes.length`  → 5 (texte, li, texte, li, texte)\nLes « texte » sont les retours à la ligne et espaces entre les balises.\n\n📋 Les deux familles\nchildNodes → tous les nœuds (éléments + texte + commentaires), NodeList vivante\nchildren → seulement les éléments, HTMLCollection\n\n`liste.firstChild`  → souvent un nœud texte (le retour à la ligne) !\n`liste.firstElementChild`  → le premier li\n`liste.lastElementChild`  → le dernier li\n`li.parentElement`  → le ul\n`li.nextElementSibling`  → le li suivant (ou null)\n\n🔢 Savoir ce qu'est un nœud\n`node.nodeType`  → 1 pour un élément, 3 pour du texte\n`node.nodeName`  → \"LI\", \"#text\"…\n\n✅ À retenir\n99 % du temps tu veux les ÉLÉMENTS : children, firstElementChild, nextElementSibling. childNodes et firstChild comptent aussi le texte.\n\n❓ Avec le HTML de l'exemple ci-dessus (le ul #liste avec 2 li sur des lignes différentes), coche TOUTES les phrases vraies.",
+      "choices": [
+        "`liste.children.length` vaut 2",
+        "`liste.childNodes.length` vaut 2",
+        "`liste.firstChild` est le premier <li>",
+        "`liste.firstElementChild` est le premier <li>",
+        "Les retours à la ligne du HTML sont des nœuds texte dans childNodes",
+        "children contient aussi les commentaires HTML"
+      ],
+      "answer": [
+        0,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 5 : les événements",
+      "notion": "Événements",
+      "why": "Une page vivante réagit à l'utilisateur : addEventListener relie une action à ton code.",
+      "prompt": "📌 C'est quoi ?\nUn événement, c'est quelque chose qui arrive : un clic, une touche, un envoi de formulaire. On l'écoute avec :\n`element.addEventListener(\"type\", fonction);`\n\n🧰 Les types les plus utiles\nclick → un clic\ninput → à CHAQUE caractère tapé dans un champ\nchange → quand la valeur est validée (un select choisi, une case cochée, un champ quitté)\nsubmit → l'envoi d'un formulaire (on l'écoute sur le <form>, pas sur le bouton)\nkeydown → une touche appuyée (`event.key` vaut \"Enter\", \"a\"…)\n\n📦 L'objet event\nLa fonction reçoit un objet avec les infos de l'événement :\n`bouton.addEventListener(\"click\", (event) => {`\n`  console.log(event.target);`  → l'élément cliqué\n`});`\n`form.addEventListener(\"submit\", (event) => {`\n`  event.preventDefault();`  → empêche le comportement normal (ici : recharger la page)\n`});`\n\n⚠️ Le piège n°1 : les parenthèses\n`bouton.addEventListener(\"click\", afficher);`  → bon : on DONNE la fonction\n`bouton.addEventListener(\"click\", afficher());`  → faux : afficher s'exécute tout de suite, une fois, et le clic ne fait rien\n\n🫧 La propagation (bubbling)\nUn clic sur un <li> déclenche aussi les écouteurs « click » de son <ul>, puis du <body>… L'événement REMONTE vers les parents. C'est la base de la délégation (doc 6).\n\n➕ Plusieurs écouteurs\nUn élément peut avoir plusieurs addEventListener du même type : ils s'exécutent tous.\n\n✅ À retenir\naddEventListener(\"type\", fonction sans parenthèses). submit sur le form + preventDefault. Les événements remontent vers les parents.\n\n❓ Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`btn.addEventListener(\"click\", afficher())` exécute afficher à chaque clic",
+        "L'événement \"input\" se déclenche à chaque caractère tapé",
+        "L'événement \"submit\" s'écoute sur le <form>",
+        "`event.preventDefault()` empêche le comportement par défaut, par exemple recharger la page",
+        "Un bouton ne peut avoir qu'un seul addEventListener(\"click\")",
+        "Un clic sur un <li> remonte (bubbling) jusqu'au <ul> parent"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 6 : délégation, target et currentTarget",
+      "notion": "Délégation, target et currentTarget",
+      "why": "Indispensable dès qu'on crée des éléments en JavaScript : les boutons Supprimer d'une liste, par exemple.",
+      "prompt": "📌 Le problème\n`document.querySelectorAll(\".suppr\").forEach((b) => b.addEventListener(\"click\", supprimer));`\nCette ligne pose un écouteur sur les boutons qui existent MAINTENANT. Un bouton créé plus tard (une nouvelle ligne ajoutée) n'a aucun écouteur : il ne fait rien.\n\n💡 La solution : la délégation\nOn pose UN SEUL écouteur sur le parent qui existe toujours (le <ul>). Grâce à la propagation (doc 5), tous les clics dans la liste arrivent jusqu'à lui, même ceux sur des éléments ajoutés après.\n\n🎯 target ou currentTarget ?\nevent.target → l'élément EXACT sur lequel on a cliqué (le plus profond)\nevent.currentTarget → l'élément qui PORTE l'écouteur (ici le ul)\n\n🧪 Exemple\n`<ul id=\"liste\">`\n`  <li data-id=\"7\">Pain <button class=\"suppr\"><span>🗑</span></button></li>`\n`</ul>`\n\n`liste.addEventListener(\"click\", (event) => {`\n`  const bouton = event.target.closest(\".suppr\");`\n`  if (!bouton) return;`  → le clic n'était pas sur un bouton suppr\n`  const id = Number(bouton.closest(\"li\").dataset.id);`\n`  console.log(id, event.currentTarget === liste);`  → 7 true\n`});`\n\nClic sur l'icône 🗑 : target = le <span>, currentTarget = le <ul>.\nClic sur le mot « Pain » : target = le <li>, currentTarget = le <ul>.\n\n🔧 Les outils\n`el.matches(\".suppr\")`  → true si el lui-même a ce sélecteur\n`el.closest(\".suppr\")`  → el ou son parent le plus proche qui correspond, sinon null. Plus sûr que matches quand le bouton contient une icône.\n`el.dataset.id`  → la valeur de data-id, TOUJOURS une chaîne : \"7\", pas 7. D'où Number().\n\n✅ À retenir\nUn écouteur sur le parent, target pour savoir où on a cliqué, closest pour remonter jusqu'au bouton, dataset pour l'id.\n\n❓ Avec l'exemple ci-dessus, on clique sur l'icône 🗑 (le <span>). Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`event.target` est le <span>",
+        "`event.currentTarget` est le <ul id=\"liste\">",
+        "`event.target.matches(\".suppr\")` vaut true",
+        "`event.target.closest(\".suppr\")` renvoie le <button>",
+        "Un <li> ajouté plus tard dans la liste ne sera pas géré par cet écouteur",
+        "`bouton.closest(\"li\").dataset.id` vaut le nombre 7 (type number)"
+      ],
+      "answer": [
+        0,
+        1,
+        3
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 7 : la validation de formulaire",
+      "notion": "Validation de formulaire",
+      "why": "On ne fait jamais confiance à ce que l'utilisateur tape : on vérifie avant d'enregistrer.",
+      "prompt": "📌 Deux niveaux de validation\n1. En HTML : `required`, `minlength=\"2\"`, `type=\"email\"`, `min=\"1\"`, `pattern=\"...\"`. Le navigateur bloque l'envoi et affiche son message.\n2. En JavaScript : tes propres règles et tes propres messages. Ajoute `novalidate` sur le <form> pour tester ta validation JS sans celle du navigateur.\nLa validation HTML ne suffit pas : on peut la retirer avec les DevTools, et elle ne connaît pas tes règles.\n\n🧪 Le schéma à connaître\n`form.addEventListener(\"submit\", (event) => {`\n`  event.preventDefault();`\n`  const nom = inputNom.value.trim();`\n`  const montant = Number(inputMontant.value);`\n`  if (nom.length < 2) { erreur.textContent = \"Nom : 2 caractères minimum\"; return; }`\n`  if (!(montant > 0)) { erreur.textContent = \"Montant : un nombre plus grand que 0\"; return; }`\n`  erreur.textContent = \"\";`\n`  // ici seulement : on enregistre`\n`  form.reset();`\n`});`\n\n⚠️ Les pièges\n- `input.value` est TOUJOURS une chaîne, même avec type=\"number\" : \"12\", pas 12. D'où Number().\n- `Number(\"\")` vaut 0 et `Number(\"abc\")` vaut NaN. Un champ vide passe donc un test `montant >= 0` ! Teste `montant > 0`.\n- trim() enlève les espaces au début et à la fin : \"   \" devient \"\".\n- Le `return` arrête la fonction : sans lui, on enregistre quand même après avoir affiché l'erreur.\n- Affiche les messages avec textContent.\n\n🔤 Une REGEX pour un format\n`/^0[67]\\d{8}$/.test(\"0612345678\")`  → true : un 0, puis 6 ou 7, puis 8 chiffres\n`/^\\S+@\\S+\\.\\S+$/.test(\"ali@mail.ma\")`  → true : un email simple\n\n🎨 Montrer le champ en erreur\n`inputNom.classList.toggle(\"invalide\", nom.length < 2);`\n\n✅ À retenir\npreventDefault, trim, Number, une condition par règle avec un message et un return, et on enregistre seulement à la fin.\n\n❓ Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`input.value` d'un <input type=\"number\"> est un nombre",
+        "`Number(\"\")` vaut 0 : un champ vide peut passer un test `montant >= 0`",
+        "Sans `event.preventDefault()`, la page se recharge à l'envoi du formulaire",
+        "`trim()` enlève les espaces au début et à la fin",
+        "Avec required dans le HTML, aucune vérification en JavaScript n'est utile",
+        "`/^0[67]\\d{8}$/.test(\"0612345678\")` vaut true"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 8 : boucler sur un tableau d'objets",
+      "notion": "Tableau d'objets et boucles",
+      "why": "Les données d'une application sont presque toujours un tableau d'objets : il faut savoir l'afficher et le transformer.",
+      "prompt": "📌 Le tableau d'objets\n`const depenses = [`\n`  { id: 1, nom: \"Café\", montant: 12, cat: \"food\" },`\n`  { id: 2, nom: \"Tram\", montant: 8, cat: \"transport\" },`\n`  { id: 3, nom: \"Tajine\", montant: 45, cat: \"food\" },`\n`];`\nChaque objet est une dépense. On lit une propriété avec un point : `depenses[0].nom` → \"Café\".\n\n🧰 Les méthodes à connaître\nforEach → faire quelque chose pour chacun (ne renvoie rien)\n`depenses.forEach((d) => console.log(d.nom));`\nmap → un NOUVEAU tableau transformé\n`const noms = depenses.map((d) => d.nom);`  → [\"Café\", \"Tram\", \"Tajine\"]\nfilter → un NOUVEAU tableau avec ceux qui passent le test\n`const food = depenses.filter((d) => d.cat === \"food\");`  → 2 dépenses\nfind → le PREMIER qui passe le test (un objet, ou undefined)\n`const tram = depenses.find((d) => d.id === 2);`\nreduce → une seule valeur, par exemple un total\n`const total = depenses.reduce((somme, d) => somme + d.montant, 0);`  → 65\nAucune de ces méthodes ne modifie le tableau d'origine.\n\n🔎 Chercher : includes et indexOf\n`\"Tajine\".toLowerCase().includes(\"taj\")`  → true : une chaîne en contient une autre\n`[\"food\", \"transport\"].includes(\"food\")`  → true : un tableau contient une valeur\n`[\"food\", \"transport\", \"food\"].indexOf(\"food\")`  → 0 : la position de la PREMIÈRE fois\n`[\"food\", \"transport\"].indexOf(\"loisirs\")`  → -1 : pas trouvé\nincludes répond oui ou non ; indexOf donne la position, ou -1.\nUne recherche, sans tenir compte des majuscules :\n`depenses.filter((d) => d.nom.toLowerCase().includes(texte.toLowerCase()))`\n\n🖥️ Afficher dans la page : vider, puis recréer\n`function afficher(liste) {`\n`  ul.innerHTML = \"\";`\n`  liste.forEach((d) => {`\n`    const li = document.createElement(\"li\");`\n`    li.textContent = d.nom + \" · \" + d.montant + \" DH\";`\n`    li.dataset.id = d.id;`\n`    ul.append(li);`\n`  });`\n`}`\nSans `ul.innerHTML = \"\"`, chaque appel ajoute les dépenses EN DOUBLE.\n\n🗑️ Supprimer\n`depenses = depenses.filter((d) => d.id !== id);`  (avec let, pas const), puis `afficher(depenses);`\n\n✅ À retenir\nLe tableau est la vérité, la page n'est que son affichage : on modifie le tableau, puis on réaffiche.\n\n❓ Avec le tableau `depenses` ci-dessus, coche TOUTES les phrases vraies.",
+      "choices": [
+        "`depenses.find((d) => d.id === 2)` renvoie un tableau",
+        "`depenses.filter(...)` renvoie un nouveau tableau, l'original ne change pas",
+        "`depenses.reduce((s, d) => s + d.montant, 0)` vaut 65",
+        "`depenses.map((d) => d.nom)` renvoie [\"Café\", \"Tram\", \"Tajine\"]",
+        "`\"Tajine\".toLowerCase().includes(\"taj\")` vaut true",
+        "`[\"food\", \"transport\"].indexOf(\"loisirs\")` vaut 0"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "kind": "mcq",
+      "title": "📖 Doc 9 : le localStorage",
+      "notion": "localStorage",
+      "why": "Garder les données après un rechargement de la page, sans serveur.",
+      "prompt": "📌 C'est quoi ?\nUn petit espace de stockage dans le navigateur, propre à chaque site. Les données restent même après avoir fermé le navigateur. Tu le vois dans les DevTools → Application → Local Storage.\n\n🧰 Les 4 méthodes\n`localStorage.setItem(\"theme\", \"sombre\");`  → écrit (clé, valeur)\n`localStorage.getItem(\"theme\");`  → \"sombre\", ou null si la clé n'existe pas\n`localStorage.removeItem(\"theme\");`  → efface une clé\n`localStorage.clear();`  → efface tout pour ce site\n\n⚠️ Il ne stocke QUE du texte\n`localStorage.setItem(\"depenses\", depenses);`  → stocke \"[object Object],[object Object]\" : les données sont perdues !\nPour un tableau ou un objet, on le transforme en texte JSON :\n`localStorage.setItem(\"depenses\", JSON.stringify(depenses));`  → écrire\n`const data = JSON.parse(localStorage.getItem(\"depenses\"));`  → relire, on retrouve le tableau\n\n🧪 Le schéma à connaître\n`let depenses = JSON.parse(localStorage.getItem(\"depenses\")) || [];`\nLa première fois, getItem renvoie null, `JSON.parse(null)` vaut null, et `|| []` donne un tableau vide.\n\n`function sauvegarder() {`\n`  localStorage.setItem(\"depenses\", JSON.stringify(depenses));`\n`}`\nOn appelle sauvegarder() après CHAQUE changement du tableau : ajout, modification, suppression. On en oublie un, et ce changement disparaît au rechargement.\n\n🔒 À savoir\n- Environ 5 Mo par site.\n- Lisible par n'importe quel script de la page : jamais de mot de passe ou de donnée sensible.\n- Les nombres reviennent bien en nombres avec JSON.parse, mais un getItem sans JSON donne toujours une chaîne.\n\n✅ À retenir\nÉcrire : setItem + JSON.stringify. Lire : JSON.parse(getItem) || []. Sauvegarder après chaque changement.\n\n❓ Coche TOUTES les phrases vraies.",
+      "choices": [
+        "`localStorage.setItem(\"d\", depenses)` avec un tableau d'objets garde les objets intacts",
+        "`getItem` sur une clé qui n'existe pas renvoie null",
+        "`JSON.parse(localStorage.getItem(\"absent\")) || []` donne []",
+        "Les données restent après avoir fermé et rouvert le navigateur",
+        "Le localStorage est partagé entre tous les sites",
+        "Il faut sauvegarder après chaque ajout ET après chaque suppression"
+      ],
+      "answer": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "kind": "brief",
+      "title": "🧪 Lab guidé : Mes dépenses (sans IA)",
+      "notion": "Lab DOM",
+      "why": "Tout ce que tu viens de lire, dans un vrai petit projet. À chaque étape : tu fais, tu observes, tu expliques. Tu dois pouvoir tout expliquer à la fin.",
+      "brief": {
+        "context": "🎯 Le lab\nTu construis « Mes dépenses » : on ajoute une dépense (nom, montant, catégorie), on voit la liste et le total, on filtre par catégorie, on supprime, et tout reste après un rechargement. Ce n'est pas une course : à chaque étape tu FAIS, tu OBSERVES (console, DevTools), puis tu EXPLIQUES ce que tu as vu dans un fichier `NOTES.md`.\n🚫 Les règles\n- Pas d'IA : ni ChatGPT, ni Copilot (désactive-le dans VS Code), ni autre. Tu as droit aux 9 docs de ce plan, à l'onglet « Mes notions » et à MDN.\n- NOTES.md avec TES mots, en français ou en darija, même avec des fautes : c'est ta compréhension qui compte.\n- À la fin, ton formateur te demande d'expliquer des lignes de ton code au hasard. Si tu l'as écrit toi-même, ce sera facile.\n🗂️ Départ (15 min)\n- Crée `index.html`, `style.css`, `script.js` (chargé avec `defer`) et `NOTES.md`. Un commit à la fin de chaque étape.\n- Le HTML : un `<form id=\"form\" novalidate>` avec `<input id=\"nom\">`, `<input id=\"montant\" type=\"number\">`, un `<select id=\"cat\">` (food, transport, loisirs) et un bouton ; un `<p id=\"erreur\">` ; dans `<div id=\"filtres\">`, quatre `<button class=\"filtre\" data-cat=\"tous\">` (puis food, transport, loisirs) ; une `<ul id=\"liste\">` ; un `<p id=\"total\">`.\n🔬 Étape 1 : sélecteurs, NodeList, HTMLCollection (30 min) · docs 1 à 3\n- Sélectionne le formulaire, les champs, la liste, le total et l'erreur.\n- FAIS : `const a = document.querySelectorAll(\".filtre\");` et `const b = document.getElementsByClassName(\"filtre\");` puis, dans la console, `a.length` et `b.length`.\n- FAIS : dans la console, `const n = document.createElement(\"button\"); n.className = \"filtre\"; document.querySelector(\"#filtres\").append(n);` puis regarde à nouveau `a.length` et `b.length`. Essaie aussi `a.forEach` et `b.forEach`.\n- EXPLIQUE 1 : laquelle a changé, et pourquoi ? Laquelle choisis-tu pour tes boutons de filtre ?\n🔬 Étape 2 : children ou childNodes (15 min) · doc 4\n- Mets deux `<li>` d'essai dans `#liste`, sur deux lignes différentes du HTML.\n- FAIS : affiche `liste.children.length`, `liste.childNodes.length` et `liste.firstChild`.\n- EXPLIQUE 2 : pourquoi ces nombres sont différents ? Puis enlève les `<li>` d'essai.\n🔬 Étape 3 : afficher un tableau d'objets (45 min) · doc 8\n- Commence avec `let depenses = [{ id: 1, nom: \"Café\", montant: 12, cat: \"food\" }, { id: 2, nom: \"Tram\", montant: 8, cat: \"transport\" }];`\n- Écris `afficher(tableau)` : elle vide `#liste`, crée pour chaque dépense un `<li data-id=\"...\">` « Café · 12 DH » avec un bouton `<button class=\"suppr\"><span>🗑</span></button>`, et écrit le total (avec `reduce`) dans `#total`.\n- FAIS : enlève la ligne qui vide la liste et appelle `afficher(depenses)` deux fois.\n- EXPLIQUE 3 : ce que tu vois, et pourquoi. Puis remets la ligne.\n🔬 Étape 4 : le formulaire et sa validation (45 min) · doc 7\n- Au `submit` : `preventDefault`, lis les valeurs, refuse un nom de moins de 2 caractères et un montant qui n'est pas plus grand que 0, avec un message dans `#erreur`. Sinon, `push` d'un objet `{ id: Date.now(), nom, montant, cat }`, `form.reset()` et `afficher(depenses)`.\n- FAIS : mets `preventDefault` en commentaire et envoie le formulaire. EXPLIQUE 4 : ce qui se passe, et pourquoi. Puis remets-le.\n- FAIS : laisse le montant vide et affiche `Number(montant.value)` dans la console. EXPLIQUE 5 : pourquoi ton test doit être `> 0` et pas `>= 0` ?\n🔬 Étape 5 : délégation, target, currentTarget (45 min) · docs 5 et 6\n- UN SEUL `addEventListener(\"click\", ...)` sur `#liste`. Dedans, d'abord : `console.log(event.target, event.currentTarget);`\n- FAIS : clique sur le texte d'une dépense, puis sur l'icône 🗑. EXPLIQUE 6 : que valent target et currentTarget à chaque fois ?\n- Supprime avec `event.target.closest(\".suppr\")`, l'id du `<li>` (`Number(...dataset.id)`), `filter`, puis `afficher(depenses)`.\n- FAIS : ajoute une nouvelle dépense, puis supprime-la. EXPLIQUE 7 : pourquoi ça marche, alors que son bouton n'existait pas quand tu as posé l'écouteur ?\n🔬 Étape 6 : les filtres (30 min) · docs 2 et 8\n- Une boucle sur tes boutons de filtre ; au clic, lis `dataset.cat`, `filter`, puis `afficher(...)`. Seul le bouton cliqué a la classe `actif`.\n- EXPLIQUE 8 : le total affiché, c'est celui du filtre ou de toutes les dépenses ? Choisis et justifie.\n🔬 Étape 7 : la recherche (40 min) · doc 8\n- Ajoute `<input id=\"recherche\" type=\"search\" placeholder=\"Rechercher…\">` au-dessus de la liste.\n- À chaque frappe (événement `input`), garde les dépenses dont le nom contient le texte tapé : `filter` + `includes`, avec `toLowerCase()` des deux côtés.\n- La recherche ET le filtre de catégorie marchent ensemble : écris une fonction `appliquer()` qui part de `depenses`, garde la catégorie active, puis la recherche, et appelle `afficher(resultat)`. Les filtres, la recherche, l'ajout et la suppression appellent tous `appliquer()`.\n- Si rien ne correspond, la liste affiche « Aucune dépense trouvée ».\n- FAIS : enlève les `toLowerCase()` et cherche « café » alors que tu as écrit « Café ». EXPLIQUE 9 : ce qui se passe, et pourquoi.\n🔬 Étape 8 : doublons et statistiques (45 min) · doc 8\n- Doublons : dans la validation, refuse un nom qui existe déjà avec `depenses.map((d) => d.nom.toLowerCase()).includes(nom.toLowerCase())`, et le message « Cette dépense existe déjà ».\n- Ajoute `<p id=\"stats\">` et une fonction `stats(tableau)`, appelée par `appliquer()`, qui affiche :\n- la plus grosse dépense : `map` des montants, puis `Math.max(...montants)` (attention : avec un tableau vide, `Math.max()` donne -Infinity, affiche alors « — ») ;\n- les catégories utilisées, sans répétition : `map` des catégories, puis `cats.filter((c, i) => cats.indexOf(c) === i)` ;\n- le nombre de dépenses de plus de 50 DH : `filter(...).length`.\n- FAIS : dans la console, `[\"food\", \"transport\", \"food\"].indexOf(\"food\")`, puis `.indexOf(\"loisirs\")`. EXPLIQUE 10 : que renvoie indexOf, et pourquoi `cats.indexOf(c) === i` garde chaque catégorie une seule fois ?\n- EXPLIQUE 11 : la différence entre `includes` et `indexOf`, et quand tu utilises l'un ou l'autre.\n🔬 Étape 9 : le localStorage (30 min) · doc 9\n- Au démarrage : `let depenses = JSON.parse(localStorage.getItem(\"depenses\")) || [];`. Une fonction `sauvegarder()` appelée après chaque ajout et chaque suppression.\n- FAIS : dans la console, `localStorage.setItem(\"test\", depenses)` SANS JSON, puis regarde DevTools → Application → Local Storage.\n- EXPLIQUE 12 : ce que tu vois, et pourquoi on utilise JSON.stringify / JSON.parse.\n🎤 Pour finir\n- Recharge la page : tes dépenses doivent être là.\n- Prépare 5 minutes pour expliquer à ton formateur, sans lire tes notes : NodeList / HTMLCollection, target / currentTarget, ta fonction `appliquer()` (filter, includes), et le chemin d'une dépense, du formulaire jusqu'au localStorage.",
+        "tasks": [
+          "Départ : les 4 fichiers, le HTML demandé, `script.js` chargé avec `defer`, Copilot et l'IA désactivés.",
+          "Étape 1 : tous les éléments sont sélectionnés, l'expérience NodeList / HTMLCollection est faite, EXPLIQUE 1 est dans NOTES.md.",
+          "Étape 2 : l'expérience children / childNodes est faite, EXPLIQUE 2 est dans NOTES.md.",
+          "Étape 3 : `afficher()` montre le tableau d'objets (forEach, createElement, textContent) et le total avec reduce ; EXPLIQUE 3 est dans NOTES.md.",
+          "Étape 4 : le formulaire ajoute une dépense ; un nom trop court et un montant vide, 0 ou négatif sont refusés avec un message clair.",
+          "Étape 4 : EXPLIQUE 4 (preventDefault) et EXPLIQUE 5 (Number(\"\")) sont dans NOTES.md.",
+          "Étape 5 : la suppression marche avec UN SEUL écouteur sur la liste (délégation et closest), y compris pour une dépense ajoutée après le chargement.",
+          "Étape 5 : EXPLIQUE 6 (target / currentTarget) et EXPLIQUE 7 (pourquoi la délégation marche) sont dans NOTES.md.",
+          "Étape 6 : les filtres par catégorie marchent, seul le bouton actif est marqué ; EXPLIQUE 8 est dans NOTES.md.",
+          "Étape 7 : la recherche en direct (input, filter, includes, toLowerCase) marche avec le filtre de catégorie grâce à une seule fonction appliquer() ; « Aucune dépense trouvée » quand rien ne correspond ; EXPLIQUE 9 est dans NOTES.md.",
+          "Étape 8 : un nom déjà utilisé est refusé (map + includes) ; les stats (plus grosse dépense avec map et Math.max, catégories sans répétition avec indexOf, nombre de plus de 50 DH) suivent la liste affichée ; EXPLIQUE 10 et 11 sont dans NOTES.md.",
+          "Étape 9 : les dépenses restent après un rechargement (JSON.stringify / JSON.parse) ; EXPLIQUE 12 est dans NOTES.md.",
+          "Au moins un commit par étape sur GitHub, avec un message qui dit ce que tu as fait.",
+          "Prêt pour l'oral : tu sais expliquer chaque ligne de ton script.js sans le relire."
+        ],
+        "deliverable": "Le lien du dépôt GitHub avec index.html, style.css, script.js et NOTES.md (tes 12 explications), au moins un commit par étape.",
+        "hours": 6
+      }
+    }
+  ]
+}

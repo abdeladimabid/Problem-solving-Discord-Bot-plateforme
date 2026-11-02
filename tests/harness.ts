@@ -435,6 +435,7 @@ export const ai = {
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -528,6 +529,11 @@ function fakeAI() {
       if (ai.mode === "broken") return { response: "sorry, I can't do JSON" };
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
+      // Mises en situation, "Vérifier mon code": categories, plus what must never reach the learner (a line, a fix, unknown ids)
+      if (sys.includes("Tu classes le code d'un apprenant")) {
+        if (ai.miseDown) throw new Error("AI down");
+        return { response: JSON.stringify({ categories: ["selection", "Erreur de syntaxe", "give-the-answer", "logic", "event"], ligne: 3, explication: "Corrige la ligne 3 : écris document.querySelector('#titre')", solution: "titre.textContent = 'x'" }) };
+      }
       // plan d'action: the diagnosis (lacunes and proposed actions), one action, the correction of an answer
       if (sys.includes("Tu fais évoluer le MINI-PROJET")) {
         // folds each element into the brief: the old tasks kept, one task per element, in the project's story

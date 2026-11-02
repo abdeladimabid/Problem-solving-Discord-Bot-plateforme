@@ -194,37 +194,25 @@ export async function standings(env: Env, guildId: string, season: string | null
 
 // ---------------------------------------------------------------- stats
 export async function playerStats(env: Env, guild: GuildRow, discordId: string) {
-  const p = await findPlayer(env, guild.id, discordId);
-  const solved = await all<{ difficulty: string; n: number }>(
-    env,
-    `SELECT c.difficulty, COUNT(*) AS n FROM attempts a JOIN challenges c ON c.id = a.challenge_id
-      WHERE a.guild_id = ? AND a.discord_id = ? AND (a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) GROUP BY c.difficulty`,
-    guild.id, discordId,
-  );
+  // independent reads, asked together
+  const [p, solved, counts, duels, contests, season, total, badges] = await Promise.all([
+    findPlayer(env, guild.id, discordId),
+    all<{ difficulty: string; n: number }>(env,
+      `SELECT c.difficulty, COUNT(*) AS n FROM attempts a JOIN challenges c ON c.id = a.challenge_id
+        WHERE a.guild_id = ? AND a.discord_id = ? AND (a.status = 'solved' OR (a.status = 'claimed' AND a.verified = 1)) GROUP BY c.difficulty`, guild.id, discordId),
+    one<{ solved: number; failed: number }>(env,
+      `SELECT SUM(status = 'solved' OR (status = 'claimed' AND verified = 1)) AS solved, SUM(status = 'failed') AS failed
+         FROM attempts WHERE guild_id = ? AND discord_id = ?`, guild.id, discordId),
+    one<{ w: number; l: number; d: number }>(env,
+      `SELECT SUM(winner_id = ?) AS w, SUM(winner_id IS NOT NULL AND winner_id != ?) AS l, SUM(winner_id IS NULL) AS d
+         FROM duels WHERE guild_id = ? AND status = 'finished' AND (challenger_id = ? OR opponent_id = ?)`, discordId, discordId, guild.id, discordId, discordId),
+    one<{ p: number; w: number; pod: number }>(env, "SELECT COUNT(*) AS p, SUM(rank = 1) AS w, SUM(rank <= 3) AS pod FROM contest_results WHERE guild_id = ? AND discord_id = ?", guild.id, discordId),
+    standings(env, guild.id, guild.season, 1000),
+    totalPoints(env, guild.id, discordId),
+    all<{ badge: string }>(env, "SELECT badge FROM badges WHERE guild_id = ? AND discord_id = ? ORDER BY created_at", guild.id, discordId),
+  ]);
   const by = Object.fromEntries(solved.map((r) => [r.difficulty, r.n])) as Record<string, number>;
-  const counts = await one<{ solved: number; failed: number }>(
-    env,
-    `SELECT SUM(status = 'solved' OR (status = 'claimed' AND verified = 1)) AS solved, SUM(status = 'failed') AS failed
-       FROM attempts WHERE guild_id = ? AND discord_id = ?`,
-    guild.id, discordId,
-  );
-  const duels = await one<{ w: number; l: number; d: number }>(
-    env,
-    `SELECT SUM(winner_id = ?) AS w,
-            SUM(winner_id IS NOT NULL AND winner_id != ?) AS l,
-            SUM(winner_id IS NULL) AS d
-       FROM duels WHERE guild_id = ? AND status = 'finished' AND (challenger_id = ? OR opponent_id = ?)`,
-    discordId, discordId, guild.id, discordId, discordId,
-  );
-  const contests = await one<{ p: number; w: number; pod: number }>(
-    env,
-    "SELECT COUNT(*) AS p, SUM(rank = 1) AS w, SUM(rank <= 3) AS pod FROM contest_results WHERE guild_id = ? AND discord_id = ?",
-    guild.id, discordId,
-  );
-  const season = await standings(env, guild.id, guild.season, 1000);
   const idx = season.findIndex((r) => r.discord_id === discordId);
-  const total = await totalPoints(env, guild.id, discordId);
-  const badges = await all<{ badge: string }>(env, "SELECT badge FROM badges WHERE guild_id = ? AND discord_id = ? ORDER BY created_at", guild.id, discordId);
   const s = counts?.solved ?? 0, f = counts?.failed ?? 0;
   return {
     player: p,

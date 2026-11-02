@@ -270,9 +270,17 @@ const CONCEPTS: [RegExp, string][] = [
   [/\bclass\s+\w+\s*(\{|extends)|\bobjets?\b|constructeur|h[ée]ritage|\bextends\b|\bPOO\b/i, 'la programmation orientée objet'],
   [/\bgit\b|commit|branche|merge/i, 'Git (commit, branches)'],
 ];
+// 28 regexes per text, asked again and again for the same texts (a page compares every lacune with every objective):
+// the answers are kept (a pure function of the text)
+const conceptMemo = new Map();
 export function conceptsOf(text) {
   const t = String(text || '');
-  return CONCEPTS.filter(([re]) => re.test(t)).map(([, c]) => c);
+  const hit = conceptMemo.get(t);
+  if (hit) return hit;
+  const out = CONCEPTS.filter(([re]) => re.test(t)).map(([, c]) => c);
+  if (conceptMemo.size > 4000) conceptMemo.clear();
+  conceptMemo.set(t, out);
+  return out;
 }
 
 // Is a notion already in the teacher's words? ("Attribut alt" is in "…des attributs label/for et alt…")

@@ -7,7 +7,7 @@ const NAV_GROUPS = [
   { key: "learners", icon: "👥", label: "Learners", hint: "Who's in the class: the students and their teams", items: ["#/students", "#/teams"] },
   { key: "support", icon: "🤝", label: "Support", hint: "Help the students: their requests, their questions, the ones who need a plan, interviews", items: ["#/assignments", "#/hands", "#/questions", "#/interviews"] },
   { key: "projects", icon: "📁", label: "Projects", hint: "The work in class: briefs, sprints, daily activities, presentations", items: ["#/briefs", "#/sprints", "#/activities", "#/presentations"] },
-  { key: "eval", icon: "🎓", label: "Evaluation", hint: "How they're assessed: assessments, debriefs and levels, competencies, the programme", items: ["#/assessments", "#/progress", "#/competencies", "#/planning"] },
+  { key: "eval", icon: "🎓", label: "Evaluation", hint: "How they're assessed: assessments, mises en situation, debriefs and levels, competencies, the programme", items: ["#/assessments", "#/mises-en-situation", "#/progress", "#/competencies", "#/planning"] },
   { key: "monitor", icon: "👀", label: "Monitoring", hint: "What they really do: GitHub, VS Code, integrity checks", items: ["#/github", "#/vscode", "#/integrity"] },
   { key: "practice", icon: "🧩", label: "Practice", hint: "Coding practice: challenges, practice blocks, daily challenge, path, sessions, skills", items: ["#/challenges", "#/blocks", "#/daily", "#/path", "#/sessions", "#/skills"] },
   { key: "games", icon: "🎮", label: "Games & rewards", hint: "Games, contests, events, points and coins", items: ["#/games", "#/contests", "#/events", "#/points", "#/coins"] },
@@ -51,7 +51,7 @@ const navSave = (st) => { try { localStorage.setItem("cb-nav", JSON.stringify(st
 
   const setOpen = (box, open) => { $(".nav-gh", box).setAttribute("aria-expanded", String(open)); box.classList.toggle("closed", !open); };
   // detail pages belong to their list's section (#/student/… → Students)
-  const ALSO = { "#/students": "#/student/", "#/assignments": "#/wplan/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/games": ["#/game/", "#/battle"] };
+  const ALSO = { "#/students": "#/student/", "#/assignments": "#/wplan/", "#/briefs": "#/brief", "#/progress": "#/debrief/", "#/assessments": "#/assessment/", "#/mises-en-situation": "#/mise/", "#/contests": "#/contest/", "#/sessions": "#/session/", "#/games": ["#/game/", "#/battle"] };
   const isHere = (href) => { const h = location.hash.split("?")[0]; return h === href || h.startsWith(href + "/") || (ALSO[href] && [].concat(ALSO[href]).some((p) => h.startsWith(p))); };
   const current = () => $$(".nav-grp", nav).find((b) => $$("a", b).some((a) => isHere(a.getAttribute("href"))));
   const apply = () => {

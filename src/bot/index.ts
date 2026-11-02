@@ -4,6 +4,7 @@
 //   GET  /u/:key           a student's shared profile page
 //   GET  /cert/:token      an end-of-season certificate (print / save as PDF)
 //   GET  /quiz/:token      a student's assessment (full screen)
+//   GET  /mes/:token       a learner's « mise en situation » (code editor, runs, checks)
 //   GET  /wp/:token        a student's plan d'action (their actions answered and corrected there, objectives ticked, questions)
 //   GET  /github/connect   a student links GitHub (from /github); POST /github/webhook: the class's GitHub App
 //   /wakatime/api/v1/…     the learners' VS Code (WakaTime extension) sends its heartbeats here (/vscode setup)
@@ -19,6 +20,7 @@ import { codeToPng } from "../shared/codeimage.ts";
 import { one } from "../shared/db.ts";
 import { certPage, profilePage } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
+import { handleMise } from "./mises.ts";
 import { handleWorkPlan } from "./wplan.ts";
 import { leagueFeed } from "../shared/league.ts";
 import { handleBattle } from "./battle.ts";
@@ -68,6 +70,8 @@ export default {
     if (cert && request.method === "GET") return certPage(env, cert[1]);
     const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate|results))?$/);
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
+    const mes = url.pathname.match(/^\/mes\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|save|event|run|check|submit))?$/);
+    if (mes) return handleMise(request, env, ctx, mes[1], mes[2]);
     const wp = url.pathname.match(/^\/wp\/([A-Za-z0-9_-]{1,30}\.\d{10,16}\.[A-Za-z0-9_-]{32}|expired)(?:\/(data|answer|check|ask|guide))?\/?$/);
     if (wp) return handleWorkPlan(request, env, wp[1], wp[2]);
     const bt = url.pathname.match(/^\/battle\/(tv|judge)\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|claim|act))?\/?$/);

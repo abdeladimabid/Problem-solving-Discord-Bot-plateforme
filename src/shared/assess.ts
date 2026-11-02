@@ -41,6 +41,7 @@ export interface TakerRow {
   id: number; assessment_id: number; guild_id: string; discord_id: string; status: string; seed: number; sid: string | null; answers: string | null; pos: number;
   started_at: number | null; deadline: number | null; submitted_at: number | null; locked_at: number | null; lock_reason: string | null; resume_ok: number; unlocks: number;
   events: string | null; grades: string | null; score: number | null; summary: string | null; invited_at: number | null;
+  open_until: number | null;   // a retake: their own link stays open until then, even when the assessment is closed
 }
 export class AssessError extends Error {}
 
@@ -163,9 +164,85 @@ export async function invite(env: Env, g: GuildRow, id: number, students: string
 
 /** The students' links (to copy when a DM didn't arrive). */
 export async function takerLinks(env: Env, a: AssessRow) {
-  const takers = await all<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM assessment_takers WHERE assessment_id = ?", a.id);
+  const takers = await all<{ id: number; discord_id: string; open_until: number | null }>(env, "SELECT id, discord_id, open_until FROM assessment_takers WHERE assessment_id = ?", a.id);
   const exp = (a.closes_at ?? now() + 7 * 86400) + 86400;
-  return Object.fromEntries(await Promise.all(takers.map(async (tk) => [tk.discord_id, quizUrl(env, await takerToken(env, tk.id, exp))] as [string, string])));
+  return Object.fromEntries(await Promise.all(takers.map(async (tk) => [tk.discord_id, quizUrl(env, await takerToken(env, tk.id, Math.max(exp, (tk.open_until ?? 0) + 86400)))] as [string, string])));
+}
+
+/** Closed for this student: the assessment is closed (or past its date), unless they have a retake still open. */
+export function closedFor(a: Pick<AssessRow, "status" | "closes_at">, tk: Pick<TakerRow, "open_until">, t = now()): boolean {
+  if (tk.open_until && t <= tk.open_until) return false;
+  return a.status === "closed" || (!!a.closes_at && t > a.closes_at);
+}
+/** The questions they really answered (the starter code handed back as it was isn't an answer). */
+export function answeredIn(qs: Question[], answers: string | null): number {
+  const ans = parse<Record<string, unknown>>(answers, {});
+  return qs.filter((q) => !notAttempted(q, ans[q.id])).length;
+}
+
+/**
+ * A retake for students who missed the assessment: not invited, invited but never started, or handed in without a
+ * single answer (absent when it closed). Their own link stays open for some days, even when the assessment is closed
+ * for the others; their paper is graded like the others' and counts in the results. A paper with answers is kept.
+ */
+export async function retake(env: Env, g: GuildRow, id: number, students: unknown, o: { days?: number; send?: boolean } = {}) {
+  const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!a) throw new AssessError("This assessment doesn't exist anymore.");
+  const qs = questionsOf(a);
+  if (!qs.length) throw new AssessError("Add at least one question first.");
+  if (a.status === "draft") throw new AssessError("Invite the class first: a retake is for an assessment already given.");
+  const ids = [...new Set((Array.isArray(students) ? students : []).map(String))].filter((s) => /^\d{1,25}$/.test(s));
+  if (!ids.length) throw new AssessError("Choose at least one student.");
+  if (ids.length > 40) throw new AssessError("40 students at most at once.");
+  const t0 = now(), until = t0 + Math.max(1, Math.min(30, Math.round(o.days || 3))) * 86400;
+  const out: number[] = [], kept: string[] = [];
+  for (const uid of ids) {
+    const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", id, uid);
+    if (!tk) {
+      const r = await run(env, "INSERT INTO assessment_takers (assessment_id, guild_id, discord_id, seed, invited_at, open_until) VALUES (?, ?, ?, ?, ?, ?)",
+        id, g.id, uid, Math.floor(Math.random() * 2 ** 31), t0, until);
+      out.push(Number(r.meta.last_row_id)); continue;
+    }
+    if (["submitted", "graded"].includes(tk.status)) {
+      if (answeredIn(qs, tk.answers) > 0) { kept.push(uid); continue; }
+      // handed in empty (absent when it closed): the empty paper and its results go, a new one starts
+      await clearResults(env, a, tk);
+      await run(env, `UPDATE assessment_takers SET status = 'invited', sid = NULL, answers = NULL, pos = 0, started_at = NULL, deadline = NULL, submitted_at = NULL,
+        locked_at = NULL, lock_reason = NULL, resume_ok = 0, grades = NULL, score = NULL, summary = NULL, invited_at = ?, open_until = ?, events = ? WHERE id = ?`,
+        t0, until, pushEvent(tk, "retake"), tk.id);
+    } else await run(env, "UPDATE assessment_takers SET open_until = ?, events = ? WHERE id = ?", until, pushEvent(tk, "retake"), tk.id);
+    out.push(tk.id);
+  }
+  let sent = 0;
+  if (o.send !== false && out.length) {
+    const st = settingsOf(a), L = g.lang;
+    const takers = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM assessment_takers WHERE id IN (${out.map(() => "?").join(",")})`, ...out);
+    for (const tk of takers) {
+      const url = quizUrl(env, await takerToken(env, tk.id, until + 86400));
+      const ok = await dm(env, tk.discord_id, {
+        embeds: [{ title: t(L, "assess.dm_title", { title: a.title }), color: 0x2563eb,
+          description: t(L, "assess.dm_body", { n: qs.length, time: st.minutes ? t(L, "assess.dm_time", { m: st.minutes }) : "", until: `<t:${until}:F>` }) }],
+        components: [row(linkBtn(t(L, "assess.dm_btn"), url, "📝"))],
+      });
+      if (ok) sent++;
+    }
+  }
+  const names = kept.length ? await all<{ discord_id: string; name: string | null }>(env, `SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id IN (${kept.map(() => "?").join(",")})`, g.id, ...kept) : [];
+  return { retake: out.length, sent, until, kept: kept.map((k) => names.find((n) => n.discord_id === k)?.name || k) };
+}
+
+/** An empty paper taken back: what it gave the student's record goes (skills, competencies, points, the debrief's level). */
+async function clearResults(env: Env, a: AssessRow, tk: TakerRow) {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND source = ?").bind(a.guild_id, tk.discord_id, `assess:${a.id}`),
+    env.DB.prepare("DELETE FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'assessment' AND ref = ?").bind(a.guild_id, tk.discord_id, a.id),
+  ]);
+  const prev = await one<{ s: number }>(env, "SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'assessment' AND ref = ?", a.guild_id, tk.discord_id, String(a.id));
+  const g = await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", a.guild_id);
+  if (g && prev?.s) await addPoints(env, g, { discordId: tk.discord_id, amount: -prev.s, reason: "assessment", ref: a.id, note: a.title.slice(0, 80) });
+  const released = await releasedOf(env, a.id);
+  if (released.delete(tk.id)) await setReleased(env, a.id, [...released]);
+  await refreshAssessLevels(env, a.brief_id, tk.discord_id).catch(() => 0);
 }
 
 /** The teacher lets a stopped student back in (they continue where they were, the timer keeps running). */
@@ -217,7 +294,7 @@ export async function sessionInfo(env: Env, takerId: number): Promise<SessionVie
   const { tk, a } = x;
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", tk.guild_id, tk.discord_id);
   const st = settingsOf(a);
-  return { lang: st.lang, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, status: a.status === "closed" && ["invited", "active", "locked"].includes(tk.status) ? "closed" : tk.status, title: a.title, n: questionsOf(a).length, minutes: st.minutes,
+  return { lang: st.lang, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, status: closedFor(a, tk) && ["invited", "active", "locked"].includes(tk.status) ? "closed" : tk.status, title: a.title, n: questionsOf(a).length, minutes: st.minutes,
     deadline: tk.deadline, now: now(), pos: tk.pos, answers: {}, reason: tk.lock_reason, name: p?.name ?? null };
 }
 
@@ -233,7 +310,7 @@ export async function startSession(env: Env, takerId: number, sid: string): Prom
   const st = settingsOf(a), qs = questionsOf(a), t0 = now();
   const view = (status: string, extra: Partial<SessionView> = {}): SessionView => ({ status, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, title: a.title, n: qs.length, minutes: st.minutes, deadline: tk.deadline, now: t0, pos: tk.pos, answers: {}, reason: tk.lock_reason, ...extra });
   if (["submitted", "graded"].includes(tk.status)) return view(tk.status);
-  if (a.status === "closed" || (a.closes_at && t0 > a.closes_at)) return view("closed");
+  if (closedFor(a, tk, t0)) return view("closed");
   if (tk.status === "invited") {
     const deadline = st.minutes ? t0 + st.minutes * 60 : null;
     await run(env, "UPDATE assessment_takers SET status = 'active', sid = ?, started_at = ?, deadline = ?, events = ? WHERE id = ? AND status = 'invited'", sid, t0, deadline, pushEvent(tk, "start"), tk.id);
@@ -603,14 +680,15 @@ export async function applyResults(env: Env, a: AssessRow, takerId: number) {
   await refreshAssessLevels(env, a.brief_id, tk.discord_id).catch(() => 0);
 }
 
-/** Send each graded student their score and the comments (when the teacher is happy with the grades). */
-export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
+/** Send each graded student their score and the comments (when the teacher is happy with the grades). onlyNew: only the
+ * papers not sent yet (a retake graded after the others). */
+export async function sendResults(env: Env, g: GuildRow, a: AssessRow, onlyNew = false) {
   const qs = questionsOf(a), st = settingsOf(a);
   const takers = await all<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", a.id);
   const L = g.lang;
   let sent = 0;
   const released = await releasedOf(env, a.id);
-  for (const tk of takers.filter((x) => !needsGrading(x)).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
+  for (const tk of takers.filter((x) => !needsGrading(x) && !(onlyNew && released.has(x.id))).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
     const grades = parse<Record<string, Grade>>(tk.grades, {});
     const order = paperFor(qs, tk.seed, st.shuffle);
     const fr = L === "fr";
@@ -633,7 +711,7 @@ export async function sendResults(env: Env, g: GuildRow, a: AssessRow) {
 // ------------------------------------------------------------------ the student's correction
 const RESULTS_DAYS = 120;
 const relKey = (aid: number) => `assess-out:${aid}`;
-async function releasedOf(env: Env, aid: number): Promise<Set<number>> {
+export async function releasedOf(env: Env, aid: number): Promise<Set<number>> {
   const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", relKey(aid)).catch(() => null);
   return new Set(parse<number[]>(r?.v, []).map(Number));
 }
@@ -677,9 +755,9 @@ export async function resultsView(env: Env, takerId: number) {
 export async function assessCron(env: Env) {
   const late = await all<{ id: number }>(env, "SELECT id FROM assessment_takers WHERE status IN ('active', 'locked') AND deadline IS NOT NULL AND deadline < ? LIMIT 5", now() - 60);
   for (const tk of late) await submit(env, tk.id, null, undefined, true).catch((e) => console.error("auto submit", e));
-  // closed assessments: papers still open are handed in
+  // closed assessments: papers still open are handed in (a retake: once its own date is past)
   const closed = await all<{ id: number }>(env, `SELECT t.id FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
-    WHERE t.status IN ('active', 'locked') AND (a.status = 'closed' OR (a.closes_at IS NOT NULL AND a.closes_at < ?)) LIMIT 5`, now());
+    WHERE t.status IN ('active', 'locked') AND COALESCE(t.open_until, 0) < ? AND (a.status = 'closed' OR (a.closes_at IS NOT NULL AND a.closes_at < ?)) LIMIT 5`, now(), now());
   for (const tk of closed) await submit(env, tk.id, null, undefined, true).catch((e) => console.error("auto submit", e));
 }
 

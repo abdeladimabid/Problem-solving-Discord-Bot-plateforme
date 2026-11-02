@@ -57,9 +57,28 @@ export function parseGoals(text: string): { group: string; items: string[] }[] {
 const STOPW = new Set(["les", "des", "une", "aux", "avec", "dans", "pour", "base", "mise", "page", "pages", "bonne", "bonnes", "pratique", "pratiques", "structure", "structuration",
   "donnee", "donnees", "gestion", "utilisation", "classe", "classes", "unite", "unites", "design", "web", "outil", "outils", "projet", "projets", "creation", "dynamique", "moderne",
   "notion", "notions", "css", "html", "code", "client", "cote", "fonctionnalite", "fonctionnalites", "lecture", "different", "differents", "simple", "simples", "selon", "entre"]);
-const wordsOf = (t: string) => new Set(key(t).split(" ").map((w) => w.replace(/s$/, "")).filter((w) => w.length >= 3 && !STOPW.has(w)));
+const wordMemo = new Map<string, Set<string>>();
+const wordsOf = (t: string) => {
+  let w = wordMemo.get(t);
+  if (!w) {
+    w = new Set(key(t).split(" ").map((x) => x.replace(/s$/, "")).filter((x) => x.length >= 3 && !STOPW.has(x)));
+    if (wordMemo.size > 4000) wordMemo.clear();
+    wordMemo.set(t, w);
+  }
+  return w;
+};
 /** Does a lacune (a notion) touch an objective (an item of the planning)? Same concept, or a distinctive word in common. */
+const touchMemo = new Map<string, boolean>();
 export function touches(item: string, notion: string): boolean {
+  const k = item + "\u0000" + notion;
+  const hit = touchMemo.get(k);
+  if (hit !== undefined) return hit;
+  const r = touches0(item, notion);
+  if (touchMemo.size > 20000) touchMemo.clear();
+  touchMemo.set(k, r);
+  return r;
+}
+function touches0(item: string, notion: string): boolean {
   const ci = new Set(conceptsOf(item)), cn = conceptsOf(notion);
   if (cn.some((c) => ci.has(c)) || ci.has(notion)) return true;
   // the same word, or the same stem (« form » / « formulaire », « selecteur » / « selecteurs »)
@@ -237,6 +256,8 @@ export async function sprintDiagnosis(env: Env, g: GuildRow, n: number) {
       state: today < sp.start ? "upcoming" : today > sp.end ? "done" : "running" },
     briefs: briefs.map((b) => ({ id: b.id, title: b.title, due: day(b.due_at), debriefs: reviews.filter((r) => r.brief_id === b.id).length, final: reviews.filter((r) => r.brief_id === b.id && r.status === "final").length, assessed: takers.filter((t) => assessments.some((a) => a.id === t.assessment_id && a.brief_id === b.id)).length })),
     students: students.length, evaluated: E,
+    // the levels of the students evaluated in this sprint (their last debrief of it)
+    levels: Object.fromEntries(["excellent", "bon", "moyen", "faible", "critique"].map((l) => [l, people.filter((x) => x.level === l).length])),
     objectives: objs, goals, lacunes, features: feats, follow: follow.slice(0, 40), next,
     comment: (await one<{ comment: string }>(env, "SELECT comment FROM sprint_comments WHERE guild_id = ? AND program = ? AND sprint = ?", g.id, p.id, n).catch(() => null))?.comment || "",
     actions: parse<any>(saved?.v, null),

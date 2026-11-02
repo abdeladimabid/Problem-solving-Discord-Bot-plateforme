@@ -4,7 +4,7 @@
 import type { Env, GuildRow } from "./types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, run } from "./db.ts";
 import { chat } from "./ai.ts";
-import { getReview, progressView, statesOf } from "./review/debrief.ts";
+import { briefAssessments, progressView, statesOf } from "./review/debrief.ts";
 import { compLabel } from "./program.ts";
 
 export class PlanError extends Error {}
@@ -61,11 +61,14 @@ export function engagement(rows: AsgRow[], lastActive: number | null, t0 = now()
 }
 
 export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
-  const P = await progressView(env, g, { finalOnly: true });
-  const sprints = await all<{ discord_id: string; sprint: number; lv: string | null }>(env,
-    "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []);
-  const notes = await all<NoteRow>(env, "SELECT discord_id, note, note_by, note_at, flagged FROM plan_notes WHERE guild_id = ?", g.id).catch(() => []);
-  const asg = await all<AsgRow>(env, "SELECT discord_id, status, due_at, created_at, completed_at FROM assignments WHERE guild_id = ? AND status != 'cancelled'", g.id);
+  // the reads don't depend on each other: in parallel
+  const [P, sprints, notes, asg] = await Promise.all([
+    progressView(env, g, { finalOnly: true }),
+    all<{ discord_id: string; sprint: number; lv: string | null }>(env,
+      "SELECT discord_id, sprint, COALESCE(level, plevel) AS lv FROM sprint_reviews WHERE guild_id = ? ORDER BY sprint", g.id).catch(() => []),
+    all<NoteRow>(env, "SELECT discord_id, note, note_by, note_at, flagged FROM plan_notes WHERE guild_id = ?", g.id).catch(() => []),
+    all<AsgRow>(env, "SELECT discord_id, status, due_at, created_at, completed_at FROM assignments WHERE guild_id = ? AND status != 'cancelled'", g.id),
+  ]);
   const noteOf = new Map(notes.map((n) => [n.discord_id, n] as const));
   const asgOf = new Map<string, AsgRow[]>();
   for (const a of asg) { if (!asgOf.has(a.discord_id)) asgOf.set(a.discord_id, []); asgOf.get(a.discord_id)!.push(a); }
@@ -102,7 +105,7 @@ export async function planView(env: Env, g: GuildRow, students: PlanStudent[]) {
     const severity = debLevel === "critique" ? 0 : debLevel === "faible" ? 1 : 2;
     return {
       discord_id: id, name: s.name || id, team: s.team ?? null, current: debLevel || current, lowCount, severity, manual: n?.flagged === 1,
-      debriefs: debriefs.slice(-6), sprints: sp.slice(-4), lastScore: lastScore ?? null, avgScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+      debriefs: debriefs.slice(-6), sprints: sp.slice(-4), lastScore: lastScore ?? null, scores: scores.slice(-6), avgScore: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
       trend: levelTrend(levels.length >= 2 ? levels : [...sp.map((x) => x.lv), ...levels], s.trend),
       activity: s.trend, lastActive: s.last_active, accuracy: s.accuracy, why, auto, inPlan, flagged: n?.flagged ?? 0,
       engagement: eng, note: n?.note ? { text: n.note, by: n.note_by || "you", at: n.note_at } : null,
@@ -196,11 +199,22 @@ export async function niveaux(env: Env, g: GuildRow) {
 export async function gapsOf(env: Env, g: GuildRow, sid: string) {
   const P = await progressView(env, g);
   const out: any[] = [];
+  // their debriefs read together (one query), the assessments of the drafts in parallel
+  const cells = P.briefs.map((b, i) => ({ b, i, c: P.cells[`${b.id}:${sid}`] })).filter((x) => x.c).slice(-40);
+  const rows = cells.length ? await all<{ brief_id: number; who: string; status: string; record: string | null }>(env,
+    `SELECT brief_id, who, status, record FROM brief_reviews WHERE ${cells.map(() => "(brief_id = ? AND who = ?)").join(" OR ")}`, ...cells.flatMap((x) => [x.b.id, x.c.who])).catch(() => []) : [];
+  const recs = new Map(await Promise.all(cells.map(async (x) => {
+    const r = rows.find((y) => y.brief_id === x.b.id && y.who === x.c.who);
+    if (!r) return [x.b.id, null] as const;
+    let rec: any = {};
+    try { rec = JSON.parse(r.record || "{}"); } catch { rec = {}; }
+    if (!(r.status === "final" && Array.isArray(rec.assess))) rec.assess = await briefAssessments(env, x.b.id, x.c.who, rec).catch(() => []);
+    return [x.b.id, rec] as const;
+  })));
   for (const [i, b] of P.briefs.entries()) {
     const c = P.cells[`${b.id}:${sid}`];
     if (!c) continue;
-    const r = await getReview(env, b.id, c.who).catch(() => null);
-    const rec = r?.rec;
+    const rec = recs.get(b.id);
     if (!rec?.result) { out.push({ b: i + 1, bid: b.id, who: c.who, title: b.title, lv: c.lv || c.plv, final: c.final, analyzed: false }); continue; }
     const st = statesOf(rec)!;
     const ex = (rec.result.exigences || []) as any[];
@@ -222,5 +236,5 @@ export async function gapsOf(env: Env, g: GuildRow, sid: string) {
       .map((x) => ({ n: x.n, prompt: x.prompt, verdict: x.g.verdict, score: x.g.score, comment: String(x.g.comment || "").slice(0, 300) }));
     return { id: p.id, title: p.title, score: p.score, missed };
   });
-  return { debriefs: out, assess };
+  return { debriefs: out, assess, briefs: P.briefs.map((b, i) => ({ n: i + 1, id: b.id, title: b.title, due_at: b.due_at })) };
 }

@@ -67,12 +67,20 @@ function parts(t: number) {
   for (const x of fmt.formatToParts(new Date(Math.floor(t) * 1000))) p[x.type] = x.value;
   return p;
 }
-/** Seconds to add to a UTC time to get the Casablanca wall clock. */
+/** Seconds to add to a UTC time to get the Casablanca wall clock. Kept per hour: the offset never changes inside an
+ *  hour, and Intl's formatToParts is the slowest call of a request (dayClock asks it 50 times). */
+const offCache = new Map<number, number>();
 export function tzOffset(t: number): number {
-  const p = parts(t);
-  return Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000 - Math.floor(t)) / 60) * 60;
+  const h = Math.floor(t / 3600);
+  const hit = offCache.get(h);
+  if (hit !== undefined) return hit;
+  const p = parts(h * 3600);
+  const off = Math.round((Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000 - h * 3600) / 60) * 60;
+  if (offCache.size > 5000) offCache.clear();
+  offCache.set(h, off);
+  return off;
 }
-export const dayOf = (t: number) => { const p = parts(t); return `${p.year}-${p.month}-${p.day}`; };
+export const dayOf = (t: number) => new Date((Math.floor(t) + tzOffset(t)) * 1000).toISOString().slice(0, 10);
 export const isDay = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + "T00:00:00Z"));
 export const addDays = (day: string, n: number) => new Date(Date.parse(day + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
 /** 0 = Monday … 6 = Sunday */

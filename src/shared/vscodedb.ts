@@ -8,7 +8,7 @@ import { currentSquads } from "./squads.ts";
 import { cleanSquads } from "./review/debrief.ts";
 import {
   type Commit, type DayAgg, type Hb, type VscSettings,
-  addDays, computeDay, dayClock, dayOf, emptyAgg, hashKey, mergeHeartbeats, mergeSettings, mondayOf, newKey, packRaw, sameProject, signals, sumDays, unpackRaw, vscSettings,
+  addDays, computeDay, dayClock, dayOf, dayStart, emptyAgg, hashKey, mergeHeartbeats, mergeSettings, mondayOf, newKey, packRaw, sameProject, signals, sumDays, unpackRaw, vscSettings,
 } from "./vscode.ts";
 
 export class VscError extends Error {}
@@ -369,12 +369,12 @@ export async function quietWriters(env: Env, g: GuildRow) {
   const today = dayOf(now());
   const work: string[] = [];
   for (let d = addDays(today, -1); work.length < 2; d = addDays(d, -1)) if (new Date(d + "T12:00:00Z").getUTCDay() % 6 !== 0) work.push(d);
-  const brief = await one<{ id: number; title: string }>(env, "SELECT id, title FROM briefs WHERE guild_id = ? AND status = 'assigned' AND (start_at IS NULL OR start_at <= ?) AND (due_at IS NULL OR due_at >= ?) ORDER BY id DESC LIMIT 1", g.id, dayClock(work[1]).start, dayClock(work[0]).start);
+  const brief = await one<{ id: number; title: string }>(env, "SELECT id, title FROM briefs WHERE guild_id = ? AND status = 'assigned' AND (start_at IS NULL OR start_at <= ?) AND (due_at IS NULL OR due_at >= ?) ORDER BY id DESC LIMIT 1", g.id, dayStart(work[1]), dayStart(work[0]));
   if (!brief) return { brief: null, days: work, learners: [] as { id: string; name: string }[] };
   const ls = await all<{ discord_id: string; name: string | null }>(env,
     `SELECT l.discord_id, p.name FROM vsc_learners l JOIN players p ON p.guild_id = l.guild_id AND p.discord_id = l.discord_id
      WHERE l.guild_id = ? AND l.first_seen IS NOT NULL AND l.first_seen < ? AND l.paused = 0
        AND NOT EXISTS (SELECT 1 FROM vsc_days d WHERE d.guild_id = l.guild_id AND d.discord_id = l.discord_id AND d.day IN (?, ?) AND d.write_s > 0)`,
-    g.id, dayClock(work[1]).start, work[0], work[1]);
+    g.id, dayStart(work[1]), work[0], work[1]);
   return { brief, days: work, learners: ls.map((r) => ({ id: r.discord_id, name: r.name || r.discord_id })) };
 }

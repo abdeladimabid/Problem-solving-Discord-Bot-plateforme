@@ -4,6 +4,8 @@
 /* global $, api, esc, toast, view, routes, S, XL, saveBlob */
 
 // until the class's own suggestions arrive (or if they can't): questions that fit any class
+// in the assistant's bubble: questions about the app itself
+const CHAT_HELP = ["Comment je configure les clés IA ?", "Où je vois les lacunes d'un apprenant ?"];
 const CHAT_EXAMPLES = ["Comment va la classe cette semaine ?", "Qui est à surveiller en ce moment, et pourquoi ?", "Mets les apprenants à surveiller dans un Excel"];
 // the questions this teacher asks most in this class: the ones asked again come first among the suggestions
 const askedKey = () => `classbot.chat.asked2.${S.g}`;
@@ -33,6 +35,7 @@ const chatSave = (list) => { try { localStorage.setItem(chatKey(), JSON.stringif
 function chatText(t) {
   const lines = esc(String(t || "")).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, "$1<i>$2</i>")
     .replace(/\[([^\]\n]{1,200})\]\((https?:\/\/[^\s)]{3,500})\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/\[([^\]\n]{1,200})\]\((#\/[\w\-/]{1,120})\)/g, (all, label, href) => (typeof routes !== "undefined" && routes[href.slice(2).split("/")[0]] ? `<a href="${href}" class="chat-in">${label} →</a>` : label))
     .replace(/(^|[\s(])(https?:\/\/[^\s<)]{3,500}?)([.,;:!?]?)(?=\s|\)|$)/gm, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>$3').split("\n");
   let html = "", list = false;
   for (const l of lines) {
@@ -142,17 +145,18 @@ function chatFoot(m, i) {
   return `${warn}<div class="chat-foot">${src}<span class="chat-votes"><button type="button" class="chat-vote" data-copy="${i}" aria-label="Copier la réponse" title="Copier la réponse">${CHAT_COPY}</button>${btn(1, CHAT_UP, "Bonne réponse")}${btn(-1, CHAT_DOWN, "Réponse fausse")}</span></div>`;
 }
 
-async function viewChat() {
+/** The chat, drawn in root: the page, or the assistant's bubble (compact: its head and its buttons are the bubble's). */
+async function viewChat(root = view, compact = false) {
   let list = chatLoad(), busy = false, status = "";
   const cls = S.guilds.find((x) => x.id === S.g)?.name || "ta classe";
-  view.innerHTML = `
-    <div class="chat-head"><div><h1>Chat avec ta classe</h1><p class="sub">${esc(cls)} · ClassBot lit les données de la classe et répond</p></div>
+  root.innerHTML = `
+    ${compact ? "" : `<div class="chat-head"><div><h1>Chat avec ta classe</h1><p class="sub">${esc(cls)} · ClassBot lit les données de la classe et répond</p></div>
       <div class="chat-actions"><button type="button" class="chat-pill" id="chat-check" title="Des questions dont ClassBot connaît la bonne réponse, posées au chat : pour voir s'il est fiable avec ta clé IA">${CHAT_SHIELD} Tester la fiabilité</button>
-      <button type="button" class="chat-pill" id="chat-new">${CHAT_PLUS} Nouvelle conversation</button></div></div>
-    <section class="chat"><div class="chat-thread" id="chat-thread"></div>
+      <button type="button" class="chat-pill" id="chat-new">${CHAT_PLUS} Nouvelle conversation</button></div></div>`}
+    <section class="chat${compact ? " compact" : ""}"><div class="chat-thread" id="chat-thread"></div>
       <div class="chat-bottom">
         <div class="chat-sugg" id="chat-sugg"></div>
-        <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="1" placeholder="Pose une question sur tes apprenants, les briefs, les niveaux…" aria-label="Ta question"></textarea>
+        <form class="chat-form" id="chat-form"><textarea id="chat-q" rows="1" placeholder="${compact ? "Une question sur ta classe, ou sur ClassBot…" : "Pose une question sur tes apprenants, les briefs, les niveaux…"}" aria-label="Ta question"></textarea>
           <button class="chat-send" id="chat-send" type="submit" aria-label="Envoyer" title="Envoyer (Entrée)">${chatIcon('<path d="M12 19V5m0 0l-7 7m7-7l7 7"/>', 20)}</button></form>
       </div></section>`;
   const thread = $("#chat-thread"), q = $("#chat-q");
@@ -164,7 +168,7 @@ async function viewChat() {
       ? `<div class="chat-msg me"><div class="chat-bubble"><p class="chat-who">Toi</p>${esc(m.text)}</div>${me}</div>`
       : `<div class="chat-msg bot">${avatar}<div class="chat-bubble"><div class="chat-card-h"><span>ClassBot</span><time>${esc(chatTime(m.at))}</time></div>${m.error ? `<p class="chat-err">${esc(m.text)}</p>` : chatText(m.text)}${m.table ? chatTable(m.table, i) : ""}${chatActions(m, i)}${m.error || !Array.isArray(m.sources) ? "" : chatFoot(m, i)}</div></div>`).join("")
       + (busy ? `<div class="chat-msg bot">${avatar}<div class="chat-bubble chat-wait"><span class="chat-dots"><i></i><i></i><i></i></span><span id="chat-status">${esc(status || "Je réfléchis…")}</span></div></div>` : "")
-      : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">C</div><h2>Que veux-tu savoir sur ta classe ?</h2><p>Pose ta question comme à un collègue, ou choisis une suggestion en bas.</p></div>`;
+      : `<div class="chat-empty"><div class="chat-hero" aria-hidden="true">C</div><h2>${compact ? "Comment je peux t'aider ?" : "Que veux-tu savoir sur ta classe ?"}</h2><p>${compact ? "Sur tes apprenants (qui aider, leurs lacunes, un message), ou sur ClassBot (où trouver une page, comment configurer)." : "Pose ta question comme à un collègue, ou choisis une suggestion en bas."}</p></div>`;
     // an action: done by ClassBot only on "Confirmer" (with the note or message as the teacher left it)
     const act = (k) => { const [i, j] = String(k).split(":").map(Number); return actionsOf(list[i])[j]; };
     const confirm = async (a) => {
@@ -247,8 +251,8 @@ async function viewChat() {
   // the suggestions: this teacher's frequent questions first, then the class's own (a new draw at each visit)
   const sugg = (list2) => {
     const seen = new Set(), all = [];
-    for (const x of [...askedTop(2), ...list2]) { const k = x.toLowerCase().replace(/[^\p{L}\d]+/gu, ""); if (!seen.has(k)) { seen.add(k); all.push(x); } }
-    all.length = Math.min(all.length, 7);
+    for (const x of [...askedTop(2), ...(compact ? CHAT_HELP : []), ...list2]) { const k = x.toLowerCase().replace(/[^\p{L}\d]+/gu, ""); if (!seen.has(k)) { seen.add(k); all.push(x); } }
+    all.length = Math.min(all.length, compact ? 5 : 7);
     $("#chat-sugg").innerHTML = `<span>Suggestions :</span>${all.map((x) => `<button type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join("")}`;
     $("#chat-sugg").querySelectorAll("[data-ex]").forEach((b) => b.onclick = () => { q.value = b.dataset.ex; grow(); q.focus(); });
   };
@@ -256,10 +260,11 @@ async function viewChat() {
   api("/chat/suggestions").then((r) => { if (Array.isArray(r.suggestions) && r.suggestions.length) sugg(r.suggestions); }).catch(() => {});
   $("#chat-form").onsubmit = (e) => { e.preventDefault(); send(); };
   q.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
-  $("#chat-check").onclick = () => chatCheckDialog();
-  $("#chat-new").onclick = () => { list = []; chatSave(list); draw(); q.focus(); };
+  const chk = $("#chat-check"), nw = $("#chat-new");
+  if (chk) chk.onclick = () => chatCheckDialog();
+  if (nw) nw.onclick = () => { list = []; chatSave(list); draw(); q.focus(); };
   draw();
   q.focus();
 }
 
-Object.assign(routes, { chat: viewChat });
+// the chat lives in the assistant's bubble (assistant.js), on every page

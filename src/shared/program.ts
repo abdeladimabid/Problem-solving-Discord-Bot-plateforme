@@ -18,9 +18,15 @@ export interface Program { key: string; name: string; stack: string; lang: strin
 export const BUILTIN: Program[] = [DWWM_2026];
 
 /** "C3N2" → { code: "C3", level: 2 } (also accepts "CT3N2" for transversal ones, written T3). */
+const compMemo = new Map<string, { code: string; level: number | null } | null>();
 export function parseComp(s: string): { code: string; level: number | null } | null {
-  const m = String(s).trim().toUpperCase().match(/^(CT|C|T)(\d{1,2})(?:N(\d))?$/);
-  return m ? { code: (m[1] === "C" ? "C" : "T") + m[2], level: m[3] ? Number(m[3]) : null } : null;
+  const k = String(s);
+  if (compMemo.has(k)) { const c = compMemo.get(k); return c ? { ...c } : null; }
+  const m = k.trim().toUpperCase().match(/^(CT|C|T)(\d{1,2})(?:N(\d))?$/);
+  const out = m ? { code: (m[1] === "C" ? "C" : "T") + m[2], level: m[3] ? Number(m[3]) : null } : null;
+  if (compMemo.size > 2000) compMemo.clear();
+  compMemo.set(k, out);
+  return out ? { ...out } : null;
 }
 export const compLabel = (code: string) => (code.startsWith("T") ? "C" + code : code);   // T1 is shown as CT1, like the planning
 
