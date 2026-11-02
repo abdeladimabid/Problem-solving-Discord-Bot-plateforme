@@ -132,6 +132,32 @@ export async function deletePlan(env: Env, g: GuildRow, id: number) {
   return { ok: true };
 }
 
+/** The same plan for other students: a new draft for each, with the same actions (none of the student's work), the
+ *  same title, message and due date. The diagnosis stays with its student: their guide is made from the actions' notions. */
+export async function copyPlan(env: Env, g: GuildRow, id: number, students: unknown): Promise<{ id: number; sid: string; name: string }[]> {
+  const p = await getPlan(env, g.id, id);
+  if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
+  if (!p.steps.length) throw new WorkPlanError("Add at least one action first.");
+  const sids = [...new Set((Array.isArray(students) ? students : []).map(String))].filter((s) => /^\d{1,25}$/.test(s) && s !== p.sid);
+  if (!sids.length) throw new WorkPlanError("Choose at least one student.");
+  if (sids.length > 40) throw new WorkPlanError("40 students at most at once.");
+  const t0 = now(), out: { id: number; sid: string; name: string }[] = [];
+  let pid = 0;
+  for (const sid of sids) {
+    const name = await nameOf(env, g.id, sid);
+    const title = p.name && p.title.includes(p.name) ? p.title.split(p.name).join(name) : p.title;
+    const steps = p.steps.map((s) => cleanStep({ ...s, work: null, review: null, asg_id: null })).filter(Boolean) as Step[];
+    // ids from the clock (like createPlan), never one already taken
+    pid = Math.max(Date.now(), pid + 1);
+    while (await getPlan(env, g.id, pid)) pid++;
+    const c: WorkPlan = { id: pid, gid: g.id, sid, name, title, message: p.message, status: "draft", due_at: p.due_at,
+      created_at: t0, updated_at: t0, sent_at: null, done_at: null, diag: null, steps };
+    await putPlan(env, c);
+    out.push({ id: c.id, sid, name });
+  }
+  return out;
+}
+
 async function fillChallenges(env: Env, g: GuildRow, steps: Step[]) {
   const ids = [...new Set(steps.map((s) => s.challenge_id).filter(Boolean))] as number[];
   if (!ids.length) return;

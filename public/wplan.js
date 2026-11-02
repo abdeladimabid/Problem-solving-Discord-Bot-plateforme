@@ -61,7 +61,7 @@ function drawWorkPlan() {
         <h1>🧭 ${esc(p.title)}</h1>
         <p class="sub">${draft ? `A draft for ${esc(p.name)}: understand their lacunes, choose the actions, then send. Nothing is sent before you press Send.`
           : `Sent to <b>${esc(p.name)}</b> ${fmtAgo(p.sent_at)}${p.due_at ? ` · due ${fmtDateTime(p.due_at)}` : ""}. Follow each action below.`}</p></div>
-      <div class="actions">${draft ? "" : `<button class="btn primary" id="wp-give">${icon("clipboard")}Give work</button>`}<button class="btn" id="wp-gaps">🔎 Weak points</button>${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
+      <div class="actions">${draft ? "" : `<button class="btn primary" id="wp-give">${icon("clipboard")}Give work</button>`}<button class="btn" id="wp-dup" title="The same actions for other students: a plan each">📋 Same plan for others</button><button class="btn" id="wp-gaps">🔎 Weak points</button>${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
     <div class="wp-grid">
       <div class="stack">
         ${draft ? `<section class="panel wp-diag" id="wp-diag">${diagHtml()}</section>`
@@ -69,7 +69,7 @@ function drawWorkPlan() {
         <section class="panel"><div class="panel-head"><h2>Actions <span class="muted">· ${p.steps.length}</span></h2><span class="small muted" id="wp-saved">${draft ? "Saved as you edit" : ""}</span></div>
           ${p.steps.length ? `<ol class="wp-steps">${p.steps.map((s, i) => stepCardHtml(s, i)).join("")}</ol>`
             : `<div class="wp-empty"><p><b>No action yet.</b></p><p class="muted">${p.diag ? "Add the proposed actions above, or one of your own below." : `Diagnose ${wpFirst()} first: the AI proposes actions for their lacunes. Or add your own below.`}</p></div>`}
-          ${draft ? `<div class="wp-add"><span class="wp-add-l">Add an action</span>${Object.entries(WK).map(([k, v]) => `<button class="wp-kbtn k-${k}" data-add="${k}" title="${esc(v.sub)}"><span>${v.ico}</span>${esc(v.label)}</button>`).join("")}</div>` : ""}
+          ${draft ? `<div class="wp-add"><span class="wp-add-l">Add an action</span>${Object.entries(WK).map(([k, v]) => `<button class="wp-kbtn k-${k}" data-add="${k}" title="${esc(v.sub)}"><span>${v.ico}</span>${esc(v.label)}</button>`).join("")}<button class="wp-kbtn" id="wp-import" title="Paste actions as JSON (a plan written for you, or another plan's actions)"><span>⬆</span>Import</button></div>` : ""}
         </section>
       </div>
       <aside class="stack wp-side">${draft ? sendPanelHtml(count) : progressPanelHtml(st)}</aside>
@@ -312,6 +312,7 @@ function wireWorkPlan() {
     Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan();
     toast(r.guide?.state === "ready" ? "Their guide is ready" : "The guide couldn't be made", r.guide?.state !== "ready");
   });
+  $("#wp-dup").onclick = (e) => busy(e.currentTarget, wpCopyDialog);
   if ($("#wp-give")) $("#wp-give").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog([p.sid]));
   $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
   $("#wp-del").onclick = () => confirmDialog(draft ? "Delete this draft?" : `Delete ${p.name}'s plan?`, draft ? "Its diagnosis and actions are lost." : "Their page stops working and its open challenges are cancelled. What they did stays in their history.", "Delete",
@@ -365,6 +366,7 @@ function wireWorkPlan() {
     return;
   }
   // the actions
+  $("#wp-import").onclick = wpImportDialog;
   $$("[data-add]").forEach((b) => b.onclick = () => { const s = wpNewStep(b.dataset.add); p.steps.push(s); WPS.open.add(s.id); if (s.kind === "challenge") wpLib().then(drawWorkPlan).catch(() => {}); drawWorkPlan(); wpSaveSoon();
     setTimeout(() => $(`.wp-step[data-sid="${s.id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50); });
   $$("[data-up]").forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [p.steps[i - 1], p.steps[i]] = [p.steps[i], p.steps[i - 1]]; drawWorkPlan(); wpSaveSoon(); });
@@ -417,6 +419,58 @@ function wireWorkPlan() {
     toast(r.dm ? `Sent: ${p.name} got their page by DM` : `Sent, but the DM couldn't go (closed DMs?): copy their link`, !r.dm);
     drawWorkPlan();
   });
+}
+
+// ------------------------------------------------------------------ the same plan for other students, actions from JSON
+async function wpCopyDialog() {
+  const p = WPS.plan;
+  if (!p.steps.length) return toast("Add at least one action first.", true);
+  if (wpDraft()) { clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving; await wpSaveNow(); }
+  const rows = (await loadStudents()).filter((s) => s.discord_id !== p.sid);
+  const low = (s) => s.niveau && (s.niveau.lv === "faible" || s.niveau.lv === "critique");
+  openDialog("Same plan for other students", `<p class="muted small">${p.steps.length} action(s), with the same title, message and due date. Each student gets their own plan: their answers, progress and guide are theirs.</p>
+    <div class="wpc-bar"><input type="search" id="wpc-q" placeholder="Search a student"><button class="btn small" id="wpc-low">Faible & Critique</button><button class="btn small" id="wpc-none">None</button></div>
+    <div class="wpc-list">${rows.map((s) => `<label class="wpc-row" data-n="${esc(String(s.name || s.discord_id).toLowerCase())}"><input type="checkbox" value="${esc(s.discord_id)}" ${low(s) ? "data-low" : ""}><b>${esc(s.name || s.discord_id)}</b>${s.team ? `<span class="muted small">${esc(s.team)}</span>` : ""}${nivPill(s.niveau)}</label>`).join("") || `<p class="muted">No other student.</p>`}</div>
+    <p class="small" id="wpc-n">0 selected</p>
+    <label class="wp-f wide"><span>Then</span><select id="wpc-send"><option value="0">Keep them as drafts: you check, then send each one</option><option value="1">Send them now: each gets their page by DM</option></select></label>`,
+  [{ label: "📋 Copy", primary: true, action: async () => {
+    const students = $$(".wpc-row input:checked", dlg).map((i) => i.value);
+    if (!students.length) throw new Error("Choose at least one student.");
+    const send = $("#wpc-send", dlg).value === "1";
+    const r = await api(`/wplans/${p.id}/copy`, { method: "POST", body: { students, send } });
+    dlg.close();
+    const noDm = send ? r.made.filter((c) => !c.dm).length : 0;
+    toast(send ? `Sent to ${r.made.length} student(s)${noDm ? ` · ${noDm} DM(s) couldn't go: copy their link from their plan` : ""}` : `${r.made.length} draft(s) made: open each one below to send it`, noDm > 0);
+    location.hash = "#/assignments";
+  } }]);
+  const count = () => { $("#wpc-n", dlg).textContent = `${$$(".wpc-row input:checked", dlg).length} selected`; };
+  $$(".wpc-row input", dlg).forEach((i) => i.onchange = count);
+  $("#wpc-q", dlg).oninput = (e) => { const q = e.target.value.trim().toLowerCase(); $$(".wpc-row", dlg).forEach((l) => { l.hidden = !!q && !l.dataset.n.includes(q); }); };
+  $("#wpc-low", dlg).onclick = () => { $$(".wpc-row input[data-low]", dlg).forEach((i) => { i.checked = true; }); count(); };
+  $("#wpc-none", dlg).onclick = () => { $$(".wpc-row input", dlg).forEach((i) => { i.checked = false; }); count(); };
+}
+
+function wpImportDialog() {
+  const p = WPS.plan;
+  openDialog("Import actions", `<p class="muted small">Paste the actions as JSON: a list of actions, or an object with a title, a message and its steps. They're added after the actions already here (15 at most), and you can edit each one.</p>
+    <textarea id="wpi-t" rows="12" style="width:100%;font:13px/1.5 var(--mono)" placeholder='{"steps": [{"kind": "code", "title": "…", "notion": "…", "prompt": "…"}]}'></textarea>`,
+  [{ label: "⬆ Import", primary: true, action: async () => {
+    let x;
+    try { x = JSON.parse($("#wpi-t", dlg).value); } catch { throw new Error("This isn't valid JSON."); }
+    const list = Array.isArray(x) ? x : Array.isArray(x?.steps) ? x.steps : [];
+    if (!list.length) throw new Error("No action found: paste a list of actions, or {\"steps\": [...]}.");
+    clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving;
+    const before = p.steps.length;
+    // new actions: never the ids, work or review of where they came from
+    const steps = [...p.steps, ...list.map(({ id, work, review, asg_id, checks, checked_at, ...s }) => s)];
+    const body = { steps, title: (!Array.isArray(x) && x.title) || $("#wp-title")?.value || p.title, message: (!Array.isArray(x) && x.message) || ($("#wp-msg")?.value ?? p.message), due_at: wpDueValue() };
+    const r = await api(`/wplans/${p.id}`, { method: "PUT", body });
+    Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
+    dlg.close(); drawWorkPlan();
+    const n = r.plan.steps.length - before;
+    toast(n ? `${n} action(s) imported: open each one to check it` : "No action could be read: each one needs a kind (code, answer, mcq, challenge, brief)", !n);
+  } }]);
+  dlg.classList.add("wide");
 }
 
 // ------------------------------------------------------------------ on the Plan d'action page: each student's plans
