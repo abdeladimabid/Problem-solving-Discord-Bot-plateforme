@@ -3148,6 +3148,39 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
   clock.advance(120);
   await runCron(env);
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id).status !== "active", "closing hands in the papers still open");
+
+  // a retake for the ones who missed it: Bob handed in an empty paper when it closed, Carol was never invited
+  const paperOf = (u: string) => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, u);
+  const rt = await api("POST", `/api/assessments/${aid}/retake`, { g: G, students: [U.alice.id, U.bob.id, U.carol.id], days: 2, send: true });
+  check(rt.status === 200 && rt.data.retake === 2 && rt.data.kept.length === 1 && paperOf(U.alice.id).score === 100, "a retake: Bob (handed in empty) and Carol (never invited) get one, Alice's paper with answers is kept");
+  check(paperOf(U.bob.id).status === "invited" && !paperOf(U.bob.id).answers && paperOf(U.bob.id).open_until > clock.now()
+    && q1("SELECT COUNT(*) AS n FROM competency_results WHERE discord_id = ? AND source = 'assessment' AND ref = ?", U.bob.id, aid).n === 0, "…Bob's empty paper and what it gave his record go, a new one starts");
+  check((await api("POST", `/api/assessments/${aid}/retake`, { g: G, students: [] })).status === 400, "a retake needs a student");
+  const links2 = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links;
+  const late = async (u: string, action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`${links2[u]}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: await res.json() as any };
+  };
+  const sc = "sessionCCCCCCCCCCCCCCCC1";
+  check((await late(U.carol.id, "info")).data.status === "invited", "the assessment is closed for the class, not for Carol's retake");
+  const cs = await late(U.carol.id, "start", { sid: sc });
+  check(cs.data.status === "active" && cs.data.paper.length === 3, "Carol starts her paper");
+  clock.advance(120);
+  await runCron(env);
+  check(paperOf(U.carol.id).status === "active", "…and the cron doesn't hand it in because the assessment is closed");
+  for (const p of cs.data.paper) await late(U.carol.id, "answer", { sid: sc, qid: p.id, answer: p.type === "mcq" ? [1] : p.type === "code" ? "@media (max-width: 767px) { .cards { display: flex; } }" : "margin dehors, padding dedans", pos: 3 });
+  await late(U.carol.id, "submit", { sid: sc });
+  check(paperOf(U.carol.id).status === "graded" && paperOf(U.carol.id).score > 0, "her paper is graded like the others'");
+  const rv = await api("GET", `/api/assessments/${aid}?g=${G}`);
+  check(rv.data.takers.filter((t: any) => t.status === "graded").map((t: any) => t.discord_id).sort().join() === [U.alice.id, U.carol.id].sort().join()
+    && rv.data.takers.find((t: any) => t.discord_id === U.alice.id).sent === true && rv.data.takers.find((t: any) => t.discord_id === U.carol.id).sent === false, "…and counts in the results with the others (Alice already got hers, Carol not yet)");
+  const dm0 = discordCalls.length;
+  const rn = await api("POST", `/api/assessments/${aid}/results`, { g: G, only: "new" });
+  check(rn.data.sent === 1 && discordCalls.slice(dm0).filter((c) => c.method === "POST" && /\/channels\/.*\/messages/.test(c.path)).length === 1, "results sent only to the new paper (Alice doesn't get hers twice)");
+  clock.advance(2 * 86400);
+  check((await late(U.bob.id, "start", { sid: "sessionBBBBBBBBBBBBBBBB2" })).data.status === "closed", "once the retake's days are over, it's closed again");
 }
 
 section("GitHub: webhook signature, activity of a linked student, settings and rewards");

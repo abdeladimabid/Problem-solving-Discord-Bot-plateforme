@@ -384,6 +384,7 @@ Web tests in full screen. Create one from **✨ Generate with AI** (a topic and 
 - **Settings:** time, page language, passed at (%), points for 100%, and a **linked brief**: its results count in that brief's debrief (competencies and comment). Change or remove it at any time, even after invitations or results: a confirmation tells what changes, the draft debriefs follow (the old brief's use the project only, its oral questions from the assessment are kept and marked), finalized debriefs never change, and the papers and grades stay.
 - **Invite:** each student gets their own link by DM, open for N days, with the order and going back set in Options.
 - **Live:** refreshes every 5 s. Who is answering, progress, who was stopped and why, **Let back in** (with extra minutes), and Remove.
+- **🔁 Retake:** for the students who missed it (not invited, never started, or handed in an empty paper). Their own link stays open for N days, even when the assessment is closed for the others. An empty paper is replaced; a paper with answers is never touched. Their paper is graded like the others' and counts in the results. **Send results by DM** then offers to send only to the new papers.
 - **Results:**
   - multiple choice is graded at once; code and explanations by the AI with your expected answer (spelling and language mistakes are ignored)
   - **↻ Grade with AI** grades what's left, keeping your changes
