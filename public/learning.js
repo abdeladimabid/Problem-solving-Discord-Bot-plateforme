@@ -2056,6 +2056,7 @@ function renderAssessment() {
       <div class="toolbar" style="margin:0">
         ${a.questions.length ? `<button class="btn" id="aa-slides" title="One question per slide, to explain them to the class">▶ Present</button>` : ""}
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
+        ${a.status !== "draft" && A.takers.length ? `<button class="btn" id="aa-retake" title="Students who missed it (absent, never started, handed in empty): their own link, even when it's closed">🔁 Retake</button>` : ""}
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
         <button class="btn" id="aa-share">🔗 Share</button>
         <button class="btn danger" id="aa-del">Delete</button></div></div>
@@ -2077,6 +2078,7 @@ function renderAssessment() {
   if ($("#aa-slides") && typeof assessSlides === "function") $("#aa-slides").onclick = () => assessSlides(AS.A, 0);
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
+  if ($("#aa-retake")) $("#aa-retake").onclick = () => retakeDialog();
   $("#aa-opts").onclick = () => assessOptionsDialog();
   $("#aa-share").onclick = () => shareAssessmentDialog(a.id);
   if ($("#aa-close")) $("#aa-close").onclick = () => confirmDialog("Close this assessment?", "Students still working are handed in automatically within a minute.", "Close", async () => { AS.A = await api(`/assessments/${a.id}/close`, { method: "POST", body: {} }); renderAssessment(); });
@@ -2319,6 +2321,33 @@ async function inviteDialog() {
   $("#iv-chg", dlg).onclick = () => assessOptionsDialog(() => inviteDialog());
 }
 
+/** A retake for the students who missed it: their own link stays open some days, even when the assessment is closed. */
+function retakeDialog() {
+  const { A } = AS, a = A.assessment;
+  const paper = new Map(A.takers.map((t) => [t.discord_id, t]));
+  const why = (s) => {
+    const t = paper.get(s.discord_id);
+    if (!t) return "not invited";
+    if (t.status === "invited") return "never started";
+    return ["submitted", "graded"].includes(t.status) && !t.answered ? "handed in empty" : "";
+  };
+  const list = A.students.map((s) => ({ s, why: why(s) })).filter((x) => x.why);
+  if (!list.length) return toast("Every student took it: nobody missed it", true);
+  openDialog("Retake for the students who missed it", `
+    <p class="muted small" style="margin-top:0">Their own link stays open for the days you choose, even when the assessment is closed for the others. Their paper is graded like the others' and counts in the results. A paper with answers is never replaced.</p>
+    <div id="rt-list" class="iv-list">${list.map(({ s, why }) => `<label class="check small"><input type="checkbox" value="${s.discord_id}"> ${esc(s.name || s.discord_id)} <span class="muted">(${why})</span></label>`).join("")}</div>
+    <label for="rt-d">Open for (days)</label><input type="number" id="rt-d" value="3" min="1" max="30" style="width:100px">
+    <label class="check"><input type="checkbox" id="rt-dm" checked> Send the links by DM now</label>`,
+    [{ label: "Give the retake", primary: true, action: async () => {
+      const students = $$("#rt-list input:checked").map((c) => c.value);
+      if (!students.length) throw new Error("Tick at least one student.");
+      const r = await api(`/assessments/${a.id}/retake`, { method: "POST", body: { students, days: $("#rt-d").value, send: $("#rt-dm").checked } });
+      AS.A = r; AS.links = null; dlg.close();
+      toast(`Retake open for ${r.retake} student(s) until ${fmtDateTime(r.until)}${r.kept.length ? ` · Already answered, kept: ${r.kept.join(", ")}` : ""}`);
+      AS.tab = "live"; renderAssessment();
+    } }]);
+}
+
 function assessLiveTab(root) {
   const { A } = AS, a = A.assessment, n = a.questions.length;
   const nowS = Date.now() / 1000;
@@ -2330,7 +2359,8 @@ function assessLiveTab(root) {
     ${table([
       { label: "Student", sort: "name", html: (t) => `<a href="#/student/${t.discord_id}">${avatar(t.name, t.discord_id)} ${esc(t.name || t.discord_id)}</a>` },
       { label: "Status", sort: "status", html: (t) => `${status(t.status === "locked" ? "failed" : t.status === "active" ? "active" : t.status === "graded" || t.status === "submitted" ? "solved" : "pending", STATUS[t.status] || t.status)}
-          ${t.status === "locked" ? `<div class="small">${esc(LOCK[t.lock_reason] || t.lock_reason || "")}${t.resume_ok ? " · <b>allowed back in</b>" : ""}</div>` : ""}` },
+          ${t.status === "locked" ? `<div class="small">${esc(LOCK[t.lock_reason] || t.lock_reason || "")}${t.resume_ok ? " · <b>allowed back in</b>" : ""}</div>` : ""}
+          ${t.open_until && t.open_until > nowS && !["submitted", "graded"].includes(t.status) ? `<div class="small">🔁 Retake until ${fmtDateTime(t.open_until)}</div>` : ""}` },
       { label: "Progress", html: (t) => `${meter(n ? (100 * t.answered) / n : 0)}<span class="small muted">${t.answered}/${n} answered ${left(t)}</span>` },
       { label: "Stops", num: true, html: (t) => `${t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length}${t.events.some((e) => e[1] === "paste") ? ` <span class="lvl warn" title="Tried to paste">paste</span>` : ""}` },
       { label: "Last event", html: (t) => `<span class="small">${lastEv(t)}</span>` },
@@ -2405,9 +2435,15 @@ function assessResultsTab(root) {
   $("#rs-grade").onclick = () => gradeAllDialog(a);
   if ($("#rs-cexp")) $("#rs-cexp").onclick = (e) => busy(e.currentTarget, () => exportGradingDialog(a));
   if ($("#rs-cimp")) $("#rs-cimp").onclick = () => importGradingDialog(a);
-  $("#rs-send").onclick = () => confirmDialog("Send the results?", `Each graded student gets their score${a.settings.showResults ? " and the corrections" : ""} by DM, and the results go to their competencies and skills${a.settings.points ? ` (+ up to ${a.settings.points} pts)` : ""}.`, "Send", async () => {
-    const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: {} }); toast(`Sent to ${r.sent} student(s)`);
-  });
+  // after a retake: only the papers not sent yet, or everyone again
+  const fresh = done.filter((t) => t.status === "graded" && !t.sent).length, sentAlready = done.some((t) => t.sent);
+  const sendTo = (only) => async () => { const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: only ? { only: "new" } : {} }); dlg.close(); toast(`Sent to ${r.sent} student(s)`); AS.A = await api(`/assessments/${a.id}`); renderAssessment(); };
+  $("#rs-send").onclick = () => sentAlready && fresh
+    ? openDialog("Send the results?", `<p>${fresh} graded paper(s) haven't got their results yet (a retake, a paper graded later). The others already got theirs.</p>`,
+      [{ label: `Only the ${fresh} new`, primary: true, action: sendTo(true) }, { label: "Everyone again", action: sendTo(false) }])
+    : confirmDialog("Send the results?", `Each graded student gets their score${a.settings.showResults ? " and the corrections" : ""} by DM, and the results go to their competencies and skills${a.settings.points ? ` (+ up to ${a.settings.points} pts)` : ""}.`, "Send", async () => {
+      const r = await api(`/assessments/${a.id}/results`, { method: "POST", body: {} }); toast(`Sent to ${r.sent} student(s)`); AS.A = await api(`/assessments/${a.id}`); renderAssessment();
+    });
   $$("[data-paper]", root).forEach((b) => b.onclick = () => paperDialog(A.takers.find((t) => String(t.id) === b.dataset.paper)));
   $$("[data-gradeone]", root).forEach((b) => b.onclick = () => busy(b, () => gradeOne(A.takers.find((t) => String(t.id) === b.dataset.gradeone), false)));
   $$("[data-g]", root).forEach((b) => b.onclick = () => gradeDialog(A.takers.find((t) => String(t.id) === b.dataset.g), qs.find((q) => q.id === b.dataset.q)));
