@@ -227,7 +227,7 @@ export async function sumupAi(env: Env, steps: Step[]): Promise<{ text: string; 
 }
 
 /** Everything ClassBot writes, as ranges and values (null = leave the cell as it is). */
-export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: ReturnType<typeof findTabs>, sheetNames: string[], plan: { cols: Partial<Record<PlanCol, number>> | null; results: string[]; bTitled?: boolean } = { cols: null, results: [] }) {
+export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: ReturnType<typeof findTabs>, sheetNames: string[], plan: { cols: Partial<Record<PlanCol, number>> | null; results: string[]; bTitled?: boolean; b3?: boolean } = { cols: null, results: [] }) {
   const S = await sheetLevels(env, g);
   const names = await studentNames(env, g, S.students);
   const match = matchNames(sheetNames, names, cfg.map);
@@ -316,6 +316,7 @@ export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: Retu
     };
     // the student's column has no title: ClassBot gives it one
     if (cols.name === 1 && !plan.bTitled) data.push({ range: `${q(tabs.plan)}!B3`, values: [["Apprenant(e)"]] });
+    if (plan.b3) clear.push(`${q(tabs.plan)}!B3`);
     for (const [k, c] of Object.entries(cols) as [PlanCol, number][]) {
       const L = colL(c);
       if (plans.length) data.push({ range: `${q(tabs.plan)}!${L}4:${L}${3 + plans.length}`, values: plans.map((p, i) => [value[k](p, i)]) });
@@ -341,11 +342,18 @@ async function readNames(env: Env, id: string, tab: string | null): Promise<stri
 
 /** The Plan d'action tab: its columns (titles in row 3) and the words of the « Résultat » list, when it has one. */
 async function readPlanLayout(env: Env, id: string, tab: string | null) {
-  if (!tab) return { cols: null, results: [] as string[], bTitled: false };
-  const j = await gapi(env, `${id}/values/${encodeURIComponent(`${q(tab)}!A3:Z3`)}`);
-  const heads: string[] = (j.values?.[0] || []).map((v: unknown) => String(v ?? ""));
-  const cols = planColumns(heads);
+  if (!tab) return { cols: null, results: [] as string[], bTitled: false, b3: false };
+  // the titles: the row of 1 to 3 that has the most titles ClassBot knows (a Google Sheets table has them in row 1)
+  const j = await gapi(env, `${id}/values/${encodeURIComponent(`${q(tab)}!A1:Z3`)}`);
+  const rows3: string[][] = [0, 1, 2].map((r) => (j.values?.[r] || []).map((v: unknown) => String(v ?? "")));
+  const known = (h: string[]) => { const c = planColumns(h.map((x) => (norm(x) === "apprenant e" ? "" : x))); return c ? Object.keys(c).length - (c.name === 1 && !String(h[1] ?? "").trim() ? 1 : 0) : 0; };
+  const score = rows3.map(known);
+  const best = score.indexOf(Math.max(...score));
+  const heads = score[best] >= 2 ? rows3[best] : rows3[2];
+  const cols = planColumns(heads.map((x, i) => (i === 1 && norm(x) === "apprenant e" ? "" : x)));
   const bTitled = !!String(heads[1] ?? "").trim() && norm(heads[1]) !== "apprenant e";
+  // ClassBot's old « Apprenant(e) » in B3, when the titles are in another row: it's in the way (removed)
+  const b3 = score[best] >= 2 && best !== 2 && norm(rows3[2][1] ?? "") === "apprenant e";
   let results: string[] = [];
   if (cols?.result !== undefined) {
     // its dropdown (data validation « list of items »), read on the first row of plans
@@ -357,7 +365,7 @@ async function readPlanLayout(env: Env, id: string, tab: string | null) {
       if (c?.type === "ONE_OF_LIST" && Array.isArray(c.values)) { results = c.values.map((x: any) => String(x?.userEnteredValue ?? "")).filter(Boolean); break; }
     }
   }
-  return { cols, results, bTitled };
+  return { cols, results, bTitled: bTitled || (score[best] >= 2 && best !== 2), b3 };
 }
 
 // ------------------------------------------------------------------ filling

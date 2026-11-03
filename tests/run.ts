@@ -6812,6 +6812,12 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     if (!rest) return Response.json({ properties: { title: "Suivi_Formateur_TEST" }, sheets: Object.keys(cells).map((t) => ({ properties: { title: t } })) });
     if (rest.startsWith("/values/") && method === "GET") {
       const p = parse(rest.slice(8)), out: any[] = [];
+      if (p.r1 > p.r0 && p.c1 > p.c0) {   // a block: rows of cells
+        const rows: any[][] = [];
+        for (let r = p.r0; r <= p.r1; r++) { const row: any[] = []; for (let c = p.c0; c <= p.c1; c++) row.push(cells[p.tab][`${colName(c)}${r}`] ?? ""); while (row.length && row[row.length - 1] === "") row.pop(); rows.push(row); }
+        while (rows.length && !rows[rows.length - 1].length) rows.pop();
+        return Response.json({ values: rows });
+      }
       if (p.r0 === p.r1 && p.c1 > p.c0) for (let c = p.c0; c <= p.c1; c++) out.push(cells[p.tab][`${colName(c)}${p.r0}`] ?? "");   // a row
       else for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
       while (out.length && out[out.length - 1] === "") out.pop();
@@ -6900,6 +6906,13 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     ai.planSumDown = false;
     check(PL.I4 === "✅ Réalisé", "every action done: « done »");
     check(PL.F4 === "À faire : 1 exercice de code (Flexbox : Une page en flex) ; 1 question (Git) ; 1 mini-projet (« Un portfolio » (≈ 3 h))." , `its actions changed and the AI is down: summed up without it (${PL.F4})`);
+    // a Google Sheets table: the titles in row 1 (Resultat before Feedback), ClassBot's old « Apprenant(e) » in B3
+    for (const k of ["C3", "D3", "E3", "F3", "G3", "H3", "I3"]) delete PL[k];
+    Object.assign(PL, { B1: "Nom", C1: "Niveau", D1: "Difficultés", E1: "Date de début d'action", F1: "Actions", G1: "Date de fin d'action", H1: "Resultat", I1: "Feedback", B3: "Apprenant(e)", H4: "", I4: "" });
+    valid["Plan daction  Retro"] = {};
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(PL.B4 === "BOB martin" && PL.E4 === "2026-10-20" && PL.F4 && PL.G4 === "2026-10-30" && PL.H4 === "Fait" && PL.I4 === "Bon début, Git à revoir." && !PL.B3,
+      `titles in row 1 (a table): found there, Resultat and Feedback filled; the old « Apprenant(e) » of B3 removed (${JSON.stringify(PL)})`);
     delete valid["Plan daction  Retro"];
     check(!calls.some((x) => x.includes("fil")) && Object.keys(cells["Suivi fil rouge"]).length === 1, "Suivi fil rouge never touched");
     // every debrief finalized: Oui, and the collective debriefing and the retro too
@@ -6909,7 +6922,7 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     check(SU[`E${row}`] === "Oui" && SU[`F${row}`] === "Oui", "every debrief finalized: individual « Oui », collective « Oui »");
     const block = [0, 1, 2].map((k) => top + k).filter((r) => SU[`B${r}`]);
     check(block.every((r) => SU[`E${r}`] === "Oui") === (SU[`G${top}`] === "Oui"), "…and the retro once every brief of the sprint is finalized");
-    check(!PL.B4 && !PL.F4 && !PL.I4 && !PL.H4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
+    check(!PL.B4 && !PL.F4 && !PL.I4 && !PL.H4 && PL.B1 === "Nom" && !PL.B3, "a plan deleted: its row emptied (the titles stay)");
 
     // automatically: a debrief finalized marks the sheet, the cron fills it 2 minutes later (every 5 minutes)
     const fills0 = calls.filter((x) => x.endsWith("batchUpdate")).length;
