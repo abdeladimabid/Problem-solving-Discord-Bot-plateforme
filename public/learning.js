@@ -1664,21 +1664,28 @@ function wireDebrief() {
     $("#db-cst").textContent = R.by === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : `${R.msg || "The AI didn't answer."} Written from your switches instead.`;
     if (R.by !== "ai") toast(R.msg || "The AI didn't answer: the comment is written from your switches", true);
   });
-  const drawTask = async (member, proposal = "") => {
+  const drawTask = async (member, proposal = "", lang = "") => {
     toast("⏳ The AI reads the project and writes the task…");
-    const R = await api(`/briefs/${bid}/review/challenge`, { method: "POST", body: { who, states: currentStates(), member, proposal } });
+    const R = await api(`/briefs/${bid}/review/challenge`, { method: "POST", body: { who, states: currentStates(), member, proposal, lang } });
     DB.R = { ...DB.R, ...R }; renderDebrief();
   };
-  $$("[data-draw]").forEach((b) => b.onclick = () => busy(b, () => drawTask(b.dataset.mm || "")));
-  // ✨ Regenerate: the teacher can say what the task should be (the AI follows it, within the brief and the week)
-  $$("[data-redraw]").forEach((b) => b.onclick = () => {
+  // ✨ Generate / Regenerate: the language or technology of the task (empty: the brief's, else the repo's), and what
+  // the task should be about (the AI follows it, within the brief and the week)
+  const taskDialog = (b, again) => {
     const ch = b.dataset.mm ? DB.R.review?.members?.[b.dataset.mm]?.ch : DB.R.review?.challenge;
-    openDialog("Regenerate the mise en situation", `<p class="small muted" style="margin-top:0">Now: <b data-notr>${esc(ch?.titre || "—")}</b></p>
+    openDialog(again ? "Regenerate the mise en situation" : "Generate the mise en situation", `${again ? `<p class="small muted" style="margin-top:0">Now: <b data-notr>${esc(ch?.titre || "—")}</b>${ch?.lang ? ` · <span data-notr>${esc(ch.lang)}</span>` : ""}</p>` : ""}
+      <label for="ms-l">Language or technology</label>
+      <input id="ms-l" list="ms-ll" maxlength="60" value="${esc(ch?.langAsked || "")}" placeholder="Auto: the brief's, else the student's repo${ch?.lang ? ` (last time: ${esc(ch.lang)})` : ""}" style="width:100%">
+      <datalist id="ms-ll">${["HTML et CSS", "JavaScript", "JavaScript et le DOM", "JavaScript (fetch, API)", "PHP", "PHP (PDO, SQL)", "Laravel", "SQL", "React", "Node.js (Express)", "Python"].map((x) => `<option value="${x}">`).join("")}</datalist>
+      <p class="small muted" style="margin:4px 0 0">The task is written in this language: e.g. <i>JavaScript</i> for a DOM or fetch feature, <i>PHP</i> for a form handled by the server.</p>
       <label for="ms-p">Your proposal <span class="muted">(optional)</span></label>
-      <textarea id="ms-p" rows="4" maxlength="1000" placeholder="e.g. ajouter un état actif sur le lien du menu de la page en cours, sur sa page contact">${esc(ch?.proposal || "")}</textarea>
-      <p class="small muted">The AI follows it within the brief, the programme week and their files. Empty: another task on another point.</p>`,
-    [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: async () => { const p = $("#ms-p", dlg).value; dlg.close(); await drawTask(b.dataset.mm || "", p); } }]);
-  });
+      <textarea id="ms-p" rows="4" maxlength="1000" placeholder="e.g. ajouter un filtre par catégorie sur la liste chargée avec fetch">${esc(ch?.proposal || "")}</textarea>
+      <p class="small muted">The AI follows it within the brief, the programme week and their files. Empty: ${again ? "another task on another point" : "a point they didn't fully validate"}.</p>`,
+    [{ label: "Cancel", action: () => dlg.close() }, { label: "✨ Generate", primary: true, action: async () => { const p = $("#ms-p", dlg).value, l = $("#ms-l", dlg).value.trim(); dlg.close(); await drawTask(b.dataset.mm || "", p, l); } }]);
+    setTimeout(() => $("#ms-l", dlg)?.focus(), 50);
+  };
+  $$("[data-draw]").forEach((b) => b.onclick = () => taskDialog(b, false));
+  $$("[data-redraw]").forEach((b) => b.onclick = () => taskDialog(b, true));
   const saveMembers = () => saveMembersNow();
   if ($("#db-msave")) $("#db-msave").onclick = (e) => busy(e.currentTarget, async () => { await saveMembers(); toast("Members saved"); renderDebrief(); });
   loadMemberVsc();

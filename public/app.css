@@ -2186,7 +2186,10 @@ button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); tr
 .wp-work-h { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
 .wp-ans { white-space: pre-wrap; font: 13px/1.5 var(--mono); margin: 0 0 6px; max-height: 260px; overflow: auto; }
 .wp-rev { margin: 8px 0; padding: 8px 12px; border-radius: var(--radius-m); font-size: 14px; } .wp-rev.ok { background: var(--up-bg); } .wp-rev.ko { background: var(--warn-bg); }
-.wp-revf { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; } .wp-revf input { flex: 1 1 220px; }
+.wp-revf { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.wp-revf textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; font: inherit; }
+.wp-revb { display: flex; gap: 8px; flex-wrap: wrap; } .wp-revc { margin: 4px 0 0; white-space: pre-wrap; font-size: 13.5px; }
+button.wp-tick { cursor: pointer; font-family: inherit; color: #fff; padding: 0; background: var(--surface); line-height: 1; }
 .wp-ring { display: flex; align-items: center; gap: 16px; margin: 6px 0 12px; }
 .wp-ring svg { width: 96px; height: 96px; transform: rotate(-90deg); }
 .wp-ring circle { fill: none; stroke-width: 10; } .wp-ring .bg { stroke: var(--surface-2); } .wp-ring .fg { stroke: var(--up); stroke-linecap: round; transition: stroke-dashoffset .5s; }
@@ -2897,3 +2900,31 @@ body.sl-open { overflow: hidden; }
 .wpc-list { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 4px; }
 .wpc-row { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--radius-s); cursor: pointer; }
 .wpc-row:hover { background: var(--surface-2); } .wpc-row .niv { margin-left: auto; }
+
+/* mises en situation: the new flow (sources, collapsible competencies, checklist) and the edit form */
+.mes-cd { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--surface); }
+.mes-cd > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; list-style: none; }
+.mes-cd > summary::-webkit-details-marker { display: none; }
+.mes-cd > summary::before { content: "▸"; color: var(--ink-faint); }
+.mes-cd[open] > summary::before { content: "▾"; }
+.mes-res { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: 16px; align-items: start; margin-top: 8px; }
+@media (max-width: 900px) { .mes-res { grid-template-columns: 1fr; } }
+.bchecks li.tip { color: var(--ink-soft); }
+.mes-checks li.ko { color: var(--warn, #b45309); }
+.mes-cl { padding-top: 12px; padding-bottom: 12px; }
+.mes-cl summary { cursor: pointer; }
+.mes-cl .bchecks { margin-top: 10px; }
+.mes-ed label { display: block; margin: 10px 0 4px; font-size: 13px; font-weight: 600; }
+.mes-ed textarea, .mes-ed input[type="text"] { width: 100%; }
+.mes-ed .code-ta, .mes-ed-q .code-ta { font: 13px/1.5 "JetBrains Mono", ui-monospace, monospace; width: 100%; tab-size: 2; }
+.mes-ed-q { border-top: 1px solid var(--line); padding: 12px 0; }
+.mes-ed-q:first-of-type { border-top: 0; }
+.mes-ed-ch { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.mes-ed-ch input[type="text"] { flex: 1; }
+.mes-give { display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
+.mes-give-it { align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.mes-wiz [hidden], .mes-ed [hidden] { display: none !important; }
+#ml-test[hidden], #ml-pick[hidden] { display: none !important; }
+.mes-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.mes-on { font-size: 12px; color: var(--ink-faint); white-space: nowrap; margin-top: 2px; }
+.mes-on.stuck { color: var(--warn); font-weight: 700; }

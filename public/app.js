@@ -1859,6 +1859,7 @@ async function viewSettings(arg) {
     <section class="set-sec" data-sec="notify" hidden>
       ${head("Notifications", "Which Discord DMs you get, and who else gets them.")}
       <div class="panel set-card"><div id="s-notify"><p class="muted">Loading…</p></div></div>
+      <div class="panel set-card"><div id="s-idle"><p class="muted">Loading…</p></div></div>
     </section>
 
     <section class="set-sec" data-sec="season" hidden>
@@ -1927,6 +1928,7 @@ async function viewSettings(arg) {
   $("#s-hour").oninput = local;
   local();
   if (typeof loadNotify === "function") loadNotify();
+  if (typeof loadIdle === "function") loadIdle();
   const readScoring = () => ({
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),

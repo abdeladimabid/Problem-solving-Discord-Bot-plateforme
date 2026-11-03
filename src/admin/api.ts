@@ -19,9 +19,11 @@ import { arenaChannel } from "../shared/arena.ts";
 import { MIGRATIONS } from "../shared/schema.ts";
 import { BOSS_BANK } from "../shared/bossbank.ts";
 import { integrityOf } from "../shared/integrity.ts";
+import { idleCfg, idleToday, saveIdleCfg } from "../shared/idle.ts";
 import { createSession, endSession, sessionResults } from "../shared/sessions.ts";
 import { ROLE_DEFS, autoRolesOf, setAutoRoles, syncAutoRoles, wantedHolders } from "../shared/roles.ts";
-import { SKILLS, setSkills, skillName, studentProfile } from "../shared/skills.ts";
+import { SKILLS, setSkills, skillName, studentProfile, mergedSkills, cleanCustomSkill } from "../shared/skills.ts";
+import type { SkillDef } from "../shared/skills.ts";
 import { classLangs, defaultLessons, defaultSteps, pathCfg, pathCustom, pathProgress, savePath } from "../shared/path.ts";
 import { GenError, bankCoverage, challengeForSkill, writeLesson } from "../shared/aigen.ts";
 import type { GenKind } from "../shared/aigen.ts";
@@ -33,7 +35,7 @@ import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/crea
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import { ChatError, chatCheck, chatFeedback, chatSuggestions, classChat, runChatAction, undoChatAction } from "../shared/classchat.ts";
-import { WorkPlanError, copyPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, planView as workPlanView } from "../shared/workplan.ts";
+import { WorkPlanError, copyPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
 import { staffIds, withoutStaff } from "../shared/staff.ts";
@@ -180,7 +182,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
     if (path === "/path" && method === "PUT") {
       const g = await guild();
-      await savePath(env, g, { steps: body.steps, lessons: body.lessons, reset: !!body.reset });
+      await savePath(env, g, { steps: body.steps, lessons: body.lessons, customSkills: body.customSkills, reset: !!body.reset });
       const g2 = await getGuild(env, g.id);
       return ok(await pathView(env, g2));
     }
@@ -453,7 +455,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild();
       const difficulty = (DIFFS.includes(body.difficulty) ? body.difficulty : "medium") as Difficulty;
       const lang = body.lang === "fr" || body.lang === "en" ? body.lang : g.lang;
-      const skill = SKILLS.find((x) => x.key === body.skill);
+      const skill = pathCfg(g).customSkills.find((x) => x.key === body.skill) ?? SKILLS.find((x) => x.key === body.skill);
       if (skill) body.topic = [skill.en, body.topic].filter(Boolean).join(": ");
       try {
         if (body.kind === "write") {
@@ -489,7 +491,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
     if (path === "/wplans" && method === "POST") return ok(await createPlan(env, await guild(), String(body.student ?? "")));
-    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|guide|copy))?$/);
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
@@ -498,6 +500,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (m[2] === "diagnose" && method === "POST") { await diagnose(env, g, pid, String(body.ask ?? "")); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "ai" && method === "POST") return ok(await stepAi(env, g, pid, body));
       if (m[2] === "review" && method === "POST") { await reviewStep(env, g, pid, String(body.step ?? ""), body); return ok(await workPlanView(env, g, pid)); }
+      if (m[2] === "check" && method === "POST") { await teacherCheck(env, g, pid, body); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "send" && method === "POST") {
         if (body.edits) await savePlanEdits(env, g, pid, body.edits);
         const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
@@ -972,6 +975,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
     // 🏠 the home page: what waits for the teacher, the students to watch, the levels, the sprint now
     if (path === "/home" && method === "GET") { const g = await guild(); return ok(await classHome(env, g, await students(env, g))); }
+    // 💤 idle students: the settings, and who got the « need help? » DM today
+    if (path === "/idle" && (method === "GET" || method === "PUT")) {
+      const g = await guild();
+      const cfg = method === "PUT" ? await saveIdleCfg(env, g.id, body) : await idleCfg(env, g.id);
+      const today = await idleToday(env, g.id);
+      const names = today.length ? new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name] as const)) : new Map();
+      return ok({ cfg, today: today.map((x) => ({ ...x, name: names.get(x.id) || x.id })) });
+    }
     if (path === "/pills" && method === "GET") {
       const g = await guild();
       // asked on every page: the counts read together, in one round of waiting
@@ -992,7 +1003,11 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0 });
     }
     // -------------------------------------------------- ✨ AI generation
-    if (path === "/path/lesson-ai" && method === "POST") return ok(await writeLesson(env, await guild(), String(body.skill ?? ""), String(body.hint ?? "")));
+    if (path === "/path/lesson-ai" && method === "POST") {
+      const g = await guild();
+      const custom = body.customSkill ? cleanCustomSkill(body.customSkill) : null;
+      return ok(await writeLesson(env, g, String(body.skill ?? ""), String(body.hint ?? ""), custom));
+    }
     if (path === "/coverage" && method === "GET") return ok(await bankCoverage(env, await guild()));
     if (path === "/ai/challenge" && method === "POST") {
       const g = await guild();
@@ -1346,7 +1361,7 @@ async function eventWithAi(env: Env, g: GuildRow, b: any, by: string) {
   const boss = b.kind === "boss";
   const difficulty = (DIFFS.includes(b.difficulty) ? b.difficulty : boss ? "hard" : "medium") as Difficulty;
   const qtype = boss ? "write" : ["write", "mcq", "output", "bug", "complexity"].includes(b.qtype) ? b.qtype : "write";
-  const skill = SKILLS.find((x) => x.key === b.skill);
+  const skill = pathCfg(g).customSkills.find((x) => x.key === b.skill) ?? SKILLS.find((x) => x.key === b.skill);
   const idea = String(b.idea ?? "").trim().slice(0, 300);
   const lang = g.lang === "fr" ? "fr" : "en";
   // who plays: the students active in the last 2 weeks (at least 4)
@@ -1883,7 +1898,8 @@ async function reviewIntegrity(env: Env, g: GuildRow, id: number, b: any, ctx: C
 // ======================================================== coaching helpers
 async function sendPracticeSet(env: Env, g: GuildRow, b: any, ctx: Ctx) {
   const skill = String(b.skill ?? "");
-  if (!SKILLS.some((x) => x.key === skill)) throw new HttpError(400, "unknown skill");
+  const { keys: allPracticeKeys } = mergedSkills(pathCfg(g).customSkills);
+  if (!allPracticeKeys.includes(skill)) throw new HttpError(400, "unknown skill");
   const students: string[] = (Array.isArray(b.students) ? b.students : []).map(String).slice(0, 40);
   if (!students.length) throw new HttpError(400, "choose at least one student");
   const count = Math.min(5, Math.max(1, Math.round(Number(b.count) || 3)));
@@ -1954,10 +1970,12 @@ async function eventsState(env: Env, g: GuildRow) {
 // ------------------------------------------------------------ path page
 async function pathView(env: Env, g: GuildRow) {
   const langs = classLangs(g);
+  const cfg = pathCfg(g);
+  const { skills: allSkills } = mergedSkills(cfg.customSkills);
   return {
-    ...pathCfg(g), custom: pathCustom(g), langs, track: trackOf(g), tracks: TRACKS,
+    ...cfg, custom: pathCustom(g), langs, track: trackOf(g), tracks: TRACKS,
     defaults: { steps: defaultSteps(g), lessons: defaultLessons(g) },
-    skills: SKILLS.map((s) => ({ ...s, fits: skillFitsTrack(s.key, g) })),
+    skills: allSkills.map((s) => ({ ...s, fits: s.custom || skillFitsTrack(s.key, g) })),
     coverage: await bankCoverage(env, g),
   };
 }

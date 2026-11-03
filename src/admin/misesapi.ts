@@ -1,14 +1,15 @@
 // Dashboard API for « Mises en situation » (src/shared/misesdb.ts). Returns null when the path isn't one of ours.
 //   GET  /mises                     the list          GET  /mises/setup        weeks, competencies, learners, teams, squads
-//   POST /mises/prompt              the prompt for Claude              POST /mises/import  Claude's JSON: preview, or a draft
+//   POST /mises/prompt              the prompt for Claude              POST /mises/import  a JSON: preview + checklist, or saved
+//   POST /mises/generate            the AI writes it (for a brief, or the sprint and week): the JSON, its preview and checklist (not saved)
 //   GET  /mises/:id                 the session, the live table and the class statistics (refreshed every few seconds)
 //   PUT  /mises/:id                 title, learners, options, the JSON of a draft          DELETE /mises/:id
-//   POST /mises/:id/launch|add|resend|extend|close|remove|results     GET /mises/:id/links
+//   POST /mises/:id/launch|add|resend|extend|close|remove|results|unlock     GET /mises/:id/links
 //   GET  /mises/:id/taker/:t        one learner        PUT /mises/:id/grade|comment        GET /mises/:id/live.csv|results.csv
 import type { Ctx, Env, GuildRow } from "../shared/types.ts";
 import {
-  MiseError, addTakers, closeMise, deleteMise, extend, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
-  saveMise, sendResults, setComment, setGrade, setupView, takerDetail,
+  MiseError, addTakers, closeMise, deleteMise, extend, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
+  saveMise, sendResults, setComment, setGrade, setupView, takerDetail, unlockTakers,
 } from "../shared/misesdb.ts";
 
 const ok = (data: unknown) => Response.json(data);
@@ -31,12 +32,13 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
   if (path === "/mises/setup" && method === "GET") return ok(await setupView(env, await guild()));
   if (path === "/mises/prompt" && method === "POST") return ok(await promptFor(env, await guild(), body));
   if (path === "/mises/import" && method === "POST") return ok(await importMise(env, await guild(), body));
+  if (path === "/mises/generate" && method === "POST") return ok(await generateMise(env, await guild(), body));
   if ((m = path.match(/^\/mises\/(\d+)\/(live|results)\.csv$/)) && method === "GET") {
     const g = await guild(), id = Number(m[1]);
     return csv(m[2] === "live" ? await liveCsv(env, g, id) : await resultsCsv(env, g, id), `mise-${id}-${m[2] === "live" ? "live" : "resultats"}.csv`);
   }
   if ((m = path.match(/^\/mises\/(\d+)\/taker\/(\d+)$/)) && method === "GET") return ok(await takerDetail(env, await guild(), Number(m[1]), Number(m[2])));
-  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|resend|extend|close|remove|results|links|grade|comment))?$/))) return null;
+  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|resend|extend|close|remove|results|links|grade|comment|unlock))?$/))) return null;
   const g = await guild(), id = Number(m[1]), act = m[2];
   if (!act && method === "GET") return ok(await miseView(env, g, id));
   if (!act && method === "PUT") { const r = await saveMise(env, g, id, body); return ok(r.problems.length ? r : { ...r, ...(await miseView(env, g, id)) }); }
@@ -48,6 +50,7 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
   if (act === "resend") return ok(await resend(env, g, id, Number(body.taker)));
   if (act === "extend") { await extend(env, g, id, Number(body.minutes)); return ok(await miseView(env, g, id)); }
   if (act === "close") { await closeMise(env, g, id); return ok(await miseView(env, g, id)); }
+  if (act === "unlock") { const r = await unlockTakers(env, g, id, Number(body.taker) || null); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "remove") { await removeTaker(env, g, id, Number(body.taker)); return ok(await miseView(env, g, id)); }
   if (act === "grade") { await setGrade(env, g, id, body); return ok(await takerDetail(env, g, id, Number(body.taker))); }
   if (act === "comment") { await setComment(env, g, id, body); return ok({ ok: true }); }

@@ -335,7 +335,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
     // ✨ the comment phrased by the AI from the switches on the screen (the template when it can't)
     if (act === "commentai" && method === "POST") { const w = await writeComment(env, g, id, who, body.states ?? null); return ok({ ...w, ...(await reviewView(env, g, id, who)) }); }
-    if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || "")); return ok(await reviewView(env, g, id, who)); }
+    if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || ""), String(body.lang || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     // a squad, member by member: their assessment, AI flags, questions to ask, suggested switches; the Discord links (CT5)

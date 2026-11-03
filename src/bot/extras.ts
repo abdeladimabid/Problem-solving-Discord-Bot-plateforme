@@ -30,6 +30,22 @@ export async function cmdHelpMe(ix: Ix) {
   ]));
 }
 
+/** 💤 The buttons of the « need help? » DM (idle.ts): raise their hand, ask a question, or all is fine. */
+export async function idleButton(ix: Ix, action: string) {
+  const fr = ix.guild.lang !== "en", L = ix.L;
+  if (action === "ok") return json({ type: 7, data: { content: fr ? "👍 Parfait, bon courage ! Si tu bloques, `/help-me` ou `/ask` à tout moment." : "👍 Great, keep going! If you get stuck, `/help-me` or `/ask` any time.", components: [] } });
+  if (action === "hand") {
+    const h = await myHand(ix.env, ix.guild, ix.userId);
+    if (h) return reply({ content: handText(L, h, h.status === "helping" ? 0 : h.position) }, true);
+    return json(modal(`mhand:${ix.guild.id}`, t(L, "hand.modal_title"), [
+      { id: "q", label: t(L, "hand.modal_q"), long: true, max: 1000 },
+      { id: "code", label: t(L, "hand.modal_code"), long: true, required: false, max: 4000 },
+    ]));
+  }
+  if (action === "ask") return json(modal(`mask:${ix.guild.id}`, fr ? "Ta question" : "Your question", [{ id: "q", label: fr ? "Qu'est-ce que tu ne comprends pas ?" : "What don't you understand?", long: true, max: 600 }]));
+  return say(t(L, "err.unknown"));
+}
+
 export function handSubmit(ix: Ix, components: any[]) {
   const L = ix.L;
   const val = (id: string) => String(components.flatMap((r: any) => r.components ?? []).find((c: any) => c.custom_id === id)?.value ?? "");

@@ -21,11 +21,11 @@ import {
 } from "./engine.ts";
 import { commitSizes, githubGet, githubText, installationToken, repoFiles, repoSnapshot, rescueFound, squadContribution } from "./gh.ts";
 import { withoutStaff } from "../staff.ts";
-import { TASK_SYSTEM, cleanTask, pickFiles, taskChecks, taskFallback, taskPrompt, taskTarget } from "./task.ts";
+import { TASK_SYSTEM, cleanTask, isHtmlCss, pickFiles, taskChecks, taskFallback, taskLang, taskPrompt, taskTarget } from "./task.ts";
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
 import { memberLevel, memberLevelOf } from "./members.ts";
-import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData } from "./comment.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData, outsideNotions } from "./comment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -185,12 +185,14 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
   }
   if (!ids.length) return [];
-  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[]; members?: Record<string, MemberAssessFacts> }[] = [];
+  const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[]; members?: Record<string, MemberAssessFacts>; scope?: string[] }[] = [];
   for (const a of list) {
     const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null; summary: string | null }>(env,
       `SELECT discord_id, score, status, grades, answers, summary FROM assessment_takers WHERE assessment_id = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const graded = takers.filter((t) => t.status === "graded");
-    if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {} }); continue; }
+    // every notion its questions are about: what the debrief comment may talk about
+    const scope = [...new Set(parseQuestions(a.questions).flatMap(notionsOfQ))];
+    if (!graded.length) { out.push({ id: a.id, title: a.title, score: null, done: 0, of: takers.length, comps: {}, scope }); continue; }
     const rows = await all<{ discord_id: string; code: string; ok: number; level: number | null; note: string | null }>(env,
       `SELECT discord_id, code, ok, level, note FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id IN (${ids.map(() => "?").join(",")})`, a.id, ...ids);
     const comps: Record<string, { ok: boolean; level: number | null; note: string | null }> = {};
@@ -209,7 +211,7 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
       members[t.discord_id] = { score: t.score ?? null, ok: f.ok, ko: f.ko, summary: String(t.summary || "").trim().slice(0, 700),
         comps: rows.filter((r) => r.discord_id === t.discord_id && r.ok).map((r) => r.code), compsKo: rows.filter((r) => r.discord_id === t.discord_id && !r.ok).map((r) => r.code) };
     });
-    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(qs, papers), members });
+    out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(qs, papers), members, scope });
   }
   return out;
 }
@@ -918,8 +920,7 @@ export async function writeComment(env: Env, g: GuildRow, briefId: number, who: 
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
   const rec = r.rec;
   const d = commentData({ first: rec.first || "", group: rec.squad ? rec.squad.name : "", project: String(rec.brief || ""), rec });
-  const ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
-  const text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  const { ask, text } = await aiComment(env, d);
   rec.result.feedback = text ?? commentText(d);
   rec.edited = Date.now();
   rec.commentBy = text ? "ai" : "template";
@@ -943,7 +944,7 @@ export async function saveCommentText(env: Env, g: GuildRow, briefId: number, wh
  * their repo (their files; in a squad, the files of their own commits, and never another member's target). One AI call,
  * checked, asked again once with what's wrong, else a template. Saved in the debrief (not drawn again on reload).
  */
-export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: string, rawStates: any = null, member = "", proposal = "") {
+export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: string, rawStates: any = null, member = "", proposal = "", langWanted = "") {
   const r = await getReview(env, b.id, who);
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
   const rec = r.rec;
@@ -963,7 +964,6 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
   const lvl = levels.length ? Math.min(...levels) : 1;
   const [lvlName, duree, lvlRule] = (CH_LEVEL as any)[lvl] || (CH_LEVEL as any)[1];
   const tech = String(b.grid?.tech || b.data.tags.join(", "));
-  const js = JS_BRIEF.test(b.text) || /javascript|\bjs\b|php|laravel|sql|react|vue|node|symfony|python/i.test(tech);
   // the programme week of the brief: its concepts, what the class has seen, the next week (out of scope)
   const wk = await one<{ week: number | null }>(env, "SELECT week FROM briefs WHERE id = ?", b.id);
   const pw = b.program && wk?.week ? b.program.weeks.find((w) => w.n === wk.week) : null;
@@ -972,11 +972,14 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
   // the repo: every file, the member's own files (their last commits), two files to read
   const read = await repoForTask(env, g, rec, who, mine, target).catch(() => ({ files: [] as string[], mine: [] as string[], excerpts: [] as { path: string; text: string }[] }));
   const lac = await lacunesOf(env, b.id, who, rec);
-  const scope = `${b.text} ${tech} ${week?.concepts || ""}`;
+  // the language of the task: the teacher's, else the brief's, else the repo's (never HTML/CSS only by default)
+  const lang = taskLang({ brief: b.text, tech, files: read.files, teacher: langWanted });
+  const js = !isHtmlCss(lang);
+  const scope = `${b.text} ${tech} ${week?.concepts || ""} ${langWanted}`;
   const base = { project: b.title, brief: b.text, target, week, next: next ? next.concepts || next.objective : "", files: read.files, mine: read.mine, excerpts: read.excerpts,
     lacunes: lac.assess, remarks: (mine ? (rec.members || {})[mine]?.note : "") || rec.remarks?.text || "", others: others.map((c: any) => `${c.titre} (${c.point || c.consigne || ""})`.slice(0, 200)),
     proposal: String(proposal || "").trim().slice(0, 1000) };
-  const system = TASK_SYSTEM({ duree, lvl, lvlName, lvlRule, js });
+  const system = TASK_SYSTEM({ duree, lvl, lvlName, lvlRule, js, lang });
   let task: Task | null = null, by = "template", extra = "";
   for (let attempt = 0; attempt < 2 && !task; attempt++) {
     const ask = await askReview(env, system, taskPrompt({ ...base, extra }), 1).catch(() => null);
@@ -984,13 +987,13 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
     const cand = cleanTask(ask.data);
     const errs = taskChecks(cand, { js, scope, files: read.files, duree });
     if (!errs.length) { task = cand; by = "ai"; break; }
-    extra = `ATTENTION : ta proposition précédente ne convient pas : ${errs.join(" ; ")}. Propose une tâche plus petite, en ${duree}, sur son projet${js ? "" : ", en HTML et CSS"}, en décrivant le résultat sans nommer de technique.`;
+    extra = `ATTENTION : ta proposition précédente ne convient pas : ${errs.join(" ; ")}. Propose une tâche plus petite, en ${duree}, sur son projet, en ${lang}, en décrivant le résultat sans nommer de technique.`;
   }
   task = task || taskFallback(target, { project: b.title, files: pickFiles(read.files, target, read.mine), duree });
   const cand = {
     ...task, consigne: task.consigne, observer: task.criteres, duree, niveau: lvl, by,
     item: target.item, point: target.item != null ? oneLine(ex[target.item].texte, 200) : `Notion : ${target.notion}`, done: target.done, why: target.why,
-    proposal: base.proposal, at: Date.now(), result: "", note: "",
+    proposal: base.proposal, lang, langAsked: String(langWanted || "").trim().slice(0, 60), at: Date.now(), result: "", note: "",
   };
   if (mine) { rec.members = rec.members || {}; rec.members[mine] = { ...(rec.members[mine] || {}), ch: cand }; }
   else rec.challenge = cand;
@@ -1078,14 +1081,26 @@ export async function writeMemberComment(env: Env, g: GuildRow, briefId: number,
   const rec = r.rec, m = (rec.contrib || []).find((x: any) => String(x.gid) === String(gid)), ms = rec.members?.[gid];
   if (!m || !ms) throw new DebriefError("This member isn't in the squad's work.");
   const d = memberCommentData(m, rec, ms);
-  const ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
-  const text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  const { ask, text } = await aiComment(env, d);
   // the AI's text is kept like one written by hand (switches changed later don't rewrite it); the template follows them
   ms.text = text ?? undefined;
   ms.by = text ? "ai" : "template";
   ms.comment = comments[gid] = text ?? commentText(d);
   await putReview(env, g, briefId, who, rec);
   return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+}
+
+/** The AI's comment, checked; when it talks about a notion that is neither in the brief nor in the assessment (nor in
+ *  the teacher's remarks), it is asked once more without it, else the template is used. */
+async function aiComment(env: Env, d: ReturnType<typeof commentData>) {
+  let ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
+  let text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  const extra = !text && ask && ask.ok ? outsideNotions(d, String(ask.data?.commentaire ?? "")) : [];
+  if (extra.length) {
+    ask = await askReview(env, AI_COMMENT_SYSTEM, `${aiCommentPrompt(d)}\n\nATTENTION : ta première version parlait de ${extra.map((x) => `« ${x} »`).join(", ")}, qui ne sont ni dans le brief ni dans l’évaluation. Réécris le commentaire SANS en parler.`, 1, { maxTokens: 3000 }).catch(() => null);
+    text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  }
+  return { ask, text };
 }
 
 export const statesOf = (rec: any) => (rec && rec.result ? reviewStates(rec) : null);

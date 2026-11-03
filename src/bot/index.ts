@@ -70,7 +70,7 @@ export default {
     if (cert && request.method === "GET") return certPage(env, cert[1]);
     const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate|results))?$/);
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
-    const mes = url.pathname.match(/^\/mes\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|save|event|run|check|submit))?$/);
+    const mes = url.pathname.match(/^\/mes\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|save|event|run|check|submit|translate))?$/);
     if (mes) return handleMise(request, env, ctx, mes[1], mes[2]);
     const wp = url.pathname.match(/^\/wp\/([A-Za-z0-9_-]{1,30}\.\d{10,16}\.[A-Za-z0-9_-]{32}|expired)(?:\/(data|answer|check|ask|guide))?\/?$/);
     if (wp) return handleWorkPlan(request, env, wp[1], wp[2]);

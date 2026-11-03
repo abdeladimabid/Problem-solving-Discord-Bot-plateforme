@@ -14,18 +14,36 @@ import type { CodeLang } from "./runner.ts";
 import { lessonLinks } from "./lessons.ts";
 import { runSqlCases } from "./sqlrx.ts";
 import { sqlSkills } from "./skills.ts";
+import type { SkillDef } from "./skills.ts";
 import { getChallenge } from "./challenges.ts";
 import { now, run } from "./db.ts";
 import { trackOf } from "./tracks.ts";
+import { pathCfg } from "./path.ts";
 
 export class GenError extends Error {}
 const DIFFS: Difficulty[] = ["easy", "medium", "hard"];
-const skillDef = (key: string) => SKILLS.find((s) => s.key === key);
+const skillDef = (key: string, g?: GuildRow) => (g ? pathCfg(g).customSkills.find((s) => s.key === key) : null) || SKILLS.find((s) => s.key === key);
 const langLabel = (l: string) => LANGS[l as CodeLang]?.label ?? l;
 
 // ----------------------------------------------------------------- lesson
-export async function writeLesson(env: Env, g: GuildRow, skill: string, hint = ""): Promise<{ en: string; fr: string }> {
-  const s = skillDef(skill);
+/** A link the AI proposes is kept only if it really opens (https, answers 2xx/3xx in a few seconds). */
+async function linkWorks(url: string): Promise<boolean> {
+  if (!/^https:\/\/[a-z0-9.-]+\.[a-z]{2,}(\/[^\s<>()"']*)?$/i.test(url) || url.length > 300) return false;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    let r = await fetch(url, { method: "HEAD", redirect: "follow", signal: ctl.signal, headers: { "user-agent": "Mozilla/5.0 (compatible; ClassBot lesson link check)" } });
+    if (r.status === 405 || r.status === 403) r = await fetch(url, { method: "GET", redirect: "follow", signal: ctl.signal, headers: { "user-agent": "Mozilla/5.0 (compatible; ClassBot lesson link check)" } });
+    return r.status < 400;
+  } catch { return false; } finally { clearTimeout(t); }
+}
+/** Searches that always work: the topic on MDN/Google/YouTube, in the lesson's language. */
+function searchLinks(topic: string, fr: boolean): [string, string][] {
+  const q = encodeURIComponent(`${topic} ${fr ? "tutoriel débutant" : "beginner tutorial"}`);
+  return [[fr ? `Vidéos : ${topic}` : `Videos: ${topic}`, `https://www.youtube.com/results?search_query=${q}`], [fr ? `Rechercher : ${topic}` : `Search: ${topic}`, `https://www.google.com/search?q=${q}`]];
+}
+export async function writeLesson(env: Env, g: GuildRow, skill: string, hint = "", custom?: SkillDef | null): Promise<{ en: string; fr: string }> {
+  const s = custom || skillDef(skill, g) || (/^[a-z0-9_]{1,30}$/.test(skill) ? { key: skill, en: skill.replace(/_/g, " "), fr: skill.replace(/_/g, " "), emoji: "📘" } : null);
   if (!s) throw new GenError("unknown skill");
   if (!(await aiBudgetOk(env, 2))) throw new GenError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI (free with Groq or Gemini), or try again tomorrow.");
   await aiBudgetUse(env, 2);
@@ -33,28 +51,63 @@ export async function writeLesson(env: Env, g: GuildRow, skill: string, hint = "
   const langs = tr.family === "sql" ? "SQL (SQLite)" : tr.family === "mern" ? "JavaScript (the MERN stack: MongoDB, Express, React, Node)"
     : tr.family === "ai" ? "Python (pandas, scikit-learn, LLM libraries)" : langLabel(tr.code ?? guildLangs(g)[0]);
   const codeLang = [tr.code ?? guildLangs(g)[0]];
-  // the AI may only use links we know exist (it invents URLs otherwise)
+  // links we know exist first; the AI may add official documentation pages, each one checked before it's kept
   const linksEn = lessonLinks(skill, "en", codeLang), linksFr = lessonLinks(skill, "fr", codeLang);
-  const fmt = (ls: [string, string][]) => ls.map(([l, u]) => `[${l}](${u})`).join(" · ") || "(none)";
-  const raw = await chat(env, [
-    { role: "system", content: `You write lessons for complete BEGINNERS in programming (first-year students). Topic: "${s.en}". The class programs in ${langs}.
-Rules: simple words, short sentences, no jargon without explaining it. Start with an everyday comparison (cooking, a queue at the bakery, lockers…).
-Format (Markdown for Discord), at most 1000 characters per language:
+  const fmt = (ls: [string, string][]) => ls.map(([l, u]) => `${l} — ${u}`).join("\n") || "(none)";
+  const wishes = hint.trim().slice(0, 800);
+  const system = `You write a lesson for BEGINNER students (first year of a web/software development course). Topic: "${s.en}" (French: "${s.fr}"). The class programs in ${langs}.
+It is read in Discord before they practise: it must TEACH the topic, with real, accurate, useful information, not generalities.
+
+CONTENT (in this order, Markdown for Discord, 2200 to 3400 characters per language):
 **${s.en}**
-2 to 4 short sentences: what it is, with the everyday comparison, and why it's useful.
-ONE code block in the class's language (fence: \`\`\`sql, \`\`\`js, \`\`\`php, \`\`\`py, \`\`\`java, \`\`\`c, \`\`\`cpp), 3 to 8 lines, a tiny example with the printed result as a comment (// 8).
-💡 one beginner tip.
-📚 **Learn more:** then the links below, exactly as given (never invent a link).
-Write it twice: "en" in English and "fr" in French (French title: "${s.fr}", "📚 **Pour aller plus loin :**"). Code stays identical.
-English links: ${fmt(linksEn)}
-French links: ${fmt(linksFr)}
-Answer ONLY with JSON: {"en": "...", "fr": "..."}` },
-    { role: "user", content: hint ? `Teacher's wishes: ${hint.slice(0, 500)}` : "Write the lesson." },
-  ], { maxTokens: 2200, temperature: 0.3, timeoutMs: 90000 }).catch(() => "");
+1. What it is and why it matters, in 2-3 sentences, with ONE everyday comparison.
+2. **Key ideas** (or **L'essentiel**): 4 to 6 bullet points: the vocabulary, the rules and the commands/syntax they must know, each one explained in one line.
+3. **Example**: ONE code block that fits the TOPIC (a Dockerfile and shell commands for Docker, SQL for databases, Git commands for Git, ${langs} for programming notions), 6 to 15 lines, commented, realistic (a small project a student could do). Fence with the right language (\`\`\`dockerfile, \`\`\`bash, \`\`\`sql, \`\`\`js, \`\`\`php, \`\`\`py, \`\`\`html, \`\`\`css…). Then one sentence on what it does / what it prints.
+4. **Common mistakes** (or **Erreurs fréquentes**): 2 or 3 mistakes beginners really make, each with how to avoid it.
+5. **Try it** (or **À toi**): one small exercise (2-3 lines) they can do in 10 minutes.
+6. 💡 one practical tip.
+(Resources are added after your text: do NOT write links in "en" or "fr".)
+
+RESOURCES: in "resources", 3 to 5 pages of OFFICIAL documentation or well-known tutorials (MDN, docs.docker.com, php.net, dev.mysql.com, git-scm.com, react.dev, nodejs.org, developer.mozilla.org, w3schools, OpenClassrooms, freeCodeCamp…) that you are SURE exist, each {"title": "…", "url": "https://…", "lang": "en" or "fr"}. Prefer French pages for "fr" when they exist. Each link is opened to check it: a wrong one is dropped.
+Known good links you can reuse: English:\n${fmt(linksEn)}\nFrench:\n${fmt(linksFr)}
+
+Write it twice: "en" in English and "fr" in French (title "**${s.fr}**"). Code identical in both.${wishes ? `
+
+THE TEACHER'S REQUIREMENTS — follow EVERY one of them exactly; they come before the rules above (length, sections, example, tone). If they ask for a specific example, notion, comparison, exercise or level, it MUST be in both languages:
+${wishes}` : ""}
+Answer ONLY with JSON: {"en": "...", "fr": "...", "resources": [{"title": "...", "url": "...", "lang": "en"}], "followed": ["each teacher requirement, and where you applied it"]}`;
+  const raw = await chat(env, [
+    { role: "system", content: system },
+    { role: "user", content: wishes ? `Write the lesson on "${s.en}". My requirements (mandatory): ${wishes}` : `Write the lesson on "${s.en}".` },
+  ], { maxTokens: 7000, temperature: 0.3, timeoutMs: 120000, json: true }).catch(() => "");
   let j: any = null;
   try { j = extractJson(raw); } catch { j = null; }
   if (!j?.en || !j?.fr) throw new GenError("The AI couldn't write the lesson right now. Try again in a minute.");
-  return { en: String(j.en).slice(0, 3500), fr: String(j.fr).slice(0, 3500) };
+  // the resources: ours, then the AI's that really open (checked at the same time), then searches that always work
+  const proposed = (Array.isArray(j.resources) ? j.resources : []).slice(0, 8)
+    .map((r: any) => ({ title: String(r?.title ?? "").replace(/[[\]\n]/g, " ").trim().slice(0, 80), url: String(r?.url ?? "").trim(), lang: r?.lang === "fr" ? "fr" : "en" }))
+    .filter((r: { title: string; url: string }) => r.title && r.url);
+  const ok = await Promise.all(proposed.map((r: { url: string }) => linkWorks(r.url)));
+  const checked = proposed.filter((_: unknown, i: number) => ok[i]);
+  const list = (fr: boolean) => {
+    const seen = new Set<string>();
+    const out: [string, string][] = [];
+    for (const [t, u] of [...(fr ? linksFr : linksEn), ...checked.filter((r: { lang: string }) => (r.lang === "fr") === fr).map((r: { title: string; url: string }) => [r.title, r.url] as [string, string]),
+      ...checked.filter((r: { lang: string }) => (r.lang === "fr") !== fr).map((r: { title: string; url: string }) => [r.title, r.url] as [string, string]), ...searchLinks(fr ? s.fr : s.en, fr)]) {
+      if (seen.has(u) || out.length >= 6) continue;
+      seen.add(u); out.push([t, u]);
+    }
+    return `\n\n📚 **${fr ? "Ressources pour aller plus loin :" : "Resources to learn more:"}**\n${out.map(([t, u]) => `• [${t}](${u})`).join("\n")}`;
+  };
+  // never a link the AI wrote in the text itself (unchecked): only the list above
+  const clean = (x: unknown) => String(x).replace(/\n*📚[^\n]*(\n[•*-][^\n]*)*/g, "").replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, "$1").trim();
+  const fit = (body: string, tail: string) => {
+    if (body.length + tail.length <= 3950) return body + tail;
+    let b = body.slice(0, 3950 - tail.length - 8).replace(/\n[^\n]*$/, "");
+    if ((b.match(/```/g) || []).length % 2) b += "\n```";   // never a code block left open
+    return b + tail;
+  };
+  return { en: fit(clean(j.en), list(false)), fr: fit(clean(j.fr), list(true)) };
 }
 
 // -------------------------------------------------------------- challenges
@@ -62,7 +115,7 @@ export type GenKind = "write" | "quick" | "mcq" | "output" | "bug" | "complexity
 export const NO_RUN = ["node", "express", "mongodb", "react", "ai_data", "ai_ml", "ai_llm", "ai_rag", "web"];
 /** One new challenge for a skill (saved in the bank, tagged with the skill). */
 export async function challengeForSkill(env: Env, g: GuildRow, o: { skill?: string | null; difficulty: Difficulty; kind: GenKind; topic?: string | null; codeLang?: string | null }): Promise<ChallengeRow> {
-  const s = o.skill ? skillDef(o.skill) : null;
+  const s = o.skill ? (skillDef(o.skill, g) || (/^[a-z0-9_]{1,30}$/.test(o.skill) ? { key: o.skill, en: o.skill.replace(/_/g, " "), fr: o.skill.replace(/_/g, " "), emoji: "📘" } : null)) : null;
   if (o.skill && !s) throw new GenError("unknown skill");
   if (o.skill === "sql" || o.skill?.startsWith("sql_")) return sqlChallenge(env, g, { skill: o.skill === "sql" ? "sql_select" : o.skill, difficulty: o.difficulty, topic: o.topic });
   if (["regex", "git"].includes(o.skill ?? "")) throw new GenError("Regex and Git challenges come from the verified bank: the AI can't check them yet. Pick another skill.");

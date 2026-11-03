@@ -504,7 +504,7 @@ export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string,
 // ------------------------------------------------------------------ live statistics
 /** An event of the learner page: [t (s), kind, item, n, extra]. */
 export type MiseEvent = [number, string, string, number, unknown?];
-export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit"];
+export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock"];
 export interface LiveStats { leaves: number; awaySec: number; away: boolean; pastes: number; pasteChars: number; blockedPastes: number; runs: number; checks: number; lastAt: number | null }
 /** Leaving the page (times, total time away), pastes (times, characters), runs and AI checks of one learner. */
 export function liveStats(events: MiseEvent[], nowSec: number): LiveStats {
@@ -532,8 +532,10 @@ export function liveStats(events: MiseEvent[], nowSec: number): LiveStats {
 }
 
 /** Where a learner is: not started, working, done, or absent (working, but away from the page or silent for 2 min). */
-export function liveStatus(t: { status: string; last_seen: number | null }, st: LiveStats, nowSec: number): "not-started" | "working" | "done" | "absent" {
+export function liveStatus(t: { status: string; last_seen: number | null }, st: LiveStats, nowSec: number): "not-started" | "working" | "done" | "absent" | "locked" {
   if (t.status === "submitted") return "done";
+  // stopped: they left full screen (a session locked by the teacher's rule), waiting to be let back in
+  if (t.status === "locked" || t.status === "resume") return "locked";
   if (t.status !== "active") return "not-started";
   if (st.away || !t.last_seen || nowSec - t.last_seen > 120) return "absent";
   return "working";
@@ -604,7 +606,14 @@ export const MISE_EXAMPLE = {
  * The prompt to paste in Claude: the week's context (title, objective, concepts, competencies with their labels,
  * technologies seen so far, what is out of scope), the competencies chosen, the job theme, the exact format.
  */
-export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string }): string {
+/** What makes a QCM test the notion, not the ability to guess (in the prompt, and what the AI review checks). */
+export const QCM_RULES = [
+  "- Les 3 mauvais choix sont du MÊME TYPE que la bonne réponse et tous crédibles : si la réponse est un nom d'événement, les autres sont de vrais noms d'événements proches (click / mousedown / mouseup / pointerdown…), une méthode → d'autres vraies méthodes voisines (querySelector / getElementById / querySelectorAll / getElementsByClassName), une valeur affichée → d'autres valeurs qu'on obtient avec une erreur réelle (off-by-one, mauvais type, liste vivante ou statique…).",
+  "- Chaque mauvais choix correspond à une confusion que font VRAIMENT les débutants ; aucun choix absurde, hors sujet ou qu'on élimine sans connaître la notion.",
+  "- La bonne réponse ne se devine pas : pas un mot de la question, pas la plus longue ni la plus précise, pas la seule « technique », pas toujours à la même place (varie \"correct\").",
+  "- Préfère les questions qui demandent de lire ou de prévoir du code (\"code\" : que vaut… ? qu'affiche… ? quelle ligne corrige… ?) aux questions de définition.",
+];
+export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string }): string {
   const w = o.week;
   const names = new Map(o.program.referential.map((c) => [c.code, c.name]));
   const compLine = (s: string) => { const pc = parseComp(s); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""}${names.get(pc.code) ? ` (${names.get(pc.code)})` : ""}` : s; };
@@ -634,7 +643,12 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     `- Technologies vues jusqu'ici (les SEULES autorisées) : ${techs.join(", ") || "—"}`,
     `- HORS PÉRIMÈTRE (pas encore vu, INTERDIT) : ${o.next ? `${o.next.concepts || o.next.title} (semaine ${o.next.n}) et tout ce qui vient après` : "toute notion qui n'a pas été vue"}`,
     `- Compétences à évaluer (et AUCUNE autre, dans "competencies") : ${comps.map(compLine).join(" ; ") || "—"}`,
-    o.metier ? `- Métier / thème : ${o.metier}` : "- Métier / thème : choisis un métier marocain crédible (coopérative, riad, souk, transport, santé…).",
+    o.metier ? `- Métier / thème : ${o.metier}` : o.brief ? "- Métier / thème : celui du brief ci-dessous." : "- Métier / thème : choisis un métier marocain crédible (coopérative, riad, souk, transport, santé…).",
+    ...(o.brief ? ["", `BRIEF DE LA SEMAINE « ${o.brief.title} » (les mises en situation y sont LIÉES) :`, "<<<", o.brief.text.slice(0, 9000), ">>>",
+      "- Les 5 mises en situation et les QCM se passent DANS ce projet : le même client, le même métier, les mêmes noms, les mêmes données, des morceaux des fonctionnalités du brief (une page, un formulaire, une liste, un calcul…).",
+      "- Elles testent les notions dont l'apprenant a besoin pour réussir CE brief, une par une, du plus simple au plus difficile.",
+      "- Ne demande jamais tout le brief : chaque situation est un petit morceau qu'on code en 10 à 25 minutes."] : []),
+    ...(o.wishes ? ["", "EXIGENCES DU FORMATEUR (à respecter ABSOLUMENT, elles passent avant les autres consignes sauf le format JSON) :", o.wishes.slice(0, 1500)] : []),
     "",
     "CE QUE TU ÉCRIS",
     `- ${N_SITUATIONS} mises en situation de difficulté CROISSANTE ("difficulty" 1 = très facile → 5 = plus difficile, mais TOUJOURS dans le périmètre de la semaine). Chacune vérifie qu'une notion est VRAIMENT comprise, et révèle ce qui ne l'est pas.`,
@@ -650,7 +664,8 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     ...usable.map((k) => `    · ${checksDoc[k]}`),
     `  - "errorHints" : les erreurs probables, parmi ces identifiants : ${ERROR_CATEGORIES.map((c) => `${c.id} (${c.label})`).join(", ")} ;`,
     "  - \"points\" (facultatif) : 1 à 10, 3 par défaut.",
-    `- ${N_QCM} QCM : "question" (avec "code" facultatif), "choices" (3 ou 4 choix plausibles, des erreurs que font vraiment les débutants), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
+    `- ${N_QCM} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
+    ...QCM_RULES.map((r) => `  ${r}`),
     "",
     "RÈGLES",
     "- En français, phrases courtes et claires, niveau débutant. Une notion principale par mise en situation.",
@@ -703,4 +718,59 @@ export function defaultComment(score: number, weak: string[]): string {
 export function toCsv(rows: (string | number | null | undefined)[][]): string {
   const cell = (v: string | number | null | undefined) => { const s = v == null ? "" : String(v); return /[",;\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
   return "﻿" + rows.map((r) => r.map(cell).join(",")).join("\n");
+}
+
+// ------------------------------------------------------------------ reading a file before checking it
+/** The week and the competencies a file says (to fill the form when a JSON is uploaded): never trusted, only proposed. */
+export function detectMise(raw: unknown): { week: number | null; comps: string[]; title: string } {
+  const { data } = readJson(raw);
+  if (!data || typeof data !== "object") return { week: null, comps: [], title: "" };
+  const w = Number(data.week);
+  const list = [data.competencies, ...(Array.isArray(data.situations) ? data.situations.map((x: any) => x?.competencies) : []), ...(Array.isArray(data.qcm) ? data.qcm.map((x: any) => x?.competencies) : [])];
+  const comps = [...new Set(list.flatMap((v) => (Array.isArray(v) ? v : [])).map(normComp).filter(Boolean) as string[])].slice(0, 8);
+  return { week: Number.isInteger(w) && w >= 1 && w <= 80 ? w : null, comps, title: text(data.title).slice(0, 120) };
+}
+
+// ------------------------------------------------------------------ the teacher's checklist (like the brief's)
+export interface MiseCheck { ok: boolean; text: string; tip?: boolean }
+/**
+ * Warnings and reminders on a mise en situation that passed checkMise (which blocks what can't work): what a
+ * teacher should look at before giving it — the competencies of the week, the ones chosen and not tested, situations
+ * graded by hand, the difficulty, the QCM, the brief it's linked to.
+ */
+export function miseChecks(c: MiseContent, o: { weekComps?: string[]; selected?: string[]; brief?: string | null } = {}): MiseCheck[] {
+  const code = (x: string) => parseComp(x)?.code ?? x;
+  const used = new Set([...c.situations.flatMap((s) => s.competencies), ...c.qcm.flatMap((q) => q.competencies)].map(code));
+  const chosen = (o.selected?.length ? o.selected : c.competencies).map((x) => normComp(x)).filter(Boolean) as string[];
+  const untested = chosen.filter((x) => !used.has(code(x)));
+  const week = (o.weekComps ?? []).map((x) => normComp(x)).filter(Boolean) as string[];
+  const tech = week.filter((x) => !/^CT/.test(x));
+  const missing = tech.filter((x) => !chosen.some((y) => code(y) === code(x)));
+  const manual = c.situations.map((s, i) => (s.checks.length ? null : `S${i + 1}`)).filter(Boolean) as string[];
+  const few = c.situations.map((s, i) => (s.checks.length === 1 ? `S${i + 1}` : null)).filter(Boolean) as string[];
+  const onlySource = c.situations.map((s, i) => (s.checks.length && s.checks.every((k) => k.type === "source") ? `S${i + 1}` : null)).filter(Boolean) as string[];
+  const d = c.situations.map((s) => s.difficulty);
+  const raw = c.situations.flatMap((s) => s.notions), notions = raw.map((n) => n.toLowerCase());
+  const dupNotions = [...new Set(raw.filter((n, i) => notions.indexOf(n.toLowerCase()) !== i))];
+  const qNotions = c.qcm.map((q) => q.notion.toLowerCase());
+  const dupQ = [...new Set(qNotions.filter((n, i) => qNotions.indexOf(n) !== i))];
+  const pts = totalPoints(c), sitPts = c.situations.reduce((s, x) => s + x.points, 0);
+  const qcmShare = pts ? Math.round((100 * (pts - sitPts)) / pts) : 0;
+  const right = c.qcm.map((q) => q.correct);
+  const sameRight = right.length >= 4 && new Set(right).size === 1;
+  const out: MiseCheck[] = [
+    { ok: c.situations.length === N_SITUATIONS && c.qcm.length === N_QCM, text: `${c.situations.length} situations and ${c.qcm.length} QCM` },
+    { ok: !d.some((x, i) => i && x < d[i - 1]), text: `Difficulty ${d.join(" → ")}` },
+    { ok: !untested.length, text: untested.length ? `Chosen but never tested: ${untested.join(", ")}` : `Every competency chosen is tested (${chosen.join(", ") || "—"})` },
+    ...(week.length ? [{ ok: !missing.length, text: missing.length ? `Competencies of the week not in it: ${missing.join(", ")}` : "All the technical competencies of the week are in it" }] : []),
+    { ok: !manual.length, text: manual.length ? `No automatic check in ${manual.join(", ")}: you grade ${manual.length > 1 ? "them" : "it"} by hand` : "Every situation has automatic checks" },
+    ...(few.length ? [{ ok: false, text: `Only one check in ${few.join(", ")}: a learner can pass it without doing everything` }] : []),
+    ...(onlySource.length ? [{ ok: false, text: `${onlySource.join(", ")} only look${onlySource.length > 1 ? "" : "s"} for words in the code: add a check of what the page shows` }] : []),
+    { ok: !dupNotions.length, text: dupNotions.length ? `The same notion in several situations: ${dupNotions.slice(0, 3).join(", ")}` : "One main notion per situation" },
+    { ok: !dupQ.length && !sameRight, text: dupQ.length ? `Two QCM on the same notion: ${dupQ.slice(0, 3).join(", ")}` : sameRight ? `Every QCM has its right answer at the same place (${"ABCD"[right[0]]})` : "The QCM test different notions" },
+    { ok: true, tip: true, text: `${pts} points: the QCM weigh ${qcmShare}% of the score` },
+  ];
+  if (o.brief) out.push({ ok: true, tip: true, text: `Linked to the brief « ${o.brief} »` });
+  out.push({ ok: true, tip: true, text: "Before launching: take it yourself as a test (Launch → Test it yourself)" });
+  return out;
 }

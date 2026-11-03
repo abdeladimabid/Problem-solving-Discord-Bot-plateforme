@@ -8,7 +8,7 @@
 //   • commentText writes it as a template (always available)
 //   • the AI may only phrase the same sections (aiCommentPrompt, one call); aiCommentText checks its answer and
 //     assembles it, or returns null (then the template is used)
-import { REF_NAMES, debriefLevel, firstNameOf, noVerif, reviewStates, saidIn } from "./engine.ts";
+import { REF_NAMES, conceptsOf, debriefLevel, firstNameOf, noVerif, reviewStates, saidIn } from "./engine.ts";
 import { memberLevelOf } from "./members.ts";
 
 export interface CommentData {
@@ -35,6 +35,8 @@ export interface CommentData {
   memberOnly: boolean;       // a squad member: the project's features are in the squad's comment, not here
   assess: AssessFacts | null;
   proj: ProjectFacts | null; // a squad: what the project shows (interface, planning, README, commits, team)
+  scope: string[];           // the notions the comment may talk about: the brief's requirements, the assessment's
+                             // questions, the teacher's remarks, the oral questions (never anything else)
 }
 /** One learner's graded assessment(s) of the brief: what they mastered, what they missed, the grader's comment. */
 export interface AssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
@@ -180,6 +182,12 @@ export function commentData(o: { first?: string; group?: string; project: string
   const mode: CommentData["mode"] = o.group ? "group" : assess ? "assess" : "project";
   const notions = uniq([...fromRemarks, ...oralMissed.filter((n) => !saidIn(n, remarks)).map(low),
     ...(assess ? assess.ko.filter((n) => !saidIn(n, remarks)).map(low) : [])]).slice(0, MAX.notions);
+  // what the comment may talk about: the notions of the brief, of the assessment's questions, of the exchange
+  const scope = uniq([
+    ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...fromRemarks].join("\n")),
+    ...((rec.assess || []) as any[]).flatMap((a) => (Array.isArray(a?.scope) ? a.scope : [])),
+    ...(assess ? [...assess.ok, ...assess.ko] : []),
+  ]);
   // a squad member: their own level (members.ts), else the debrief's
   const lv = o.member?.level || (rec.level && (rec.level.lvl || rec.level.prop)) || debriefLevel(rec, st) || "";
   return {
@@ -192,7 +200,7 @@ export function commentData(o: { first?: string; group?: string; project: string
     comps,
     bonus: memberOnly ? [] : uniq(items.filter((x) => x.type === "bonus" && x.ok).map((x) => low(storyCore(x.texte)))).slice(0, MAX.bonus),
     improve: memberOnly ? [] : uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => clean(x.texte, 400))).slice(0, MAX.improve),
-    notions, remarks, oralMissed, mode, memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null,
+    notions, remarks, oralMissed, mode, memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null, scope,
     positive: (o.group ? /\b(tu|ton|ta|tes|toi)\b/i : /\b(vous|votre|vos)\b/i).test(String(R.positive || "")) ? "" : clean(R.positive, 300).replace(/([^.!?])$/, "$1.").replace(/^\.$/, ""),
   };
 }
@@ -357,7 +365,8 @@ export function aiCommentPrompt(d: CommentData): string {
   const list = (a: string[]) => (a.length ? a.map((x) => `- ${x}`).join("\n") : "(aucun)");
   const missing = d.improve.map(missingOf).filter(Boolean).map((x) => x!.text);
   const remarks = `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`;
-  const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`];
+  const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`,
+    `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`];
   if (d.mode === "assess") {
     const a = d.assess!;
     return [
@@ -403,6 +412,11 @@ export function aiCommentPrompt(d: CommentData): string {
     `NOTIONS À REVOIR :\n${list(d.notions)}`,
   ].join("\n\n");
 }
+/** The notions a comment talks about that are neither in the brief, nor in the assessment, nor in the exchange. */
+export function outsideNotions(d: Pick<CommentData, "scope">, body: string): string[] {
+  const scope = new Set(d.scope || []);
+  return conceptsOf(body).filter((c: string) => !scope.has(c));
+}
 const MARKUP = /\*\*|(^|\n)\s*#|`|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
 const VOUS = /\b(vous|votre|vos)\b/i, TU = /\b(tu|ton|ta|tes|toi|t['’](?:as|es|en|y))\b/i;
 /** The AI's comment, checked (form, tone, level, bonus, length) with our greeting; null when it doesn't follow the rules. */
@@ -422,6 +436,8 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   if (!d.bonus.length && /bonus/i.test(body)) return null;
   // never which competencies were validated
   if (/(valid[ée]|acquis|atteint)[a-zé]*\s+(la |les |une |des |l['’]|ta |tes )?comp[ée]tence|comp[ée]tences?\s+(est |sont |a été |ont été |bien )?(valid|acquis)|\bC[T]?\d{1,2}(N\d)?\b/i.test(body)) return null;
+  // never a notion that is neither in the brief nor in the assessment (nor in the teacher's remarks)
+  if (outsideNotions(d, body).length) return null;
   const words = wordCount(body), nothing = !d.improve.length && !d.notions.length;
   if (words < 15 || words > (nothing ? 140 : 520)) return null;
   return `${greetingOf(d)}\n\n${body}`;

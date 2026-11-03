@@ -14,24 +14,31 @@ import type { Program, ProgramWeek } from "./program.ts";
 import { nextProgrammeWeek, techSoFar } from "./activities.ts";
 import { RunnerUnavailable, runOnce } from "./runner.ts";
 import {
-  AI_CHECKS_PER_ITEM, EVENT_KINDS, aiCheckSystem, aiCheckUser, attempted, buildPrompt, categoryLabel, checkMise, classStats, defaultComment,
-  evaluateChecks, filterCategories, itemIds, liveStats, liveStatus, normComp, paperOf, previewOf, scoreMise, toCsv,
+  AI_CHECKS_PER_ITEM, EVENT_KINDS, aiCheckSystem, aiCheckUser, attempted, buildPrompt, categoryLabel, checkMise, classStats, defaultComment, detectMise,
+  evaluateChecks, filterCategories, itemIds, liveStats, liveStatus, miseChecks, normComp, paperOf, previewOf, scoreMise, toCsv,
 } from "./mises.ts";
+import { chat, extractJson } from "./ai.ts";
+import { aiBudgetOk, aiBudgetUse } from "./db.ts";
+import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
+import { QCM_RULES } from "./mises.ts";
 
 export class MiseError extends Error { status: number; constructor(msg: string, status = 400) { super(msg); this.status = status; } }
 
 export interface MiseRow { id: number; guild_id: string; title: string; week: number | null; sprint: number | null; comps: string | null; target: string | null; settings: string | null; content: string; status: string; starts_at: number | null; ends_at: number | null; created_at: number; opened_at: number | null; closed_at: number | null }
 export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; discord_id: string; status: string; answers: string | null; spent: string | null; checks: string | null; ai: string | null; logs: string | null; events: string | null;
   cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null }
-export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[] }   // testers: staff who take it to try it (never "the class")
+// testers: staff who take it to try it (never "the class") · lockScreen: in full screen, leaving it stops the session until
+// the teacher lets them back (like an assessment) · brief: the brief it was written for
+export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null }
 
 const parse = <T>(s: string | null | undefined, d: T): T => { try { const v = s ? JSON.parse(s) : d; return v ?? d; } catch { return d; } };
 const str = (v: unknown, n: number) => String(v ?? "").replace(/\r\n/g, "\n").trim().slice(0, n);
 export const contentOf = (m: Pick<MiseRow, "content">) => parse<MiseContent>(m.content, { format: "", title: "", week: null, metier: "", competencies: [], situations: [], qcm: [] });
 export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
-  return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10) };
+  return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
+    lockScreen: s.lockScreen === true, brief: briefRef(s.brief) };
 };
 /** draft · scheduled (launched, starts later) · live · closed (closed by the teacher, or its time is up). */
 export function statusOf(m: Pick<MiseRow, "status" | "starts_at" | "ends_at">, t = now()): "draft" | "scheduled" | "live" | "closed" {
@@ -40,6 +47,7 @@ export function statusOf(m: Pick<MiseRow, "status" | "starts_at" | "ends_at">, t
   if (m.starts_at && t < m.starts_at) return "scheduled";
   return "live";
 }
+const briefRef = (v: any) => (v && Number(v.id) > 0 ? { id: Math.round(Number(v.id)), title: str(v.title, 160) } : null);
 const ids = (v: unknown) => [...new Set((Array.isArray(v) ? v : []).map(String).filter((x) => /^\d{1,25}$/.test(x)))].slice(0, 200);
 async function getMise(env: Env, g: GuildRow, id: number) {
   const m = await one<MiseRow>(env, "SELECT * FROM mises WHERE id = ? AND guild_id = ?", id, g.id);
@@ -87,26 +95,166 @@ function weekOf(p: Program, n: number): ProgramWeek {
   if (!w) throw new MiseError("Pick a week of the programme.");
   return w;
 }
-/** The prompt for Claude, for a week and the competencies chosen. */
+const normList = (v: unknown) => [...new Set((Array.isArray(v) ? v : []).map(normComp).filter(Boolean) as string[])].slice(0, 8);
+const weekComps = (w: ProgramWeek | null) => (w ? [...w.competencies, ...w.soft].map(compText) : []);
+/** The brief a mise en situation is written for: one of the class's briefs, or the text of a brief page (Simplonline). */
+async function briefFor(env: Env, g: GuildRow, p: Program, b: any): Promise<{ id: number | null; title: string; text: string; week: number | null; comps: string[] } | null> {
+  if (Number(b.brief) > 0) {
+    const r = await getBrief(env, g, Number(b.brief));
+    if (!r) throw new MiseError("That brief doesn't exist anymore.");
+    return { id: r.id, title: r.data.title, text: simplonText(r.data, p), week: r.week ?? null, comps: normList(r.data.competencies.map(compText)) };
+  }
+  const t = str(b.briefText, 20000);
+  if (t.length >= 200) return { id: null, title: str(b.briefTitle, 160) || "Brief", text: t, week: null, comps: normList(Array.isArray(b.briefComps) ? b.briefComps.map((x: unknown) => compText(String(x))) : []) };
+  return null;
+}
+/** The week, the competencies and the brief of a request: what the teacher picked, else what the brief or the file says. */
+async function scopeOf(env: Env, g: GuildRow, p: Program, b: any, file?: { week: number | null; comps: string[] }) {
+  const br = await briefFor(env, g, p, b);
+  const wn = Number(b.week) || file?.week || br?.week || null;
+  const w = wn ? weekOf(p, wn) : null;
+  let comps = normList(b.comps);
+  if (!comps.length && file?.comps.length) comps = file.comps;
+  if (!comps.length && br?.comps.length) comps = br.comps;
+  if (!comps.length && w) comps = normList(w.competencies.map(compText));
+  return { br, w, comps };
+}
+/** The prompt for Claude, for a week and the competencies chosen (and the brief it's linked to). */
 export async function promptFor(env: Env, g: GuildRow, b: any) {
   const p = await programOf(env, g);
-  const w = weekOf(p, Number(b.week));
-  const comps = (Array.isArray(b.comps) ? b.comps : []).map(normComp).filter(Boolean) as string[];
+  const { br, w, comps } = await scopeOf(env, g, p, b);
+  if (!w) throw new MiseError("Pick a week of the programme.");
   if (!comps.length) throw new MiseError("Choose at least one competency.");
-  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120) }), techs: techSoFar(p, w) };
+  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) }), techs: techSoFar(p, w) };
 }
 
-/** Claude's JSON: checked (preview), then saved as a draft when asked. */
+/**
+ * The AI writes it here (no copy-paste through Claude): for the brief of the week, or the objectives of the sprint and
+ * the week. Checked like an import; when the AI's file has problems it gets them back once to fix them. Nothing is
+ * saved: the teacher reads it, can change it, then saves.
+ */
+export async function generateMise(env: Env, g: GuildRow, b: any) {
+  const p = await programOf(env, g);
+  const { br, w, comps } = await scopeOf(env, g, p, b);
+  if (!w) throw new MiseError("Pick the week of the programme: the AI keeps to what the class has seen by then.");
+  if (!comps.length) throw new MiseError("Choose at least one competency.");
+  if (!(await aiBudgetOk(env, 4))) throw new MiseError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI, or try again tomorrow.");
+  await aiBudgetUse(env, 4);
+  const techs = techSoFar(p, w);
+  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) });
+  const opts = { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n };
+  const ask = (extra: string) => chat(env, [
+    { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
+    { role: "user", content: prompt + extra },
+  ], { maxTokens: 16000, temperature: 0.5, timeoutMs: 170000, json: true });
+  const read = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
+  let data = read(await ask("").catch((e) => { throw new MiseError(`The AI couldn't write it right now (${String((e as Error)?.message || e).slice(0, 120)}). Try again in a minute.`, 502); }));
+  if (!data) throw new MiseError("The AI's answer wasn't a complete JSON. Try again (or ask for it with fewer words in your wishes).", 502);
+  if (data.week == null) data.week = w.n;
+  // until it matches the requirements: what can be fixed here is fixed here, the rest is written again by the AI
+  // (only the situations / QCM that have a problem; the whole file when the problem is the file's), 4 rounds at most
+  tidyMise(data);
+  let r = checkMise(data, opts);
+  // once the file is valid: a second look at the QCM (can they be guessed without knowing the notion?), twice at most
+  let reviews = 0;
+  const weakQcm = async () => (r.problems.length || reviews >= 2 ? [] : (reviews++, await reviewQcm(env, r.content!)));
+  let weak = await weakQcm();
+  for (let round = 0; round < 5 && (r.problems.length || weak.length); round++) {
+    const todo = r.problems.length ? r.problems : weak;
+    const next = await repairMise(data, todo, { ask, read, techs, next: nextProgrammeWeek(p, w) });
+    if (!next) continue;
+    if (next.week == null) next.week = w.n;
+    tidyMise(next);
+    const r2 = checkMise(next, opts);
+    // a round that makes it worse is dropped (the next one starts again from the better file)
+    if (r2.problems.length <= r.problems.length) { data = next; r = r2; weak = await weakQcm(); }
+  }
+  return {
+    json: JSON.stringify(data, null, 2), problems: r.problems, preview: r.problems.length ? null : r.preview,
+    checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title }) : [],
+    detected: { week: w.n, sprint: w.sprint ?? null, comps }, brief: br?.id ? { id: br.id, title: br.title } : null,
+  };
+}
+
+/**
+ * The QCM read again by the AI as a learner who does NOT know the notion: the ones that can be guessed (wrong choices
+ * easy to rule out, the answer echoing the question…) come back as problems to rewrite. An unavailable AI: nothing.
+ */
+async function reviewQcm(env: Env, c: MiseContent): Promise<{ where: string; msg: string }[]> {
+  try {
+    const raw = await chat(env, [
+      { role: "system", content: `Tu relis des QCM pour débutants en développement web. Pour chacun, imagine un apprenant qui NE CONNAÎT PAS la notion : peut-il trouver la bonne réponse quand même (mauvais choix hors sujet ou faciles à éliminer, d'un autre type que la réponse, bonne réponse qui reprend un mot de la question, plus longue ou plus précise) ? Règles d'un bon QCM :\n${QCM_RULES.join("\n")}\nRéponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…ce qui le rend devinable, en une phrase…"}]} (liste vide si tous sont bons).` },
+      { role: "user", content: JSON.stringify(c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] }))) },
+    ], { maxTokens: 1500, temperature: 0.1, timeoutMs: 60000, json: true });
+    const j = extractJson(raw);
+    return (Array.isArray(j?.weak) ? j.weak : []).filter((x: any) => Number.isInteger(Number(x?.n)) && Number(x.n) >= 1 && Number(x.n) <= c.qcm.length)
+      .slice(0, c.qcm.length).map((x: any) => ({ where: `QCM ${Number(x.n)}`, msg: `facile à deviner sans connaître la notion : ${String(x.why ?? "").slice(0, 200)}. Garde la notion, réécris la question et les 4 choix : 3 mauvais choix du même type que la bonne réponse, crédibles, chacun une vraie confusion de débutant.` }));
+  } catch { return []; }
+}
+/** What needs no AI: too many notions or too long ones, points out of range (the AI often writes 6 notions). */
+function tidyMise(d: any) {
+  if (!d || typeof d !== "object") return;
+  for (const s of Array.isArray(d.situations) ? d.situations : []) {
+    if (!s || typeof s !== "object") continue;
+    if (Array.isArray(s.notions)) s.notions = s.notions.map((x: unknown) => String(x ?? "").trim().slice(0, 60)).filter(Boolean).slice(0, 5);
+    if (s.points != null) s.points = Math.max(1, Math.min(10, Math.round(Number(s.points)) || 3));
+    if (Array.isArray(s.competencies)) s.competencies = s.competencies.slice(0, 4);
+  }
+  for (const q of Array.isArray(d.qcm) ? d.qcm : []) {
+    if (!q || typeof q !== "object") continue;
+    if (q.notion != null) q.notion = String(q.notion).trim().slice(0, 60);
+    if (q.points != null) q.points = Math.max(1, Math.min(5, Math.round(Number(q.points)) || 1));
+    if (Array.isArray(q.competencies)) q.competencies = q.competencies.slice(0, 4);
+  }
+}
+/**
+ * One round of repairs. Problems of a situation or a QCM: the AI writes ONLY those items again (smaller, so it follows
+ * the rules), with their problems and what's out of scope spelled out. Problems of the file (how many, the difficulty
+ * going up…): the whole file again.
+ */
+async function repairMise(data: any, problems: { where: string; msg: string }[], o: { ask: (extra: string) => Promise<string>; read: (raw: string) => any; techs: string[]; next: ProgramWeek | null }) {
+  const scope = `RAPPEL DU PÉRIMÈTRE : seulement ${o.techs.join(", ") || "les notions vues"}${o.next ? `. INTERDIT (pas encore vu) : ${o.next.concepts || o.next.title} et tout ce qui vient après (fetch, API, async/await, promesses, frameworks… s'ils n'ont pas été vus)` : ""}.`;
+  const items = new Map<string, string[]>();
+  const whole: string[] = [];
+  for (const x of problems) { if (/^(situation|QCM) \d+$/.test(x.where)) items.set(x.where, [...(items.get(x.where) ?? []), x.msg]); else whole.push(x.msg); }
+  if (whole.length || !items.size) {
+    const d = o.read(await o.ask(`\n\nTA PROPOSITION PRÉCÉDENTE NE RESPECTE PAS LES EXIGENCES. Renvoie le JSON COMPLET corrigé (tous les problèmes réglés, le reste gardé) :\n${problems.slice(0, 30).map((x) => `- ${x.where} : ${x.msg}`).join("\n")}\n${scope}\n\nTa proposition précédente :\n${JSON.stringify(data).slice(0, 40000)}`).catch(() => ""));
+    return d && typeof d === "object" ? d : null;
+  }
+  const out = JSON.parse(JSON.stringify(data));
+  const list = [...items.entries()].map(([where, msgs]) => {
+    const [kind, n] = where.split(" ");
+    const cur = kind === "QCM" ? out.qcm?.[Number(n) - 1] : out.situations?.[Number(n) - 1];
+    return `- ${where} (clé "${kind === "QCM" ? "q" : "s"}${n}") :\n  problèmes : ${msgs.join(" | ")}\n  actuel : ${JSON.stringify(cur ?? {}).slice(0, 9000)}`;
+  });
+  const d = o.read(await o.ask(`\n\nDANS TA PROPOSITION, CES ÉLÉMENTS NE RESPECTENT PAS LES EXIGENCES. Réécris UNIQUEMENT ces éléments, entièrement, en réglant chaque problème (garde le même thème, la même difficulté et la même notion quand c'est possible ; si une notion est hors périmètre, remplace-la par une notion du périmètre) :\n${list.join("\n")}\n${scope}\nRéponds UNIQUEMENT avec ce JSON : {"items": {"s5": { …la mise en situation complète… }, "q5": { …le QCM complet… }}}`).catch(() => ""));
+  const got = d?.items && typeof d.items === "object" ? d.items : null;
+  if (!got) return null;
+  for (const [k, v] of Object.entries(got)) {
+    const m = /^([sq])(\d)$/.exec(k);
+    if (!m || !v || typeof v !== "object") continue;
+    const arr = m[1] === "q" ? out.qcm : out.situations, i = Number(m[2]) - 1;
+    if (Array.isArray(arr) && i >= 0 && i < arr.length) arr[i] = v;
+  }
+  return out;
+}
+
+/** A JSON (uploaded, pasted, from Claude or from the AI here): checked (preview + the checklist), then saved when asked.
+ *  The week, the sprint and the competencies come from the file when the teacher didn't pick them. */
 export async function importMise(env: Env, g: GuildRow, b: any) {
   const p = await programOf(env, g);
-  const w = weekOf(p, Number(b.week));
-  const comps = (Array.isArray(b.comps) ? b.comps : []).map(normComp).filter(Boolean) as string[];
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: techSoFar(p, w), week: w.n });
-  if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview };
+  const det = detectMise(b.json);
+  const { br, w, comps } = await scopeOf(env, g, p, b, det);
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
+  const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title };
+  const brief = br?.id ? { id: br.id, title: br.title } : null;
+  const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title }) : [];
+  if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
-    g.id, str(b.title, 120) || c.title, w.n, w.sprint, JSON.stringify(comps.length ? comps : c.competencies), JSON.stringify(ids(b.target)), JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10) }), JSON.stringify(c), now());
-  return { id: Number(res.meta.last_row_id), problems: [] };
+    g.id, str(b.title, 120) || c.title, w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps.length ? comps : c.competencies), JSON.stringify(ids(b.target)),
+    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief }), JSON.stringify(c), now());
+  return { id: Number(res.meta.last_row_id), problems: [], checks, detected, brief };
 }
 
 /** Change a draft (title, learners, the JSON checked again) or the options of a launched one. */
@@ -116,13 +264,21 @@ export async function saveMise(env: Env, g: GuildRow, id: number, b: any) {
   if (b.title != null) { const t = str(b.title, 120); if (t.length < 3) throw new MiseError("The title: 3 characters at least."); sets.push("title = ?"); args.push(t); }
   if (b.target != null) { sets.push("target = ?"); args.push(JSON.stringify(ids(b.target))); }
   if (b.settings != null) { const s = { ...settingsOf(m), ...pickSettings(b.settings) }; sets.push("settings = ?"); args.push(JSON.stringify(s)); }
-  if (b.json != null) {
+  // the week and the competencies (the edit form): the content is checked again with them
+  let week = m.week, comps = parse<string[]>(m.comps, []), scope = false;
+  if (b.week !== undefined || b.comps != null) {
+    scope = true;
+    if (m.status !== "draft") throw new MiseError("The learners already have it: its week and competencies can't change anymore.");
+    if (b.week !== undefined) week = Number(b.week) || null;
+    if (b.comps != null) { comps = normList(b.comps); if (!comps.length) throw new MiseError("Choose at least one competency."); }
+  }
+  if (b.json != null || scope) {
     if (m.status !== "draft") throw new MiseError("The learners already have it: its content can't change anymore.");
     const p = await programOf(env, g);
-    const w = m.week ? weekOf(p, m.week) : null;
-    const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: parse<string[]>(m.comps, []), techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
+    const w = week ? weekOf(p, week) : null;
+    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
     if (r.problems.length) return { problems: r.problems };
-    sets.push("content = ?"); args.push(JSON.stringify(r.content));
+    sets.push("content = ?", "week = ?", "sprint = ?", "comps = ?"); args.push(JSON.stringify(r.content), w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps));
   }
   if (sets.length) await run(env, `UPDATE mises SET ${sets.join(", ")} WHERE id = ?`, ...args, id);
   return { problems: [] };
@@ -133,6 +289,8 @@ const pickSettings = (s: any) => {
   if (s && "noPaste" in s) o.noPaste = !!s.noPaste;
   if (s && "channel" in s) o.channel = !!s.channel;
   if (s && "testers" in s) o.testers = ids(s.testers).slice(0, 10);
+  if (s && "lockScreen" in s) o.lockScreen = !!s.lockScreen;
+  if (s && "brief" in s) o.brief = briefRef(s.brief);
   return o;
 };
 
@@ -182,12 +340,14 @@ export async function launch(env: Env, g: GuildRow, id: number, b: any) {
   const startsAt = b.startsAt ? Math.max(t0, Math.round(Number(b.startsAt))) : t0;
   const s = { ...settingsOf(m), ...pickSettings(b) };
   const endsAt = s.minutes ? startsAt + s.minutes * 60 : null;
-  let who = ids(b.students?.length ? b.students : parse<string[]>(m.target, []));
-  if (!who.length) who = await classIds(env, g);
+  // the learners chosen when launching ([] = the whole class; "only" = nobody but the teachers testing it)
+  const chosen = Array.isArray(b.students) ? ids(b.students) : parse<string[]>(m.target, []);
+  let who = b.only ? [] : chosen.length ? chosen : await classIds(env, g);
   // the teachers who test it get it too
   who = [...new Set([...who, ...s.testers])];
   if (!who.length) throw new MiseError("Nobody to send it to: choose at least one learner.");
-  await run(env, "UPDATE mises SET status = 'live', starts_at = ?, ends_at = ?, settings = ?, target = ?, opened_at = COALESCE(opened_at, ?) WHERE id = ?", startsAt, endsAt, JSON.stringify(s), JSON.stringify(b.students?.length ? who : parse<string[]>(m.target, [])), t0, id);
+  const target = b.only ? s.testers : chosen;
+  await run(env, "UPDATE mises SET status = 'live', starts_at = ?, ends_at = ?, settings = ?, target = ?, opened_at = COALESCE(opened_at, ?) WHERE id = ?", startsAt, endsAt, JSON.stringify(s), JSON.stringify(target), t0, id);
   const r = await addTakers(env, g, id, who, b.send !== false);
   if (s.channel && g.announce_channel) {
     await send(env, g.announce_channel, { embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
@@ -234,7 +394,7 @@ export async function extend(env: Env, g: GuildRow, id: number, minutes: number)
 export async function closeMise(env: Env, g: GuildRow, id: number) {
   await getMise(env, g, id);
   await run(env, "UPDATE mises SET status = 'closed', closed_at = ?, ends_at = COALESCE(MIN(ends_at, ?), ?) WHERE id = ?", now(), now(), now(), id);
-  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status = 'active'", id);
+  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", id);
   for (const t of open) await submitTaker(env, t.id, null, true);
 }
 export async function removeTaker(env: Env, g: GuildRow, id: number, takerId: number) {
@@ -265,14 +425,18 @@ export async function learnerInfo(env: Env, takerId: number) {
   const { t, m } = x, c = contentOf(m), st = settingsOf(m);
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", t.guild_id, t.discord_id);
   return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(m), taker: t.status, name: p?.name ?? null,
-    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: m.starts_at, endsAt: m.ends_at, now: now(), noPaste: st.noPaste };
+    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: m.starts_at, endsAt: m.ends_at, now: now(), noPaste: st.noPaste,
+    lockScreen: st.lockScreen, lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null };
 }
-/** The learner writes: only theirs, only while the session is live and their paper isn't handed in. */
+/** Why their session stopped (the last "lock" event): fullscreen, hidden, blur, reload. */
+const lockWhy = (t: Pick<MiseTakerRow, "events">) => String(parse<MiseEvent[]>(t.events, []).filter((e) => e[1] === "lock").at(-1)?.[4] ?? "fullscreen");
+/** The learner writes: only theirs, only while the session is live and their paper isn't handed in (nor stopped). */
 async function writable(env: Env, takerId: number) {
   const x = await loadTaker(env, takerId);
   if (!x) throw new MiseError("unknown", 404);
   const s = statusOf(x.m);
   if (x.t.status === "submitted") throw new MiseError("submitted", 409);
+  if (x.t.status === "locked" || x.t.status === "resume") throw new MiseError("locked", 409);
   // a few seconds of grace after the end (a save on its way)
   if (s === "closed" && !(x.m.status === "live" && x.m.ends_at && now() <= x.m.ends_at + 30)) throw new MiseError("closed", 409);
   if (s === "scheduled") throw new MiseError("scheduled", 409);
@@ -281,11 +445,17 @@ async function writable(env: Env, takerId: number) {
 }
 /** Start (or come back: a reload, another device): the paper and everything already saved. */
 export async function startTaker(env: Env, takerId: number) {
+  // let back in by the teacher: the session goes on (once)
+  const back = await run(env, "UPDATE mise_takers SET status = 'active', last_seen = ? WHERE id = ? AND status = 'resume'", now(), takerId);
   const { t, m } = await writable(env, takerId);
   const c = contentOf(m), t0 = now();
   if (t.status === "invited") {
     await run(env, "UPDATE mise_takers SET status = 'active', started_at = ?, last_seen = ?, cur_item = ?, item_since = ? WHERE id = ? AND status = 'invited'", t0, t0, c.situations[0]?.id ?? "q1", t0, t.id);
     await pushEvent(env, t.id, [t0, "start", "", 0]);
+  } else if (settingsOf(m).lockScreen && !back.meta.changes) {
+    // full screen rule: opening the page again (a reload, another tab or device) while working stops the session too
+    await lockTaker(env, t.id, "reload");
+    throw new MiseError("locked", 409);
   } else await run(env, "UPDATE mise_takers SET last_seen = ? WHERE id = ?", t0, t.id);
   const ai = parse<Record<string, { categories: string[] }[]>>(t.ai, {});
   const checks = parse<TakerData["checks"]>(t.checks, {});
@@ -294,8 +464,28 @@ export async function startTaker(env: Env, takerId: number) {
     // the last automatic checks and AI categories of each situation (labels only)
     checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, (v.results ?? []).map((r) => ({ id: r.id, ok: r.ok }))])),
     ai: Object.fromEntries(Object.entries(ai).map(([k, v]) => [k, { left: Math.max(0, AI_CHECKS_PER_ITEM - v.filter((x: any) => !x.submit).length), last: (v.filter((x: any) => !x.submit).at(-1)?.categories ?? []).map((id) => ({ id, label: categoryLabel(id) })) }])),
-    endsAt: m.ends_at, now: t0, noPaste: settingsOf(m).noPaste, status: "active",
+    endsAt: m.ends_at, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
   };
+}
+
+/** Full screen rule: they left it (or the tab, the window): the session stops until the teacher lets them back. */
+export async function lockTaker(env: Env, takerId: number, what: unknown) {
+  const x = await loadTaker(env, takerId);
+  if (!x || x.t.status !== "active" || !settingsOf(x.m).lockScreen) return { ok: false };
+  const why = ["fullscreen", "hidden", "blur", "reload"].includes(String(what)) ? String(what) : "fullscreen";
+  const r = await run(env, "UPDATE mise_takers SET status = 'locked', last_seen = ? WHERE id = ? AND status = 'active'", now(), x.t.id);
+  if (r.meta.changes) await pushEvent(env, x.t.id, [now(), "lock", x.t.cur_item ?? "", 0, why]);
+  return { ok: true, status: "locked" };
+}
+/** The teacher lets them back in (one learner, or everyone stopped): their page asks again for full screen and goes on. */
+export async function unlockTakers(env: Env, g: GuildRow, id: number, takerId: number | null) {
+  await getMise(env, g, id);
+  const list = await all<{ id: number }>(env, `SELECT id FROM mise_takers WHERE mise_id = ? AND status = 'locked'${takerId ? " AND id = ?" : ""}`, id, ...(takerId ? [takerId] : []));
+  for (const t of list) {
+    await run(env, "UPDATE mise_takers SET status = 'resume' WHERE id = ? AND status = 'locked'", t.id);
+    await pushEvent(env, t.id, [now(), "unlock", "", 0]);
+  }
+  return { unlocked: list.length };
 }
 
 async function pushEvent(env: Env, takerId: number, e: MiseEvent) {
@@ -356,11 +546,12 @@ function cleanLog(raw: any, at: number) {
 }
 /** Leaving and coming back, pastes (allowed and written down, or blocked), runs in the browser, moving to an item. */
 export async function learnerEvent(env: Env, takerId: number, b: any) {
+  if (b?.kind === "lock") return lockTaker(env, takerId, b.why);
   const x = await loadTaker(env, takerId);
   if (!x || x.t.status !== "active") return { ok: false };
   const c = contentOf(x.m);
   const kind = String(b.kind ?? "");
-  if (!EVENT_KINDS.includes(kind) || ["start", "submit", "check", "item"].includes(kind)) return { ok: false };
+  if (!EVENT_KINDS.includes(kind) || ["start", "submit", "check", "item", "lock", "unlock"].includes(kind)) return { ok: false };
   const item = itemOf(c, b.item) ?? "";
   const n = Math.max(0, Math.min(10_000_000, Math.round(Number(b.n) || 0)));
   // what was pasted, for the teacher (the start of it)
@@ -449,7 +640,7 @@ export async function aiCheck(env: Env, takerId: number, b: any, o: { submit?: b
 export async function submitTaker(env: Env, takerId: number, ctx: Ctx | null, auto = false) {
   const x = auto ? await loadTaker(env, takerId) : await writable(env, takerId);
   if (!x) throw new MiseError("unknown", 404);
-  const r = await run(env, "UPDATE mise_takers SET status = 'submitted', submitted_at = ? WHERE id = ? AND status = 'active'", now(), x.t.id);
+  const r = await run(env, `UPDATE mise_takers SET status = 'submitted', submitted_at = ? WHERE id = ? AND status ${auto ? "IN ('active', 'locked', 'resume')" : "= 'active'"}`, now(), x.t.id);
   if (!r.meta.changes) return;
   await pushEvent(env, x.t.id, [now(), "submit", "", auto ? 1 : 0]);
   await refreshScore(env, x.t.id);
@@ -520,6 +711,9 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
     const spent = parse<Record<string, number>>(t.spent, {});
     return {
       id: t.id, discord_id: t.discord_id, name: names.get(t.discord_id) ?? null, test: staff.has(t.discord_id), status: t.status, live: liveStatus(t, st, t0),
+      lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null, locks: ev.filter((e) => e[1] === "lock").length,
+      // right so far: a QCM answered right, a situation whose last run passed every check
+      correct: itemIds(c).filter((k) => sc.items[k]?.attempted && sc.items[k]?.score === 100).length,
       item: t.cur_item, itemSince: t.item_since, answered: itemIds(c).filter((k) => attempted(c, k, d.answers[k])).length,
       timeSec: t.started_at ? Math.max(0, (t.submitted_at ?? t0) - t.started_at) : 0, workSec: Math.round(Object.values(spent).reduce((a, b) => a + (Number(b) || 0), 0) / 1000),
       runs: st.runs, checks: st.checks, leaves: st.leaves, awaySec: st.awaySec, away: st.away, pastes: st.pastes, pasteChars: st.pasteChars, blockedPastes: st.blockedPastes,
@@ -532,7 +726,10 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
   const learners = takers.filter((t) => !staff.has(t.discord_id) && started(t));
   const testOnly = !learners.length && takers.some((t) => staff.has(t.discord_id) && started(t));
   const stats = { ...classStats(c, (testOnly ? takers.filter((t) => staff.has(t.discord_id) && started(t)) : learners).map((t) => ({ answers: parse(t.answers, {}), checks: parse(t.checks, {}), ai: parse(t.ai, {}), spent: parse(t.spent, {}) }))), testOnly };
-  return { mise: { ...m, content: c, status: statusOf(m), comps: parse<string[]>(m.comps, []), target: parse<string[]>(m.target, []), settings: settingsOf(m), preview: previewOf(c), now: t0 }, takers: rows, stats };
+  const p = await programOf(env, g);
+  const w = m.week ? p.weeks.find((x) => x.n === m.week) ?? null : null;
+  const checks = c.situations.length ? miseChecks(c, { weekComps: weekComps(w), selected: parse<string[]>(m.comps, []), brief: settingsOf(m).brief?.title }) : [];
+  return { mise: { ...m, content: c, status: statusOf(m), comps: parse<string[]>(m.comps, []), target: parse<string[]>(m.target, []), settings: settingsOf(m), preview: previewOf(c), now: t0, checks }, takers: rows, stats };
 }
 
 /** One learner: their answers per item, the checks, the AI categories, pastes, leaving and coming back, the typing record. */
@@ -619,7 +816,7 @@ export async function miseCron(env: Env) {
   const late = await all<{ id: number }>(env, "SELECT id FROM mises WHERE status = 'live' AND ends_at IS NOT NULL AND ends_at < ? LIMIT 3", now() - 60).catch(() => []);
   for (const m of late) {
     await run(env, "UPDATE mises SET status = 'closed', closed_at = ? WHERE id = ?", now(), m.id);
-    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status = 'active'", m.id);
+    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", m.id);
     for (const t of open) await submitTaker(env, t.id, null, true).catch((e) => console.error("mise auto submit", e));
   }
 }

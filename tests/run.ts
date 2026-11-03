@@ -2750,9 +2750,12 @@ section("lessons follow the class languages, AI buttons, live overview, SQL in /
   await slash(U.prof, "teacher", { code_language: "python" }, "setup");
   // AI: lesson
   db.prepare("DELETE FROM ai_usage").run();
-  const ls = await api("POST", `/api/path/lesson-ai?g=${G}`, { skill: "loops" });
+  const ls = await api("POST", `/api/path/lesson-ai?g=${G}`, { skill: "loops", hint: "compare with a while loop, an exercise on a list of prices" });
   check(ls.status === 200 && ls.data.en.includes("**Loops**") && ls.data.fr.length > 20, "✨ AI writes a lesson (EN + FR)");
-  check(ai.prompts.some((p) => p.includes("BEGINNERS") && p.includes("docs.python.org")), "the AI is told to write for beginners, with real links only");
+  check(ai.prompts.some((p) => p.includes("BEGINNER") && p.includes("docs.python.org") && p.includes("Common mistakes") && p.includes("Try it")), "the AI is told to teach: key ideas, an example, common mistakes, an exercise, and the known links");
+  check(ai.prompts.some((p) => p.includes("TEACHER'S REQUIREMENTS") && p.includes("compare with a while loop")), "the teacher's wishes are requirements the AI must follow");
+  check(ls.data.en.includes("](https://links.example.org/ok)") && !ls.data.en.includes("links.example.org/nope") && !ls.data.fr.includes("javascript:"), "resources: an AI link is kept only if the page really opens");
+  check(!ls.data.en.includes("made-up") && ls.data.en.includes("docs.python.org") && ls.data.en.includes("youtube.com/results") && ls.data.fr.includes("Ressources pour aller plus loin"), "…never an unchecked link in the text; known links and searches that always work");
   // AI: challenge for a skill
   const before = pv.data.coverage["strings-easy"] ?? 0;
   const gc = await api("POST", `/api/ai/challenge?g=${G}`, { skill: "strings", difficulty: "easy", kind: "mcq" });
@@ -2823,6 +2826,34 @@ section("tracks: one language or stack per class (SQL, MERN, AI…), AI SQL chal
   await api("PUT", `/api/track?g=${G}`, { track: "ai" });
   check((await api("GET", `/api/path?g=${G}`)).data.steps[0].skill === "ai_data", "…and finds it again when coming back");
   await api("PUT", `/api/track?g=${G}`, { track: "python" });
+  {
+    // 🧩 the teacher's own skills: in the path, the lessons, on Discord; never a built-in key taken over
+    const base = (await api("GET", `/api/path?g=${G}`)).data;
+    const cs = [{ key: "docker", en: "Docker", fr: "Docker", emoji: "🐳" }, { key: "loops", en: "Hijack", fr: "x", emoji: "x" }, { key: "Bad Key!", en: "Tailwind", emoji: "🎨" }];
+    const sv = await api("PUT", `/api/path?g=${G}`, { steps: [...base.steps, { skill: "docker", level: "easy", need: 2 }], lessons: { docker: { en: "Images and containers", fr: "Images et conteneurs" } }, customSkills: cs });
+    const dk = sv.data.skills.find((x: any) => x.key === "docker");
+    check(sv.status === 200 && dk?.custom && dk.fits && sv.data.steps.some((x: any) => x.skill === "docker") && sv.data.customSkills.length === 2 && sv.data.customSkills.some((x: any) => x.key === "badkey")
+      && sv.data.skills.filter((x: any) => x.key === "loops").length === 1 && sv.data.skills.find((x: any) => x.key === "loops").en !== "Hijack",
+      `custom skills: saved with the path, usable in a step, cleaned, a built-in skill can't be taken over (${JSON.stringify(sv.data.customSkills)})`);
+    const { skillName } = await import("../src/shared/skills.ts");
+    check(skillName("docker", "en") === "🐳 Docker", "…their name shows on Discord, not their identifier");
+    const { lessonFor } = await import("../src/shared/path.ts");
+    check(lessonFor(q1("SELECT * FROM guilds WHERE id = ?", G), "docker", "fr") === "Images et conteneurs", "…with the teacher's lesson");
+    await api("PUT", `/api/path?g=${G}`, { reset: true });
+  }
+  {
+    // 🎭 the mise en situation's language: the teacher's, else the brief's, else the repo's (not HTML/CSS by default)
+    const { taskLang, isHtmlCss, TASK_SYSTEM } = await import("../src/shared/review/task.ts");
+    const html = "Créer un site vitrine pour un événement : pages, menu, responsive.";
+    check(taskLang({ brief: html, tech: "HTML, CSS", files: ["index.html", "style.css"] }) === "HTML et CSS"
+      && taskLang({ brief: html, tech: "", files: ["index.html", "js/app.js", "js/data.js", "style.css"] }) === "JavaScript"
+      && taskLang({ brief: "Gestion des réservations avec PHP et PDO", tech: "", files: ["index.php"] }) === "PHP"
+      && taskLang({ brief: html, tech: "HTML, CSS", files: ["index.html"], teacher: "PHP" }) === "PHP"
+      && isHtmlCss("HTML et CSS") && !isHtmlCss("JavaScript"),
+      "the mise en situation follows the brief's language, else the repo's (a site for an « événement » is not JavaScript), and the teacher's choice wins");
+    const sys = TASK_SYSTEM({ duree: "15 min", lvl: 2, lvlName: "x", lvlRule: "y", js: true, lang: "PHP" });
+    check(sys.includes("LANGAGE DE LA TÂCHE : PHP") && !sys.includes("pas de JavaScript"), "…and the AI is told which language to write it in");
+  }
   // 🌐 translations
   db.prepare("UPDATE guilds SET lang = 'en' WHERE id = ?").run(G);
   await slash(sam, "practice", { difficulty: "easy", type: "mcq", language: "python" });
@@ -4024,6 +4055,14 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: "Points forts\n\n" + body }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
     && C.aiCommentText({ ...lvD, bonus: [] }, { commentaire: body }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
     "an AI comment that says « vous », has titles or bullets, invents a bonus, praises above the level, uses markdown or greets is refused (the template is used)");
+  {
+    // a notion that is neither in the brief nor in the assessment (« fetch et async/await » for an HTML/CSS brief) is refused
+    const extra = body.replace("Tu as aussi réalisé un bonus", "Tu maîtrises aussi les appels d’API avec fetch et async/await. Tu as aussi réalisé un bonus");
+    check(C.outsideNotions(lvD, extra).length > 0 && C.aiCommentText(lvD, { commentaire: extra }) === null && C.outsideNotions(lvD, body).length === 0,
+      `a comment about a notion outside the brief and the assessment is refused (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
+    const withApi = { ...lvD, scope: [...lvD.scope, ...C.outsideNotions(lvD, extra)] };
+    check(C.aiCommentText(withApi, { commentaire: extra }) !== null, "…and accepted when the brief or the assessment is about it");
+  }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
   const bid = mk.data.brief.id, who = `u:${U.carol.id}`;
@@ -6389,6 +6428,24 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   check(L.data.some((x: any) => x.id === id && x.toReview === 1 && x.done === 2), "…and the plans list says a mini brief waits for them");
   const rv = await api("POST", `/api/wplans/${id}/review?g=${G}`, { step: br.id, ok: true, comment: "Propre." });
   check(rv.status === 200 && rv.data.status.steps.find((x: any) => x.id === br.id).state === "done", "validated by the teacher");
+  {
+    // the teacher marks ANY action done or not (a challenge too), with a comment on several lines; and can take it back
+    const chs = rv.data.plan.steps.find((x: any) => x.kind === "challenge");
+    const mk = (body: any) => api("POST", `/api/wplans/${id}/review?g=${G}`, { step: chs.id, ...body });
+    const d1 = await mk({ ok: true, comment: "Fait en classe.\nBien expliqué." });
+    const d2 = await mk({ ok: false, comment: "Pas encore." });
+    const d3 = await mk({ clear: true });
+    const stOf = (r: any) => r.data.status.steps.find((x: any) => x.id === chs.id).state;
+    check(stOf(d1) === "done" && d1.data.plan.steps.find((x: any) => x.id === chs.id).review.comment.includes("\n") && stOf(d2) === "redo" && stOf(d3) !== "done" && stOf(d3) !== "redo",
+      `the teacher marks a challenge done or not done, then removes the mark (${stOf(d1)}, ${stOf(d2)}, ${stOf(d3)})`);
+    // the mini brief's objectives: the teacher ticks them too
+    const before = rv.data.plan.steps.find((x: any) => x.id === br.id).checks || [];
+    const tk = await api("POST", `/api/wplans/${id}/check?g=${G}`, { step: br.id, i: 0, on: !before.includes(0) });
+    const after = tk.data.plan.steps.find((x: any) => x.id === br.id).checks;
+    check(tk.status === 200 && after.includes(0) === !before.includes(0), "the teacher ticks a mini brief's objective (the student sees the same list)");
+    await api("POST", `/api/wplans/${id}/check?g=${G}`, { step: br.id, i: 0, on: before.includes(0) });
+    check((await api("POST", `/api/wplans/${id}/check?g=${G}`, { step: br.id, i: 99, on: true })).status === 400, "…an unknown objective is refused");
+  }
   // everything done (the challenge solved in Discord) → the plan is done
   run1("UPDATE assignments SET status = 'done', completed_at = ? WHERE discord_id = ? AND note LIKE 'Plan d''action%'", clock.now(), B);
   const ans = v.steps.find((x: any) => x.kind === "answer");
@@ -7027,6 +7084,68 @@ section("no merge conflict left in the code (a stray <<<<<<< line breaks the CSS
   check(!left.length, `merge conflict lines (<<<<<<< / ======= / >>>>>>>) left in: ${left.join(", ")}`);
 }
 
+section("💤 idle students: a « need help? » DM in class time, buttons to raise a hand or ask");
+{
+  const I = await import("../src/shared/idle.ts");
+  const { localTime, addDays, mondayOf, dayOf } = await import("../src/shared/vscode.ts");
+  // off by default; the settings are cleaned
+  const g0 = await api("GET", `/api/idle?g=${G}`);
+  check(g0.status === 200 && g0.data.cfg.on === false && g0.data.cfg.minutes === 60, "off by default (an hour when it's turned on)");
+  const sv = await api("PUT", `/api/idle?g=${G}`, { on: true, minutes: 45, from: "09:00", to: "12:00", days: [0, 1, 2, 3, 4, 9], max: 2 });
+  const bad = I.cleanIdle({ minutes: 2, from: "18:00", to: "08:00", max: 99 });
+  check(sv.data.cfg.on && sv.data.cfg.minutes === 45 && sv.data.cfg.days.join() === "0,1,2,3,4" && bad.minutes === 15 && bad.max === 5 && bad.to === "17:00", "the teacher's settings, cleaned (15 min at least, the hours in order)");
+  // a Monday of next week, 10:00 in Morocco
+  const day = addDays(mondayOf(dayOf(clock.now())), 7), t0 = localTime(day, 600);
+  const g = q1("SELECT * FROM guilds WHERE id = ?", G);
+  const cfg = await I.idleCfg(env, G);
+  const set = (id: string, t: number) => run1("UPDATE players SET last_active = ? WHERE guild_id = ? AND discord_id = ?", t, G, id);
+  run1("DELETE FROM hands WHERE guild_id = ?", G);
+  run1("DELETE FROM app_settings WHERE k LIKE 'idlenudge:%'");
+  for (const p of q("SELECT discord_id FROM players WHERE guild_id = ?", G)) set(p.discord_id, localTime(addDays(day, -1), 600));   // yesterday: absent today
+  set(U.alice.id, localTime(day, 540));        // worked at 9:00, nothing since: 60 min
+  set(U.bob.id, t0 - 600);                     // 10 min ago
+  const who = (t = t0) => I.idleStudents(env, g, cfg, t).then((r) => r.map((x) => x.id));
+  const w0 = await who();
+  check(w0.length === 1 && w0[0] === U.alice.id, `only the student idle for too long after working today (not the one active, not the absent ones): ${w0.join(",")}`);
+  check((await who(localTime(day, 13 * 60))).length === 0 && (await who(localTime(addDays(day, 5), 600))).length === 0, "…never outside the class hours or on a day off");
+  const sent: { id: string; p: any }[] = [];
+  const send = async (id: string, p: any) => { sent.push({ id, p }); return true; };
+  await I.idleCron(env, send, t0);
+  const m = sent[0]?.p;
+  check(sent.length === 1 && sent[0].id === U.alice.id && /besoin d'aide|need help/i.test(m.content) && ids(m).join() === `idle:hand:${G},idle:ask:${G},idle:ok:${G}`, "the DM: « need help? » with ✋ raise a hand, ❓ ask, 👍 fine (the class in the buttons)");
+  await I.idleCron(env, send, t0 + 300);
+  check(sent.length === 1, "…once per idle spell (not every 5 minutes)");
+  set(U.alice.id, t0 + 600);                   // works again at 10:10, then idle again
+  await I.idleCron(env, send, t0 + 600 + 50 * 60);
+  set(U.alice.id, t0 + 600 + 55 * 60);
+  await I.idleCron(env, send, t0 + 600 + 55 * 60 + 50 * 60);
+  const toAlice = sent.filter((x) => x.id === U.alice.id).length;
+  check(toAlice === 2 && sent.some((x) => x.id === U.bob.id), `…again after working and going idle again, at most 2 a day (${toAlice}); the others when their turn comes`);
+  // a student with a raised hand is left alone
+  run1("DELETE FROM app_settings WHERE k LIKE 'idlenudge:%'");
+  set(U.alice.id, localTime(day, 540));
+  run1("INSERT INTO hands (guild_id, discord_id, question, status, created_at) VALUES (?, ?, 'help', 'waiting', ?)", G, U.alice.id, t0 - 60);
+  check((await who()).length === 0, "…not a student whose hand is already raised");
+  run1("DELETE FROM hands WHERE guild_id = ?", G);
+  // the buttons, from the DM (no server in the interaction): a raised hand, a question, fine
+  const dmRaw = (custom_id: string, type = 3, extra: any = {}) => ({ type, id: String(++tok), token: `tok${tok}`, application_id: "app1", channel_id: "dm-x", user: { id: U.alice.id, username: "alice", global_name: "Alice" }, data: { custom_id, component_type: 2, ...extra } });
+  const h = await call(dmRaw(`idle:hand:${G}`));
+  check(h.type === 9 && h.data.custom_id === `mhand:${G}`, "✋ opens the help-me form");
+  await call(dmRaw(`mhand:${G}`, 5, { components: [{ type: 1, components: [{ type: 4, custom_id: "q", value: "Je ne comprends pas fetch" }] }] }));
+  check(q("SELECT * FROM hands WHERE guild_id = ? AND discord_id = ? AND status = 'waiting'", G, U.alice.id).length === 1, "…and the hand is raised in the class's Help queue");
+  const a = await call(dmRaw(`idle:ask:${G}`));
+  check(a.type === 9 && a.data.custom_id === `mask:${G}`, "❓ opens a question form");
+  const f0 = q1("SELECT COUNT(*) AS n FROM faq WHERE guild_id = ?", G).n;
+  await call(dmRaw(`mask:${G}`, 5, { components: [{ type: 1, components: [{ type: 4, custom_id: "q", value: "Comment marche la boucle forEach sur un tableau d'objets ?" }] }] }));
+  check(q1("SELECT COUNT(*) AS n FROM faq WHERE guild_id = ?", G).n >= f0, "…and the question goes to the class's questions (or its FAQ answer)");
+  const ok = await call(dmRaw(`idle:ok:${G}`));
+  check(ok.type === 7 && ok.data.components.length === 0, "👍 closes the DM's buttons");
+  const tday = await api("GET", `/api/idle?g=${G}`);
+  check(Array.isArray(tday.data.today), "the teacher sees who got it today");
+  run1("DELETE FROM hands WHERE guild_id = ?", G);
+  await api("PUT", `/api/idle?g=${G}`, { on: false });
+}
+
 section("slash command definitions are valid for Discord");
 {
   let captured: any = null;
@@ -7162,7 +7281,8 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   check(setup.status === 200 && setup.data.weeks.some((w: any) => w.n === 3 && w.competencies.includes("C3N1")) && setup.data.students.some((s: any) => s.discord_id === U.alice.id) && !setup.data.students.some((s: any) => s.discord_id === U.prof.id), "setup: the weeks with their competencies, the learners (not the teacher)");
   const pr = await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: ["C3N1", "C4N1"], metier: "Coopérative d'argan" });
   check(pr.status === 200 && pr.data.prompt.includes(w3.title) && pr.data.prompt.includes("C4N1"), "the prompt for Claude of week 3");
-  check((await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: [] })).status === 400, "…at least one competency");
+  const prDef = await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: [] });
+  check(prDef.status === 200 && w3.competencies.every((c) => prDef.data.prompt.includes(M.normComp(c.includes("N") ? c : c + "N1") ?? c)), "…no competency chosen: the week's");
   const sit = (i: number) => ({ title: `Le titre ${i}`, context: "Fatima gère la page de la coopérative Tifawin à Agadir et veut changer le titre.", difficulty: i, competencies: ["C3N1"], notions: ["querySelector"], runtime: "web",
     files: [{ name: "index.html", lang: "html", starter: '<h1 id="titre">Bienvenue</h1>\n<script src="script.js"></script>' }, { name: "script.js", lang: "javascript", starter: "// à toi\n" }],
     questions: ["1. Sélectionne le titre.", "2. Change son texte."], expected: "Le titre affiché est « Tifawin ».", solution: [{ name: "script.js", content: "document.querySelector('#titre').textContent = 'Tifawin';" }],
@@ -7180,7 +7300,8 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   const ed = await api("PUT", `/api/mises/${mid}`, { g: G, json: JSON.stringify({ ...file, title: "Tifawin v2" }) });
   check(ed.status === 200 && ed.data.mise.content.title === "Tifawin v2", "a draft's JSON can be edited (checked again)");
   const calls0 = discordCalls.length;
-  const ln = await api("POST", `/api/mises/${mid}/launch`, { g: G, minutes: 90, noPaste: false, channel: false });
+  check(JSON.parse(q1("SELECT settings FROM mises WHERE id = ?", mid).settings).lockScreen === true, "a new one is in full screen by default (like an assessment)");
+  const ln = await api("POST", `/api/mises/${mid}/launch`, { g: G, minutes: 90, noPaste: false, channel: false, lockScreen: false });
   check(ln.status === 200 && ln.data.invited === 2 && ln.data.mise.status === "live" && ln.data.takers.length === 2, "launched for the 2 learners chosen");
   check(discordCalls.slice(calls0).filter((x) => JSON.stringify(x.body ?? {}).includes("/mes/")).length === 2, "each gets their personal link by DM");
   check((await api("PUT", `/api/mises/${mid}`, { g: G, json: JSON.stringify(file) })).status === 400, "once launched, its content can't change");
@@ -7290,6 +7411,128 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   await api("DELETE", `/api/mises/${imp3.data.id}?g=${G}`);
   await api("DELETE", `/api/mises/${imp2.data.id}?g=${G}`);
   check(!q1("SELECT id FROM mises WHERE id = ?", imp2.data.id) && !q("SELECT id FROM mise_takers WHERE mise_id = ?", imp2.data.id).length, "deleted with its papers");
+}
+
+section("mises en situation: made like a brief (upload, AI for a brief or the sprint), checklist, normal edit, launched for whom you choose, full screen lock");
+{
+  const sit = (i: number) => ({ title: `Le titre ${i}`, context: "Fatima gère la page de la coopérative Tifawin à Agadir et veut changer le titre.", difficulty: i, competencies: ["C3N1"], notions: [`notion ${i}`], runtime: "web",
+    files: [{ name: "index.html", lang: "html", starter: '<h1 id="titre">Bienvenue</h1>\n<script src="script.js"></script>' }, { name: "script.js", lang: "javascript", starter: "// à toi\n" }],
+    questions: ["1. Sélectionne le titre.", "2. Change son texte."], expected: "Le titre affiché est « Tifawin ».", solution: [{ name: "script.js", content: "document.querySelector('#titre').textContent = 'Tifawin';" }],
+    checks: i === 5 ? [] : i === 4 ? [{ type: "source", file: "script.js", pattern: "querySelector", label: "Le titre est sélectionné" }] : [{ type: "dom-text", selector: "h1", contains: "Tifawin", label: "Le titre affiché a changé" }, { type: "source", file: "script.js", pattern: "querySelector", label: "Le titre est sélectionné en JavaScript" }],
+    errorHints: ["selection", "syntax"] });
+  const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
+    qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: `textContent ${i}` })) };
+  // pure: what a file says, and the checklist
+  const det = M.detectMise(JSON.stringify(file));
+  check(det.week === 3 && det.comps.join(",") === "C3N1,C4N1" && det.title === "Tifawin", "a JSON says its week and its competencies (read to fill the form)");
+  check(M.detectMise("not json").week === null && !M.detectMise({ week: 99 }).week, "…nothing from a broken file or a week out of range");
+  const c = M.checkMise(JSON.stringify(file), {}).content!;
+  const cl = M.miseChecks(c, { weekComps: ["C3N1", "C4N1", "C5N1", "CT2N1"], selected: ["C3N1", "C4N1"], brief: "Le site Tifawin" });
+  const txt = cl.map((x) => `${x.ok ? "ok" : "ko"}:${x.text}`).join("\n");
+  check(/ko:Competencies of the week not in it: C5N1/.test(txt) && !/CT2N1/.test(txt.split("\n").find((l) => l.includes("of the week")) ?? ""), "checklist: a technical competency of the week left out (the soft ones aren't required)");
+  check(/ko:No automatic check in S5/.test(txt) && /ko:Only one check in S4/.test(txt) && /ko:S4 only looks for words/.test(txt), "…a situation graded by hand, one with a single check, one that only reads the code");
+  check(/ko:Every QCM has its right answer at the same place \(A\)/.test(txt) && cl.some((x) => x.tip && x.text.includes("Le site Tifawin")), "…the right answers all at A; the brief it's linked to as a reminder");
+  check(M.miseChecks(c, { selected: ["C3N1", "C4N1", "C6N1"] }).some((x) => !x.ok && x.text.includes("never tested: C6N1")), "…a competency chosen but tested nowhere");
+  const bp = M.buildPrompt({ program: BUILTIN[0], week: BUILTIN[0].weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], brief: { title: "Ittihad Al Fajr", text: "Le club de football de Tanger veut un site pour sa tachkila." }, wishes: "une situation sur les formulaires" });
+  check(bp.includes("BRIEF DE LA SEMAINE « Ittihad Al Fajr »") && bp.includes("tachkila") && bp.includes("DANS ce projet") && bp.includes("EXIGENCES DU FORMATEUR") && bp.includes("une situation sur les formulaires"), "the prompt: linked to the brief (its project, its data) and the teacher's requirements");
+
+  // upload: no week, no competency picked → read from the file
+  const up = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file) });
+  check(up.status === 200 && !up.data.problems.length && up.data.detected.week === 3 && up.data.detected.sprint === BUILTIN[0].weeks.find((w) => w.n === 3)!.sprint && up.data.detected.comps.join(",") === "C3N1,C4N1", "upload: the week, the sprint and the competencies are read from the file " + JSON.stringify(up.data.problems?.slice(0, 2)));
+  check(up.data.checks.some((x: any) => x.text.includes("No automatic check in S5")), "…with the checklist (warnings and reminders)");
+  // the AI writes it for a brief (one of ours): the brief's text in the prompt, checked, problems sent back once
+  const br = await api("POST", "/api/briefs", { g: G, title: "Ittihad Al Fajr" });
+  const bid = br.data.brief.id;
+  db.prepare("UPDATE briefs SET week = 3 WHERE id = ?").run(bid);
+  ai.miseJson = JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) });
+  ai.miseJson2 = JSON.stringify(file);
+  db.prepare("DELETE FROM ai_usage").run();
+  const nBefore = q("SELECT id FROM mises WHERE guild_id = ?", G).length;
+  const gen = await api("POST", "/api/mises/generate", { g: G, brief: bid, comps: ["C3N1", "C4N1"], wishes: "pas de regex" });
+  check(gen.status === 200 && !gen.data.problems.length && gen.data.preview.situations.length === 5 && gen.data.brief.id === bid && gen.data.detected.week === 3, "AI for a brief: the brief's week, a full preview " + JSON.stringify(gen.data).slice(0, 300));
+  check(ai.users.some((u) => u.includes("BRIEF DE LA SEMAINE « Ittihad Al Fajr »") && u.includes("pas de regex")) && ai.users.some((u) => u.includes("TA PROPOSITION PRÉCÉDENTE NE RESPECTE PAS") && u.includes("exactly 5 questions")), "…the brief and the wishes go to the AI; a problem of the whole file: the whole file written again");
+  // a situation and a QCM out of the requirements: only those two written again, until it matches
+  const off = JSON.parse(JSON.stringify(file));
+  off.situations[4].notions = ["a", "b", "c", "d", "e", "f", "g"];                        // fixed here, no AI
+  off.situations[3].context = "Fatima récupère la liste avec fetch(\"/api/produits\") puis l'affiche.";   // out of scope
+  off.qcm[4].question = "Que renvoie fetch() ?";
+  ai.miseJson = JSON.stringify(off); ai.miseJson2 = "";
+  ai.miseItems = JSON.stringify({ items: { s4: file.situations[3], q5: file.qcm[4] } });
+  ai.users.length = 0;
+  const gen2 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const rep = ai.users.find((u) => u.includes("Réécris UNIQUEMENT ces éléments")) ?? "";
+  check(gen2.status === 200 && !gen2.data.problems.length && JSON.parse(gen2.data.json).situations[4].notions.length === 5 && !gen2.data.json.includes("fetch"), "out of the requirements: written again until it matches (" + JSON.stringify(gen2.data.problems) + ")");
+  // the QCM read again: one that can be guessed is written again
+  ai.miseJson = JSON.stringify(file);
+  ai.qcmWeak = [[{ n: 2, why: "les autres choix sont hors sujet" }], []];
+  ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Quel événement pour un clic ?", choices: ["click", "mousedown", "pointerup", "dblclick"], notion: "événement click" } } });
+  ai.users.length = 0;
+  const gen3 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  check(gen3.status === 200 && JSON.parse(gen3.data.json).qcm[1].choices.includes("mousedown") && ai.users.some((u) => u.includes("QCM 2") && u.includes("facile à deviner")), "a QCM that can be guessed without the notion: written again with credible wrong choices");
+  check(ai.prompts.some((p) => p.includes("MÊME TYPE que la bonne réponse")), "…and the prompt asks for wrong choices of the same kind as the answer");
+  ai.qcmWeak = [];
+  check(rep.includes("situation 4") && rep.includes("QCM 5") && !rep.includes("situation 5 (") && rep.includes("RAPPEL DU PÉRIMÈTRE"), "…only the items with a problem are sent back, with what's out of scope; too many notions is fixed without the AI");
+  check(q("SELECT id FROM mises WHERE guild_id = ?", G).length === nBefore, "…nothing saved before the teacher saves");
+  ai.miseJson = "{ broken"; ai.miseJson2 = "";
+  check((await api("POST", "/api/mises/generate", { g: G, week: 3 })).status === 502, "AI from the sprint: an answer that isn't JSON is a clear error");
+  ai.miseJson = "";
+  // saved with the brief, in full screen
+  const sv = await api("POST", "/api/mises/import", { g: G, json: gen.data.json, brief: bid, week: 3, comps: ["C3N1", "C4N1"], save: true });
+  const mid = sv.data.id;
+  const view = (await api("GET", `/api/mises/${mid}?g=${G}`)).data;
+  check(view.mise.settings.brief?.id === bid && view.mise.settings.lockScreen === true && view.mise.target.length === 0 && view.mise.checks.length > 3, "saved: linked to the brief, full screen, nobody chosen yet, its checklist on the page");
+  // the normal edit: title, week, competencies and the content, checked again
+  const ed = await api("PUT", `/api/mises/${mid}`, { g: G, title: "Tifawin bis", week: 3, comps: ["C3N1"], json: JSON.stringify({ ...file, title: "Tifawin bis", competencies: ["C3N1"], qcm: file.qcm.map((x) => ({ ...x, competencies: ["C3N1"] })) }) });
+  check(ed.status === 200 && ed.data.mise.title === "Tifawin bis" && ed.data.mise.comps.join() === "C3N1" && ed.data.mise.content.qcm[0].competencies[0] === "C3N1", "edit: the title, the competencies and the content saved together");
+  const ed2 = await api("PUT", `/api/mises/${mid}`, { g: G, comps: ["C5N1"] });
+  check(ed2.status === 200 && ed2.data.problems?.length > 0, "…a competency the content doesn't test: refused with the problems");
+  // launched for the learners chosen now (not when it was made), and a teacher testing it
+  const ln = await api("POST", `/api/mises/${mid}/launch`, { g: G, students: [U.alice.id], testers: [U.prof.id], minutes: 60, lockScreen: true, send: false });
+  check(ln.status === 200 && ln.data.takers.length === 2 && ln.data.mise.target.join() === U.alice.id, "launch: the learners picked in the launch window (+ the teacher testing it)");
+  const links = (await api("GET", `/api/mises/${mid}/links?g=${G}`)).data.links;
+  const mes = async (u: string, action = "", body?: any) => {
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${links[u].split("/mes/")[1]}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, makeCtx());
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const info = await mes(U.alice.id, "info");
+  check(info.data.lockScreen === true, "the learner's page knows it's in full screen");
+  const trd = await mes(U.alice.id, "translate", { to: "ar", texts: ["Le titre", "Change le texte"] });
+  check(trd.status === 200 && Array.isArray(trd.data.texts) && trd.data.texts.length === 2 && (await mes(U.alice.id, "translate", { to: "de", texts: ["x"] })).status === 400, "translation: the situation or the QCM in Arabic, French or English");
+  const pg = String((await mes(U.alice.id)).data);
+  check(pg.includes('data-tr="ar"') === false && pg.includes("trBar()") && pg.includes("العربية") && !pg.includes("🔎 Vérifier") && pg.includes("showStarter") && pg.includes('id="sdet"'), "the page: language buttons, « Vérifier mon code » without the lens, its own tabs for the starter code, folded on demand");
+  const page = String((await mes(U.alice.id)).data);
+  check(page.includes("requestFullscreen") && page.includes("fullscreenchange") && page.includes("Session arrêtée"), "…the page asks for full screen and stops when they leave it");
+  const st = await mes(U.alice.id, "start", {});
+  check(st.status === 200 && st.data.lockScreen === true, "started (in full screen)");
+  await mes(U.alice.id, "save", { item: "q1", answer: { choice: 0 }, cur: "q1" });
+  const lk = await mes(U.alice.id, "event", { kind: "lock", why: "fullscreen" });
+  check(lk.data.status === "locked" && q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).status === "locked", "leaving full screen: the session stops");
+  check((await mes(U.alice.id, "save", { item: "q1", answer: { choice: 1 } })).data.error === "locked" && (await mes(U.alice.id, "start", {})).data.error === "locked", "…they can't write nor start again on their own");
+  const i2 = await mes(U.alice.id, "info");
+  check(i2.data.taker === "locked" && i2.data.lockWhy === "fullscreen", "…their page says why");
+  const lv = (await api("GET", `/api/mises/${mid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+  check(lv.live === "locked" && lv.lockWhy === "fullscreen" && lv.locks === 1, "the teacher sees them stopped, and why");
+  check(lv.correct === 1 && lv.item === "q1" && lv.itemSince > 0, "…how many questions are right so far, and since when they're on the current one");
+  const ul = await api("POST", `/api/mises/${mid}/unlock`, { g: G, taker: lv.id });
+  check(ul.data.unlocked === 1 && (await mes(U.alice.id, "info")).data.taker === "resume", "let back in by the teacher");
+  const back = await mes(U.alice.id, "start", {});
+  check(back.status === 200 && back.data.answers.q1.choice === 0 && q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).status === "active", "…they continue where they were");
+  const again = await mes(U.alice.id, "start", {});
+  check(again.data.error === "locked" && JSON.parse(q1("SELECT events FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).events).filter((e: any) => e[1] === "lock").at(-1)[4] === "reload", "opening the page again while working (a reload) stops it too");
+  await api("POST", `/api/mises/${mid}/close`, { g: G });
+  check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).status === "submitted", "closed: a stopped paper is handed in like the others");
+  // without the full screen rule: leaving is only written down
+  const sv2 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+  await api("POST", `/api/mises/${sv2.data.id}/launch`, { g: G, students: [U.bob.id], lockScreen: false, send: false });
+  const l2 = (await api("GET", `/api/mises/${sv2.data.id}/links?g=${G}`)).data.links[U.bob.id].split("/mes/")[1];
+  const call2 = async (a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${l2}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as any;
+  await call2("start", {});
+  check((await call2("event", { kind: "lock", why: "blur" })).ok === false && (await call2("start", {})).paper, "full screen off: nothing stops (as before)");
+  // « only me »: a test launch for the teacher
+  const sv3 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+  const t3 = await api("POST", `/api/mises/${sv3.data.id}/launch`, { g: G, only: true, testers: [U.prof.id], send: false });
+  check(t3.data.takers.length === 1 && t3.data.takers[0].discord_id === U.prof.id, "launch « only me (a test) »: nobody else gets it");
+  for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
 }
 
 section("the assistant knows the app: its pages and how to set up");

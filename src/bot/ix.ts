@@ -61,7 +61,12 @@ export function errorText(L: string, e: unknown): string {
 
 /** Which server a button pressed in a DM belongs to. */
 export async function guildFromButton(env: Env, customId: string, userId: string): Promise<string | null> {
-  const [kind, x] = customId.split(":");
+  const [kind, x, y] = customId.split(":");
+  // a DM about one class (💤 idle: « need help? »): the class is in the id, if they're in it
+  if (["idle", "mhand", "mask"].includes(kind)) {
+    const gid = kind === "idle" ? y : x;
+    if (gid && /^[\w-]{1,40}$/.test(gid) && (await one(env, "SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", gid, userId))) return gid;
+  }
   const id = Number(x);
   const noId = ["plan", "path", "today", "report", "skills", "sk", "help", "shop", "shopm", "shopmc", "shopsel", "share", "cert", "ivnew", "hand", "faqok", "faqask", "vsc"].includes(kind);
   if (kind === "hrate") {

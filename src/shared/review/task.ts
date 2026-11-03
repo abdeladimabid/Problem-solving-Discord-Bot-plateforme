@@ -103,7 +103,29 @@ export function taskFallback(target: TaskTarget, o: { project: string; files: st
   };
 }
 
-export const TASK_SYSTEM = (o: { duree: string; lvl: number; lvlName: string; lvlRule: string; js: boolean }) => [
+/**
+ * The language of the task: the teacher's choice when given (« PHP », « JavaScript et le DOM »…), else what the brief
+ * names, else what the learner's repo is written in; « HTML et CSS » when nothing else shows.
+ */
+export function taskLang(o: { brief: string; tech: string; files: string[]; teacher?: string }): string {
+  const t = line(o.teacher, 60);
+  if (t) return t;
+  const txt = `${o.brief} ${o.tech}`;
+  const named: [RegExp, string][] = [
+    [/laravel/i, "PHP (Laravel)"], [/symfony/i, "PHP (Symfony)"], [/\bphp\b|\bpdo\b/i, "PHP"], [/\breact\b/i, "JavaScript (React)"], [/\bvue(\.js)?\b/i, "JavaScript (Vue)"],
+    [/\bnode(\.js)?\b|\bexpress\b/i, "JavaScript (Node.js)"], [/typescript/i, "TypeScript"], [/\bpython\b|\bdjango\b|\bflask\b/i, "Python"], [/\bjava\b|\bspring\b/i, "Java"],
+    [/javascript|\bjs\b|\bdom\b|\bfetch\b|localstorage|addeventlistener/i, "JavaScript"], [/\bsql\b|mysql|postgres/i, "SQL"],
+  ];
+  const fromBrief = named.filter(([rx]) => rx.test(txt)).map(([, l]) => l);
+  if (fromBrief.length) return [...new Set(fromBrief)].slice(0, 2).join(" et ");
+  // the repo: the most used code language beyond HTML and CSS
+  const ext: [RegExp, string][] = [[/\.php$/i, "PHP"], [/\.(tsx?)$/i, "TypeScript"], [/\.(jsx?|mjs)$/i, "JavaScript"], [/\.py$/i, "Python"], [/\.java$/i, "Java"], [/\.sql$/i, "SQL"]];
+  const count = ext.map(([rx, l]) => [l, o.files.filter((f) => rx.test(f) && !/(^|\/)(node_modules|vendor|dist|build)\//.test(f) && !/\.min\.js$/i.test(f)).length] as const).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+  return count.length ? count[0][0] : "HTML et CSS";
+}
+export const isHtmlCss = (lang: string) => /^\s*html\s*(et|and|\/|,|&|\+)?\s*css\s*$/i.test(lang) || /^\s*(html|css)\s*$/i.test(lang);
+
+export const TASK_SYSTEM = (o: { duree: string; lvl: number; lvlName: string; lvlRule: string; js: boolean; lang?: string }) => [
   "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
   `Propose UNE mise en situation : une petite tâche que l’apprenant réalise seul, en direct, devant le formateur, sur SON propre projet, en ${o.duree}.`,
   "La tâche lui demande soit d’AJOUTER une petite fonctionnalité à son code, soit de MODIFIER son code pour qu’il fasse une fonctionnalité donnée (ex. un état actif sur le lien du menu de la page en cours, un point de rupture à 768 px qui empile les cartes, un champ obligatoire avec un pattern dans le formulaire ; plus tard : un nouveau filtre sur un résultat de fetch, une nouvelle requête SQL, une nouvelle route…).",
@@ -111,7 +133,7 @@ export const TASK_SYSTEM = (o: { duree: string; lvl: number; lvlName: string; lv
   `- Niveau ${o.lvl} (${o.lvlName}) : ${o.lvlRule}`,
   `- Taille : la tâche tient vraiment en ${o.duree}. Jamais une page entière ni plusieurs fonctionnalités : une seule chose, sur le POINT VISÉ.`,
   "- Seulement ce que le brief demande et les concepts de la SEMAINE DU PROGRAMME ; jamais rien du HORS PÉRIMÈTRE.",
-  `- ${o.js ? "Utilise le langage du projet." : "Le brief est en HTML et CSS : pas de JavaScript, rien d’interactif."}`,
+  `- ${o.js ? `LANGAGE DE LA TÂCHE : ${o.lang || "le langage du projet"}. La fonctionnalité à ajouter ou à modifier s’écrit en ${o.lang || "ce langage"} (pas seulement du HTML ou du CSS).` : "Le brief est en HTML et CSS : pas de JavaScript, rien d’interactif."}`,
   "- Ne nomme aucune technique ou propriété que le brief ne cite pas : décris le résultat à obtenir, l’apprenant choisit comment faire.",
   "- Appuie-toi sur SES vrais fichiers (liste fournie) : nomme les fichiers, pages ou fonctions à toucher.",
   "- Textes pour l’apprenant (titre, contexte, consigne, critères) au vouvoiement (« Ajoutez… », « Modifiez… »). « regarder » est pour le formateur seulement.",

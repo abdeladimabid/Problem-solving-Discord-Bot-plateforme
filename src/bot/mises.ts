@@ -6,10 +6,13 @@
 //   POST /mes/<t>/run      the checks of a situation (PHP and Node.js run here; HTML/CSS/JS and SQL ran in the page)
 //   POST /mes/<t>/check    "Vérifier mon code": the category of the problem only (3 per situation)
 //   POST /mes/<t>/submit   hand in
+//   POST /mes/<t>/translate  the situation / the QCM in Arabic, French or English (Google Translate, the AI as a backup)
 // The code runs in a sandboxed frame (scripts only, its own empty origin, a CSP without any network): no cookie, no
 // access to this page, the dashboard or the network. The solutions and the expected values never come to the page.
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
+import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
+import type { TrLang } from "../shared/webtranslate.ts";
 import { MiseError, aiCheck, learnerEvent, learnerInfo, readTakerToken, runItem, saveItem, startTaker, submitTaker } from "../shared/misesdb.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -27,6 +30,11 @@ export async function handleMise(request: Request, env: Env, ctx: Ctx, token: st
     let b: any = {};
     try { b = await request.json(); } catch { b = {}; }
     if (action === "start") return json(await startTaker(env, takerId));
+    if (action === "translate") {
+      const to = String(b.to ?? "") as TrLang;
+      if (!TR_LANGS.includes(to) || !Array.isArray(b.texts)) return json({ error: "bad" }, 400);
+      return json({ texts: await translateTexts(env, b.texts.map(String), to) });
+    }
     if (action === "save") return json(await saveItem(env, takerId, b));
     if (action === "event") return json(await learnerEvent(env, takerId, b));
     if (action === "run") return json(await runItem(env, takerId, b));
@@ -59,6 +67,15 @@ const PAGE = String.raw`<!doctype html>
 :root[data-theme="dark"] { --bg:#0b1222; --card:#111a2e; --ink:#e7edf8; --soft:#b3bfd6; --faint:#8a97b3; --line:#22304d; --blue:#5b8cff; --blue-ink:#93b4ff; --blue50:#16223d; --blue100:#1e2f55;
   --good:#34d399; --goodbg:#0d2b22; --bad:#f87171; --badbg:#3a1518; --warn:#fbbf24; --warnbg:#33260b; --code:#0f1626; --shadow:none; color-scheme: dark; }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.trbar { margin-left: auto; display: inline-flex; gap: 4px; } .trbar button { border: 1px solid var(--line); background: var(--card); color: var(--soft); border-radius: 8px; padding: 2px 9px; font: 600 12px Inter, system-ui, sans-serif; cursor: pointer; }
+.trbar button.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+.trans { margin: 8px 0 0; padding: 9px 12px; border-radius: 10px; background: var(--blue50); color: var(--ink); font-size: 14px; line-height: 1.6; }
+ol.trans { padding-left: 32px; } .trans.warn { background: var(--warnbg); color: var(--warn); }
+.trc { display: block; font-size: 14px; color: var(--soft); margin-top: 3px; } .trc:empty { display: none; }
+.sdet > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; gap: 10px; } .sdet > summary::-webkit-details-marker { display: none; }
+.sdet > summary h2 { margin: 0; } .sdet > summary::before { content: "▾"; color: var(--faint); } .sdet:not([open]) > summary::before { content: "▸"; }
+.sdet[open] > summary { margin-bottom: 10px; } .sdet-h { margin-left: auto; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; }
 button { font: inherit; }
 :focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
@@ -200,7 +217,12 @@ function savedMsg(m) { $("#saved").textContent = m; }
 
 // ---------------------------------------------------------------- state
 var P = null, A = {}, SPENT = {}, CHECKS = {}, AI = {}, CUR = null, ORDER = [], ENDS = null, OFFSET = 0, NOPASTE = false, DONE = false;
-var LOGS = {}, DIRTY = {}, RAN = {}, LASTERR = {}, CONSOLE = {}, OUTTAB = {}, FILE = {}, DOCS = {}, VISITED = {};
+// full screen rule (like an assessment): leaving it stops the session until the teacher lets them back
+var LOCK = false, LOCKED = false, GRACE = 0, STARTED = false;
+var FS_OK = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
+var LOGS = {}, DIRTY = {}, RAN = {}, LASTERR = {}, CONSOLE = {}, OUTTAB = {}, FILE = {}, SFILE = {}, DOCS = {}, VISITED = {};
+// the starter code shown or folded (remembered on this device)
+var STARTOPEN = store.get("cb-mes-start") !== "closed";
 var ed = null, startEd = null, saveTimer = null, logTimer = null;
 try { VISITED = JSON.parse(store.get(KEY + ":visited") || "{}") || {}; } catch (e) { VISITED = {}; }
 var sit = function (id) { return P.situations.filter(function (s) { return s.id === id; })[0] || null; };
@@ -224,18 +246,25 @@ function screen(html) { $("#prog").hidden = true; $("#finish").hidden = true; $(
 function fmtDate(u) { return new Date(u * 1000).toLocaleString("fr-FR", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }); }
 function intro(info) {
   $("#title").textContent = info.title; $("#sub").textContent = info.metier || "";
+  LOCK = !!info.lockScreen;
+  if (info.status === "live" && info.taker === "locked") return lockedScreen(info.lockWhy);
+  // full screen rule: the page opened again while working (a reload, another tab): the server stops the session
+  if (info.status === "live" && info.taker === "active" && LOCK) return start();
   if (info.status === "submitted") return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>');
   if (info.status === "closed" || info.status === "draft") return screen('<div class="big">🔒</div><h1>Cette mise en situation est fermée</h1><p class="muted">Demande à ton formateur si tu penses que c’est une erreur.</p>');
   var rules = ["💻 <span>" + info.n.situations + " mises en situation avec du code (de la plus facile à la plus difficile), puis " + info.n.qcm + " QCM.</span>",
     "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>",
-    "💾 <span>Tout est enregistré au fur et à mesure : tu peux recharger la page ou revenir sur une question jusqu’à l’envoi.</span>",
-    "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",
+    info.lockScreen ? "💾 <span>Tout est enregistré au fur et à mesure : tu peux revenir sur une question jusqu’à l’envoi.</span>" : "💾 <span>Tout est enregistré au fur et à mesure : tu peux recharger la page ou revenir sur une question jusqu’à l’envoi.</span>",
+    info.lockScreen ? "🖥️ <span>Elle se passe <b>en plein écran</b>.</span>" : "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",
+    info.lockScreen ? "🔒 <span>Si tu quittes le plein écran, changes d’onglet ou de fenêtre, <b>ta session s’arrête</b> : seul ton formateur peut te laisser revenir. Ton travail reste enregistré.</span>" : "",
     info.noPaste ? "✋ <span>Le copier-coller est désactivé dans l’éditeur pour cette mise en situation.</span>" : ""].filter(Boolean);
   var when = info.status === "scheduled" ? '<p class="notice">Elle commence ' + esc(fmtDate(info.startsAt)) + ' · <b id="cd"></b></p>' : info.endsAt ? '<p class="muted">À rendre avant ' + esc(fmtDate(info.endsAt)) + ".</p>" : "";
   screen('<div class="big">🧪</div><h1>' + esc(info.title) + '</h1><p class="muted">' + (info.name ? "Bonjour " + esc(info.name) + " · " : "") + esc(info.metier || "") + "</p>" + when
     + '<ul class="rules">' + rules.map(function (r) { return "<li>" + r + "</li>"; }).join("") + "</ul>"
-    + '<button class="btn primary" id="go" type="button"' + (info.status === "scheduled" ? " disabled" : "") + ">" + (info.taker === "active" ? "Continuer" : "Commencer") + " →</button>");
+    + (info.lockScreen && !FS_OK ? '<p class="notice">Ce navigateur ne permet pas le plein écran : ouvre ce lien sur un ordinateur, avec Chrome, Edge ou Firefox.</p>'
+      : '<button class="btn primary" id="go" type="button"' + (info.status === "scheduled" ? " disabled" : "") + ">" + (info.lockScreen ? "🖥️ " : "") + (info.taker === "active" || info.taker === "resume" ? "Continuer" : "Commencer") + (info.lockScreen ? " en plein écran" : "") + " →</button>"));
   var go = $("#go");
+  if (!go) return;
   go.onclick = begin;
   if (info.status === "scheduled") {
     var off = Date.now() / 1000 - info.now;
@@ -249,9 +278,18 @@ function intro(info) {
   } else go.focus();
 }
 function begin() {
-  $("#go").disabled = true;
-  call("/start", {}).then(function (r) {
-    if (!r || r.error) { if (r && (r.error === "submitted" || r.error === "closed" || r.error === "scheduled")) return call("/info").then(intro); return screen("<h1>Ce lien a expiré</h1>"); }
+  var go = $("#go"); if (go) go.disabled = true;
+  var full = LOCK ? document.documentElement.requestFullscreen({ navigationUI: "hide" }) : Promise.resolve();
+  full.then(function () { GRACE = Date.now() + 1500; return start(); }, function () { if (go) go.disabled = false; toast("Le plein écran est nécessaire pour commencer."); });
+}
+function start() {
+  return call("/start", {}).then(function (r) {
+    if (!r || r.error) {
+      if (r && r.error === "locked") return call("/info").then(function (i) { lockedScreen(i && i.lockWhy); });
+      if (r && (r.error === "submitted" || r.error === "closed" || r.error === "scheduled")) return call("/info").then(intro);
+      return screen("<h1>Ce lien a expiré</h1>");
+    }
+    LOCKED = false; LOCK = !!r.lockScreen;
     P = r.paper; A = r.answers || {}; SPENT = r.spent || {}; ENDS = r.endsAt; OFFSET = Date.now() / 1000 - r.now; NOPASTE = !!r.noPaste;
     Object.keys(r.checks || {}).forEach(function (k) { CHECKS[k] = r.checks[k]; });
     Object.keys(r.ai || {}).forEach(function (k) { AI[k] = r.ai[k]; });
@@ -262,7 +300,7 @@ function begin() {
     ORDER.forEach(function (id) { var s = sit(id); if (s) { A[id] = A[id] || { files: {} }; A[id].files = A[id].files || {}; s.files.forEach(function (f) { if (A[id].files[f.name] == null) A[id].files[f.name] = f.starter; }); FILE[id] = s.files[0] && s.files[0].name; } });
     $("#finish").hidden = false; $("#prog").hidden = false;
     go(ORDER.indexOf(r.cur) >= 0 ? r.cur : ORDER[0]);
-    timer(); setInterval(heartbeat, 20000); setInterval(tickSpent, 1000);
+    if (!STARTED) { STARTED = true; timer(); setInterval(heartbeat, 20000); setInterval(tickSpent, 1000); }
     Object.keys(DIRTY).forEach(function (k) { saveNow(k); });
   });
 }
@@ -312,10 +350,10 @@ function release() { if (ed) { ed.swapDoc(CodeMirror.Doc("")); ed = null; } }
 function drawQcm(q) {
   release();
   var i = P.qcm.indexOf(q), mine = A[q.id] && A[q.id].choice;
-  $("#main").innerHTML = '<div class="qcm"><div class="card"><div class="meta"><span class="kicker">QCM ' + (i + 1) + " / " + P.qcm.length + "</span><span>· " + q.points + " pt" + (q.points > 1 ? "s" : "") + "</span></div>"
-    + '<h1 class="qtext">' + esc(q.question) + "</h1>" + (q.code ? '<div class="starter cmbox" id="qcode"></div><div style="height:14px"></div>' : "")
+  $("#main").innerHTML = '<div class="qcm"><div class="card"><div class="meta"><span class="kicker">QCM ' + (i + 1) + " / " + P.qcm.length + "</span><span>· " + q.points + " pt" + (q.points > 1 ? "s" : "") + "</span>" + trBar() + "</div>"
+    + '<h1 class="qtext" translate="no">' + esc(q.question) + '</h1><div id="trs"></div>' + (q.code ? '<div class="starter cmbox" id="qcode"></div><div style="height:14px"></div>' : "")
     + '<fieldset style="border:0;padding:0;margin:0"><legend class="sr">Choisis une réponse</legend><div class="choices">' + q.choices.map(function (c, k) {
-      return '<label class="choice' + (mine === k ? " on" : "") + '"><input type="radio" name="c" value="' + k + '"' + (mine === k ? " checked" : "") + '><span><span class="letter">' + "ABCD".charAt(k) + ".</span> " + esc(c) + "</span></label>";
+      return '<label class="choice' + (mine === k ? " on" : "") + '"><input type="radio" name="c" value="' + k + '"' + (mine === k ? " checked" : "") + '><span><span class="letter">' + "ABCD".charAt(k) + '.</span> <span translate="no">' + esc(c) + '</span><span class="trc" data-ct="' + k + '"></span></span></label>';
     }).join("") + "</div></fieldset></div>" + navBtns() + "</div>";
   if (q.code) { var cm = CodeMirror($("#qcode"), { value: q.code, readOnly: true, lineNumbers: true, mode: guessMode(q.code), theme: dark() ? "material-darker" : "default" }); CMS.push(cm); }
   $$(".choice input").forEach(function (inp) {
@@ -325,7 +363,40 @@ function drawQcm(q) {
       DIRTY[q.id] = true; saveNow(q.id); drawProg();
     });
   });
-  wireNav();
+  wireNav(); wireTr(q);
+}
+// ---------------------------------------------------------------- translation (Arabic, French, English), like the assessment
+// The original stays; the translation shows under it. Code and file names are never translated.
+var TRTO = store.get("cb-mes-tr") || "", TRCACHE = {};
+var TRL = [["ar", "العربية"], ["fr", "FR"], ["en", "EN"]];
+function trBar() { return '<span class="trbar" title="Traduire (Google Translate)">' + TRL.map(function (x) { return '<button type="button" data-tr="' + x[0] + '" class="' + (TRTO === x[0] ? "on" : "") + '">' + x[1] + "</button>"; }).join("") + "</span>"; }
+function isCode(t) { t = String(t || "").trim(); return /^[<{\[(.#$@0-9-]/.test(t) || /[;{}=<>]|\(\)|=>/.test(t) || /^[a-z]+(-[a-z]+)+$/.test(t) || /^[a-z]+[A-Z]\w*$/.test(t) || /^\w+\.\w+/.test(t) || !/[A-Za-zÀ-ÿ]{2,}/.test(t) || /^[a-z]+$/.test(t); }
+function wireTr(item) {
+  $$("[data-tr]").forEach(function (b) { b.onclick = function () { TRTO = TRTO === b.dataset.tr ? "" : b.dataset.tr; store.set("cb-mes-tr", TRTO); $$("[data-tr]").forEach(function (x) { x.classList.toggle("on", x.dataset.tr === TRTO); }); translateItem(item); }; });
+  if (TRTO) translateItem(item);
+}
+function translateItem(item) {
+  var s = sit(item.id), boxS = $("#trs"), boxQ = $("#trq");
+  var clear = function () { if (boxS) boxS.innerHTML = ""; if (boxQ) boxQ.innerHTML = ""; $$("[data-ct]").forEach(function (x) { x.textContent = ""; }); };
+  if (!TRTO) return clear();
+  var to = TRTO, k = item.id + "|" + to;
+  var clean = function (q) { return q.replace(/^\s*\d+\s*[.)-]\s*/, ""); };
+  var texts = s ? [s.title, s.context].concat(s.questions.map(clean)) : [item.question].concat(item.choices.map(function (c) { return isCode(c) ? "" : c; }));
+  if (boxS) boxS.innerHTML = '<div class="trans muted">…</div>';
+  var p = TRCACHE[k] ? Promise.resolve(TRCACHE[k]) : call("/translate", { to: to, texts: texts }).then(function (r) { return r && r.texts || null; }, function () { return null; });
+  p.then(function (got) {
+    if (TRTO !== to || CUR !== item.id) return;
+    if (!got) { if (boxS) boxS.innerHTML = '<div class="trans warn">Traduction indisponible, réessaie.</div>'; return; }
+    TRCACHE[k] = got;
+    var dir = to === "ar" ? ' dir="rtl" lang="ar"' : ' lang="' + to + '"';
+    if (s) {
+      if (boxS) boxS.innerHTML = '<div class="trans"' + dir + "><b>" + esc(got[0] || "") + "</b><br>" + esc(got[1] || "") + "</div>";
+      if (boxQ) boxQ.innerHTML = '<ol class="trans"' + dir + ">" + got.slice(2).map(function (t) { return "<li>" + esc(t || "") + "</li>"; }).join("") + "</ol>";
+    } else {
+      if (boxS) boxS.innerHTML = got[0] ? '<div class="trans"' + dir + ">" + esc(got[0]) + "</div>" : "";
+      item.choices.forEach(function (c, i) { var el = $('[data-ct="' + i + '"]'); if (el) { var t = got[i + 1]; el.textContent = t && t !== c ? t : ""; if (to === "ar") el.setAttribute("dir", "rtl"); else el.removeAttribute("dir"); } });
+    }
+  });
 }
 function guessMode(code) { return /<\?php/.test(code) ? "application/x-httpd-php" : /^\s*</.test(code) ? "htmlmixed" : /\bSELECT\b|\bFROM\b/i.test(code) ? "text/x-sql" : /[{;]\s*$/m.test(code) && /:\s*[^;]+;/.test(code) && !/function|=>|const |let /.test(code) ? "css" : "javascript"; }
 
@@ -336,21 +407,23 @@ function drawSituation(s) {
   var i = P.situations.indexOf(s);
   var dots = ""; for (var k = 1; k <= 5; k++) dots += '<i class="' + (k <= s.difficulty ? "on" : "") + '"></i>';
   var qs = s.questions.map(function (q) { return "<li>" + esc(q.replace(/^\s*\d+\s*[.)-]\s*/, "")) + "</li>"; }).join("");
-  var tabs = function (pfx) { return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-' + pfx + '="' + esc(f.name) + '" aria-selected="' + (f.name === FILE[s.id]) + '">' + esc(f.name) + "</button>"; }).join("") + "</div>"; };
+  SFILE[s.id] = SFILE[s.id] || FILE[s.id];
+  // two sets of tabs: the starter code and the editor each show their own file
+  var tabs = function (pfx) { var cur = pfx === "sf" ? SFILE[s.id] : FILE[s.id]; return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-' + pfx + '="' + esc(f.name) + '" aria-selected="' + (f.name === cur) + '">' + esc(f.name) + "</button>"; }).join("") + "</div>"; };
   var left = AI[s.id] ? AI[s.id].left : 3;
   var hasPreview = s.runtime === "web" || s.runtime === "php";
   OUTTAB[s.id] = OUTTAB[s.id] || (hasPreview ? "preview" : "console");
   $("#main").innerHTML = '<div class="sit"><div class="col">'
-    + '<div class="card"><div class="meta"><span class="kicker">Mise en situation ' + (i + 1) + " / " + P.situations.length + '</span><span class="diff" aria-label="Difficulté ' + s.difficulty + ' sur 5">' + dots + "</span><span>· " + s.points + " pts</span></div>"
-    + "<h1>" + esc(s.title) + '</h1><p class="ctx">' + esc(s.context) + '</p><div class="chips">' + s.notions.map(function (n) { return '<span class="chip">' + esc(n) + "</span>"; }).join("") + "</div></div>"
-    + '<div class="card"><h2>Code de départ</h2>' + tabs("sf") + '<div class="starter cmbox" id="starter"></div>' + (s.schema ? '<details style="margin-top:10px"><summary class="small">🗂 La base de données</summary><div class="starter cmbox" id="schema" style="margin-top:6px"></div></details>' : "") + "</div>"
-    + '<div class="card"><h2>Ce que tu dois faire</h2><ol class="qs">' + qs + "</ol></div>"
+    + '<div class="card"><div class="meta"><span class="kicker">Mise en situation ' + (i + 1) + " / " + P.situations.length + '</span><span class="diff" aria-label="Difficulté ' + s.difficulty + ' sur 5">' + dots + "</span><span>· " + s.points + " pts</span>" + trBar() + "</div>"
+    + '<h1 translate="no">' + esc(s.title) + '</h1><p class="ctx" translate="no">' + esc(s.context) + '</p><div id="trs"></div><div class="chips">' + s.notions.map(function (n) { return '<span class="chip">' + esc(n) + "</span>"; }).join("") + "</div></div>"
+    + '<details class="card sdet" id="sdet"' + (STARTOPEN ? " open" : "") + '><summary><h2>Code de départ</h2><span class="muted small sdet-h">' + (STARTOPEN ? "masquer" : "afficher") + "</span></summary>" + tabs("sf") + '<div class="starter cmbox" id="starter"></div>' + (s.schema ? '<details style="margin-top:10px"><summary class="small">La base de données</summary><div class="starter cmbox" id="schema" style="margin-top:6px"></div></details>' : "") + "</details>"
+    + '<div class="card"><h2>Ce que tu dois faire</h2><ol class="qs" translate="no">' + qs + '</ol><div id="trq"></div></div>'
     + (s.checks.length ? '<div class="card"><h2>Vérifications automatiques</h2><ul class="checks" id="cklist"></ul><p class="muted small" style="margin:8px 0 0">Elles se lancent à chaque exécution.</p></div>' : "")
     + '</div><div class="col">'
     + '<div class="card editor"><div class="etop">' + tabs("ef") + '<span class="spacer"></span><button class="btn icon" type="button" id="reset" title="Repartir du code de départ (ce fichier)" aria-label="Repartir du code de départ pour ce fichier">↺</button></div>'
     + '<div class="cmbox" id="editor"></div>'
     + '<div class="actions"><button class="btn primary" type="button" id="run">▶ Exécuter <kbd>Ctrl+Entrée</kbd></button>'
-    + '<button class="btn" type="button" id="aicheck"' + (left <= 0 ? " disabled" : "") + '>🔎 Vérifier mon code <span class="left-n" id="aileft">' + left + "</span></button>"
+    + '<button class="btn" type="button" id="aicheck"' + (left <= 0 ? " disabled" : "") + '>Vérifier mon code <span class="left-n" id="aileft">' + left + "</span></button>"
     + '<span class="muted small" id="runinfo"></span></div></div>'
     + '<div class="card"><div class="otabs" role="tablist">' + (hasPreview ? '<button class="otab" role="tab" data-ot="preview">Aperçu</button>' : "")
     + '<button class="otab" role="tab" data-ot="console">' + (s.runtime === "web" ? "Console" : s.runtime === "sql" ? "Résultat" : "Sortie") + '<span class="n" id="errn" hidden></span></button>'
@@ -368,7 +441,9 @@ function drawSituation(s) {
     extraKeys: { Tab: function (c) { if (c.somethingSelected()) c.indentSelection("add"); else c.replaceSelection("  "); }, "Shift-Tab": function (c) { c.indentSelection("subtract"); } } });
   CMS.push(ed);
   DOCS[s.id] = DOCS[s.id] || {};
+  showStarter(s, SFILE[s.id]);
   showFile(s, FILE[s.id]);
+  $("#sdet").addEventListener("toggle", function () { STARTOPEN = $("#sdet").open; store.set("cb-mes-start", STARTOPEN ? "open" : "closed"); $(".sdet-h").textContent = STARTOPEN ? "masquer" : "afficher"; if (STARTOPEN) setTimeout(function () { startEd.refresh(); }, 0); });
   ed.on("beforeChange", function (c, ch) {
     if (ch.origin === "paste" || ch.origin === "drop") {
       var txt = ch.text.join("\n");
@@ -383,7 +458,7 @@ function drawSituation(s) {
     DIRTY[s.id] = true; RAN[s.id] = false;
     queueSave(s.id);
   });
-  $$("[data-sf]").forEach(function (b) { b.onclick = function () { showFile(s, b.dataset.sf); }; });
+  $$("[data-sf]").forEach(function (b) { b.onclick = function () { showStarter(s, b.dataset.sf); }; });
   $$("[data-ef]").forEach(function (b) { b.onclick = function () { showFile(s, b.dataset.ef); }; });
   $("#reset").onclick = function () {
     var f = s.files.filter(function (x) { return x.name === FILE[s.id]; })[0];
@@ -393,24 +468,33 @@ function drawSituation(s) {
   $("#aicheck").onclick = aiCheck;
   $$("[data-ot]").forEach(function (b) { b.onclick = function () { OUTTAB[s.id] = b.dataset.ot; showOut(); }; });
   showOut(); drawChecks(); drawFeedback(); drawConsole();
-  wireNav();
+  wireNav(); wireTr(s);
   setTimeout(function () { ed.refresh(); startEd.refresh(); }, 0);
 }
-function showFile(s, name) {
-  FILE[s.id] = name;
+/** The starter code panel: its own file (independent of the editor's). */
+function showStarter(s, name) {
   var f = s.files.filter(function (x) { return x.name === name; })[0];
   if (!f) return;
-  $$("[data-sf],[data-ef]").forEach(function (b) { b.setAttribute("aria-selected", String((b.dataset.sf || b.dataset.ef) === name)); });
+  SFILE[s.id] = name;
+  $$("[data-sf]").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.sf === name)); });
   startEd.setOption("mode", MODES[f.lang]); startEd.setValue(f.starter || "");
   $("#starter").classList.toggle("is-empty", !f.starter);
   var box = $("#starter");
   var note = $(".empty-file", box.parentNode); if (note) note.remove();
   if (!f.starter) { box.style.display = "none"; box.insertAdjacentHTML("afterend", '<div class="empty-file cmbox">(' + esc(f.name) + " est vide au départ)</div>"); } else box.style.display = "";
+  setTimeout(function () { startEd.refresh(); }, 0);
+}
+/** The editor: the learner's file. */
+function showFile(s, name) {
+  FILE[s.id] = name;
+  var f = s.files.filter(function (x) { return x.name === name; })[0];
+  if (!f) return;
+  $$("[data-ef]").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.ef === name)); });
   var doc = DOCS[s.id][name];
   if (!doc) { doc = DOCS[s.id][name] = CodeMirror.Doc(A[s.id].files[name] != null ? A[s.id].files[name] : f.starter, MODES[f.lang]); var lg = logOf(s.id, name); if (!lg.changes.length) lg.changes.push([ms(), 0, 0, doc.getValue(), "setValue"]); }
   ed.swapDoc(doc);
   ed.setOption("mode", MODES[f.lang]);
-  setTimeout(function () { startEd.refresh(); ed.refresh(); }, 0);
+  setTimeout(function () { ed.refresh(); }, 0);
 }
 function showOut() {
   var t = OUTTAB[CUR];
@@ -629,22 +713,52 @@ function saveNow(id, withLog) {
   return call("/save", body).then(function (r) {
     if (r && r.ok) { DIRTY[id] = false; clearUnsaved(id); savedMsg("Enregistré ✓"); }
     else if (r && (r.error === "closed" || r.error === "submitted")) { closedNow(r.error); }
+    else if (r && r.error === "locked") { lockedNow("fullscreen", true); }
     else savedMsg("Hors ligne : enregistré sur cet appareil");
   });
 }
 function flushLog(id) { if (LOGS[id]) saveNow(id, true); }
 setInterval(function () { if (CUR && sit(CUR) && LOGS[CUR] && !DONE) saveNow(CUR, true); }, 25000);
-function heartbeat() { if (!DONE && document.visibilityState === "visible") call("/save", { cur: CUR, spent: SPENT }).then(function (r) { if (r && (r.error === "closed" || r.error === "submitted")) closedNow(r.error); }); }
-function tickSpent() { if (!DONE && CUR && document.visibilityState === "visible" && document.hasFocus()) SPENT[CUR] = (SPENT[CUR] || 0) + 1000; }
+function heartbeat() { if (!DONE && !LOCKED && document.visibilityState === "visible") call("/save", { cur: CUR, spent: SPENT }).then(function (r) { if (r && (r.error === "closed" || r.error === "submitted")) closedNow(r.error); else if (r && r.error === "locked") lockedNow("fullscreen", true); }); }
+function tickSpent() { if (!DONE && !LOCKED && CUR && document.visibilityState === "visible" && document.hasFocus()) SPENT[CUR] = (SPENT[CUR] || 0) + 1000; }
 function closedNow(why) { if (DONE) return; DONE = true; screen(why === "submitted" ? '<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats.</p>' : '<div class="big">⏰</div><h1>La mise en situation est terminée</h1><p class="muted">Ton travail enregistré a été envoyé à ton formateur.</p>'); }
 
 // ---------------------------------------------------------------- leaving the page (allowed: only written down)
 var FOCUS = [], awayAt = null;
-function leave() { if (!P || DONE || awayAt) return; awayAt = Date.now(); FOCUS.push([ms(), "blur"]); call("/event", { kind: "leave", item: CUR }); }
+function leave(why) { if (!P || DONE || LOCKED) return; if (LOCK) return lockedNow(why || "blur"); if (awayAt) return; awayAt = Date.now(); FOCUS.push([ms(), "blur"]); call("/event", { kind: "leave", item: CUR }); }
 function back() { if (!awayAt) return; var d = Date.now() - awayAt; awayAt = null; FOCUS.push([ms(), "focus"]); if (!DONE) call("/event", { kind: "back", item: CUR, n: d }); }
-document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") leave(); else back(); });
+document.addEventListener("visibilitychange", function () { if (document.visibilityState === "hidden") leave("hidden"); else back(); });
+document.addEventListener("fullscreenchange", function () { if (!document.fullscreenElement && LOCK) leave("fullscreen"); });
 // clicking in the preview takes the focus without leaving the page: not counted
-window.addEventListener("blur", function () { setTimeout(function () { var a = document.activeElement; if (!document.hasFocus() && !(a && a.tagName === "IFRAME")) leave(); }, 250); });
+window.addEventListener("blur", function () { setTimeout(function () { var a = document.activeElement; if (!document.hasFocus() && !(a && a.tagName === "IFRAME")) leave("blur"); }, 250); });
+
+// ---------------------------------------------------------------- the session stopped (full screen rule)
+var LOCKWHY = { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d’onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs." };
+function lockedNow(why, already) {
+  if (!P || DONE || LOCKED || (!already && Date.now() < GRACE)) return;
+  LOCKED = true;
+  if (CUR && DIRTY[CUR]) { var id = CUR; call("/save", { item: id, answer: A[id], cur: CUR, spent: SPENT }).catch(function () {}); }
+  (already ? Promise.resolve() : call("/event", { kind: "lock", why: why, item: CUR })).then(function () { lockedScreen(why); }, function () { lockedScreen(why); });
+}
+function lockedScreen(why) {
+  LOCKED = true;
+  if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+  screen('<div class="big">⏸️</div><h1>Session arrêtée</h1><p><b>' + esc(LOCKWHY[why] || LOCKWHY.fullscreen) + '</b></p><p class="muted">Demande à ton formateur de te laisser revenir. Ton travail est enregistré. Cette page se met à jour toute seule.</p><div id="resume"></div>');
+  var poll = function () {
+    call("/info").then(function (i) {
+      if (!i || i.error) return setTimeout(poll, 5000);
+      if (i.status === "submitted" || i.status === "closed" || i.taker === "submitted") { LOCKED = false; DONE = true; return intro(i); }
+      if (i.taker === "resume") {
+        var box = $("#resume");
+        if (box) box.innerHTML = '<p class="notice" style="background:var(--goodbg);color:var(--good)">Ton formateur t’a laissé revenir.</p><button class="btn primary" id="go" type="button">🖥️ Continuer en plein écran →</button>';
+        var go = $("#go"); if (go) { go.onclick = begin; go.focus(); }
+        return;
+      }
+      setTimeout(poll, 4000);
+    }, function () { setTimeout(poll, 5000); });
+  };
+  setTimeout(poll, 2500);
+}
 window.addEventListener("focus", back);
 window.addEventListener("pagehide", function () { if (CUR && !DONE) { if (DIRTY[CUR]) saveNow(CUR, true); } });
 
@@ -676,6 +790,7 @@ function confirmFinish() {
 }
 function finish(timeUp) {
   if (DONE) return;
+  LOCK = false;   // handing in: leaving full screen now doesn't stop anything
   screen('<div class="big">⏳</div><h1>' + (timeUp ? "Temps écoulé" : "Envoi de ta copie…") + '</h1><p class="muted">Enregistrement de tes réponses et des vérifications.</p>');
   // every answer saved, and the checks of the situations changed since their last run
   var todo = ORDER.filter(function (id) { return DIRTY[id] || LOGS[id]; });
@@ -683,6 +798,7 @@ function finish(timeUp) {
   P.situations.filter(function (s) { return changed(s.id) && !RAN[s.id] && s.checks.length; }).forEach(function (s) { p = p.then(function () { return runFor(s, true); }).catch(function () {}); });
   p.then(function () { return call("/submit", {}); }).then(function () {
     DONE = true;
+    if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
     try { localStorage.removeItem(KEY + ":unsaved"); localStorage.removeItem(KEY + ":visited"); } catch (e) {}
     screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">' + (timeUp ? "Le temps est écoulé : ton travail a été envoyé tel quel. " : "") + "Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>");
   });

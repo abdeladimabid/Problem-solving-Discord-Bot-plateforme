@@ -3,7 +3,7 @@
 import type { ChallengeRow, Env, GuildRow } from "./types.ts";
 import { all, run } from "./db.ts";
 
-export interface SkillDef { key: string; en: string; fr: string; emoji: string }
+export interface SkillDef { key: string; en: string; fr: string; emoji: string; custom?: boolean }
 
 // In teaching order: it is also the order of /path.
 export const SKILLS: SkillDef[] = [
@@ -62,10 +62,36 @@ export const SKILLS: SkillDef[] = [
   { key: "ai_rag", en: "Embeddings & RAG", fr: "Embeddings et RAG", emoji: "📚" },
 ];
 export const SKILL_KEYS = SKILLS.map((s) => s.key);
+/** The teachers' own skills seen so far (filled when a class's path is read): their names show on Discord too. */
+const CUSTOM_SEEN = new Map<string, SkillDef>();
+export const rememberCustomSkills = (list: SkillDef[]) => { for (const x of list) CUSTOM_SEEN.set(x.key, x); };
 export const skillName = (key: string, lang: string) => {
-  const s = SKILLS.find((x) => x.key === key);
+  const s = SKILLS.find((x) => x.key === key) || CUSTOM_SEEN.get(key);
   return s ? `${s.emoji} ${lang === "fr" ? s.fr : s.en}` : key;
 };
+/** Validate and clean a custom skill definition. */
+export function cleanCustomSkill(s: unknown): SkillDef | null {
+  if (!s || typeof s !== "object") return null;
+  const { key, en, fr, emoji } = s as any;
+  const k = String(key || "").toLowerCase().replace(/[^a-z0-9_]/g, "").slice(0, 30);
+  if (!k || SKILL_KEYS.includes(k)) return null;   // can't shadow built-in skills
+  return { key: k, en: String(en || k).slice(0, 60), fr: String(fr || en || k).slice(0, 60), emoji: String(emoji || "📘").slice(0, 10), custom: true };
+}
+
+/** Merge built-in skills with custom ones (deduped, custom keys never shadow built-in ones). */
+export function mergedSkills(custom?: SkillDef[]): { skills: SkillDef[]; keys: string[] } {
+  const deduped = (custom || []).filter((s) => s?.key && !SKILL_KEYS.includes(s.key));
+  const skills = [...SKILLS, ...deduped.map((s) => ({ ...s, custom: true }))];
+  return { skills, keys: skills.map((s) => s.key) };
+}
+
+/** Like skillName but aware of custom skills. */
+export const skillNameWith = (key: string, lang: string, custom?: SkillDef[]) => {
+  const all = [...SKILLS, ...(custom || [])];
+  const s = all.find((x) => x.key === key);
+  return s ? `${s.emoji} ${lang === "fr" ? s.fr : s.en}` : key;
+};
+
 
 // ------------------------------------------------------------- tagging
 // Hand-tagged: the built-in write-code problems and the HackerRank problems.
@@ -163,8 +189,9 @@ export function guessSkills(c: Pick<ChallengeRow, "kind" | "title"> & Partial<Ch
   if (!out.length) add(c.kind === "write" || c.kind === "code" ? "loops" : "basics");
   return out.slice(0, 3);
 }
+export const isSkillKey = (k: string) => SKILL_KEYS.includes(k) || /^[a-z0-9_]{1,30}$/.test(k);
 export const skillsOf = (c: { skills?: string | null } & Parameters<typeof guessSkills>[0]): string[] =>
-  c.skills ? c.skills.split(",").filter((k) => SKILL_KEYS.includes(k)) : guessSkills(c);
+  c.skills ? c.skills.split(",").map((k) => k.trim()).filter(isSkillKey) : guessSkills(c);
 
 /** Fill in the skills of challenges that don't have them yet (AI-made, teacher-made, imported). */
 export async function backfillSkills(env: Env, limit = 60) {
@@ -174,7 +201,7 @@ export async function backfillSkills(env: Env, limit = 60) {
   return rows.length;
 }
 export async function setSkills(env: Env, id: number, skills: string[]) {
-  const clean = [...new Set(skills.filter((k) => SKILL_KEYS.includes(k)))].slice(0, 4);
+  const clean = [...new Set(skills.map((k) => k.trim().toLowerCase()).filter(isSkillKey))].slice(0, 4);
   await run(env, "UPDATE challenges SET skills = ? WHERE id = ?", clean.length ? clean.join(",") : null, id);
 }
 
