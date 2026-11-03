@@ -443,6 +443,7 @@ export const ai = {
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
   miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
+  planSum: "Écrire une page en Flexbox et répondre à une question sur Git.", planSumDown: false,   // the sheet's « Actions »: what a plan d'action asks, summed up
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -537,6 +538,7 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       // Mises en situation, "Vérifier mon code": categories, plus what must never reach the learner (a line, a fix, unknown ids)
+      if (sys.includes("Tu résumes un plan d'action pédagogique")) { if (ai.planSumDown) throw new Error("AI down"); return { response: ai.planSum }; }
       if (sys.includes("qui relit une évaluation")) { const w = ai.qcmWeak.shift(); const e = ai.sitEasy.shift(); const u = ai.qcmUnrelated.shift(); return { response: JSON.stringify({ weak: w ?? [], unrelated: u ?? [], level: e ?? [] }) }; }
       // the QCM's answers judged without the key: by default the first choice of each is the only right one
       if (sys.includes("expert en développement web très rigoureux")) { const qs = JSON.parse(user); const j = ai.qcmJudge.shift(); return { response: JSON.stringify({ q: qs.map((x: any) => ({ n: x.n, right: j?.[x.n] ?? [0] })) }) }; }

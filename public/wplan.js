@@ -229,7 +229,10 @@ function progressPanelHtml(st) {
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
     <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
-    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}</section>${guidePanelHtml()}${asksPanelHtml()}`;
+    ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}
+    <label class="wp-f wide" style="margin-top:12px"><span>Feedback <span class="muted">(your word on the plan · goes to the « Feedback » column of Suivi Formateur)</span></span>
+      <textarea id="wp-fb" rows="3" placeholder="e.g. Bon travail sur Flexbox, Git reste à revoir.">${esc(p.feedback || "")}</textarea></label>
+    <p class="small muted" id="wp-fbs" style="margin:2px 0 0"></p></section>${guidePanelHtml()}${asksPanelHtml()}`;
 }
 /** 📚 Their guide (on their page, "Mes notions"): each lacune explained, with resources; French, darija or English. */
 function guidePanelHtml() {
@@ -324,6 +327,17 @@ function wireWorkPlan() {
     async () => { await api(`/wplans/${p.id}`, { method: "DELETE", confirmed: true }); toast("Plan deleted"); location.hash = "#/assignments"; }, true);
   $$("[data-toggle]").forEach((b) => b.onclick = () => { const id = b.dataset.toggle; WPS.open.has(id) ? WPS.open.delete(id) : WPS.open.add(id); drawWorkPlan(); });
   if ($("#wp-copy")) $("#wp-copy").onclick = () => { navigator.clipboard?.writeText(WPS.url); toast("Link copied"); };
+  // the teacher's feedback on the plan: saved as they type (then in the sheet, 2 minutes later)
+  if ($("#wp-fb")) {
+    let t = null;
+    $("#wp-fb").addEventListener("input", () => {
+      clearTimeout(t); $("#wp-fbs").textContent = "…";
+      t = setTimeout(async () => {
+        try { const r = await api(`/wplans/${WPS.plan.id}`, { method: "PUT", body: { feedback: $("#wp-fb").value } }); WPS.plan.feedback = r.plan.feedback; $("#wp-fbs").textContent = "Saved ✓ · in the sheet within a few minutes"; }
+        catch (e) { $("#wp-fbs").textContent = e.message; }
+      }, 800);
+    });
+  }
   // the diagnosis
   if ($("#wp-ask")) $("#wp-ask").addEventListener("input", (e) => { WPS.wish = e.target.value; });
   const diagnose = async () => {

@@ -6791,6 +6791,7 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
   const SID = "1SheetIdForTheTestsXXXXXXXXXXXXXXXX";
   const cells: Record<string, Record<string, any>> = { "Niveau technique": { A3: "Durand Alice", A4: "BOB martin", A5: "DUPONT carol", A6: "Inconnu Total", G3: "Bon", C3: 9 }, "Suivi et Validation Classe": {}, "Suivi fil rouge": { A4: "x" }, "Plan daction  Retro": {} };
   const calls: string[] = [];
+  const valid: Record<string, Record<string, string[]>> = {};
   let tokens = 0, badSig = 0;
   const col = (c: string) => c.charCodeAt(0) - 65, colName = (i: number) => String.fromCharCode(65 + i);
   const parse = (r: string) => { const m = r.match(/^'((?:[^']|'')*)'!([A-Z])(\d+)(?::([A-Z])(\d+))?$/)!; return { tab: m[1].replace(/''/g, "'"), c0: col(m[2]), r0: Number(m[3]), c1: col(m[4] || m[2]), r1: Number(m[5] || m[3]) }; };
@@ -6806,10 +6807,13 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     }
     if (!url.pathname.startsWith(`/v4/spreadsheets/${SID}`)) return Response.json({ error: { message: "nope" } }, { status: 403 });
     const rest = decodeURIComponent(url.pathname.slice(`/v4/spreadsheets/${SID}`.length));
+    // a cell's dropdown (data validation)
+    if (!rest && url.searchParams.get("ranges")) { const p = parse(url.searchParams.get("ranges")!); const dv = valid[p.tab]?.[`${colName(p.c0)}${p.r0}`]; return Response.json({ sheets: [{ data: [{ rowData: dv ? [{ values: [{ dataValidation: { condition: { type: "ONE_OF_LIST", values: dv.map((x) => ({ userEnteredValue: x })) } } }] }] : [] }] }] }); }
     if (!rest) return Response.json({ properties: { title: "Suivi_Formateur_TEST" }, sheets: Object.keys(cells).map((t) => ({ properties: { title: t } })) });
     if (rest.startsWith("/values/") && method === "GET") {
       const p = parse(rest.slice(8)), out: any[] = [];
-      for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
+      if (p.r0 === p.r1 && p.c1 > p.c0) for (let c = p.c0; c <= p.c1; c++) out.push(cells[p.tab][`${colName(c)}${p.r0}`] ?? "");   // a row
+      else for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
       while (out.length && out[out.length - 1] === "") out.pop();
       return Response.json({ values: out.length ? [out] : [] });
     }
@@ -6871,8 +6875,32 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     const row = [0, 1, 2].map((k) => top + k).find((r) => SU[`B${r}`] === "'=Brief Sheet")!;
     check(!!row && SU[`C${row}`] === "2026-09-14" && SU[`D${row}`] === "2026-09-18", `Suivi: the brief (never read as a formula) with its start and end dates (${JSON.stringify(SU)})`);
     check(SU[`E${row}`] === "En cours" && !SU[`F${row}`] && SU[`G${top}`] !== "Oui", "…debriefing individuel « En cours » (one debrief of three): no collective debriefing nor retro yet");
-    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === "1. Une page en flex\n2. Git" && PL.G4 === "2026-10-30" && !PL.B5,
-      `Plan d'action: the plan sent (not the draft): the student as in the sheet, level, difficulties, start, actions, end (${JSON.stringify(PL)})`);
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === ai.planSum && PL.G4 === "2026-10-30" && !PL.B5 && !PL.H4 && !PL.I4,
+      `Plan d'action (no titles: the old layout B…G): the plan sent (not the draft): the student as in the sheet, level, difficulties, start, what it asks summed up, end (${JSON.stringify(PL)})`);
+    check(JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `wplan:${G}:9901`).v).sumup?.by === "ai", "…the summary is kept with the plan (made once)");
+    // the new columns: found by their titles (row 3), Feedback and Résultat (its dropdown's words)
+    Object.assign(PL, { B3: "", C3: "Niveau", D3: "Difficultés", E3: "Date début", F3: "Actions", G3: "Date fin", H3: "Feedback", I3: "Résultat", H4: "écrit à la main" });
+    valid["Plan daction  Retro"] = { I4: ["✅ Réalisé", "🟠 Partiellement", "❌ Non réalisé"] };
+    const aiN = ai.users.length;
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(ai.users.length === aiN && PL.F4 === ai.planSum, "the summary isn't asked again while the actions don't change");
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.H4 === "écrit à la main" && PL.I4 === "❌ Non réalisé", `past its end, nothing done: « not done » in the list's own words; no feedback in ClassBot: what's typed in the sheet stays (${PL.H4} ${PL.I4})`);
+    const { savePlanEdits: spe } = await import("../src/shared/workplan.ts");
+    const gRow = await getGuild(env, G);
+    await spe(env, gRow!, 9901, { feedback: "Bon début, Git à revoir." });
+    const pl = JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `wplan:${G}:9901`).v);
+    pl.steps[0].review = { ok: true, comment: "", at: clock.now() };
+    run1("UPDATE app_settings SET v = ? WHERE k = ?", JSON.stringify(pl), `wplan:${G}:9901`);
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(PL.H4 === "Bon début, Git à revoir." && PL.I4 === "🟠 Partiellement", `the teacher's feedback; one action of two done: « partly » (${PL.H4} ${PL.I4})`);
+    pl.steps[1].review = { ok: true, comment: "", at: clock.now() }; pl.feedback = "Bon début, Git à revoir."; pl.steps.push({ id: "cccc", kind: "brief", title: "Un portfolio", notion: "Flexbox", brief: { context: "", tasks: ["Une grille"], deliverable: "", hours: 3 }, review: { ok: true, comment: "", at: 1 } });
+    run1("UPDATE app_settings SET v = ? WHERE k = ?", JSON.stringify(pl), `wplan:${G}:9901`);
+    ai.planSumDown = true;
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    ai.planSumDown = false;
+    check(PL.I4 === "✅ Réalisé", "every action done: « done »");
+    check(PL.F4 === "À faire : 1 exercice de code (Flexbox : Une page en flex) ; 1 question (Git) ; 1 mini-projet (« Un portfolio » (≈ 3 h))." , `its actions changed and the AI is down: summed up without it (${PL.F4})`);
+    delete valid["Plan daction  Retro"];
     check(!calls.some((x) => x.includes("fil")) && Object.keys(cells["Suivi fil rouge"]).length === 1, "Suivi fil rouge never touched");
     // every debrief finalized: Oui, and the collective debriefing and the retro too
     for (const u of N.data.students.map((x: any) => x.id).filter((x: string) => x !== U.alice.id)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
@@ -6881,7 +6909,7 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     check(SU[`E${row}`] === "Oui" && SU[`F${row}`] === "Oui", "every debrief finalized: individual « Oui », collective « Oui »");
     const block = [0, 1, 2].map((k) => top + k).filter((r) => SU[`B${r}`]);
     check(block.every((r) => SU[`E${r}`] === "Oui") === (SU[`G${top}`] === "Oui"), "…and the retro once every brief of the sprint is finalized");
-    check(!PL.B4 && !PL.F4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
+    check(!PL.B4 && !PL.F4 && !PL.I4 && !PL.H4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
 
     // automatically: a debrief finalized marks the sheet, the cron fills it 2 minutes later (every 5 minutes)
     const fills0 = calls.filter((x) => x.endsWith("batchUpdate")).length;

@@ -44,6 +44,10 @@ export interface WorkPlan {
   asks?: { hand: number; step: string; at: number }[];
   /** their guide: each lacune explained, with resources (wpguide.ts) */
   guide?: any;
+  /** the teacher's word on the whole plan (the « Feedback » column of the Suivi Formateur sheet) */
+  feedback?: string;
+  /** what the plan asks of the student, summed up for the sheet's « Actions » column (h = its actions, to redo it when they change) */
+  sumup?: { h: string; text: string; by: "ai" | "calc" } | null;
 }
 
 const KEY = (gid: string, id: number) => `wplan:${gid}:${id}`;
@@ -113,6 +117,7 @@ export async function savePlanEdits(env: Env, g: GuildRow, id: number, b: any): 
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   if ("title" in b) p.title = str(b.title, 120) || p.title;
   if ("message" in b) p.message = str(b.message, 2000);
+  if ("feedback" in b) p.feedback = str(b.feedback, 2000);
   if ("due_at" in b) p.due_at = Number(b.due_at) > 0 ? Number(b.due_at) : null;
   if (Array.isArray(b.steps)) {
     if (p.status !== "draft") throw new WorkPlanError("The plan was sent: its actions can't change anymore (make a new plan).");
