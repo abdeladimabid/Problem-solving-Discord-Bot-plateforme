@@ -984,6 +984,7 @@ const GRADE_PROMPT = [
   "- chaque mise en situation non faite (attempted: false) : ce qu'elle demandait et la notion à étudier ;",
   "- chaque QCM (ils sont déjà notés automatiquement) : si la réponse est juste, une phrase qui confirme pourquoi ; sinon, pourquoi son choix est faux, ce qui est juste, et la notion à revoir.",
   "Chaque apprenant doit donc avoir un commentaire pour CHAQUE item.",
+  "Tout commentaire d'un item qui n'est pas entièrement réussi (score < 100, situation non faite, QCM faux ou sans réponse) se termine par une phrase « À revoir : … » qui nomme les notions précises à retravailler, tirées de SES erreurs (par exemple « À revoir : l'événement submit d'un formulaire ; e.preventDefault() »).",
   "Puis, pour chaque apprenant, un commentaire général (2 à 4 phrases, tutoiement) : ses points forts, ce qu'il doit retravailler.",
   "Garde exactement les identifiants donnés (« learner » et « item »).",
   "Réponds UNIQUEMENT avec un JSON au format de « output_format », sans texte autour (je l'importerai dans ClassBot).",
@@ -1040,6 +1041,15 @@ export async function importGrades(env: Env, g: GuildRow, id: number, text: unkn
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, (p.name || "").toLowerCase()] as const));
   const who = (v: unknown) => { const k = String(v ?? "").trim(); return takers.find((t) => String(t.id) === k) || takers.find((t) => t.discord_id === k) || takers.find((t) => k && names.get(t.discord_id) === k.toLowerCase()) || null; };
   const ids = new Set([...c.situations.map((s) => s.id), ...c.qcm.map((q) => q.id)]);
+  // every comment of an item not fully right ends with what to study again: when Claude forgot, the item's notions
+  const notionsOf = (item: string) => { const s = c.situations.find((x) => x.id === item); if (s) return s.notions.length ? s.notions.join(", ") : s.title; const q = c.qcm.find((x) => x.id === item); return q ? q.notion : ""; };
+  const restudy = (t: MiseTakerRow, item: string, note: string, score: number | null) => {
+    if (!note || /à (revoir|étudier|retravailler)\s*:/i.test(note)) return note;
+    const q = c.qcm.find((x) => x.id === item);
+    const ok = q ? dataOf(t).answers[item]?.choice === q.correct : score != null && score >= 100;
+    const n = notionsOf(item);
+    return ok || !n ? note : `${note.replace(/\s*$/, "")}${/[.!?…]$/.test(note.trim()) ? "" : "."} À revoir : ${n}.`.slice(0, 600);
+  };
   const skipped: string[] = [];
   const byTaker = new Map<number, Record<string, any>>();
   let grades = 0, comments = 0;
@@ -1048,8 +1058,8 @@ export async function importGrades(env: Env, g: GuildRow, id: number, text: unkn
     const sc = Number(x?.score);
     if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
     if (!ids.has(item)) { skipped.push(`unknown item « ${item.slice(0, 20)} »`); continue; }
-    const note = str(x?.comment, 600);
     const noScore = x?.score === null || x?.score === undefined || x?.score === "";
+    const note = restudy(t, item, str(x?.comment, 560), noScore ? (c.qcm.some((q) => q.id === item) ? null : 0) : Math.round(sc));
     if (noScore && !note) { skipped.push(`nothing for ${item}`); continue; }
     if (!noScore && !Number.isFinite(sc)) { skipped.push(`no score for ${item}`); continue; }
     const gr = byTaker.get(t.id) ?? parse<Record<string, any>>(t.grades, {});

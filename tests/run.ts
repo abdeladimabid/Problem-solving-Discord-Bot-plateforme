@@ -7766,6 +7766,11 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
       { learner: al.learner, item: q1id, comment: "Tu as choisi « change le style » : textContent change le texte. À revoir : textContent." },
       { learner: al.learner, item: s2, comment: "Pas faite : revois addEventListener." }] }) });
     const d8 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    const gr2 = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: JSON.stringify({ format: "classbot-mise-grades@1", grades: [
+      { learner: al.learner, item: s2, score: 40, comment: "Le clic n'est pas écouté" }, { learner: al.learner, item: st7.paper.qcm[2].id, comment: "Mauvais choix." }] }) });
+    const d9 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    check(gr2.status === 200 && /^Le clic n'est pas écouté\. À revoir : .+\.$/.test(d9.grades[s2].comment) && /^Mauvais choix\. À revoir : .+\.$/.test(d9.grades[st7.paper.qcm[2].id].comment) && !/À revoir/.test(d9.grades[s1].comment),
+      `a comment that doesn't say what to study again gets the item's notions (not when it's fully right) (${d9.grades[s2].comment} | ${d9.grades[st7.paper.qcm[2].id].comment})`);
     check(gc.data.grades === 2 && d8.grades[q1id].comment.includes("textContent") && !d8.grades[q1id].teacher && d8.items[q1id].score === autoQ && d8.grades[s1].score === 100,
       "a comment without a score (a QCM, an item not done): kept, the automatic score stays, the other grades too");
     await api("PUT", `/api/mises/${M7}/grade`, { g: G, taker: Number(al.learner), item: s2, score: 0, comment: "Pas faite : revois addEventListener." });
