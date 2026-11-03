@@ -21,7 +21,7 @@ import { chat, extractJson } from "./ai.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { QCM_RULES } from "./mises.ts";
+import { QCM_RULES, SIT_RULES } from "./mises.ts";
 
 export class MiseError extends Error { status: number; constructor(msg: string, status = 400) { super(msg); this.status = status; } }
 
@@ -177,18 +177,30 @@ export async function generateMise(env: Env, g: GuildRow, b: any) {
 }
 
 /**
- * The QCM read again by the AI as a learner who does NOT know the notion: the ones that can be guessed (wrong choices
- * easy to rule out, the answer echoing the question…) come back as problems to rewrite. An unavailable AI: nothing.
+ * The file read again by the AI as a strict reviewer: QCM that can be guessed (traps too easy to rule out, or two right
+ * answers) and situations too easy or too guided (the instructions name the method, the starter code gives the steps)
+ * come back as problems to rewrite. An unavailable AI: nothing.
  */
 async function reviewQcm(env: Env, c: MiseContent): Promise<{ where: string; msg: string }[]> {
   try {
     const raw = await chat(env, [
-      { role: "system", content: `Tu relis des QCM pour débutants en développement web. Pour chacun, imagine un apprenant qui NE CONNAÎT PAS la notion : peut-il trouver la bonne réponse quand même (mauvais choix hors sujet ou faciles à éliminer, d'un autre type que la réponse, bonne réponse qui reprend un mot de la question, plus longue ou plus précise) ? Règles d'un bon QCM :\n${QCM_RULES.join("\n")}\nRéponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…ce qui le rend devinable, en une phrase…"}]} (liste vide si tous sont bons).` },
-      { role: "user", content: JSON.stringify(c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] }))) },
-    ], { maxTokens: 1500, temperature: 0.1, timeoutMs: 60000, json: true });
+      { role: "system", content: `Tu es un formateur exigeant qui relit une évaluation de développement web avant de la donner.
+QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Un mauvais choix est-il AUSSI juste ? Règles :
+${QCM_RULES.join("\n")}
+SITUATIONS : sont-elles trop faciles ou trop guidées (sous-questions qui nomment la méthode / la propriété / l'événement à utiliser, code de départ qui donne les étapes en commentaires, une seule notion triviale, aucun cas limite) ? Règles :
+${SIT_RULES.join("\n")}
+Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "easy": [{"n": 1, "why": "…"}]} ("weak" = numéros des QCM à refaire, "easy" = numéros des situations à rendre plus exigeantes ; listes vides si tout est bon).` },
+      { role: "user", content: JSON.stringify({
+        qcm: c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] })),
+        situations: c.situations.map((x, i) => ({ n: i + 1, difficulty: x.difficulty, context: x.context, questions: x.questions, starter: x.files.map((f) => f.starter).join("\n").slice(0, 1500), checks: x.checks.map((k) => k.label) })),
+      }) },
+    ], { maxTokens: 2500, temperature: 0.1, timeoutMs: 90000, json: true });
     const j = extractJson(raw);
-    return (Array.isArray(j?.weak) ? j.weak : []).filter((x: any) => Number.isInteger(Number(x?.n)) && Number(x.n) >= 1 && Number(x.n) <= c.qcm.length)
-      .slice(0, c.qcm.length).map((x: any) => ({ where: `QCM ${Number(x.n)}`, msg: `facile à deviner sans connaître la notion : ${String(x.why ?? "").slice(0, 200)}. Garde la notion, réécris la question et les 4 choix : 3 mauvais choix du même type que la bonne réponse, crédibles, chacun une vraie confusion de débutant.` }));
+    const pick = (v: any, max: number) => (Array.isArray(v) ? v : []).filter((x: any) => Number.isInteger(Number(x?.n)) && Number(x.n) >= 1 && Number(x.n) <= max).slice(0, max);
+    return [
+      ...pick(j?.weak, c.qcm.length).map((x: any) => ({ where: `QCM ${Number(x.n)}`, msg: `trop facile à deviner : ${String(x.why ?? "").slice(0, 200)}. Garde la notion ; réécris la question et les 4 choix : 3 pièges qui ressemblent à la bonne réponse (même forme, un détail exact change), une seule réponse juste.` })),
+      ...pick(j?.easy, c.situations.length).map((x: any) => ({ where: `situation ${Number(x.n)}`, msg: `trop facile ou trop guidée : ${String(x.why ?? "").slice(0, 200)}. Rends-la plus exigeante (même difficulté relative, même métier) : plusieurs notions combinées, des cas limites, des sous-questions qui disent quoi faire sans dire comment, un code de départ sans les étapes, des vérifications sur les cas limites ; mets à jour la solution et les vérifications.` })),
+    ];
   } catch { return []; }
 }
 /** What needs no AI: too many notions or too long ones, points out of range (the AI often writes 6 notions). */

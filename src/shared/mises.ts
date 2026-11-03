@@ -608,11 +608,24 @@ export const MISE_EXAMPLE = {
  */
 /** What makes a QCM test the notion, not the ability to guess (in the prompt, and what the AI review checks). */
 export const QCM_RULES = [
-  "- Les 3 mauvais choix sont du MÊME TYPE que la bonne réponse et tous crédibles : si la réponse est un nom d'événement, les autres sont de vrais noms d'événements proches (click / mousedown / mouseup / pointerdown…), une méthode → d'autres vraies méthodes voisines (querySelector / getElementById / querySelectorAll / getElementsByClassName), une valeur affichée → d'autres valeurs qu'on obtient avec une erreur réelle (off-by-one, mauvais type, liste vivante ou statique…).",
-  "- Chaque mauvais choix correspond à une confusion que font VRAIMENT les débutants ; aucun choix absurde, hors sujet ou qu'on élimine sans connaître la notion.",
-  "- La bonne réponse ne se devine pas : pas un mot de la question, pas la plus longue ni la plus précise, pas la seule « technique », pas toujours à la même place (varie \"correct\").",
-  "- Préfère les questions qui demandent de lire ou de prévoir du code (\"code\" : que vaut… ? qu'affiche… ? quelle ligne corrige… ?) aux questions de définition.",
+  "- Les 3 mauvais choix sont des PIÈGES : des sosies de la bonne réponse qu'on ne peut écarter qu'en connaissant la notion avec précision. Exemples de bons QCM (du formateur) :",
+  "    · « Quel événement se déclenche quand on clique sur un élément ? » → click ✓ · onclick · clicked · mouseClick (l'attribut HTML, un participe, un nom inventé mais crédible)",
+  "    · « Quelle méthode supprime un élément enfant du DOM ? » → removeChild() ✓ · removeNode() · deleteElement() · detachChild() (des noms qui SONNENT juste mais n'existent pas)",
+  "    · « Que fait la classe Tailwind p-4 ? » → padding de 1rem ✓ · padding de 4% · padding de 4px · padding de 4rem (la même phrase, seule l'unité ou la valeur change)",
+  "- Donc : même forme, même longueur, même vocabulaire pour les 4 choix ; la différence tient à un détail exact (le nom réel, la casse, l'unité, la valeur, le type, l'ordre, un off-by-one, liste vivante / statique, référence / copie…).",
+  "- UNE SEULE réponse est juste, sans discussion : aucun mauvais choix ne doit aussi marcher (ex. INTERDIT : querySelector('.carte') ✓ avec getElementsByClassName('carte')[0] qui donne aussi le premier élément).",
+  "- Jamais un choix qu'on écarte sans connaître la notion (hors sujet, absurde, d'un autre type) ; la bonne réponse ne reprend pas un mot de la question et n'est pas la plus longue ; varie sa place (\"correct\").",
+  "- Au moins 3 QCM sur 5 demandent de LIRE du code (\"code\") : qu'affiche-t-il, que vaut cette variable, quelle ligne a le bug, quel est l'effet de cet ordre d'instructions.",
 ];
+/** What makes a situation test the class's limits (in the prompt, and what the AI review checks). */
+export const SIT_RULES = [
+  "- C'est une ÉVALUATION exigeante, pas un exercice guidé : elle doit révéler les limites de la classe. La situation 1 est accessible mais demande déjà de réfléchir ; les situations 4 et 5 ne sont réussies que par les meilleurs.",
+  "- Chaque situation combine 2 à 4 notions de la semaine (et des semaines d'avant) dans un vrai besoin du métier : données à transformer, plusieurs éléments, conditions, cas limites (liste vide, valeur invalide, doublon, majuscules / espaces, zéro, élément absent).",
+  "- Les sous-questions disent CE QUE le programme doit faire (le comportement, les règles, les cas limites), JAMAIS COMMENT : ne nomme pas la méthode, la propriété, l'événement ni la boucle à utiliser (pas « utilise querySelector », « change textContent », « écoute l'événement click »).",
+  "- Le code de départ ne mâche pas le travail : pas de commentaires « 1. sélectionne… 2. écoute… » qui donnent les étapes ; seulement le HTML / les données nécessaires.",
+  "- Les vérifications testent aussi les cas limites (au moins une vérification par cas limite demandé), pour qu'une solution approximative ne passe pas.",
+];
+
 export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string }): string {
   const w = o.week;
   const names = new Map(o.program.referential.map((c) => [c.code, c.name]));
@@ -651,7 +664,8 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     ...(o.wishes ? ["", "EXIGENCES DU FORMATEUR (à respecter ABSOLUMENT, elles passent avant les autres consignes sauf le format JSON) :", o.wishes.slice(0, 1500)] : []),
     "",
     "CE QUE TU ÉCRIS",
-    `- ${N_SITUATIONS} mises en situation de difficulté CROISSANTE ("difficulty" 1 = très facile → 5 = plus difficile, mais TOUJOURS dans le périmètre de la semaine). Chacune vérifie qu'une notion est VRAIMENT comprise, et révèle ce qui ne l'est pas.`,
+    `- ${N_SITUATIONS} mises en situation de difficulté CROISSANTE ("difficulty" 1 → 5, TOUJOURS dans le périmètre de la semaine). Chacune vérifie que les notions sont VRAIMENT maîtrisées, et révèle ce qui ne l'est pas.`,
+    ...SIT_RULES.map((r) => `  ${r}`),
     "  Pour chacune :",
     "  - \"title\", \"context\" (2 à 4 phrases : un métier marocain fictif, un personnage, un besoin concret), \"difficulty\", \"competencies\", \"notions\" (1 à 5) ;",
     `  - "runtime" : comment le code s'exécute, parmi ${runtimes.map((r) => `"${r}"`).join(", ")}${runtimes.includes("web") ? " (web = HTML/CSS/JS dans le navigateur)" : ""} ;`,
@@ -668,7 +682,7 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     ...QCM_RULES.map((r) => `  ${r}`),
     "",
     "RÈGLES",
-    "- En français, phrases courtes et claires, niveau débutant. Une notion principale par mise en situation.",
+    "- En français, phrases claires. Exigeant mais juste : tout ce qui est demandé a été vu en cours, rien n'est ambigu.",
     "- UNIQUEMENT les notions et les technologies vues jusqu'à cette semaine. Rien du HORS PÉRIMÈTRE, aucun framework ni bibliothèque non listé.",
     "- Les vérifications doivent passer avec ta solution de référence, et échouer avec le code de départ.",
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",

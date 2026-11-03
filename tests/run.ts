@@ -7469,7 +7469,14 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.users.length = 0;
   const gen3 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
   check(gen3.status === 200 && JSON.parse(gen3.data.json).qcm[1].choices.includes("mousedown") && ai.users.some((u) => u.includes("QCM 2") && u.includes("facile à deviner")), "a QCM that can be guessed without the notion: written again with credible wrong choices");
-  check(ai.prompts.some((p) => p.includes("MÊME TYPE que la bonne réponse")), "…and the prompt asks for wrong choices of the same kind as the answer");
+  check(ai.users.some((u) => u.includes("PIÈGES") && u.includes("removeNode()") && u.includes("JAMAIS COMMENT")), "…the prompt asks for traps that look like the answer (the teacher's examples) and demanding situations that don't say how");
+  // a situation too guided: written again, harder
+  ai.qcmWeak = [[], []]; ai.sitEasy = [[{ n: 1, why: "la consigne nomme querySelector et textContent" }], []];
+  ai.miseItems = JSON.stringify({ items: { s1: { ...file.situations[0], questions: ["1. Affiche le nom de la coopérative dans le titre, sans espaces au début ni à la fin.", "2. Si le nom est vide, affiche « Sans nom »."] } } });
+  ai.users.length = 0;
+  const gen4 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  check(gen4.status === 200 && JSON.parse(gen4.data.json).situations[0].questions[1].includes("Sans nom") && ai.users.some((u) => u.includes("situation 1") && u.includes("trop facile ou trop guidée")), "a situation too easy or too guided: written again, more demanding");
+  ai.sitEasy = [];
   ai.qcmWeak = [];
   check(rep.includes("situation 4") && rep.includes("QCM 5") && !rep.includes("situation 5 (") && rep.includes("RAPPEL DU PÉRIMÈTRE"), "…only the items with a problem are sent back, with what's out of scope; too many notions is fixed without the AI");
   check(q("SELECT id FROM mises WHERE guild_id = ?", G).length === nBefore, "…nothing saved before the teacher saves");
