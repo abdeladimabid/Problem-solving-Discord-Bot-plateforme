@@ -1,7 +1,7 @@
 // Dashboard API for the learning part: programmes (planning + competencies), briefs (generator, editor, hand-ins,
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
-import { cleanConcepts, conceptsPrompt, coverage, getConcepts, suggestScope } from "../shared/concepts.ts";
+import { cleanConcepts, conceptsPrompt, coverage, getConcepts, knownConcepts, suggestScope } from "../shared/concepts.ts";
 import { netFlags } from "../shared/identity.ts";
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
@@ -690,7 +690,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const p = await programOf(env, g);
     // the Fiche niveaux: the codes it knows, and the capacities asked (the ones of the prompt, sent back by the page)
     const cstore = await getConcepts(env, g.id);
-    const knownC = new Set(cstore.sprints.flatMap((sp) => sp.caps.map((c) => `S${sp.n}.${c.n}`)).filter((c) => !cstore.off.includes(c)));
+    const knownC = knownConcepts(cstore);
     const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: Array.isArray(body.concepts) || body.concepts === undefined ? { known: knownC, scope: Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts) : [] } : undefined });
     if (r.quiz?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", r.quiz.brief_id, g.id))) r.problems.push({ where: "quiz", msg: `"brief_id": brief #${r.quiz.brief_id} isn't in this class (or null).` });
     if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
@@ -710,7 +710,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (!scope.length) bad("Pick the capacities of the Fiche niveaux it covers first.");
     if (method === "POST" && !body?.json) return ok({ prompt: conceptsAuditPrompt(a, questionsOf(a), st, conceptsPrompt(cstore, scope), scope), concepts: scope });
     if (method === "POST") {
-      const knownC = new Set(cstore.sprints.flatMap((sp) => sp.caps.map((c) => `S${sp.n}.${c.n}`)).filter((c) => !cstore.off.includes(c)));
+      const knownC = knownConcepts(cstore);
       const p = await programOf(env, g);
       const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: { known: knownC, scope } });
       if (r.problems.length || !body.apply) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });

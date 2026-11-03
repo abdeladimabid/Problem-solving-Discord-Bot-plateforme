@@ -126,11 +126,11 @@ export interface CheckOpts {
 /** An item's capacities of the Fiche niveaux: checked against the codes known (and required when there's a scope). */
 function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): string[] {
   if (v == null && !o.concepts?.scope.length) return [];
-  if (v != null && !Array.isArray(v)) { bad(`"concepts" must be a list (e.g. ["S2.3"]).`); return []; }
+  if (v != null && !Array.isArray(v)) { bad(`"concepts" must be a list (e.g. ["S2.M3"]).`); return []; }
   const cs = [...new Set((Array.isArray(v) ? v : []).map((c: unknown) => String(c).trim().toUpperCase()))];
-  const unknown = o.concepts ? cs.filter((c) => !o.concepts!.known.has(c)) : cs.filter((c) => !/^S\d{1,2}\.\d{1,2}$/.test(c));
-  if (unknown.length) { bad(`concept(s) ${unknown.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.3).`); return []; }
-  if (o.concepts?.scope.length && !cs.some((c) => o.concepts!.scope.includes(c))) bad(`"concepts": the capacities of the Fiche niveaux it really works on (among ${o.concepts.scope.join(", ")}).`);
+  const unknown = o.concepts ? cs.filter((c) => !o.concepts!.known.has(c)) : cs.filter((c) => !/^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c));
+  if (unknown.length) { bad(`concept(s) ${unknown.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.M3).`); return []; }
+  if (o.concepts?.scope.length && !cs.some((c) => o.concepts!.scope.includes(c))) bad(`"concepts": the items of the Fiche niveaux it really works on (among ${o.concepts.scope.join(", ")}).`);
   return cs.slice(0, 6);
 }
 
@@ -304,7 +304,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
   const cscope = o.concepts?.scope.length ? o.concepts.scope : declared.filter((c) => !o.concepts || o.concepts.known.has(c));
   if (cscope.length && !p.length) for (const cc of cscope) {
     const k = [...sits, ...qcm].filter((x) => (x.concepts ?? []).includes(cc)).length;
-    if (k < 5) top(`capacity ${cc} (Fiche niveaux): touched by ${k} item(s), at least 5 of the ${N_SITUATIONS + N_QCM} situations and QCM must work on it (add it to items that REALLY work on it, or change items so they do).`);
+    if (k < 5) top(`item ${cc} of the Fiche niveaux: worked on by ${k} situation(s) / QCM, at least 5 of the ${N_SITUATIONS + N_QCM} must work on it (add it to the ones that REALLY work on it, or change them so they do).`);
   }
   if (p.length) return { problems: p };
   const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
@@ -720,7 +720,7 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     `- ${N_QCM} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
     ...QCM_RULES.map((r) => `  ${r}`),
     ...(o.concepts?.scope.length ? ["", o.concepts.block,
-      `- Dans ce fichier : "concepts" sur CHAQUE situation et CHAQUE QCM (les capacités qu'il travaille vraiment), et "concepts" en haut du fichier = ${JSON.stringify(o.concepts.scope)}. Avec ${N_SITUATIONS} situations et ${N_QCM} QCM, chaque capacité doit être travaillée par au moins 5 de ces ${N_SITUATIONS + N_QCM} éléments : une situation peut en travailler plusieurs (ses étapes), un QCM une ou deux.`] : []),
+      `- Dans ce fichier : "concepts" sur CHAQUE situation et CHAQUE QCM (les éléments de la Fiche qu'il vérifie vraiment), et "concepts" en haut du fichier = ${JSON.stringify(o.concepts.scope)}. Avec ${N_SITUATIONS} situations et ${N_QCM} QCM, chaque élément doit être vérifié par au moins 5 de ces ${N_SITUATIONS + N_QCM} : une situation peut en vérifier plusieurs (ses étapes), un QCM un ou deux.`] : []),
     "",
     "RÈGLES",
     "- En français, phrases claires. Exigeant mais juste : tout ce qui est demandé a été vu en cours, rien n'est ambigu.",

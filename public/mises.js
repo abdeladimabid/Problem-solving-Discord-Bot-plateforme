@@ -195,7 +195,7 @@ async function mesWizard(opts = {}) {
   // ---- the request: what the teacher picked (else the server reads the file / the brief)
   // 📐 the capacities of the Fiche niveaux it covers (each in 5 items): ticked from the brief / week, the teacher changes them
   const cnBox = $("#mw-cn");
-  const loadCn = () => conceptsPicker(cnBox, { week: W.week, brief_id: W.src === "brief" ? W.brief : "", limit: 5 }, W.cn, { mise: true });
+  const loadCn = () => conceptsPicker(cnBox, { week: W.week, brief_id: W.src === "brief" ? W.brief : "", limit: 6 }, W.cn, { mise: true });
   loadCnLater = loadCn;
   loadCn();
   cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });

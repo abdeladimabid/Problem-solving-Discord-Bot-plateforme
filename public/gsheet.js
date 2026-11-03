@@ -30,7 +30,7 @@ async function gsheetSettings(root, d = null) {
       <div id="gs-key-form" ${d.key ? "hidden" : ""}>
         <ol class="gs-steps small">
           <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">console.cloud.google.com</a> and create a project (any name, e.g. <i>ClassBot</i>).</li>
-          <li>Enable the <a href="https://console.cloud.google.com/apis/library/sheets.googleapis.com" target="_blank" rel="noopener">Google Sheets API</a> for this project (<b>Enable</b>).</li>
+          <li>Enable the <a href="https://console.cloud.google.com/apis/library/sheets.googleapis.com" target="_blank" rel="noopener">Google Sheets API</a> for this project (<b>Enable</b>), and the <a href="https://console.cloud.google.com/apis/library/docs.googleapis.com" target="_blank" rel="noopener">Google Docs API</a> too (it reads the Fiche niveaux Doc).</li>
           <li><a href="https://console.cloud.google.com/iam-admin/serviceaccounts" target="_blank" rel="noopener">IAM → Service accounts</a> → <b>Create service account</b>: a name, then <b>Done</b> (no role needed).</li>
           <li>Click it → <b>Keys</b> → <b>Add key</b> → <b>Create new key</b> → <b>JSON</b>: a file downloads.</li>
           <li>Open that file, copy everything, paste it here.</li>

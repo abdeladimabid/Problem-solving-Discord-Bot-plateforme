@@ -1,15 +1,14 @@
 // 📐 The « Fiche niveaux » (Fiche de validation des sprints): what each sprint asks, the official reference.
-//   • each sprint has 12 capacities (the « concepts »: « 1. Lire et exploiter une maquette »…), each with its points
-//   • and 5 level boxes (Critique → Excellent): what a learner can do at that level; each item is linked to the
-//     capacities it relies on (found from the words, the teacher can change it)
+//   • 5 level boxes (Critique → Excellent): each item is the MINIMUM a learner must know to be at that level. These
+//     items are the « concepts » (« S2.M3 » = Sprint 2, Moyen, 3rd item), checked one by one
+//   • 12 capacities (« 1. Lire et exploiter une maquette »…) group them: each item is linked to its capacities
 // Rules (an administrative demand):
-//   • every evaluation (assessment, mise en situation, debrief questions) tags each question with the capacities it
-//     touches, and covers each capacity of its scope with at least 5 questions (a question may touch several)
-//   • a capacity is understood when, over all the sprint's evaluations, at least 5 questions touched it and more than
-//     half of them are right (correct = 1, partly = ½); the teacher may decide it in the debrief (a project, an oral)
-//   • a level is reached when at least half of its items are understood, and every level below too (each level
-//     includes the ones before); « Bon » is the level expected to validate the sprint
-// The teacher turns off what shouldn't count (a capacity, for the class). Kept in app_settings (concepts:<guild>):
+//   • every evaluation (assessment, mise en situation, debrief oral questions) tags each question with the items it
+//     checks, and checks each item of its scope with at least 5 questions (a question may touch several)
+//   • an item is known when, over all the sprint's evaluations, at least 5 questions checked it and more than half of
+//     them are right (correct = 1, partly = ½); the teacher may decide it in a debrief (a project, an oral)
+//   • a level is reached when EVERY one of its items is known, and every level below too; « Bon » validates the sprint
+// The teacher turns off what shouldn't count (an item, or a capacity's items). Kept in app_settings (concepts:<guild>):
 // the sprints read from the Google Doc (or pasted), else the built-in Sprint 1 and 2 of the Fiche A1.
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
@@ -24,20 +23,19 @@ export interface FicheSprint { n: number; title: string; goal: string; levels: R
 export interface ConceptStore {
   source: { kind: "builtin" | "doc" | "paste"; doc: string | null; at: number };
   sprints: FicheSprint[];
-  /** capacities turned off by the teacher (not asked, not counted): ["S1.11", …] */
+  /** items (« S1.B3 ») or capacities (« S1.11 ») turned off by the teacher: not asked, not counted */
   off: string[];
   /** level items linked by hand: "S1.bon.3" → [2, 7] */
   links?: Record<string, number[]>;
 }
 export class ConceptError extends Error {}
 
-/** « S2.3 » → { sprint: 2, n: 3 }. */
+/** A capacity: « S2.3 » → { sprint: 2, n: 3 }. */
 export const codeOf = (sprint: number, n: number) => `S${sprint}.${n}`;
 export function parseCode(c: unknown): { sprint: number; n: number } | null {
-  const m = /^S(\d{1,2})[.\-_ ]?(?:C|K)?(\d{1,2})$/i.exec(String(c ?? "").trim());
+  const m = /^S(\d{1,2})[.\-_ ]?(\d{1,2})$/i.exec(String(c ?? "").trim());
   return m ? { sprint: Number(m[1]), n: Number(m[2]) } : null;
 }
-const normCode = (c: unknown) => { const p = parseCode(c); return p ? codeOf(p.sprint, p.n) : null; };
 
 // ------------------------------------------------------------------ reading the Fiche
 const norm = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -127,7 +125,20 @@ function builtinLinks(): Record<string, number[]> {
   return A1_CACHE;
 }
 
-// ------------------------------------------------------------------ the class's concepts
+// ------------------------------------------------------------------ the concepts: each item of each level box
+// « S2.M3 » = Sprint 2, level Moyen, its 3rd item (C critique · F faible · M moyen · B bon · E excellent). The
+// capacities (« S2.3 ») group them; turning a capacity off turns its items off.
+export const LEVEL_LETTER: Record<Level, string> = { critique: "C", faible: "F", moyen: "M", bon: "B", excellent: "E" };
+const LETTER_LEVEL: Record<string, Level> = { C: "critique", F: "faible", M: "moyen", B: "bon", E: "excellent" };
+export const itemCode = (sprint: number, lv: Level, k: number) => `S${sprint}.${LEVEL_LETTER[lv]}${k}`;
+export function parseItem(c: unknown): { sprint: number; level: Level; k: number } | null {
+  const m = /^S(\d{1,2})[.\-_ ]?([CFMBE])(\d{1,2})$/i.exec(String(c ?? "").trim());
+  return m ? { sprint: Number(m[1]), level: LETTER_LEVEL[m[2].toUpperCase()], k: Number(m[3]) } : null;
+}
+/** A concept code as stored (« s2-m3 » → « S2.M3 »), or null. */
+export const normConcept = (c: unknown) => { const p = parseItem(c); return p ? itemCode(p.sprint, p.level, p.k) : null; };
+export interface Concept { code: string; sprint: number; level: Level; k: number; text: string; caps: number[]; capTitles: string[] }
+
 const KEY = (gid: string) => `concepts:${gid}`;
 export async function getConcepts(env: Env, gid: string): Promise<ConceptStore> {
   const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", KEY(gid)).catch(() => null);
@@ -141,31 +152,42 @@ export async function getConcepts(env: Env, gid: string): Promise<ConceptStore> 
 async function putConcepts(env: Env, gid: string, s: ConceptStore) {
   await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", KEY(gid), JSON.stringify(s), now());
 }
-export const sprintOf = (s: ConceptStore, n: number | null | undefined) => (n ? s.sprints.find((x) => x.n === n) ?? null : null);
-export const isOff = (s: ConceptStore, code: string) => s.off.includes(code);
-/** The capacities of a sprint that count (not turned off). */
-export function activeCaps(s: ConceptStore, n: number | null | undefined): (Capacity & { code: string })[] {
+export const sprintOf = (s: ConceptStore, n: number | null | undefined) => (n ? s.sprints.find((x) => x.n === Number(n)) ?? null : null);
+/** Every item of a sprint's level boxes, in order (Critique 1 … Excellent n), with its capacities. */
+export function sprintConcepts(s: ConceptStore, n: number | null | undefined): Concept[] {
   const sp = sprintOf(s, n);
-  return sp ? sp.caps.map((c) => ({ ...c, code: codeOf(sp.n, c.n) })).filter((c) => !isOff(s, c.code)) : [];
+  if (!sp) return [];
+  return LEVELS.flatMap((lv) => sp.levels[lv].map((it, i) => ({ code: itemCode(sp.n, lv, i + 1), sprint: sp.n, level: lv, k: i + 1, text: it.text, caps: it.caps,
+    capTitles: it.caps.map((c) => sp.caps.find((x) => x.n === c)?.title ?? "").filter(Boolean) })));
 }
-export function capOf(s: ConceptStore, code: string): (Capacity & { code: string; sprint: number }) | null {
-  const p = parseCode(code);
-  const c = p ? sprintOf(s, p.sprint)?.caps.find((x) => x.n === p.n) : null;
-  return c && p ? { ...c, code: codeOf(p.sprint, p.n), sprint: p.sprint } : null;
+export function conceptOf(s: ConceptStore, code: string): Concept | null {
+  const p = parseItem(code);
+  return p ? sprintConcepts(s, p.sprint).find((c) => c.code === itemCode(p.sprint, p.level, p.k)) ?? null : null;
 }
-export const capLabel = (s: ConceptStore, code: string) => { const c = capOf(s, code); return c ? `${c.code} ${c.title}` : code; };
+/** Off: the item itself, or every capacity it belongs to (the teacher's checklist). */
+export function isOff(s: ConceptStore, code: string): boolean {
+  if (s.off.includes(code)) return true;
+  const c = conceptOf(s, code);
+  return !!c && c.caps.length > 0 && c.caps.every((n) => s.off.includes(codeOf(c.sprint, n)));
+}
+/** The items of a sprint that count (not turned off). */
+export const activeConcepts = (s: ConceptStore, n: number | null | undefined) => sprintConcepts(s, n).filter((c) => !isOff(s, c.code));
+export const conceptLabel = (s: ConceptStore, code: string) => { const c = conceptOf(s, code); return c ? `${c.code} (${LEVEL_LABEL[c.level]}) ${c.text}` : code; };
 
 /** What the teacher sees and changes (Settings → Fiche niveaux). */
 export async function conceptsView(env: Env, g: GuildRow) {
   const s = await getConcepts(env, g.id);
-  return { source: s.source, off: s.off, min: MIN_QUESTIONS, sprints: s.sprints.map((sp) => ({ ...sp, caps: sp.caps.map((c) => ({ ...c, code: codeOf(sp.n, c.n), off: isOff(s, codeOf(sp.n, c.n)) })) })) };
+  return { source: s.source, off: s.off, min: MIN_QUESTIONS, sprints: s.sprints.map((sp) => ({ ...sp,
+    caps: sp.caps.map((c) => ({ ...c, code: codeOf(sp.n, c.n), off: s.off.includes(codeOf(sp.n, c.n)) })),
+    levels: Object.fromEntries(LEVELS.map((lv) => [lv, sp.levels[lv].map((it, i) => ({ ...it, code: itemCode(sp.n, lv, i + 1), off: isOff(s, itemCode(sp.n, lv, i + 1)) }))])) })) };
 }
-/** Turn capacities on or off (« S1.11 »: false = not asked, not counted), or link a level item to capacities by hand. */
+/** Turn items or capacities on or off (false = not asked, not counted), or link a level item to capacities by hand. */
 export async function saveConceptChoices(env: Env, g: GuildRow, b: { off?: Record<string, boolean>; link?: { key: string; caps: number[] } }) {
   const s = await getConcepts(env, g.id);
   for (const [code, on] of Object.entries(b.off ?? {})) {
-    const c = normCode(code);
-    if (!c || !capOf(s, c)) continue;
+    const item = normConcept(code), cap = parseCode(code);
+    const c = item && conceptOf(s, item) ? item : cap && sprintOf(s, cap.sprint)?.caps.some((x) => x.n === cap.n) ? codeOf(cap.sprint, cap.n) : null;
+    if (!c) continue;
     s.off = on ? s.off.filter((x) => x !== c) : [...new Set([...s.off, c])];
   }
   if (b.link && /^S\d+\.(critique|faible|moyen|bon|excellent)\.\d+$/.test(b.link.key)) {
@@ -194,16 +216,35 @@ export function docIdOf(url: string): string {
   if (!m) throw new ConceptError("Paste the link of the Google Doc (https://docs.google.com/document/d/…).");
   return m[1];
 }
-/** A Google Doc as text: shared « anyone with the link » (no key), else through the class's Google service account. */
-export async function readGoogleDoc(env: Env, id: string, token?: () => Promise<string>): Promise<string> {
-  const pub = await fetch(`https://docs.google.com/document/d/${id}/export?format=txt`, { redirect: "follow" }).catch(() => null);
-  if (pub && pub.ok && !/text\/html/.test(pub.headers.get("content-type") || "")) { const t = await pub.text(); if (/fiche de validation|sprint/i.test(t)) return t; }
-  if (!token) throw new ConceptError("ClassBot can't open this Google Doc: share it as « Anyone with the link: Viewer », or with the Google service account (Settings → Google Sheet) as Viewer.");
-  const tok = await token();
-  const r = await fetch(`https://docs.googleapis.com/v1/documents/${id}?includeTabsContent=true`, { headers: { authorization: `Bearer ${tok}` } });
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new ConceptError(r.status === 403 || r.status === 404 ? "ClassBot can't open this Google Doc: share it as « Anyone with the link: Viewer », or with the Google service account's email as Viewer (and turn on the « Google Docs API » in its Google Cloud project)." : `Google Docs: ${j?.error?.message || r.status}`);
-  return docJsonText(j);
+/**
+ * A Google Doc as text, every tab (Sprint 1, Sprint 2…): through the class's Google service account when it can (the
+ * Docs API reads all the tabs), else shared « anyone with the link » (each tab exported by its id).
+ */
+export async function readGoogleDoc(env: Env, id: string, token?: () => Promise<string>, tabs: string[] = []): Promise<string> {
+  let why = "";
+  if (token) {
+    try {
+      const tok = await token();
+      const r = await fetch(`https://docs.googleapis.com/v1/documents/${id}?includeTabsContent=true`, { headers: { authorization: `Bearer ${tok}` } });
+      if (r.ok) return docJsonText(await r.json());
+      const j: any = await r.json().catch(() => ({}));
+      const msg = String(j?.error?.message || "");
+      why = /has not been used|is disabled|SERVICE_DISABLED|accessNotConfigured/i.test(msg + JSON.stringify(j?.error?.details || ""))
+        ? "the « Google Docs API » is off in the service account's Google Cloud project: turn it on (APIs & Services → Library → Google Docs API → Enable), wait a minute, then read it again."
+        : r.status === 404 || r.status === 403 ? "the Doc isn't shared with the service account: in the Doc, Share → add the service account's email (Settings → Programme & suivi → Suivi Formateur) as Viewer."
+        : `Google answered ${r.status}${msg ? ` (${msg.slice(0, 160)})` : ""}.`;
+    } catch (e) { why = `the service account couldn't sign in (${String((e as Error)?.message || e).slice(0, 160)}).`; }
+  }
+  // shared with the link: the default export is the first tab only, so each tab is asked for by its id (in the link: ?tab=t.0)
+  const ids = [...new Set(["", ...tabs])];
+  const parts: string[] = [];
+  for (const t of ids) {
+    const pub = await fetch(`https://docs.google.com/document/d/${id}/export?format=txt${t ? `&tab=${encodeURIComponent(t)}` : ""}`, { redirect: "follow" }).catch(() => null);
+    if (pub && pub.ok && !/text\/html/.test(pub.headers.get("content-type") || "")) { const x = await pub.text(); if (/fiche de validation|sprint/i.test(x) && !parts.includes(x)) parts.push(x); }
+  }
+  if (parts.length) return parts.join("\n\n");
+  if (why) throw new ConceptError(`ClassBot can't open this Google Doc: ${why}`);
+  throw new ConceptError("ClassBot can't open this Google Doc: share it as « Anyone with the link: Viewer », or with the Google service account (Settings → Programme & suivi → Suivi Formateur) as Viewer and turn on the « Google Docs API » in its Google Cloud project.");
 }
 /** The text of a Google Docs API document (every tab, paragraphs and tables, one line per paragraph). */
 export function docJsonText(doc: any): string {
@@ -222,8 +263,8 @@ export function docJsonText(doc: any): string {
 
 // ------------------------------------------------------------------ in the evaluations
 /**
- * The sprint and the capacities to cover for an evaluation: its brief (its sprint, its text), else a programme week,
- * else the topic and today's sprint. What the teacher then sees ticked (and changes).
+ * The sprint and the items to cover for an evaluation: its brief (its sprint, its text), else a programme week, else
+ * the topic and today's sprint. What the teacher then sees ticked (and changes).
  */
 export async function suggestScope(env: Env, g: GuildRow, b: { brief_id?: unknown; week?: unknown; sprint?: unknown; text?: unknown; limit?: unknown }) {
   const { programOf, weekAt } = await import("./program.ts");
@@ -241,82 +282,89 @@ export async function suggestScope(env: Env, g: GuildRow, b: { brief_id?: unknow
   }
   if (b.week) { const w = p.weeks.find((x) => x.n === Number(b.week)); sprint = sprint || w?.sprint || null; if (w) text += `\n${w.title}\n${w.objective}\n${w.concepts}\n${w.deliverables}`; }
   if (!sprint) sprint = weekAt(p, new Date().toISOString().slice(0, 10))?.sprint ?? null;
-  // the Fiche has no such sprint (Sprint 3 not written yet…): the last one it has before it
-  const has = s.sprints.map((x) => x.n);
-  const fiche = sprint && has.includes(sprint) ? sprint : null;
+  const fiche = sprint && sprintOf(s, sprint) ? sprint : null;
+  const items = fiche ? activeConcepts(s, fiche) : [];
+  const sp = sprintOf(s, fiche);
   return {
     sprint: fiche, programmeSprint: sprint, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: MIN_QUESTIONS,
-    caps: fiche ? activeCaps(s, fiche).map((c) => ({ code: c.code, title: c.title, points: c.points })) : [],
-    scope: fiche ? scopeFromText(s, fiche, text, Math.max(1, Math.min(12, Number(b.limit) || 12))) : [],
+    items: items.map((c) => ({ code: c.code, level: c.level, text: c.text, caps: c.caps, capTitles: c.capTitles })),
+    caps: sp ? sp.caps.map((c) => ({ code: codeOf(sp.n, c.n), n: c.n, title: c.title })) : [],
+    scope: fiche ? scopeFromText(s, fiche, text, Math.max(1, Math.min(60, Number(b.limit) || 12))) : [],
   };
 }
-/** The capacities an evaluation should cover, from its text (a brief, a week, a topic): the ones its words point to. */
+/** The items an evaluation should cover, from its text (a brief, a week, a topic): the ones its words point to. */
 export function scopeFromText(s: ConceptStore, sprintN: number | null | undefined, text: string, limit = 12): string[] {
-  const caps = activeCaps(s, sprintN);
-  if (!caps.length) return [];
+  const items = activeConcepts(s, sprintN);
+  if (!items.length) return [];
+  const sp = sprintOf(s, sprintN)!;
   const w = words(text);
-  if (!w.size) return caps.map((c) => c.code);
-  const hit = caps.map((c) => { const cw = words([c.title, ...c.points].join(" ")); let x = 0; for (const k of w) if (cw.has(k)) x++; return { code: c.code, x }; });
+  const byLevel = (a: Concept, b: Concept) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level) || a.k - b.k;
+  if (!w.size) return items.sort(byLevel).slice(0, limit).map((c) => c.code);
+  const hit = items.map((c) => {
+    const own = words(c.text), cap = words(c.caps.map((n) => { const x = sp.caps.find((y) => y.n === n); return x ? [x.title, ...x.points].join(" ") : ""; }).join(" "));
+    let x = 0; for (const k of w) { if (own.has(k)) x += 2; else if (cap.has(k)) x += 1; }
+    return { c, x };
+  });
   const top = Math.max(...hit.map((h) => h.x));
-  const picked = hit.filter((h) => h.x >= Math.max(2, top * 0.4)).sort((a, b) => b.x - a.x).slice(0, limit).map((h) => h.code);
-  return picked.length ? picked.sort((a, b) => Number(a.split(".")[1]) - Number(b.split(".")[1])) : caps.slice(0, limit).map((c) => c.code);
+  const picked = hit.filter((h) => h.x >= Math.max(2, top * 0.4)).sort((a, b) => b.x - a.x || byLevel(a.c, b.c)).slice(0, limit).map((h) => h.c);
+  return (picked.length ? picked : items.slice(0, limit)).sort(byLevel).map((c) => c.code);
 }
-/** The block of the AI prompts (and the prompts for Claude): the capacities to cover and the rules. */
+/** The block of the AI prompts (and the prompts for Claude): the items to cover, at their level, and the rules. */
 export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: string; lang?: "fr" | "en" } = {}): string {
-  const caps = scope.map((c) => capOf(s, c)).filter((c): c is NonNullable<ReturnType<typeof capOf>> => !!c && !isOff(s, c.code));
-  if (!caps.length) return "";
+  const items = scope.map((c) => conceptOf(s, c)).filter((c): c is Concept => !!c && !isOff(s, c.code));
+  if (!items.length) return "";
   const per = o.per ?? "question";
   return [
-    `CONCEPTS OBLIGATOIRES (Fiche de validation du sprint, exigence administrative) : chaque ${per} porte "concepts", la liste des codes des capacités qu'elle travaille VRAIMENT (un ${per} peut en toucher une ou plusieurs).`,
-    `Chacune de ces capacités doit être touchée par AU MOINS ${MIN_QUESTIONS} ${per}s différentes ; une capacité est considérée comme comprise quand plus de la moitié des ${per}s qui la touchent sont réussies (au moins 3 sur 5).`,
-    "Les capacités, avec ce qu'elles recouvrent :",
-    ...caps.map((c) => `- ${c.code} « ${c.title} » : ${c.points.join(" ; ")}`),
-    "Les capacités pratiques (Git, GitHub, Jira, maquette, DevTools, organisation du projet) sont aussi évaluées par des questions concrètes (commande à choisir, étape à ordonner, problème à diagnostiquer, capture ou extrait à lire).",
-    `N'utilise QUE ces codes (exactement : ${caps.map((c) => c.code).join(", ")}).`,
+    `CONCEPTS OBLIGATOIRES (Fiche de validation du sprint, exigence administrative) : ce sont les éléments des niveaux (Critique → Excellent), chacun est le MINIMUM à savoir pour ce niveau. Chaque ${per} porte "concepts", la liste des codes des éléments qu'elle vérifie VRAIMENT (un ${per} peut en toucher un ou plusieurs).`,
+    `Chacun de ces éléments doit être vérifié par AU MOINS ${MIN_QUESTIONS} ${per}s différentes ; un élément est considéré comme acquis quand plus de la moitié des ${per}s qui le touchent sont réussies (au moins 3 sur 5).`,
+    "Chaque question est au niveau d'exigence de SON élément : un élément « Bon » ou « Excellent » se vérifie par une question de ce niveau (choisir, justifier, corriger, organiser), pas par une question de niveau Critique.",
+    "Les éléments, avec leur niveau et leur capacité :",
+    ...items.map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »${c.capTitles.length ? ` (capacité : ${c.capTitles.join(" ; ")})` : ""}`),
+    "Les éléments pratiques (Git, GitHub, Jira, maquette Figma, DevTools, organisation du projet) sont aussi vérifiés par des questions concrètes (commande à choisir, étapes à ordonner, problème à diagnostiquer, extrait à lire).",
+    `N'utilise QUE ces codes (exactement : ${items.map((c) => c.code).join(", ")}).`,
   ].join("\n");
 }
-/** How many questions touch each capacity of the scope, and the ones under the minimum. */
+/** How many questions touch each item of the scope, and the ones under the minimum. */
 export function coverage(items: { concepts?: string[] }[], scope: string[]) {
   const count: Record<string, number> = Object.fromEntries(scope.map((c) => [c, 0]));
-  for (const it of items) for (const c of new Set((it.concepts ?? []).map(normCode).filter(Boolean) as string[])) if (c in count) count[c]++;
+  for (const it of items) for (const c of new Set((it.concepts ?? []).map(normConcept).filter(Boolean) as string[])) if (c in count) count[c]++;
   return { count, missing: Object.entries(count).filter(([, n]) => n < MIN_QUESTIONS).map(([c, n]) => ({ code: c, n, need: MIN_QUESTIONS - n })) };
 }
-/** The concept codes of an item, cleaned: known codes only, the ones turned off left out. */
+/** The concept codes of a question, cleaned: known items only, the ones turned off left out. */
 export function cleanConcepts(s: ConceptStore, v: unknown): string[] {
-  return [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\s]+/)).map(normCode).filter((c): c is string => !!c && !!capOf(s, c) && !isOff(s, c)))].slice(0, 6);
+  return [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\s]+/)).map(normConcept).filter((c): c is string => !!c && !!conceptOf(s, c) && !isOff(s, c)))].slice(0, 60);
 }
+/** Every concept code the class knows (not turned off): what a file may use. */
+export const knownConcepts = (s: ConceptStore) => new Set(s.sprints.flatMap((sp) => activeConcepts(s, sp.n).map((c) => c.code)));
 /**
- * The plan of an assessment: n questions, each with 1 or 2 capacities, so that every capacity of the scope gets at
- * least 5. When n is too small for that, n grows (the minimum always wins); returns the plan's capacities per question.
+ * The plan of an assessment: n questions, each with 1 or 2 items, so that every item of the scope gets at least 5.
+ * When n is too small for that, n grows (the minimum always wins); returns the plan's items per question.
  */
 export function planConcepts(scope: string[], n: number, perQuestion = 2): string[][] {
   if (!scope.length) return Array.from({ length: n }, () => []);
   const need = Math.ceil((scope.length * MIN_QUESTIONS) / perQuestion);
   const total = Math.max(n, need);
   const out: string[][] = Array.from({ length: total }, () => []);
-  // round robin: capacity k goes to slots k, k+K, k+2K… until each has its 5, then the second place of each question
   let slot = 0;
   for (let r = 0; r < MIN_QUESTIONS; r++) for (const c of scope) { while (out[slot % total].length >= perQuestion || out[slot % total].includes(c)) slot++; out[slot % total].push(c); slot++; }
-  // questions left without a capacity: the least covered ones
   const cnt = (c: string) => out.filter((q) => q.includes(c)).length;
   for (const q of out) if (!q.length) q.push([...scope].sort((a, b) => cnt(a) - cnt(b))[0]);
   return out;
 }
 
-// ------------------------------------------------------------------ mastery: what each learner understood
+// ------------------------------------------------------------------ mastery: what each learner knows
 export interface Evidence { code: string; got: number; from: "assessment" | "mise" | "oral"; ref: string; at: number; label: string }
-export interface CapState { code: string; title: string; asked: number; got: number; pct: number | null; state: "ok" | "ko" | "few"; teacher: boolean | null; final: "ok" | "ko" | "few"; evidence: Evidence[] }
+export interface ItemState { code: string; level: Level; k: number; text: string; caps: number[]; asked: number; got: number; pct: number | null; state: "ok" | "ko" | "few"; teacher: boolean | null; final: "ok" | "ko" | "few"; evidence: Evidence[] }
 /**
- * Every question that touched a capacity of a sprint, for one learner: the assessments (correct = 1, partly = ½), the
- * mises en situation (the item's score), the debrief's oral questions (✓ = 1); the teacher's decision wins.
+ * Every question that touched an item of a sprint, for one learner: the assessments (correct = 1, partly = ½), the
+ * mises en situation (the item's score), the debrief's oral questions (✓ = 1).
  */
 export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptStore, sprintN: number, o: { live?: { briefId: number } } = {}): Promise<Evidence[]> {
   const pre = `S${sprintN}.`;
   const ev: Evidence[] = [];
   const hasPre = (list: unknown) => Array.isArray(list) && list.some((c) => String(c).startsWith(pre));
-  // assessments
-  const ass = await all<{ id: number; title: string; questions: string; grades: string | null; submitted_at: number | null; status: string }>(env,
-    `SELECT a.id, a.title, a.questions, t.grades, t.submitted_at, t.status FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
+  const ass = await all<{ id: number; title: string; questions: string; grades: string | null; submitted_at: number | null }>(env,
+    `SELECT a.id, a.title, a.questions, t.grades, t.submitted_at FROM assessment_takers t JOIN assessments a ON a.id = t.assessment_id
      WHERE a.guild_id = ? AND t.discord_id = ? AND t.status IN ('submitted', 'graded') AND a.questions LIKE ?`, gid, uid, `%"${pre}%`).catch(() => []);
   for (const a of ass) {
     let qs: any[] = [], gr: Record<string, any> = {};
@@ -330,7 +378,6 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
       for (const c of cleanConcepts(s, q.concepts)) if (c.startsWith(pre)) ev.push({ code: c, got, from: "assessment", ref: `a${a.id}:${q.id}`, at: a.submitted_at ?? 0, label: `${a.title} · Q${i + 1}` });
     });
   }
-  // mises en situation (the score of each item: QCM 0 or 100, situations 0…100)
   const mis = await all<{ id: number; title: string; content: string; grades: string | null; answers: string | null; checks: string | null; submitted_at: number | null }>(env,
     `SELECT m.id, m.title, m.content, t.grades, t.answers, t.checks, t.submitted_at FROM mise_takers t JOIN mises m ON m.id = t.mise_id
      WHERE m.guild_id = ? AND t.discord_id = ? AND t.status = 'submitted' AND m.content LIKE ?`, gid, uid, `%"${pre}%`).catch(() => []);
@@ -351,8 +398,7 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
       }
     }
   }
-  // the oral questions of the learner's debriefs (each tagged with a capacity): counted once the debrief is finalized,
-  // or the debrief being done right now (its switches as they are)
+  // the oral questions of the learner's debriefs: counted once the debrief is finalized, or the one being done now
   const revs = await all<{ brief_id: number; record: string; status: string; updated_at: number | null }>(env,
     "SELECT brief_id, record, status, updated_at FROM brief_reviews WHERE guild_id = ? AND who = ? AND record LIKE ?", gid, `u:${uid}`, `%"${pre}%`).catch(() => []);
   if (revs.length) {
@@ -369,39 +415,40 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
   }
   return ev.filter((e) => !isOff(s, e.code));
 }
-/** Each capacity of the sprint: asked, right, understood (≥ 5 asked and more than half right), the teacher's decision. */
-export async function masteryOf(env: Env, gid: string, uid: string, sprintN: number, s?: ConceptStore, o: { live?: { briefId: number } } = {}): Promise<{ caps: CapState[]; level: ReturnType<typeof levelFrom> }> {
+/** Each item of the sprint: asked, right, known (≥ 5 asked and more than half right), the teacher's decision. */
+export async function masteryOf(env: Env, gid: string, uid: string, sprintN: number, s?: ConceptStore, o: { live?: { briefId: number } } = {}) {
   const S = s ?? (await getConcepts(env, gid));
   const ev = await evidenceOf(env, gid, uid, S, sprintN, o);
   const dec = await decisionsOf(env, gid, uid);
-  const caps = activeCaps(S, sprintN).map((c) => {
+  const items: ItemState[] = activeConcepts(S, sprintN).map((c) => {
     const e = ev.filter((x) => x.code === c.code);
     const asked = e.length, got = Math.round(e.reduce((a, x) => a + x.got, 0) * 10) / 10;
-    const state: CapState["state"] = asked < MIN_QUESTIONS ? "few" : got / asked > 0.5 ? "ok" : "ko";
+    const state: ItemState["state"] = asked < MIN_QUESTIONS ? "few" : got / asked > 0.5 ? "ok" : "ko";
     const teacher = dec[c.code] ?? null;
-    return { code: c.code, title: c.title, asked, got, pct: asked ? Math.round((100 * got) / asked) : null, state, teacher, final: teacher == null ? state : teacher ? "ok" : "ko", evidence: e } as CapState;
+    return { code: c.code, level: c.level, k: c.k, text: c.text, caps: c.caps, asked, got, pct: asked ? Math.round((100 * got) / asked) : null, state, teacher, final: teacher == null ? state : teacher ? "ok" : "ko", evidence: e };
   });
-  return { caps, level: levelFrom(S, sprintN, caps) };
+  const sp = sprintOf(S, sprintN);
+  const caps = (sp?.caps ?? []).map((c) => { const its = items.filter((i) => i.caps.includes(c.n)); return { code: codeOf(sprintN, c.n), title: c.title, items: its.length, known: its.filter((i) => i.final === "ok").length }; }).filter((c) => c.items);
+  return { items, caps, level: levelFrom(items) };
 }
 /**
- * The level from the capacities understood: each item of a level box is understood when its capacities are; a level
- * is reached when at least half of its items are, and every level below too. Unknown (too few questions): not reached.
+ * The level: each item of a level box is the MINIMUM of that level. A level is reached when EVERY one of its items is
+ * known, and every level below too. Not reached yet: what's missing (not known, or not evaluated enough).
  */
-export function levelFrom(s: ConceptStore, sprintN: number, caps: Pick<CapState, "code" | "final">[]) {
-  const sp = sprintOf(s, sprintN);
-  const ok = new Map(caps.map((c) => [c.code, c.final]));
+export function levelFrom(items: Pick<ItemState, "code" | "level" | "final">[]) {
   const per = LEVELS.map((lv) => {
-    const items = (sp?.levels[lv] ?? []).map((it) => ({ text: it.text, caps: it.caps.map((n) => codeOf(sprintN, n)).filter((c) => ok.has(c)) })).filter((it) => it.caps.length);
-    const understood = items.filter((it) => it.caps.every((c) => ok.get(c) === "ok")).length;
-    const unknown = items.filter((it) => it.caps.some((c) => ok.get(c) === "few")).length;
-    return { level: lv, items: items.length, understood, unknown, pct: items.length ? Math.round((100 * understood) / items.length) : null };
+    const its = items.filter((i) => i.level === lv);
+    const known = its.filter((i) => i.final === "ok").length, ko = its.filter((i) => i.final === "ko").length, few = its.filter((i) => i.final === "few").length;
+    return { level: lv, items: its.length, known, ko, few, full: its.length > 0 && known === its.length };
   });
   let reached: Level | null = null;
-  for (const p of per) { if (p.items && p.understood * 2 >= p.items) reached = p.level; else if (p.items) break; }
-  const known = caps.some((c) => c.final !== "few");
-  return { reached: known ? reached ?? "critique" : null, per };
+  for (const p of per) { if (!p.items) continue; if (p.full) reached = p.level; else break; }
+  const evaluated = items.some((i) => i.final !== "few");
+  // the lowest level is Critique: not all its minimum shown yet → still Critique, said as such
+  const below = !reached && evaluated;
+  const next = per.find((p) => p.items && !p.full) ?? null;
+  return { reached: reached ?? (evaluated ? "critique" as Level : null), belowMinimum: below, next: next ? { level: next.level, missing: next.items - next.known, ko: next.ko, few: next.few } : null, per };
 }
-
 /** The sprint of the Fiche a brief belongs to (its sprint, else its week's), or null when the Fiche hasn't it. */
 export async function briefSprint(env: Env, g: GuildRow, briefId: number, s?: ConceptStore): Promise<number | null> {
   const S = s ?? (await getConcepts(env, g.id));
@@ -411,30 +458,37 @@ export async function briefSprint(env: Env, g: GuildRow, briefId: number, s?: Co
   if (!n && r.week) { const { programOf } = await import("./program.ts"); n = (await programOf(env, g)).weeks.find((w) => w.n === r.week)?.sprint ?? null; }
   return n && sprintOf(S, n) ? n : null;
 }
-/** For the AI that proposes a level: what the Fiche says about this learner (capacities, the level it gives). */
-export function masteryForAi(sprintN: number, m: { caps: CapState[]; level: ReturnType<typeof levelFrom> }): string {
-  const ok = m.caps.filter((c) => c.final === "ok"), ko = m.caps.filter((c) => c.final === "ko"), few = m.caps.filter((c) => c.final === "few");
-  return [`FICHE NIVEAUX DU SPRINT ${sprintN} (référence officielle) : ${ok.length}/${m.caps.length} capacités comprises (au moins ${MIN_QUESTIONS} questions, plus de la moitié réussies)`,
-    ok.length ? `- comprises : ${ok.map((c) => `${c.code} ${c.title}`).join(" ; ")}` : "",
-    ko.length ? `- pas comprises : ${ko.map((c) => `${c.code} ${c.title} (${c.got}/${c.asked})`).join(" ; ")}` : "",
-    few.length ? `- pas assez évaluées (moins de ${MIN_QUESTIONS} questions) : ${few.map((c) => `${c.code} (${c.asked})`).join(" ; ")}` : "",
-    m.level.reached ? `- NIVEAU SELON LA FICHE (au moins la moitié des éléments de chaque niveau, jusqu'à celui-ci) : ${LEVEL_LABEL[m.level.reached]}` : "- niveau selon la Fiche : pas encore assez de questions pour le dire",
+/** For the AI that proposes a level: what the Fiche says about this learner (each level's minimum, the level it gives). */
+export function masteryForAi(sprintN: number, m: Awaited<ReturnType<typeof masteryOf>>): string {
+  const L = m.level;
+  const miss = L.next ? m.items.filter((i) => i.level === L.next!.level && i.final !== "ok") : [];
+  return [`FICHE NIVEAUX DU SPRINT ${sprintN} (référence officielle ; chaque élément d'un niveau est le MINIMUM de ce niveau : un niveau n'est atteint que si TOUS ses éléments sont acquis, et tous les niveaux en dessous)`,
+    ...L.per.filter((p) => p.items).map((p) => `- ${LEVEL_LABEL[p.level]} : ${p.known}/${p.items} éléments acquis${p.ko ? `, ${p.ko} pas acquis` : ""}${p.few ? `, ${p.few} pas assez évalués` : ""}`),
+    L.reached ? `- NIVEAU SELON LA FICHE : ${LEVEL_LABEL[L.reached]}${L.belowMinimum ? " (même le minimum Critique n'est pas encore entièrement montré)" : ""}` : "- niveau selon la Fiche : pas encore assez de questions pour le dire",
+    miss.length ? `- pour atteindre ${LEVEL_LABEL[L.next!.level]}, il manque : ${miss.slice(0, 8).map((i) => `${i.code} « ${i.text} »${i.final === "few" ? " (pas assez évalué)" : ""}`).join(" ; ")}` : "",
   ].filter(Boolean).join("\n");
 }
 
-// the teacher's decisions on capacities (app_settings, per learner)
+// the teacher's decisions on items (app_settings, per learner)
 const DKEY = (gid: string, uid: string) => `concept:dec:${gid}:${uid}`;
 async function readJsonKey<T>(env: Env, k: string, d: T): Promise<T> { const r = await one<{ v: string }>(env, "SELECT v FROM app_settings WHERE k = ?", k).catch(() => null); try { return r ? JSON.parse(r.v) ?? d : d; } catch { return d; } }
 async function writeJsonKey(env: Env, k: string, v: unknown) { await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", k, JSON.stringify(v), now()); }
 export async function decisionsOf(env: Env, gid: string, uid: string): Promise<Record<string, boolean>> { return readJsonKey(env, DKEY(gid, uid), {}); }
-/** The teacher decides a capacity (from the project, an oral…): true / false, or null to follow the questions again. */
-export async function decideCapacity(env: Env, g: GuildRow, uid: string, code: string, ok: boolean | null) {
-  const c = normCode(code);
-  if (!c) throw new ConceptError("Unknown capacity.");
+/**
+ * The teacher decides (from the project, an oral…): an item (« S2.M3 »), or every item of a capacity (« S2.11 », e.g. Git
+ * judged on the repo): true / false, or null to follow the questions again.
+ */
+export async function decideConcept(env: Env, g: GuildRow, uid: string, code: string, ok: boolean | null) {
+  const s = await getConcepts(env, g.id);
+  const item = normConcept(code), cap = item ? null : parseCode(code);
+  const codes = item && conceptOf(s, item) ? [item] : cap ? sprintConcepts(s, cap.sprint).filter((c) => c.caps.includes(cap.n)).map((c) => c.code) : [];
+  if (!codes.length) throw new ConceptError("Unknown item of the Fiche.");
   const d = await decisionsOf(env, g.id, uid);
-  if (ok == null) delete d[c]; else d[c] = !!ok;
+  for (const c of codes) { if (ok == null) delete d[c]; else d[c] = !!ok; }
   await writeJsonKey(env, DKEY(g.id, uid), d);
+  return codes.length;
 }
+
 // ------------------------------------------------------------------ the built-in Fiche (Sprint 1 and 2 of the A1)
 export const BUILTIN_FICHE = `
 FICHE DE VALIDATION DU SPRINT 1

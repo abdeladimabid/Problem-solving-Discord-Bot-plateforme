@@ -17,7 +17,7 @@ import { conceptsOf } from "./review/engine.ts";
 import { extractJson } from "./ai.ts";
 import { parseComp, techOutside } from "./program.ts";
 import { SKILL_KEYS } from "./skills.ts";
-import { capOf, codeOf, conceptsPrompt, coverage, parseCode, planConcepts } from "./concepts.ts";
+import { conceptOf, conceptsPrompt, coverage, normConcept, planConcepts } from "./concepts.ts";
 import type { ConceptStore } from "./concepts.ts";
 
 export type QType = "code" | "explain" | "mcq";
@@ -73,7 +73,7 @@ export function cleanQuestion(q: any, i = 0): Question | null {
   }
   if (comps.length) { out.comps = comps.slice(0, 6); out.comp = comps[0].code; out.level = comps[0].level; }
   // the capacities of the Fiche niveaux ("S2.3", "S2-3"…: kept as « S2.3 »)
-  const concepts = [...new Set((Array.isArray(q?.concepts) ? q.concepts : String(q?.concepts ?? "").split(/[,;\s]+/)).map((c: unknown) => { const p = parseCode(c); return p ? codeOf(p.sprint, p.n) : null; }).filter(Boolean))] as string[];
+  const concepts = [...new Set((Array.isArray(q?.concepts) ? q.concepts : String(q?.concepts ?? "").split(/[,;\s]+/)).map(normConcept).filter(Boolean))] as string[];
   if (concepts.length) out.concepts = concepts.slice(0, 6);
   if (q?.code) out.code = str(q.code, 4000);
   if (type === "code") {
@@ -101,7 +101,7 @@ export function cleanSettings(s: any): Settings {
     target: (Array.isArray(s?.target) ? s.target : []).map(String).filter((x: string) => /^\d{1,25}$/.test(x)).slice(0, 60),
     noPaste: s?.noPaste !== false, lockScreen: s?.lockScreen !== false, shuffle: s?.shuffle !== false, nav: s?.nav === "forward" ? "forward" : "free",
     oneDevice: s?.oneDevice !== false, netAlerts: s?.netAlerts !== false,
-    concepts: [...new Set((Array.isArray(s?.concepts) ? s.concepts : []).map((c: unknown) => { const p = parseCode(c); return p ? codeOf(p.sprint, p.n) : null; }).filter(Boolean))].slice(0, 24) as string[],
+    concepts: [...new Set((Array.isArray(s?.concepts) ? s.concepts : []).map(normConcept).filter(Boolean))].slice(0, 60) as string[],
   };
 }
 const parse = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
@@ -873,15 +873,16 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
     // the plan: each question its type, notion, kind of task and situation; then batches of up to 6, asked together
     // the Fiche niveaux: each capacity of the scope gets at least 5 questions (one question may touch two): the
     // number of questions grows when it's too small for that
-    const cs = o.conceptStore && o.concepts?.length ? o.concepts.filter((c) => capOf(o.conceptStore!, c)) : [];
+    const cs = o.conceptStore && o.concepts?.length ? o.concepts.filter((c) => conceptOf(o.conceptStore!, c)) : [];
     const cplan = cs.length ? planConcepts(cs, Math.max(1, Math.min(60, Math.round(o.count) || 10))) : null;
     const n = cplan ? Math.min(60, cplan.length) : Math.max(1, Math.min(30, Math.round(o.count) || 10));
     const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);
     const k = { code: Math.round((n * o.mix.code) / total), explain: Math.round((n * o.mix.explain) / total) };
     const types: PlanItem["type"][] = [...Array(k.code).fill("code"), ...Array(k.explain).fill("explain"), ...Array(Math.max(0, n - k.code - k.explain)).fill("mcq")];
-    // each question's notion: a point of its capacities (in turn), else one the AI plans
     const pointN: Record<string, number> = {};
-    const capNotion = (codes: string[]) => codes.map((c) => { const cap = capOf(o.conceptStore!, c)!; const k = (pointN[c] = (pointN[c] ?? -1) + 1); return `${cap.title} : ${cap.points[k % Math.max(1, cap.points.length)] ?? ""}`; }).join(" + ");
+    // each question's notion: its items (each at its level), seen from another angle each time
+    const ANGLES = ["", " (dans un cas concret)", " (repérer l'erreur)", " (choisir et justifier)", " (compléter)"];
+    const capNotion = (codes: string[]) => codes.map((c) => { const it = conceptOf(o.conceptStore!, c)!; const k = (pointN[c] = (pointN[c] ?? -1) + 1); return `${it.code} [${it.level}] ${it.text}${ANGLES[k % ANGLES.length]}`; }).join(" + ");
     const notions = cplan ? cplan.map(capNotion) : n > 1 ? await planNotions(env, o, n, techs) : [];
     const forms: Record<string, string[]> = Object.fromEntries(Object.entries(FORMS).map(([t, l]) => [t, mixUp(l.map(([f, e]) => (fr ? f : e)))]));
     const used: Record<string, number> = {};

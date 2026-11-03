@@ -1720,13 +1720,11 @@ async function viewSettings(arg) {
   const ic = g.integrity || { editor: "required", explain: true, similarity: true, codeImage: true, quickLimit: 0, practiceWeight: 1 };
   const TABS = [
     ["general", "⚙️", "General", "Language, track, channels"],
-    ["programme", "🎓", "Programme", "Planning & competencies"],
+    ["programme", "🎓", "Programme & suivi", "Planning, Fiche niveaux, Suivi Formateur"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
-    ["concepts", "📐", "Fiche niveaux", "Sprint capacities & levels"],
-    ["gsheet", "📗", "Google Sheet", "Suivi Formateur, filled for you"],
     ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
@@ -1735,7 +1733,11 @@ async function viewSettings(arg) {
     ["season", "🗓️", "Season", "Start a new season"],
     ["diag", "🩺", "Diagnostics", "Is everything answering?"],
   ];
-  const tab0 = TABS.some(([k]) => k === arg) ? arg : "general";
+  // Programme, Fiche niveaux and the Suivi Formateur sheet: one section, three tabs
+  const PGROUP = [["programme", "🎓", "Programme"], ["concepts", "📐", "Fiche niveaux"], ["gsheet", "📗", "Suivi Formateur (Google Sheet)"]];
+  const navOf = (k) => (PGROUP.some(([x]) => x === k) ? "programme" : k);
+  const pTabs = (k) => `<div class="tabs set-subtabs" role="tablist">${PGROUP.map(([x, ic, t]) => `<button type="button" role="tab" data-goto="${x}" aria-selected="${x === k}">${ic} ${t}</button>`).join("")}</div>`;
+  const tab0 = TABS.some(([k]) => k === arg) || PGROUP.some(([k]) => k === arg) ? arg : "general";
   const head = (title, sub) => `<header class="set-head"><h2>${title}</h2><p class="sub">${sub}</p></header>`;
   view.innerHTML = `
     <div class="page-head"><div><h1>Settings</h1><p class="sub">${esc(g.name || "this server")} · everything here is for this class only</p></div></div>
@@ -1767,6 +1769,7 @@ async function viewSettings(arg) {
     </section>
 
     <section class="set-sec" data-sec="programme" hidden>
+      ${pTabs("programme")}
       ${head("Programme", "The planning of the year (weeks, sprints) and the competency framework. Briefs, debriefs and the competency record follow it.")}
       <div id="set-programme"><p class="muted">Loading…</p></div>
     </section>
@@ -1893,11 +1896,13 @@ async function viewSettings(arg) {
     </section>
 
     <section class="set-sec" data-sec="concepts" hidden>
-      ${head("Fiche niveaux · sprint capacities and levels", "The official Fiche de validation of each sprint: its capacities are the concepts every evaluation must cover (5 questions each at least), and its level boxes say what each level means. Used by the assessments, the mises en situation, the debriefs and the sprint levels.")}
+      ${pTabs("concepts")}
+      ${head("Fiche niveaux · what each level requires", "The official Fiche de validation of each sprint: the items of each level box are the minimum of that level, and the concepts every evaluation checks (5 questions each at least). A level needs all its items. Used by the assessments, the mises en situation, the debriefs and the sprint levels.")}
       <div id="set-concepts"><p class="muted">Loading…</p></div>
     </section>
 
     <section class="set-sec" data-sec="gsheet" hidden>
+      ${pTabs("gsheet")}
       ${head("Google Sheet · Suivi Formateur", "ClassBot fills your Suivi Formateur sheet: the sprint levels (Niveau technique), the briefs and where the debriefs are (Suivi et Validation Classe), and the plans d'action sent. Suivi fil rouge is never touched.")}
       <div id="set-gsheet"><p class="muted">Loading…</p></div>
     </section>
@@ -1914,7 +1919,7 @@ async function viewSettings(arg) {
     </div></div>`;
   const loaded = new Set();
   const showTab = (k) => {
-    $$(".set-nav a").forEach((a) => a.setAttribute("aria-current", String(a.dataset.tab === k)));
+    $$(".set-nav a").forEach((a) => a.setAttribute("aria-current", String(a.dataset.tab === navOf(k))));
     $$(".set-sec").forEach((x) => (x.hidden = x.dataset.sec !== k));
     history.replaceState(null, "", `#/settings/${k}`);
     if (!loaded.has(k)) {

@@ -205,7 +205,7 @@ export async function sprintView(env: Env, g: GuildRow, n: number) {
   const fiche: Record<string, { reached: string | null; ok: number; ko: number; few: number; total: number }> = {};
   if (sprintOf(cstore, n)) for (const r of rows) {
     const m = await masteryOf(env, g.id, r.discord_id, n, cstore).catch(() => null);
-    if (m) fiche[r.discord_id] = { reached: m.level.reached, ok: m.caps.filter((c) => c.final === "ok").length, ko: m.caps.filter((c) => c.final === "ko").length, few: m.caps.filter((c) => c.final === "few").length, total: m.caps.length };
+    if (m) fiche[r.discord_id] = { reached: m.level.reached, ok: m.items.filter((c) => c.final === "ok").length, ko: m.items.filter((c) => c.final === "ko").length, few: m.items.filter((c) => c.final === "few").length, total: m.items.length };
   }
   return {
     fiche: sprintOf(cstore, n) ? fiche : null,
@@ -262,16 +262,16 @@ export async function proposeLevels(env: Env, g: GuildRow, n: number) {
     "Tu aides un formateur en développement web à classer chaque apprenant à la fin d’un sprint, selon son niveau technique : \"excellent\", \"bon\", \"moyen\", \"faible\" ou \"critique\".",
     "Tu reçois pour chaque apprenant (A1, A2…) : les compétences du sprint atteintes au niveau demandé, la part de la grille des briefs validée, les briefs évalués, le niveau de chacun de ses débriefs (en squad : son niveau à lui), les étapes rendues à temps, et un niveau calculé (\"calc\").",
     "Garde le niveau calculé sauf raison claire. Ne juge que sur ces données.",
-    fiche ? "La FICHE NIVEAUX du sprint est la référence officielle : un niveau est atteint quand au moins la moitié de ses éléments sont compris (et tous les niveaux en dessous). Quand elle donne un niveau (\"fiche\"), c'est le niveau calculé : ne t'en écarte pas de plus d'un cran, et seulement avec une raison claire." : "",
+    fiche ? "La FICHE NIVEAUX du sprint est la référence officielle : chaque élément d'un niveau en est le MINIMUM ; un niveau n'est atteint que si TOUS ses éléments sont acquis (et tous les niveaux en dessous). Quand elle donne un niveau (\"fiche\"), c'est le niveau calculé : ne t'en écarte pas de plus d'un cran, et seulement avec une raison claire." : "",
     'Réponds UNIQUEMENT avec ce JSON : {"niveaux":[{"id":"A1","niveau":"bon","raison":"max 15 mots, en français"}]}',
   ].join("\n");
-  const ficheLine = (uid: string) => { const m = fm.get(uid); if (!m) return ""; const ok = m.caps.filter((c) => c.final === "ok").length; return ` · fiche : ${m.level.reached ?? "pas assez évalué"} (${ok}/${m.caps.length} capacités comprises)`; };
+  const ficheLine = (uid: string) => { const m = fm.get(uid); if (!m) return ""; const ok = m.items.filter((c) => c.final === "ok").length; return ` · fiche : ${m.level.reached ?? "pas assez évalué"} (${ok}/${m.items.length} éléments acquis${m.level.next ? `, il manque ${m.level.next.missing} élément(s) pour ${m.level.next.level}` : ""})`; };
   const ask = await askReview(env, system.split("\n").filter(Boolean).join("\n"), () => `SPRINT ${sp.n} : ${sp.title}\n` + rows.map((x) => `${x.id} · ${statsLine(x.r, sp.codes)}${ficheLine(x.r.discord_id)} · calc : ${x.rule}`).join("\n"), 1).catch(() => null);
   const ai = ask && ask.ok && Array.isArray(ask.data?.niveaux) ? new Map(ask.data.niveaux.filter((v: any) => v && SPRINT_LEVELS.includes(v.niveau)).map((v: any) => [String(v.id), v])) : null;
   for (const x of rows) {
     const a: any = ai?.get(x.id);
     const fmx = fm.get(x.r.discord_id);
-    await putDecision(env, g, L.p.id, n, x.r.discord_id, { plevel: a ? a.niveau : x.rule, why: a ? oneLine(a.raison, 160) : fmx?.level.reached ? `Fiche niveaux : ${fmx.caps.filter((c) => c.final === "ok").length}/${fmx.caps.length} capacités comprises` : `${x.r.ok}/${sp.codes.length} compétences, grille ${x.r.pct ?? "?"} %` });
+    await putDecision(env, g, L.p.id, n, x.r.discord_id, { plevel: a ? a.niveau : x.rule, why: a ? oneLine(a.raison, 160) : fmx?.level.reached ? `Fiche niveaux : ${fmx.items.filter((c) => c.final === "ok").length}/${fmx.items.length} éléments acquis` : `${x.r.ok}/${sp.codes.length} compétences, grille ${x.r.pct ?? "?"} %` });
   }
   return { by: ai ? "ai" : "rules" };
 }

@@ -2409,7 +2409,7 @@ function questionCard(q, i, n, locked) {
       : `<label class="small">Expected answer / key points <span class="muted">(never shown; the AI grades with it)</span></label><textarea data-qexp ${q.type === "code" ? 'class="code"' : ""} style="min-height:80px">${esc(q.expected || "")}</textarea>`}
     <div class="qe-meta">
       <div class="small qe-skills"><span class="muted">Skills</span> ${tagSelect(`sk-${i}`, skillOptions(), q.skills || [], { max: 3, placeholder: "Search a skill…" })}</div>
-      <div class="small q-cn" data-qcn><span class="muted">📐 Capacities</span> ${[...new Set([...(AS?.cscope || []), ...(q.concepts || [])])].map((c) => `<label class="cn-qc" title="${esc((AS?.clabels || {})[c] || c)}"><input type="checkbox" value="${esc(c)}" ${(q.concepts || []).includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("") || `<span class="muted">pick the Fiche's capacities above</span>`}</div>
+      <div class="small q-cn" data-qcn><span class="muted">📐 Fiche</span> ${[...new Set([...(AS?.cscope || []), ...(q.concepts || [])])].map((c) => `<label class="cn-qc" title="${esc((AS?.clabels || {})[c] || c)}"><input type="checkbox" value="${esc(c)}" ${(q.concepts || []).includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("") || `<span class="muted">pick the Fiche's capacities above</span>`}</div>
       <div class="small qe-comps"><span class="muted">Competencies</span> ${(q.comps?.length ? q.comps : q.comp ? [{ code: q.comp, level: q.level || 1 }] : []).map((c) => compRow(c, ref)).join("")}
         <button type="button" class="btn small" data-addcomp>+ Competency</button></div>
     </div></article>`;

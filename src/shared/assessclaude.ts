@@ -97,10 +97,10 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string>; concepts?: { k
     // the capacities of the Fiche niveaux it touches ("S2.3")
     if (q.concepts != null || o.concepts) {
       const cs = (Array.isArray(q.concepts) ? q.concepts : []).map((c: unknown) => String(c).trim().toUpperCase());
-      if (q.concepts != null && !Array.isArray(q.concepts)) bad(`"concepts" must be a list (e.g. ["S2.3"]).`);
-      const badC = o.concepts ? cs.filter((c: string) => !o.concepts!.known.has(c)) : cs.filter((c: string) => !/^S\d{1,2}\.\d{1,2}$/.test(c));
-      if (badC.length) bad(`concept(s) ${badC.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.3).`);
-      else if (o.concepts?.scope.length && !cs.length) bad(`"concepts": the capacities of the Fiche niveaux this question touches (at least one of ${o.concepts.scope.join(", ")}).`);
+      if (q.concepts != null && !Array.isArray(q.concepts)) bad(`"concepts" must be a list (e.g. ["S2.M3"]).`);
+      const badC = o.concepts ? cs.filter((c: string) => !o.concepts!.known.has(c)) : cs.filter((c: string) => !/^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c));
+      if (badC.length) bad(`concept(s) ${badC.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.M3).`);
+      else if (o.concepts?.scope.length && !cs.length) bad(`"concepts": the items of the Fiche niveaux this question checks (at least one of ${o.concepts.scope.join(", ")}).`);
       if (cs.length && !badC.length) m.concepts = [...new Set(cs)];
     }
     if (text(q.code)) { if (text(q.code).length > 4000) bad(`"code": 4000 characters at most.`); m.code = text(q.code); }
@@ -136,11 +136,11 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string>; concepts?: { k
   });
   // the Fiche niveaux: each capacity of the scope touched by at least 5 questions (the quiz's own list, else the one asked)
   const declared = Array.isArray(data.concepts) ? data.concepts.map((c: unknown) => String(c).trim().toUpperCase()) : null;
-  if (declared && o.concepts) { const badC = declared.filter((c: string) => !o.concepts!.known.has(c)); if (badC.length) top(`"concepts": ${badC.join(", ")} unknown (codes of the Fiche niveaux, like S2.3).`); }
+  if (declared && o.concepts) { const badC = declared.filter((c: string) => !o.concepts!.known.has(c)); if (badC.length) top(`"concepts": ${badC.join(", ")} unknown (codes of the Fiche niveaux, like S2.M3).`); }
   const scope: string[] = declared?.length ? declared : o.concepts?.scope ?? [];
   if (scope.length && !p.length) for (const c of scope) {
     const k = out.filter((q) => (q.concepts ?? []).includes(c)).length;
-    if (k < 5) top(`capacity ${c}: touched by ${k} question(s), at least 5 are required (Fiche niveaux).`);
+    if (k < 5) top(`item ${c} of the Fiche niveaux: checked by ${k} question(s), at least 5 are required.`);
   }
   if (p.length) return { problems: p };
   const n = (t: string) => out.filter((q) => q.type === t).length;
@@ -198,8 +198,8 @@ export function creationPrompt(o: { program: Pick<Program, "name" | "referential
     "- \"competencies\" : une ou deux compétences du référentiel, au format C3N1 ou CT2N1 (le niveau 1 = débutant).",
     `- "skills" (facultatif, 3 au plus) parmi : ${SKILL_KEYS.join(", ")}.`,
     "- \"notion\" : la notion évaluée, en 2 à 5 mots.",
-    o.concepts?.scope.length ? `- "concepts" (OBLIGATOIRE sur chaque question) : les codes des capacités de la Fiche niveaux qu'elle travaille (voir ci-dessous) ; et "concepts" en haut du fichier : la liste des capacités couvertes (${o.concepts.scope.join(", ")}).` : "",
-    o.concepts?.scope.length ? `- Assez de questions pour que CHAQUE capacité soit touchée par au moins 5 questions (une question peut en toucher plusieurs) : au moins ${Math.ceil((o.concepts.scope.length * 5) / 2)} questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; "minutes" : une durée réaliste pour des débutants.`
+    o.concepts?.scope.length ? `- "concepts" (OBLIGATOIRE sur chaque question) : les codes des éléments de la Fiche niveaux qu'elle vérifie (voir ci-dessous) ; et "concepts" en haut du fichier : la liste des éléments couverts (${o.concepts.scope.join(", ")}).` : "",
+    o.concepts?.scope.length ? `- Assez de questions pour que CHAQUE élément soit vérifié par au moins 5 questions (une question peut en toucher plusieurs) : au moins ${Math.ceil((o.concepts.scope.length * 5) / 2)} questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; "minutes" : une durée réaliste pour des débutants.`
       : "- 8 à 15 questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; \"minutes\" : une durée réaliste pour des débutants.",
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",
     o.concepts?.block ? `\n${o.concepts.block}` : "",
@@ -226,8 +226,8 @@ export function conceptsAuditPrompt(a: Pick<AssessRow, "title" | "brief_id">, qs
     block,
     "",
     "CE QUE TU FAIS",
-    `- Pour CHAQUE question existante : mets dans "concepts" les codes des capacités qu'elle travaille VRAIMENT (relis la question et la réponse attendue ; un tableau vide n'est pas permis). Ne change pas la question si elle est bonne.`,
-    `- Puis compte, pour chaque capacité (${scope.join(", ")}), combien de questions la touchent. Pour chaque capacité en dessous de 5, AJOUTE des questions nouvelles (même style, même niveau, mêmes technologies, une seule bonne réponse pour un QCM) jusqu'à 5 au moins.`,
+    `- Pour CHAQUE question existante : mets dans "concepts" les codes des éléments de la Fiche qu'elle vérifie VRAIMENT (relis la question et la réponse attendue ; un tableau vide n'est pas permis). Ne change pas la question si elle est bonne.`,
+    `- Puis compte, pour chaque élément (${scope.join(", ")}), combien de questions le vérifient. Pour chaque élément en dessous de 5, AJOUTE des questions nouvelles (même style, même niveau, mêmes technologies, une seule bonne réponse pour un QCM) jusqu'à 5 au moins.`,
     `- Garde "format", "title", "minutes" (augmente-le si tu ajoutes beaucoup de questions), "lang", "codeLang", "passAt", "points", "brief_id" et "concepts" (en haut) ; chaque question garde ses "competencies" et ses "skills".`,
     `- Les QCM : "correct" = l'index de la seule bonne réponse. Les questions "code" et "explain" : "expected" (et "grading" si utile).`,
     "- Réponds UNIQUEMENT avec le JSON complet, sans texte avant ni après.",

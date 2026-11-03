@@ -7731,19 +7731,19 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
   }
-  // 📐 the Fiche niveaux: every capacity of its scope worked on by 5 of the 10 items at least
+  // 📐 the Fiche niveaux: every item of its scope worked on by 5 of the 10 situations / QCM at least
   {
-    const sc = ["S2.1", "S2.3"];
+    const sc = ["S2.C1", "S2.C3"];
     const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
-    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's capacities on its items: refused, item by item");
-    const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.1"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.3"] : ["S2.1"] })) });
+    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's items on its situations: refused, one by one");
+    const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.C1"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.C3"] : ["S2.C1"] })) });
     const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
-    check(four.data.problems.some((p: any) => /capacity S2\.3 \(Fiche niveaux\): touched by 4 item\(s\), at least 5/.test(p.msg)), "…a capacity in 4 items only: refused, with how many");
+    check(four.data.problems.some((p: any) => /item S2\.C3 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…an item in 4 only: refused, with how many");
     const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
     const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
-    check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.1,S2.3" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.3", "…in 5 each: saved, with its capacities (the mise's and each item's)");
+    check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.C1,S2.C3" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.C3", "…in 5 each: saved, with its items (the mise's and each situation's / QCM's)");
     const pr = await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: ["C3N1"], concepts: sc });
-    check(pr.status === 200 && pr.data.prompt.includes("CONCEPTS OBLIGATOIRES") && pr.data.prompt.includes('"concepts" en haut du fichier = ["S2.1","S2.3"]'), "the prompt for Claude: the capacities, 5 of the 10 items each, \"concepts\" on every item");
+    check(pr.status === 200 && pr.data.prompt.includes("CONCEPTS OBLIGATOIRES") && pr.data.prompt.includes('"concepts" en haut du fichier = ["S2.C1","S2.C3"]') && pr.data.prompt.includes("S2.C3 [Critique]"), "the prompt for Claude: the items with their level, 5 of the 10 each, \"concepts\" on every one");
     await api("DELETE", `/api/mises/${five.data.id}?g=${G}`);
   }
   // the learners' work for Claude (claude.ai) to grade, and its correction back
@@ -7841,7 +7841,7 @@ section("papers: Sign in with Discord, one device per paper, network alerts");
   await api("DELETE", `/api/assessments/${aid}?g=${G}`);
 }
 
-section("📐 Fiche niveaux: the sprints' capacities in every evaluation, what each learner understood, the levels");
+section("📐 Fiche niveaux: each level's items in every evaluation, what each learner knows, the levels (100% of a level)");
 {
   const C = await import("../src/shared/concepts.ts");
   // the Fiche A1 built in: Sprint 1 and 2, 12 capacities each, the 5 level boxes
@@ -7861,17 +7861,26 @@ section("📐 Fiche niveaux: the sprints' capacities in every evaluation, what e
   const r3 = C.parseFiche(fiche3);
   check(r3.sprints.length === 1 && r3.sprints[0].n === 3 && r3.sprints[0].caps.length === 3 && r3.sprints[0].levels.moyen[0].caps.join() === "3" && r3.sprints[0].goal.startsWith("Développer"),
     "a Fiche in plain text (Google Doc): its capacities, its levels, each item linked from its words");
-  // 5 questions per capacity at least (a question touches 2): the plan grows when it's too small
-  const pl = C.planConcepts(["S2.1", "S2.2", "S2.3", "S2.4"], 8);
-  const cov = C.coverage(pl.map((x) => ({ concepts: x })), ["S2.1", "S2.2", "S2.3", "S2.4"]);
-  check(pl.length === 10 && !cov.missing.length && pl.every((x) => x.length >= 1 && x.length <= 2 && new Set(x).size === x.length), `8 questions asked for 4 capacities: 10 (5 each at least) (${JSON.stringify(cov.count)})`);
-  check(C.planConcepts(["S2.1"], 12).length === 12 && C.coverage([{ concepts: ["S2.1"] }, { concepts: ["s2-1"] }], ["S2.1"]).missing[0].need === 3, "…more questions asked: kept; the count reads « S2-1 » too");
-  // the level: at least half of each level's items understood, and every level below
-  const st = (ok: number[]) => s2.caps.map((c) => ({ code: `S2.${c.n}`, final: (ok.includes(c.n) ? "ok" : "ko") as "ok" | "ko" }));
-  const S0 = { source: { kind: "builtin" as const, doc: null, at: 0 }, sprints: r.sprints, off: [] };
-  check(C.levelFrom(S0, 2, st([1, 2, 3, 5])).reached === "critique" && C.levelFrom(S0, 2, st([1, 2, 3, 5, 6])).reached === "faible", "Critique 4/6 → Critique; Faible needs 5/9: one more capacity → Faible");
-  check(C.levelFrom(S0, 2, st([4, 6, 7, 8, 9, 12])).reached === "critique", "a higher level half done doesn't count while a level below isn't reached");
-  check(C.levelFrom(S0, 2, st([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])).reached === "excellent" && C.levelFrom(S0, 2, s2.caps.map((c) => ({ code: `S2.${c.n}`, final: "few" as const }))).reached === null, "everything understood → Excellent; not enough questions yet → no level");
+  // 5 questions per item at least (a question touches 2): the plan grows when it's too small
+  const pl = C.planConcepts(["S2.C1", "S2.C2", "S2.C3", "S2.C4"], 8);
+  const cov = C.coverage(pl.map((x) => ({ concepts: x })), ["S2.C1", "S2.C2", "S2.C3", "S2.C4"]);
+  check(pl.length === 10 && !cov.missing.length && pl.every((x) => x.length >= 1 && x.length <= 2 && new Set(x).size === x.length), `8 questions asked for 4 items: 10 (5 each at least) (${JSON.stringify(cov.count)})`);
+  check(C.planConcepts(["S2.C1"], 12).length === 12 && C.coverage([{ concepts: ["S2.C1"] }], ["S2.C1"]).missing[0].need === 4, "…more questions asked: kept; under 5: how many are missing");
+  // each item of a level box is a concept on its own, with its code
+  const S0 = { source: { kind: "builtin" as const, doc: null, at: 0 }, sprints: r.sprints, off: [], links: {} };
+  const all = C.sprintConcepts(S0, 2);
+  check(all.length === 48 && all[2].code === "S2.C3" && all[2].level === "critique" && all[2].text.startsWith("Ajouter un écouteur") && C.conceptOf(S0, "s2-m4")?.text.startsWith("Comprendre la propagation") && C.normConcept("S2.3") === null,
+    "every item of the 5 levels is a concept with its code (S2.C3 = Critique, 3rd item); a capacity code is not an item");
+  // the level: EVERY item of a level (its minimum), and every level below
+  const st = (ok: (c: { code: string; level: string }) => boolean) => all.map((c) => ({ code: c.code, level: c.level, final: (ok(c) ? "ok" : "ko") as "ok" | "ko" }));
+  const crit = (c: any) => c.level === "critique", fai = (c: any) => c.level === "faible";
+  const l1 = C.levelFrom(st((c) => crit(c) && c.code !== "S2.C6"));
+  check(l1.reached === "critique" && l1.belowMinimum && l1.next?.level === "critique" && l1.next.missing === 1, "5 of the 6 Critique items: under the minimum of Critique (said), the one missing named");
+  const l2 = C.levelFrom(st((c) => crit(c) || (fai(c) && c.code !== "S2.F9")));
+  check(l2.reached === "critique" && !l2.belowMinimum && l2.next?.level === "faible" && l2.next.missing === 1, "all Critique, 8 of the 9 Faible: Critique (one item short of Faible is not Faible)");
+  check(C.levelFrom(st((c) => crit(c) || fai(c))).reached === "faible", "…all 9 Faible: Faible");
+  check(C.levelFrom(st((c) => c.code !== "S2.F2")).reached === "critique", "everything above known but one Faible item: Critique (a level is reached only with all the levels below)");
+  check(C.levelFrom(st(() => true)).reached === "excellent" && C.levelFrom(st(() => true)).next === null && C.levelFrom(all.map((c) => ({ code: c.code, level: c.level, final: "few" as const }))).reached === null, "everything known → Excellent; not enough questions yet → no level");
 
   // ---- Settings → Fiche niveaux
   let V = await api("GET", `/api/settings/concepts?g=${G}`);
@@ -7885,72 +7894,85 @@ section("📐 Fiche niveaux: the sprints' capacities in every evaluation, what e
   V = await api("POST", "/api/settings/concepts/import", { g: G, url: "https://docs.google.com/document/d/1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY/edit?tab=t.0" });
   check(V.status === 200 && V.data.source.kind === "doc" && V.data.source.doc === "1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY" && V.data.sprints.find((x: any) => x.n === 3).title === "Back-end PHP et MySQL", "the Google Doc read (shared with the link): its sprints replace the same ones");
   googleDocFake.text = null;
-  V = await api("PUT", "/api/settings/concepts", { g: G, off: { "S2.12": false } });
-  check(V.data.off.includes("S2.12") && V.data.sprints.find((x: any) => x.n === 2).caps.find((c: any) => c.code === "S2.12").off, "a capacity turned off (not asked, not counted)");
+  V = await api("PUT", "/api/settings/concepts", { g: G, off: { "S2.12": false, "S2.E8": false } });
+  const v2 = V.data.sprints.find((x: any) => x.n === 2);
+  check(V.data.off.includes("S2.12") && v2.caps.find((c: any) => c.code === "S2.12").off && v2.levels.faible[8].off && v2.levels.moyen[10].off && v2.levels.excellent[7].off && !v2.levels.excellent[6].off,
+    "a capacity turned off: its items too (Jira); an item turned off on its own");
   V = await api("PUT", "/api/settings/concepts", { g: G, link: { key: "S3.critique.2", caps: [1, 2] } });
   check(V.data.sprints.find((x: any) => x.n === 3).levels.critique[1].caps.join() === "1,2", "a level item linked by hand");
   const sug = await api("GET", `/api/concepts/suggest?g=${G}&week=3&text=${encodeURIComponent("événements, délégation, formulaires et regex")}`);
-  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.caps.length === 11 && !sug.data.caps.some((c: any) => c.code === "S2.12") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => c.startsWith("S2.")),
-    `an evaluation's capacities: its week's sprint, the ones its words point to (${sug.data.scope.join(", ")})`);
+  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.items.length === 43 && !sug.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => /^S2\.[CFMBE]\d+$/.test(c)) && sug.data.scope.includes("S2.C3"),
+    `an evaluation's items: its week's sprint, the ones its words point to, by level (${sug.data.scope.join(", ")})`);
 
   // ---- assessments: 5 questions per capacity, the prompts for Claude, the import
   ai.gen = "plan";
-  const gq = await api("POST", "/api/assessments/generate", { g: G, topic: "Le DOM", count: 3, concepts: ["S2.1", "S2.3"], techs: ["JavaScript"], codeLang: "javascript", mix: { code: 40, explain: 20, mcq: 40 } });
+  const gq = await api("POST", "/api/assessments/generate", { g: G, topic: "Le DOM", count: 3, concepts: ["S2.C1", "S2.C3"], techs: ["JavaScript"], codeLang: "javascript", mix: { code: 40, explain: 20, mcq: 40 } });
   ai.gen = "";
   const per = (c: string) => gq.data.questions.filter((q: any) => (q.concepts || []).includes(c)).length;
-  check(gq.status === 200 && gq.data.questions.length >= 5 && per("S2.1") >= 5 && per("S2.3") >= 5 && !gq.data.concepts.missing.length && gq.data.questions.every((q: any) => q.concepts.every((c: string) => ["S2.1", "S2.3"].includes(c))),
-    `AI assessment: 3 questions asked for 2 capacities → at least 5 per capacity, each question tagged (${gq.status} ${gq.data.questions?.length} ${JSON.stringify(gq.data.concepts?.count)})`);
-  check(ai.prompts.some((x) => x.includes("CONCEPTS OBLIGATOIRES") && x.includes("S2.3 « Gérer les événements »") && x.includes("AU MOINS 5")), "…the AI is told the capacities, what they cover, and the rule");
-  const cp = await api("GET", `/api/assessments/claude-prompt?g=${G}&week=3&concepts=S2.1,S2.3`);
-  check(cp.status === 200 && cp.data.prompt.includes("CONCEPTS OBLIGATOIRES") && cp.data.prompt.includes('"concepts" (OBLIGATOIRE sur chaque question)') && cp.data.prompt.includes("au moins 5 questions") && cp.data.concepts.scope.join() === "S2.1,S2.3", "the prompt for Claude: the capacities, 5 questions each, \"concepts\" on every question");
-  const quiz = (n: number) => ({ format: "classbot-assessment@1", title: "DOM et événements", minutes: 40, lang: "fr", codeLang: "javascript", passAt: 60, points: 20, brief_id: null, concepts: ["S2.1", "S2.3"],
-    questions: Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Question ${i + 1} sur le DOM et les événements ?`, choices: ["A1", "B1", "C1", "D1"], correct: 0, points: 1, concepts: i < n ? ["S2.1", "S2.3"] : ["S2.1"] })) });
-  const ci = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(4)), concepts: ["S2.1", "S2.3"] });
-  check(ci.data.problems.some((p: any) => /capacity S2\.3: touched by 4 question\(s\), at least 5/.test(p.msg)), "Claude's quiz with a capacity under 5 questions: refused, with which one and how many");
-  const bad = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), questions: quiz(5).questions.map((q, i) => (i ? q : { ...q, concepts: ["S9.9"] })) }), concepts: ["S2.1", "S2.3"] });
-  check(bad.data.problems.some((p: any) => /S9\.9 unknown/.test(p.msg)), "…an unknown capacity code: refused");
-  const okq = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(5)), concepts: ["S2.1", "S2.3"], import: true });
+  check(gq.status === 200 && gq.data.questions.length >= 5 && per("S2.C1") >= 5 && per("S2.C3") >= 5 && !gq.data.concepts.missing.length && gq.data.questions.every((q: any) => q.concepts.every((c: string) => ["S2.C1", "S2.C3"].includes(c))),
+    `AI assessment: 3 questions asked for 2 items → at least 5 per item, each question tagged (${gq.status} ${gq.data.questions?.length} ${JSON.stringify(gq.data.concepts?.count)})`);
+  check(ai.prompts.some((x) => x.includes("CONCEPTS OBLIGATOIRES") && x.includes("S2.C3 [Critique] « Ajouter un écouteur") && x.includes("AU MOINS 5") && x.includes("MINIMUM")), "…the AI is told the items, their level, and the rule");
+  const cp = await api("GET", `/api/assessments/claude-prompt?g=${G}&week=3&concepts=S2.C1,S2.C3`);
+  check(cp.status === 200 && cp.data.prompt.includes("CONCEPTS OBLIGATOIRES") && cp.data.prompt.includes('"concepts" (OBLIGATOIRE sur chaque question)') && cp.data.prompt.includes("au moins 5 questions") && cp.data.concepts.scope.join() === "S2.C1,S2.C3", "the prompt for Claude: the items, 5 questions each, \"concepts\" on every question");
+  const quiz = (n: number) => ({ format: "classbot-assessment@1", title: "DOM et événements", minutes: 40, lang: "fr", codeLang: "javascript", passAt: 60, points: 20, brief_id: null, concepts: ["S2.C1", "S2.C3"],
+    questions: Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Question ${i + 1} sur le DOM et les événements ?`, choices: ["A1", "B1", "C1", "D1"], correct: 0, points: 1, concepts: i < n ? ["S2.C1", "S2.C3"] : ["S2.C1"] })) });
+  const ci = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(4)), concepts: ["S2.C1", "S2.C3"] });
+  check(ci.data.problems.some((p: any) => /item S2\.C3 of the Fiche niveaux: checked by 4 question\(s\), at least 5/.test(p.msg)), "Claude's quiz with an item under 5 questions: refused, with which one and how many");
+  const bad = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), questions: quiz(5).questions.map((q, i) => (i ? q : { ...q, concepts: ["S9.C9"] })) }), concepts: ["S2.C1", "S2.C3"] });
+  check(bad.data.problems.some((p: any) => /S9\.C9 unknown/.test(p.msg)), "…an unknown item code: refused");
+  const okq = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(5)), concepts: ["S2.C1", "S2.C3"], import: true });
   const qa = (await api("GET", `/api/assessments/${okq.data.id}?g=${G}`)).data.assessment;
-  check(okq.status === 200 && !okq.data.problems.length && qa.settings.concepts.join() === "S2.1,S2.3" && qa.questions.every((q: any) => q.concepts.includes("S2.1")), "…5 each: imported, its capacities kept (the assessment's and each question's)");
+  check(okq.status === 200 && !okq.data.problems.length && qa.settings.concepts.join() === "S2.C1,S2.C3" && qa.questions.every((q: any) => q.concepts.includes("S2.C1")), "…5 each: imported, its items kept (the assessment's and each question's)");
   // an existing assessment brought up to the Fiche by Claude
   const old = await api("POST", "/api/assessments", { g: G, title: "Ancienne évaluation", questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2 }], settings: { minutes: 20 } });
-  const ap = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.3"] });
-  check(ap.status === 200 && ap.data.prompt.includes("Explique addEventListener.") && ap.data.prompt.includes("AJOUTE des questions") && ap.data.prompt.includes('"concepts": [\n    "S2.3"\n  ]'), "an existing assessment: the prompt for Claude with its questions, to tag them and add what's missing");
-  const fixed = { ...quiz(5), concepts: ["S2.3"], questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2, concepts: ["S2.3"] }, ...quiz(5).questions.slice(0, 4).map((q) => ({ ...q, concepts: ["S2.3"] }))] };
-  const ap2 = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.3"], json: JSON.stringify(fixed), apply: true });
-  check(ap2.status === 200 && ap2.data.assessment.questions.length === 5 && ap2.data.assessment.questions[0].id === old.data.assessment.questions[0].id && ap2.data.assessment.settings.concepts.join() === "S2.3",
+  const ap = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.C3"] });
+  check(ap.status === 200 && ap.data.prompt.includes("Explique addEventListener.") && ap.data.prompt.includes("AJOUTE des questions") && ap.data.prompt.includes('"concepts": [\n    "S2.C3"\n  ]'), "an existing assessment: the prompt for Claude with its questions, to tag them and add what's missing");
+  const fixed = { ...quiz(5), concepts: ["S2.C3"], questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2, concepts: ["S2.C3"] }, ...quiz(5).questions.slice(0, 4).map((q) => ({ ...q, concepts: ["S2.C3"] }))] };
+  const ap2 = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.C3"], json: JSON.stringify(fixed), apply: true });
+  check(ap2.status === 200 && ap2.data.assessment.questions.length === 5 && ap2.data.assessment.questions[0].id === old.data.assessment.questions[0].id && ap2.data.assessment.settings.concepts.join() === "S2.C3",
     "…Claude's answer back into the same assessment: its question kept (same id), the new ones added, the scope saved");
 
-  // ---- what a learner understood: every question that touched a capacity, in the sprint
+  // ---- what a learner knows: every question that checked an item, in the sprint
   const A = U.alice.id;
   const mk = await api("POST", "/api/assessments", { g: G, title: "Fiche S2", questions: [
-    ...Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Fiche question ${i + 1} sur la sélection ?`, choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.1"] })),
-    { type: "mcq", prompt: "Fiche question 6 sur les événements ?", choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.3"] }], settings: { minutes: 10, concepts: ["S2.1", "S2.3"] } });
+    ...Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Fiche question ${i + 1} sur la sélection ?`, choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.C1"] })),
+    { type: "mcq", prompt: "Fiche question 6 sur les événements ?", choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.C3"] }], settings: { minutes: 10, concepts: ["S2.C1", "S2.C3"] } });
   const aid = mk.data.assessment.id, qids = mk.data.assessment.questions.map((q: any) => q.id);
   await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [A], send: true });
   const grade = (right: number) => run1("UPDATE assessment_takers SET status = 'graded', submitted_at = ?, grades = ? WHERE assessment_id = ? AND discord_id = ?", clock.now(),
     JSON.stringify(Object.fromEntries(qids.map((id: string, i: number) => [id, { verdict: i < 5 ? (i < right ? "correct" : "wrong") : "correct", score: 0, comment: "" }]))), aid, A);
   grade(3);
-  let M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
-  const cap = (code: string) => M.data.caps.find((c: any) => c.code === code);
-  check(M.status === 200 && cap("S2.1").asked === 5 && cap("S2.1").got === 3 && cap("S2.1").state === "ok" && cap("S2.1").evidence.length === 5, "3 right out of 5 questions touching it: understood");
-  check(cap("S2.3").asked === 1 && cap("S2.3").state === "few" && !M.data.caps.some((c: any) => c.code === "S2.12"), "…fewer than 5 questions: not decided yet; a capacity turned off: not shown");
+  const mastery = async () => (await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`));
+  let M = await mastery();
+  const it = (code: string) => M.data.items.find((c: any) => c.code === code);
+  check(M.status === 200 && it("S2.C1").asked === 5 && it("S2.C1").got === 3 && it("S2.C1").state === "ok" && it("S2.C1").evidence.length === 5 && it("S2.C1").level === "critique", "3 right out of 5 questions checking an item: known");
+  check(it("S2.C3").asked === 1 && it("S2.C3").state === "few" && !M.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8"), "…fewer than 5 questions: not decided yet; an item turned off: not shown");
   run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[3], JSON.stringify({ verdict: "partial", score: 50, comment: "" }), aid, A);
   run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[2], JSON.stringify({ verdict: "wrong", score: 0, comment: "" }), aid, A);
-  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
-  check(cap("S2.1").got === 2.5 && cap("S2.1").state === "ko", "2 right and one partly (2.5 out of 5): exactly half is not more than half: not understood");
-  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.3", ok: true });
-  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
-  check(cap("S2.3").teacher === true && cap("S2.3").final === "ok" && cap("S2.1").final === "ko" && M.data.level.reached === "critique", "the teacher decides a capacity (a project, an oral): it counts; the level follows the Fiche");
-  // the oral questions of a finalized debrief count, each on its capacity
+  M = await mastery();
+  check(it("S2.C1").got === 2.5 && it("S2.C1").state === "ko", "2 right and one partly (2.5 out of 5): exactly half is not more than half: not known");
+  // the teacher decides an item, or every item of a capacity (Git judged on the repo)
+  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.C3", ok: true });
+  for (const c of ["S2.C2", "S2.C4", "S2.C5"]) await api("POST", "/api/concepts/decide", { g: G, uid: A, code: c, ok: true });
+  const git = await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.11", ok: true });
+  M = await mastery();
+  check(git.status === 200 && it("S2.C3").teacher === true && it("S2.C3").final === "ok" && ["S2.C6", "S2.F8", "S2.M10", "S2.B11", "S2.E9"].every((c) => it(c).final === "ok") && it("S2.F1").teacher === null,
+    "the teacher decides an item, or a whole capacity (Git: its 5 items, one per level)");
+  check(M.data.level.reached === "critique" && M.data.level.belowMinimum && M.data.level.next.level === "critique" && M.data.level.next.missing === 1 && M.data.caps.find((c: any) => c.code === "S2.11").known === 5,
+    "5 of the 6 Critique items known (S2.C1 not): under the minimum of Critique, 1 missing");
+  // the oral questions of a finalized debrief count, each on its item
   const bidF = q1("SELECT id FROM briefs WHERE guild_id = ? AND id NOT IN (SELECT brief_id FROM brief_reviews WHERE who = ?) ORDER BY id LIMIT 1", G, `u:${A}`).id;
   const hadRev = q1("SELECT 1 AS x FROM brief_reviews WHERE brief_id = ? AND who = ?", bidF, `u:${A}`);
   if (!hadRev) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bidF, G, `u:${A}`,
-    JSON.stringify({ oral: [{ q: "Que fait querySelectorAll ?", a: "une NodeList", concepts: ["S2.1"] }, { q: "Et closest ?", a: "le parent", concepts: ["S2.1"] }], final: { oral: [true, true] } }), clock.now());
-  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
-  check(!hadRev && (cap("S2.1").asked === 7 && cap("S2.1").got === 4.5 && cap("S2.1").state === "ok" && cap("S2.1").evidence.filter((e: any) => e.from === "oral").length === 2), "a finalized debrief's oral questions (✓) count like questions: 4.5 out of 7, understood");
-  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.3", ok: null });
-  check((await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`)).data.caps.find((c: any) => c.code === "S2.3").teacher === null, "…the decision taken back: the questions decide again");
+    JSON.stringify({ oral: [{ q: "Que fait querySelector ?", a: "le premier élément", concepts: ["S2.C1"] }, { q: "Et getElementById ?", a: "par son id", concepts: ["S2.C1"] }], final: { oral: [true, true] } }), clock.now());
+  M = await mastery();
+  check(!hadRev && (it("S2.C1").asked === 7 && it("S2.C1").got === 4.5 && it("S2.C1").state === "ok" && it("S2.C1").evidence.filter((e: any) => e.from === "oral").length === 2), "a finalized debrief's oral questions (✓) count like questions: 4.5 out of 7, known");
+  check(M.data.level.reached === "critique" && !M.data.level.belowMinimum && M.data.level.next.level === "faible" && M.data.level.next.missing === 7, "…all 6 Critique items known: Critique reached; Faible needs its 7 others (8 counted, Jira off; Git's known)");
+  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.C3", ok: null });
+  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.11", ok: null });
+  M = await mastery();
+  check(it("S2.C3").teacher === null && it("S2.C6").teacher === null && M.data.level.belowMinimum, "…the decisions taken back: the questions decide again");
+  check((await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.Z1", ok: true })).status === 400, "…an unknown code: refused");
   const nos = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=7`);
   check(nos.status === 200 && nos.data.sprint === null && nos.data.sprints.length === 3, "a sprint not in the Fiche yet: said (nothing invented)");
   // clean up

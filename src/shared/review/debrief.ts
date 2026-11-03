@@ -7,7 +7,7 @@
 //   5. finalize: the result goes into the student's record (see learning.ts)
 // Ported from GitHub Watcher (aiAnalyze, makeChallenge, saveComment, saveMembers), now on D1 and ClassBot briefs.
 /* eslint-disable */
-import { activeCaps, briefSprint, cleanConcepts, getConcepts, masteryForAi, masteryOf } from "../concepts.ts";
+import { LEVEL_LABEL, activeConcepts, briefSprint, cleanConcepts, getConcepts, masteryForAi, masteryOf, scopeFromText } from "../concepts.ts";
 import type { Env, GuildRow, PlayerRow } from "../types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "../db.ts";
 import { extractJson, groqChat, hasKeyedAi, workersChat } from "../ai.ts";
@@ -774,9 +774,14 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   // asked enough) first; its ✓ / ✗ counts like a question of an evaluation
   const cstore = await getConcepts(env, g.id);
   const csp = await briefSprint(env, g, b.id, cstore);
-  const ccaps = csp ? activeCaps(cstore, csp) : [];
+  // the items the questions may check: a learner's next level's missing items first (the minimum not shown yet), else the brief's
   const cm = csp && who.startsWith("u:") ? await masteryOf(env, g.id, who.slice(2), csp, cstore, { live: { briefId: b.id } }).catch(() => null) : null;
-  const cfirst = cm ? cm.caps.filter((c) => c.final !== "ok").map((c) => c.code) : [];
+  const all = csp ? activeConcepts(cstore, csp) : [];
+  const fromBrief = csp ? new Set(scopeFromText(cstore, csp, `${b.title}\n${b.text}`, 20)) : new Set<string>();
+  const missing = cm ? cm.items.filter((i) => i.final !== "ok") : [];
+  const firstLv = missing.length ? missing[0].level : null;
+  const ccaps = all.filter((c) => fromBrief.has(c.code) || (firstLv && missing.some((m) => m.code === c.code && m.level === firstLv))).slice(0, 24);
+  const cfirst = firstLv ? missing.filter((m) => m.level === firstLv).map((m) => m.code) : [];
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
     "Prépare les questions orales de la soutenance : au plus 5 questions courtes que le formateur pose à l’apprenant pour vérifier qu’il comprend son projet.",
@@ -789,8 +794,8 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
     "- Pour chaque question, \"source\" : \"evaluation\" (une lacune de l’évaluation), \"projet\" (un point du projet) ou \"brief\".",
     before.length ? "- Ne repose pas une question déjà posée (liste DÉJÀ POSÉES) : d’autres notions." : "",
     "- S’il y a des PARTIES À LUI FAIRE EXPLIQUER : les 1 ou 2 premières questions lui demandent d’expliquer ce que fait cette partie de SON code, ou comment il la changerait (\"source\" : \"projet\"), sans jamais l’accuser.",
-    ccaps.length ? `- "concept" : le code de LA capacité de la Fiche niveaux que la question vérifie, parmi : ${ccaps.map((c) => `${c.code} « ${c.title} »`).join(" ; ")}.${cfirst.length ? ` En PRIORITÉ celles que l'apprenant n'a pas encore montrées : ${cfirst.join(", ")}.` : ""}` : "",
-    `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots","source":"evaluation|projet|brief"${ccaps.length ? ',"concept":"S2.3"' : ""}}]}`,
+    ccaps.length ? `- "concept" : le code de L'ÉLÉMENT de la Fiche niveaux que la question vérifie (chaque élément est le minimum de son niveau), parmi : ${ccaps.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »`).join(" ; ")}.${cfirst.length ? ` En PRIORITÉ ceux du niveau ${LEVEL_LABEL[missing[0].level]} que l'apprenant n'a pas encore montrés : ${cfirst.join(", ")}.` : ""}` : "",
+    `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots","source":"evaluation|projet|brief"${ccaps.length ? ',"concept":"S2.M3"' : ""}}]}`,
   ].filter(Boolean).join("\n");
   const user = [`PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`, tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", points ? `POINTS DU BRIEF :\n${points}` : "",
     lac.assess.length ? `LACUNES DE L’ÉVALUATION :\n${lac.assess.map((x) => "- " + x).join("\n")}` : "LACUNES DE L’ÉVALUATION : aucune évaluation liée (ou rien de raté).",

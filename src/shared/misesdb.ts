@@ -19,7 +19,7 @@ import {
 } from "./mises.ts";
 import { chat, extractJson } from "./ai.ts";
 import { netFlags } from "./identity.ts";
-import { cleanConcepts, codeOf, conceptsPrompt, getConcepts, isOff, suggestScope } from "./concepts.ts";
+import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope } from "./concepts.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
@@ -45,7 +45,7 @@ export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
   return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
     lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false,
-    concepts: (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.\d{1,2}$/.test(c)).slice(0, 12) };
+    concepts: (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30) };
 };
 /**
  * The Fiche niveaux for a request: the codes the class knows, and the capacities to cover: the ones ticked (b.concepts),
@@ -53,11 +53,11 @@ export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
  */
 async function conceptOpts(env: Env, g: GuildRow, b: any, o: { week?: number | null; brief?: number | null; suggest: boolean; file?: unknown }) {
   const store = await getConcepts(env, g.id);
-  const known = new Set(store.sprints.flatMap((sp) => sp.caps.map((c) => codeOf(sp.n, c.n))).filter((c) => !isOff(store, c)));
+  const known = knownConcepts(store);
   let scope: string[] = Array.isArray(b?.concepts) ? cleanConcepts(store, b.concepts) : [];
   if (!scope.length && !Array.isArray(b?.concepts) && o.file && typeof o.file === "object" && Array.isArray((o.file as any).concepts)) scope = cleanConcepts(store, (o.file as any).concepts);
-  // 10 items (5 situations, 5 QCM): 5 capacities at most, each in 5 items
-  if (!scope.length && !Array.isArray(b?.concepts) && o.suggest) scope = (await suggestScope(env, g, { brief_id: o.brief, week: o.week, limit: 5 })).scope;
+  // 10 items (5 situations, 5 QCM): 6 items of the Fiche at most, each in 5 of them
+  if (!scope.length && !Array.isArray(b?.concepts) && o.suggest) scope = (await suggestScope(env, g, { brief_id: o.brief, week: o.week, limit: 6 })).scope;
   return { store, known, scope };
 }
 /** draft · scheduled (launched, starts later) · live · closed (closed by the teacher, or its time is up). */
@@ -404,7 +404,7 @@ const pickSettings = (s: any) => {
   if (s && "brief" in s) o.brief = briefRef(s.brief);
   if (s && "oneDevice" in s) o.oneDevice = !!s.oneDevice;
   if (s && "netAlerts" in s) o.netAlerts = !!s.netAlerts;
-  if (s && "concepts" in s) o.concepts = (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.\d{1,2}$/.test(c)).slice(0, 12);
+  if (s && "concepts" in s) o.concepts = (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30);
   return o;
 };
 

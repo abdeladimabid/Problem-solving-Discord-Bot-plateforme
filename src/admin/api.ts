@@ -1,5 +1,5 @@
 // JSON API behind the teacher dashboard.
-import { ConceptError, briefSprint, conceptsView, decideCapacity, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
+import { ConceptError, briefSprint, conceptsView, decideConcept, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
@@ -649,7 +649,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     }
     if (path === "/concepts/decide" && method === "POST") {
       const g = await guild();
-      try { await decideCapacity(env, g, String(body.uid || ""), String(body.code || ""), body.ok == null ? null : !!body.ok); }
+      try { await decideConcept(env, g, String(body.uid || ""), String(body.code || ""), body.ok == null ? null : !!body.ok); }
       catch (e) { if (e instanceof ConceptError) throw new HttpError(400, e.message); throw e; }
       return ok({ ok: true });
     }
