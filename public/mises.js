@@ -472,7 +472,7 @@ function mesLiveTab(root) {
           : { label: "Left page", num: true, sort: "leaves", html: (t) => (t.leaves ? `<b>${t.leaves}×</b><div class="small muted">${mesDur(t.awaySec)}</div>` : "0") },
         ...(m.settings.netAlerts ? [{ label: "Network", html: (t) => netHtml(t.net) }] : []),
         { label: "Pastes", num: true, sort: "pastes", html: (t) => (t.pastes || t.blockedPastes ? `<b>${t.pastes}</b>${t.pasteChars ? `<div class="small muted">${t.pasteChars} chars</div>` : ""}${t.blockedPastes ? `<div class="small" style="color:var(--warn)">${t.blockedPastes} blocked</div>` : ""}` : "0") },
-        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ` <button class="btn small danger" data-mdel="${t.id}" title="Delete their paper and results, then invite them again">Delete paper</button>`}</span>` },
+        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "submitted" && m.status !== "closed" ? `<button class="btn small" data-mro="${t.id}" title="Handed in by mistake: their paper opens again, where they were">Reopen paper</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ` <button class="btn small danger" data-mdel="${t.id}" title="Delete their paper and results, then invite them again">Delete paper</button>`}</span>` },
       ], rows, { empty: MSIT.filter === "all" ? "Nobody yet: launch it for the class." : "Nobody in this filter." })}
     </section>`;
   $$("[data-mf]", root).forEach((b) => b.onclick = () => { MSIT.filter = b.dataset.mf; mesLiveTab(root); });
@@ -481,6 +481,9 @@ function mesLiveTab(root) {
   $$("[data-mu]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: { taker: Number(b.dataset.mu) } }); toast("Let back in: their page asks for full screen again"); mesRender(); }));
   $$("[data-mx]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/remove`, { method: "POST", body: { taker: Number(b.dataset.mx) } }); mesRender(); }));
   $$("[data-mdel]", root).forEach((b) => b.onclick = () => { const t = takers.find((x) => x.id === Number(b.dataset.mdel)); if (t) mesResetDialog(t); });
+  $$("[data-mro]", root).forEach((b) => b.onclick = () => { const t = takers.find((x) => x.id === Number(b.dataset.mro)); if (!t) return;
+    confirmDialog(`Reopen ${t.name || t.discord_id}'s paper?`, "Handed in by mistake: they open their link again and go on where they were (their answers are kept). Their results come back when they hand it in again.", "Reopen their paper",
+      async () => { MSIT.d = await api(`/mises/${m.id}/reopen`, { method: "POST", body: { taker: t.id } }); toast("Reopened: they open their link again"); mesRender(); }); });
   $("#ml-links").onclick = (e) => busy(e.currentTarget, async () => { const l = (await api(`/mises/${m.id}/links`)).links; copyText(takers.map((t) => `${t.name || t.discord_id}: ${l[t.discord_id]}`).join("\n"), "Links copied"); });
 }
 
@@ -529,7 +532,7 @@ function mesResultsTab(root) {
       <div class="figure"><span class="ico">📨</span><div><b>${done.filter((t) => t.sent_at).length}</b><span>results sent</span></div></div>
     </div>
     <section class="panel">
-      <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0"><a class="btn small" href="/api/mises/${m.id}/results.csv?g=${encodeURIComponent(S.g)}" download>⬇ CSV</a><button class="btn small primary" id="mr-send" ${done.length ? "" : "disabled"}>Send the results by DM</button></span></div>
+      <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0"><a class="btn small" href="/api/mises/${m.id}/results.csv?g=${encodeURIComponent(S.g)}" download>⬇ CSV</a><a class="btn small" href="/api/mises/${m.id}/answers.json?g=${encodeURIComponent(S.g)}" download title="Their work, the paper and the instructions: give this file to Claude (claude.ai) to grade it">⬇ Answers for Claude (JSON)</a><button class="btn small" id="mr-claude" ${done.length ? "" : "disabled"}>📥 Import Claude's grades</button><button class="btn small primary" id="mr-send" ${done.length ? "" : "disabled"}>Send the results by DM</button></span></div>
       <p class="muted small" style="margin-top:0">The automatic score: the share of checks passed (situations) and the right answer (QCM), weighted by the points. Click a score to change it (✎ = yours), a learner to see everything they did and write their comment. Results go to their competencies once nothing is left to grade.</p>
       <p class="muted small">Weight of each item in the score (its points ÷ ${mesWeight(c, ids[0]).total} points). Under each result: what it adds to the score.<br>${ids.map((id) => `<b>${mesItemLabel(c, id)}</b> ${mesWeight(c, id).pct}%`).join(" · ")}</p>
       ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Learner</th><th>Score</th>${ids.map((id) => `<th class="ctr"><span class="qh">${mesItemLabel(c, id)}</span><span class="mes-w">${mesWeight(c, id).pct}%</span></th>`).join("")}</tr></thead>
@@ -539,6 +542,7 @@ function mesResultsTab(root) {
     </section>`;
   $$("[data-ml]", root).forEach((b) => b.onclick = () => busy(b, () => mesLearner(Number(b.dataset.ml))));
   $$("[data-mg]", root).forEach((b) => b.onclick = () => busy(b, async () => { const d = await api(`/mises/${m.id}/taker/${b.dataset.mg}`); mesGradeDialog(d, b.dataset.it, () => viewMise(m.id)); }));
+  if ($("#mr-claude")) $("#mr-claude").onclick = () => mesClaudeImport(m);
   if ($("#mr-send")) $("#mr-send").onclick = () => confirmDialog("Send the results?", `Each learner whose paper is fully graded gets their score, each item and your comment (or a short professional one written from their score) by DM.${toGrade ? ` ${toGrade} item(s) still to grade: those learners are skipped.` : ""}`, "Send", async () => {
     const r = await api(`/mises/${m.id}/results`, { method: "POST", body: {} });
     toast(`Sent to ${r.sent} learner(s)${r.skipped ? ` · ${r.skipped} skipped (to grade)` : ""}`);
@@ -708,6 +712,24 @@ function mesExtendDialog() {
     const r = await api(`/mises/${m.id}/extend`, { method: "POST", body: { minutes: Number($("#me-m").value), continue: cont } });
     MSIT.d = r; dlg.close();
     toast(m.status === "closed" ? `Reopened${r.continued ? ` · ${r.continued} can continue: they open their link again` : ""}` : "Time added"); mesRender(); } }]);
+}
+/** Claude's correction back: the JSON it answered becomes your grades (each still editable) and their comments. */
+function mesClaudeImport(m) {
+  openDialog("📥 Import Claude's grades", `<ol class="small" style="margin:0 0 10px;padding-left:18px">
+      <li><b>⬇ Answers for Claude (JSON)</b>: the paper, what's expected, each learner's work and the instructions.</li>
+      <li>In <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">claude.ai</a>, attach the file and write « Corrige ». Claude answers with a JSON.</li>
+      <li>Paste that JSON here (or choose the file).</li></ol>
+    <textarea id="mc-json" rows="10" style="width:100%;font-family:var(--mono, monospace);font-size:12px" placeholder='{ "format": "classbot-mise-grades@1", "grades": [ … ], "comments": [ … ] }'></textarea>
+    <p class="toolbar" style="margin:6px 0 0"><input type="file" id="mc-file" accept=".json,application/json,text/plain"></p>
+    <p class="muted small" style="margin:6px 0 0">Each grade becomes yours (✎, you can still change it) and each comment goes with their results. Nothing is sent to the learners until you press « Send the results by DM ».</p>`,
+  [{ label: "Import the grades", primary: true, action: async () => {
+    const txt = $("#mc-json", dlg).value.trim();
+    if (!txt) throw new Error("Paste Claude's JSON first.");
+    const r = await api(`/mises/${m.id}/claude-grades`, { method: "POST", body: { json: txt } });
+    MSIT.d = r; dlg.close();
+    toast(`${r.grades} grade(s) and ${r.comments} comment(s) imported for ${r.learners} learner(s)${r.skipped.length ? ` · skipped: ${r.skipped.slice(0, 3).join(", ")}` : ""}`, !!r.skipped.length && !r.grades);
+    mesRender(); } }]);
+  $("#mc-file", dlg).onchange = async (e) => { const f = e.target.files[0]; if (f) $("#mc-json", dlg).value = await f.text(); };
 }
 /** Delete a learner's paper (their work and results), and invite them again with a new paper if asked. */
 function mesResetDialog(t) {

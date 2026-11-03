@@ -7714,6 +7714,13 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check(!q("SELECT 1 FROM competency_results WHERE source = 'mise' AND ref = ? AND discord_id = ?", String(M6), U.alice.id).length, "…their results wait until they hand it in again");
     const back6 = await call6(U.alice.id, "start", {});
     check(back6.paper && back6.answers.q1?.choice === 0 && q1("SELECT status FROM mise_takers WHERE id = ?", ta.id).status === "active", "…they go on where they were, their answers kept");
+    // handed in by mistake while it's open: their paper alone opens again
+    await call6(U.alice.id, "submit", {});
+    check(q1("SELECT status FROM mise_takers WHERE id = ?", ta.id).status === "submitted", "(handed in by mistake)");
+    const ro = await api("POST", `/api/mises/${M6}/reopen`, { g: G, taker: ta.id });
+    check(ro.status === 200 && ro.data.continued === 1 && ro.data.takers.find((t: any) => t.id === ta.id).status === "resume" && (await call6(U.alice.id, "start", {})).answers?.q1?.choice === 0,
+      `a paper handed in by mistake: reopened alone, they go on where they were (${ro.status} ${ro.data.error ?? ""})`);
+    check((await api("POST", `/api/mises/${M6}/reopen`, { g: G, taker: ta.id })).status === 400, "…a paper not handed in: said");
     const c0 = discordCalls.length;
     const rs = await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: tb.id, invite: true });
     const nb = rs.data.takers.find((t: any) => t.discord_id === U.bob.id);
@@ -7723,6 +7730,36 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check(rs2.data.removed === 1 && !rs2.data.takers.some((t: any) => t.discord_id === U.alice.id), "…or only deleted (they can be added again later)");
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
+  }
+  // the learners' work for Claude (claude.ai) to grade, and its correction back
+  {
+    const sv7 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    const M7 = sv7.data.id;
+    await api("POST", `/api/mises/${M7}/launch`, { g: G, students: [U.alice.id, U.bob.id], lockScreen: false, send: false });
+    const L7 = (await api("GET", `/api/mises/${M7}/links?g=${G}`)).data.links;
+    const call7 = async (u: string, a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${L7[u].split("/mes/")[1]}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as any;
+    const st7 = await call7(U.alice.id, "start", {});
+    const s1 = st7.paper.situations[0].id, q1id = st7.paper.qcm[0].id;
+    await call7(U.alice.id, "save", { item: s1, answer: { files: { "index.html": '<h1 id="titre">Bienvenue</h1>', "script.js": "document.querySelector('#titre').textContent = 'Tifawin';" } } });
+    await call7(U.alice.id, "save", { item: q1id, answer: { choice: 1 } });
+    await call7(U.alice.id, "submit", {});
+    const raw7 = await admin.fetch(new Request(`https://dash.example.workers.dev/api/mises/${M7}/answers.json?g=${G}`), env, makeCtx());
+    const ex = await raw7.json() as any;
+    const al = ex.learners.find((x: any) => x.name === U.alice.name || x.work?.[s1]?.attempted);
+    check(raw7.status === 200 && /attachment; filename="mise-\d+-copies\.json"/.test(raw7.headers.get("content-disposition") || "") && ex.format === "classbot-mise-answers@1" && /Corrige|corriges/.test(ex.instructions) && ex.output_format.format === "classbot-mise-grades@1",
+      `⬇ Answers for Claude: a JSON file with the instructions and the format of the answer (${raw7.status})`);
+    check(ex.items.length === 10 && ex.items[0].model_solution?.length && ex.items[0].questions.length && ex.items.find((x: any) => x.kind === "qcm").correct_text === "Il change le texte", "…the paper: each item, what's expected, the model solution, the QCM's right answer");
+    check(!!al && al.work[s1].files["script.js"].includes("Tifawin") && al.work[q1id].choice === 1 && al.work[q1id].right === false && ex.learners.length === 1, "…each learner who started: their code and their choices (not the ones who didn't start)");
+    const before = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data.score;
+    const gi = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: "Voici la correction :\n```json\n" + JSON.stringify({ format: "classbot-mise-grades@1",
+      grades: [{ learner: al.learner, item: s1, score: 100, comment: "Bien sélectionné et modifié." }, { learner: "nobody", item: s1, score: 50, comment: "x" }, { learner: al.learner, item: "zz9", score: 10 }],
+      comments: [{ learner: al.learner, comment: "Bon travail sur le DOM, revois les QCM." }] }) + "\n```" });
+    const d7 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    check(gi.status === 200 && gi.data.grades === 1 && gi.data.comments === 1 && gi.data.skipped.length === 2 && d7.grades[s1].score === 100 && d7.grades[s1].teacher && d7.grades[s1].comment === "Bien sélectionné et modifié." && d7.comment === "Bon travail sur le DOM, revois les QCM.",
+      `📥 Claude's grades imported (even wrapped in text): your grade of the item, their comment; unknown learners and items skipped, and said (${gi.status} ${JSON.stringify(gi.data.skipped)})`);
+    check(d7.score >= before, "…the score follows");
+    check((await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: "pas du json" })).status === 400, "…not Claude's JSON: refused, with what to paste");
+    await api("DELETE", `/api/mises/${M7}?g=${G}`);
   }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
 }

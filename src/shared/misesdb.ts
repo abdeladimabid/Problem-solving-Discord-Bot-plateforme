@@ -479,20 +479,32 @@ export async function extend(env: Env, g: GuildRow, id: number, minutes: number,
   const base = Math.max(m.ends_at ?? now(), now());
   await run(env, "UPDATE mises SET ends_at = ?, status = 'live', closed_at = NULL WHERE id = ?", base + add * 60, id);
   // papers handed in (often by the closing, or the time running out) that the teacher lets continue: where they were
-  const want = (Array.isArray(cont) ? cont : []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  return { continued: await continueTakers(env, g.id, id, cont) };
+}
+/** Papers handed in that go on where they were (handed in by mistake, or by the closing): their results wait. */
+async function continueTakers(env: Env, gid: string, id: number, takers: unknown) {
+  const want = (Array.isArray(takers) ? takers : []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  if (!want.length) return 0;
   let continued = 0;
-  if (want.length) {
-    const list = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM mise_takers WHERE mise_id = ? AND status = 'submitted' AND id IN (${want.map(() => "?").join(",")})`, id, ...want);
-    for (const t of list) {
-      const r = await run(env, "UPDATE mise_takers SET status = 'resume', submitted_at = NULL WHERE id = ? AND status = 'submitted'", t.id);
-      if (!r.meta.changes) continue;
-      // their results come back when they hand it in again
-      await clearResults(env, g.id, id, t.discord_id);
-      await pushEvent(env, t.id, [now(), "reopen", "", 0]);
-      continued++;
-    }
+  const list = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM mise_takers WHERE mise_id = ? AND status = 'submitted' AND id IN (${want.map(() => "?").join(",")})`, id, ...want);
+  for (const t of list) {
+    const r = await run(env, "UPDATE mise_takers SET status = 'resume', submitted_at = NULL WHERE id = ? AND status = 'submitted'", t.id);
+    if (!r.meta.changes) continue;
+    // their results come back when they hand it in again
+    await clearResults(env, gid, id, t.discord_id);
+    await pushEvent(env, t.id, [now(), "reopen", "", 0]);
+    continued++;
   }
-  return { continued };
+  return continued;
+}
+/** One learner handed in by mistake: their paper opens again (the mise must be open: else reopen it with more time). */
+export async function reopenTaker(env: Env, g: GuildRow, id: number, takerId: number) {
+  const m = await getMise(env, g, id);
+  if (statusOf(m) === "closed") throw new MiseError("It's closed: use « Reopen with more time » and tick them.");
+  const t = await one<{ status: string }>(env, "SELECT status FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  if (!t) throw new MiseError("Unknown learner.", 404);
+  if (t.status !== "submitted") throw new MiseError("Their paper isn't handed in.");
+  return { continued: await continueTakers(env, g.id, id, [takerId]) };
 }
 async function clearResults(env: Env, gid: string, miseId: number, uid: string) {
   await env.DB.batch([
@@ -943,6 +955,97 @@ export async function resultsCsv(env: Env, g: GuildRow, id: number) {
   const items = [...c.situations.map((s, i) => ({ id: s.id, h: `S${i + 1} ${s.title}` })), ...c.qcm.map((q, i) => ({ id: q.id, h: `QCM${i + 1} ${q.notion}` }))];
   return toCsv([["Apprenant", "Score %", ...items.map((x) => x.h), "À corriger"],
     ...v.takers.filter((t) => t.status === "submitted").map((t) => [t.name || t.discord_id, t.score, ...items.map((x) => t.items[x.id]?.score ?? ""), t.toGrade])]);
+}
+
+// ------------------------------------------------------------------ correction by Claude (claude.ai): out, then back in
+/** What the teacher gives Claude to grade with: the instructions, the paper with what's expected, then each learner's work. */
+export const GRADE_FORMAT = "classbot-mise-grades@1";
+const GRADE_PROMPT = [
+  "Tu es formateur en développement web et tu corriges une mise en situation passée en classe.",
+  "Ce fichier contient : les éléments de l'épreuve (« items » : les mises en situation avec la consigne, le résultat attendu, une solution modèle et les vérifications automatiques ; les QCM avec la bonne réponse), puis le travail de chaque apprenant (« learners »).",
+  "Pour CHAQUE apprenant et CHAQUE mise en situation (kind « situation ») qu'il a remise, donne une note de 0 à 100 :",
+  "- d'après ce que la consigne demande et le résultat attendu ; une autre façon de faire qui marche est juste (la solution modèle n'est qu'un exemple) ;",
+  "- les vérifications automatiques (auto_checks) sont des indices, pas la note : vérifie le code toi-même ;",
+  "- une étape faite en partie vaut une partie des points ; un code vide ou seulement le code de départ vaut 0 ;",
+  "- le commentaire (1 à 3 phrases, en français, en tutoyant l'apprenant) dit ce qui est juste, ce qui manque ou est faux et pourquoi, et une piste ; ne donne pas la solution complète.",
+  "Les QCM sont déjà corrigés automatiquement : ne les note pas.",
+  "Puis, pour chaque apprenant, un commentaire général (2 à 4 phrases, tutoiement) : ses points forts, ce qu'il doit retravailler.",
+  "Garde exactement les identifiants donnés (« learner » et « item »).",
+  "Réponds UNIQUEMENT avec un JSON au format de « output_format », sans texte autour (je l'importerai dans ClassBot).",
+].join("\n");
+export async function answersExport(env: Env, g: GuildRow, id: number) {
+  const m = await getMise(env, g, id);
+  const c = contentOf(m);
+  const takers = await all<MiseTakerRow>(env, "SELECT * FROM mise_takers WHERE mise_id = ? AND status != 'invited' ORDER BY id", id);
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name || ""] as const));
+  const staff = await staffIds(env, g.id);
+  const items = [
+    ...c.situations.map((s, i) => ({ item: s.id, kind: "situation", label: `Mise en situation ${i + 1}`, title: s.title, points: s.points, competencies: s.competencies, notions: s.notions,
+      context: s.context, questions: s.questions, expected: s.expected, starter_files: s.files.map((f) => ({ name: f.name, content: f.starter })),
+      model_solution: s.solution, auto_checks: s.checks.map((k) => k.label) })),
+    ...c.qcm.map((q, i) => ({ item: q.id, kind: "qcm", label: `QCM ${i + 1}`, points: q.points, notion: q.notion, question: q.question, ...(q.code ? { code: q.code } : {}), choices: q.choices, correct: q.correct, correct_text: q.choices[q.correct] })),
+  ];
+  const learners = takers.map((t) => {
+    const d = dataOf(t), sc = scoreMise(c, d), spent = parse<Record<string, number>>(t.spent, {});
+    const work: Record<string, any> = {};
+    for (const s of c.situations) {
+      const a = d.answers[s.id] || {};
+      const res = d.checks[s.id]?.results ?? [];
+      work[s.id] = { attempted: !!sc.items[s.id]?.attempted, files: a.files || {}, auto_checks: res.map((r) => ({ check: s.checks.find((k) => k.id === r.id)?.label ?? r.id, ok: !!r.ok })),
+        auto_score: sc.items[s.id]?.auto ?? null, minutes: Math.round((spent[s.id] || 0) / 60000) };
+    }
+    for (const q of c.qcm) {
+      const ch = d.answers[q.id]?.choice;
+      work[q.id] = { choice: Number.isInteger(ch) ? ch : null, choice_text: Number.isInteger(ch) ? q.choices[ch] ?? null : null, right: ch === q.correct };
+    }
+    const ev = parse<MiseEvent[]>(t.events, []);
+    return { learner: String(t.id), name: names.get(t.discord_id) || t.discord_id, status: t.status, ...(staff.has(t.discord_id) ? { test: true } : {}),
+      auto_score: sc.total, pastes: ev.filter((e) => e[1] === "paste").length, work };
+  });
+  return {
+    format: "classbot-mise-answers@1", exported_at: new Date(now() * 1000).toISOString(),
+    mise: { id: m.id, title: c.title || m.title, metier: c.metier, week: m.week, competencies: c.competencies },
+    instructions: GRADE_PROMPT,
+    output_format: {
+      format: GRADE_FORMAT,
+      grades: [{ learner: "<learner>", item: "<item d'une mise en situation>", score: "<0 à 100>", comment: "<1 à 3 phrases>" }],
+      comments: [{ learner: "<learner>", comment: "<2 à 4 phrases>" }],
+    },
+    items, learners,
+  };
+}
+/** Claude's correction back: each grade becomes the teacher's grade of that item (still editable), each comment theirs. */
+export async function importGrades(env: Env, g: GuildRow, id: number, text: unknown) {
+  const m = await getMise(env, g, id);
+  const c = contentOf(m);
+  let j: any;
+  try { j = typeof text === "string" ? extractJson(text) : text; } catch { j = null; }
+  if (!j || typeof j !== "object" || (!Array.isArray(j.grades) && !Array.isArray(j.comments))) throw new MiseError("This isn't Claude's correction: paste the JSON it answered (with « grades » and « comments »).");
+  const takers = await all<MiseTakerRow>(env, "SELECT * FROM mise_takers WHERE mise_id = ? AND status != 'invited'", id);
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, (p.name || "").toLowerCase()] as const));
+  const who = (v: unknown) => { const k = String(v ?? "").trim(); return takers.find((t) => String(t.id) === k) || takers.find((t) => t.discord_id === k) || takers.find((t) => k && names.get(t.discord_id) === k.toLowerCase()) || null; };
+  const ids = new Set([...c.situations.map((s) => s.id), ...c.qcm.map((q) => q.id)]);
+  const skipped: string[] = [];
+  const byTaker = new Map<number, Record<string, any>>();
+  let grades = 0, comments = 0;
+  for (const x of (Array.isArray(j.grades) ? j.grades : []).slice(0, 2000)) {
+    const t = who(x?.learner), item = String(x?.item ?? "");
+    const sc = Number(x?.score);
+    if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
+    if (!ids.has(item)) { skipped.push(`unknown item « ${item.slice(0, 20)} »`); continue; }
+    if (!Number.isFinite(sc)) { skipped.push(`no score for ${item}`); continue; }
+    const gr = byTaker.get(t.id) ?? parse<Record<string, any>>(t.grades, {});
+    gr[item] = { score: Math.max(0, Math.min(100, Math.round(sc))), comment: str(x?.comment, 600), teacher: true, by: "claude" };
+    byTaker.set(t.id, gr); grades++;
+  }
+  for (const [tid, gr] of byTaker) { await run(env, "UPDATE mise_takers SET grades = ? WHERE id = ?", JSON.stringify(gr), tid); await refreshScore(env, tid); }
+  for (const x of (Array.isArray(j.comments) ? j.comments : []).slice(0, 500)) {
+    const t = who(x?.learner), txt = str(x?.comment, 1000);
+    if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
+    if (!txt) continue;
+    await run(env, "UPDATE mise_takers SET comment = ? WHERE id = ?", txt, t.id); comments++;
+  }
+  return { grades, comments, learners: byTaker.size, skipped: [...new Set(skipped)].slice(0, 20) };
 }
 
 // ------------------------------------------------------------------ cron
