@@ -142,6 +142,8 @@ let msgId = 1000;
 
 /** Google (OAuth token + Sheets API): the test sets the handler. */
 export const googleFake = { handler: null as null | ((url: URL, method: string, body: string, headers: any) => Response | Promise<Response>) };
+/** A Google Doc shared « anyone with the link » (its text export): null = not shared (Google's sign-in page). */
+export const googleDocFake = { text: null as string | null };
 export const libraryHub = { handler: null as null | ((r: Request) => Promise<Response>), target: "", down: false };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
@@ -164,6 +166,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "css-guide.example.org" || url.hostname === "brave-found.example.org" || url.hostname === "stackoverflow.com") return new Response("<html></html>", { status: 200 });
   // pages the chat's links point at: /ok exists, the rest is a 404
   if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
+  if (url.hostname === "docs.google.com" && /\/export$/.test(url.pathname)) return googleDocFake.text == null ? new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } }) : new Response(googleDocFake.text, { headers: { "content-type": "text/plain; charset=utf-8" } });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
@@ -855,6 +858,10 @@ function fakeAI() {
         return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
       }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        // one distinct question per line of the plan (with the capacities of its line): the Fiche niveaux tests
+        if (ai.gen === "plan") { const lines = [...user.matchAll(/^Q(\d+) — "(\w+)"[^\n]*?(?:concepts : ([^\n]+))?$/gm)];
+          return { response: JSON.stringify({ questions: lines.map((m) => ({ type: m[2], prompt: `Quiz ${ai.calls}x${m[1]}`,
+            ...(m[2] === "mcq" ? { choices: ["un", "deux", "trois", "quatre"], answer: [0] } : { expected: "la réponse attendue", lang: "javascript" }), points: 1, concepts: (m[3] || "").split(/,\s*/).filter(Boolean) })) }) }; }
         if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
           { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },
           { type: "explain", prompt: "Explique le rôle de la balise main.", expected: "le contenu principal", points: 2, comps: ["C9N1"] }] }) };

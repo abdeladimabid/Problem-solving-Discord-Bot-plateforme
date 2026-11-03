@@ -75,9 +75,10 @@ export interface Situation {
   id: string; title: string; context: string; difficulty: number; competencies: string[]; notions: string[]; skills: string[];
   runtime: Runtime; files: MiseFile[]; schema?: string; questions: string[]; expected: string;
   solution: { name: string; content: string }[]; checks: Check[]; errorHints: string[]; points: number;
+  concepts?: string[];   // the capacities of the Fiche niveaux it touches ("S2.3": concepts.ts)
 }
-export interface Qcm { id: string; question: string; code?: string; choices: string[]; correct: number; competencies: string[]; notion: string; skills: string[]; points: number }
-export interface MiseContent { format: string; title: string; week: number | null; metier: string; competencies: string[]; situations: Situation[]; qcm: Qcm[] }
+export interface Qcm { id: string; question: string; code?: string; choices: string[]; correct: number; competencies: string[]; notion: string; skills: string[]; points: number; concepts?: string[] }
+export interface MiseContent { format: string; title: string; week: number | null; metier: string; competencies: string[]; situations: Situation[]; qcm: Qcm[]; concepts?: string[] }
 export interface Problem { where: string; msg: string }
 
 const FILE_LANGS: FileLang[] = ["html", "css", "javascript", "php", "sql"];
@@ -119,6 +120,18 @@ export interface CheckOpts {
   selected?: string[];     // the competencies the teacher chose ("C3N1"): every item stays inside them
   techs?: string[];        // the technologies seen up to the week (nothing else may be used)
   week?: number | null;    // the week chosen
+  /** the Fiche niveaux: the codes it knows, and the capacities to cover (each by 5 items at least) */
+  concepts?: { known: Set<string>; scope: string[] };
+}
+/** An item's capacities of the Fiche niveaux: checked against the codes known (and required when there's a scope). */
+function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): string[] {
+  if (v == null && !o.concepts?.scope.length) return [];
+  if (v != null && !Array.isArray(v)) { bad(`"concepts" must be a list (e.g. ["S2.3"]).`); return []; }
+  const cs = [...new Set((Array.isArray(v) ? v : []).map((c: unknown) => String(c).trim().toUpperCase()))];
+  const unknown = o.concepts ? cs.filter((c) => !o.concepts!.known.has(c)) : cs.filter((c) => !/^S\d{1,2}\.\d{1,2}$/.test(c));
+  if (unknown.length) { bad(`concept(s) ${unknown.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.3).`); return []; }
+  if (o.concepts?.scope.length && !cs.some((c) => o.concepts!.scope.includes(c))) bad(`"concepts": the capacities of the Fiche niveaux it really works on (among ${o.concepts.scope.join(", ")}).`);
+  return cs.slice(0, 6);
 }
 
 /**
@@ -244,8 +257,9 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
       const out = outOfScope(all, techs);
       if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
+    const sc = itemConcepts(s.concepts, o, bad);
     sits.push({ id: `m${i + 1}`, title: t, context: ctx, difficulty: diff, competencies: comps(s.competencies, bad), notions: notions.slice(0, 5), skills: skills(s.skills, bad),
-      runtime, files, ...(schema ? { schema } : {}), questions: qs, expected, solution: sol, checks, errorHints: [...new Set(hints.filter((h: string) => CAT_IDS.has(h)))] as string[], points: pts });
+      runtime, files, ...(schema ? { schema } : {}), questions: qs, expected, solution: sol, checks, errorHints: [...new Set(hints.filter((h: string) => CAT_IDS.has(h)))] as string[], points: pts, ...(sc.length ? { concepts: sc } : {}) });
   });
   // increasing difficulty: 1 → 5 (each once), or at least never going down
   if (sits.length === N_SITUATIONS && sits.every((s) => s.difficulty >= 1 && s.difficulty <= 5)) {
@@ -282,10 +296,18 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
       const out = outOfScope([question, c, choices[k] ?? ""].join("\n"), techs);
       if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
-    qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad), notion, skills: skills(q.skills, bad), points: pts });
+    const qc = itemConcepts(q.concepts, o, bad);
+    qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad), notion, skills: skills(q.skills, bad), points: pts, ...(qc.length ? { concepts: qc } : {}) });
   });
+  // the Fiche niveaux: every capacity of the scope touched by at least 5 of the 10 items (an item may touch several)
+  const declared = Array.isArray(data.concepts) ? [...new Set(data.concepts.map((c: unknown) => String(c).trim().toUpperCase()))] as string[] : [];
+  const cscope = o.concepts?.scope.length ? o.concepts.scope : declared.filter((c) => !o.concepts || o.concepts.known.has(c));
+  if (cscope.length && !p.length) for (const cc of cscope) {
+    const k = [...sits, ...qcm].filter((x) => (x.concepts ?? []).includes(cc)).length;
+    if (k < 5) top(`capacity ${cc} (Fiche niveaux): touched by ${k} item(s), at least 5 of the ${N_SITUATIONS + N_QCM} situations and QCM must work on it (add it to items that REALLY work on it, or change items so they do).`);
+  }
   if (p.length) return { problems: p };
-  const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm };
+  const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
   return { problems: [], content, preview: previewOf(content) };
 }
 /** What's out of scope, with the words that gave it away (the AI needs them to fix it). JSON.parse / JSON.stringify
@@ -643,7 +665,7 @@ export const SIT_RULES = [
 ];
 
 
-export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string }): string {
+export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string; concepts?: { block: string; scope: string[] } }): string {
   const w = o.week;
   const names = new Map(o.program.referential.map((c) => [c.code, c.name]));
   const compLine = (s: string) => { const pc = parseComp(s); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""}${names.get(pc.code) ? ` (${names.get(pc.code)})` : ""}` : s; };
@@ -697,6 +719,8 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     "  - \"points\" (facultatif) : 1 à 10, 3 par défaut.",
     `- ${N_QCM} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
     ...QCM_RULES.map((r) => `  ${r}`),
+    ...(o.concepts?.scope.length ? ["", o.concepts.block,
+      `- Dans ce fichier : "concepts" sur CHAQUE situation et CHAQUE QCM (les capacités qu'il travaille vraiment), et "concepts" en haut du fichier = ${JSON.stringify(o.concepts.scope)}. Avec ${N_SITUATIONS} situations et ${N_QCM} QCM, chaque capacité doit être travaillée par au moins 5 de ces ${N_SITUATIONS + N_QCM} éléments : une situation peut en travailler plusieurs (ses étapes), un QCM une ou deux.`] : []),
     "",
     "RÈGLES",
     "- En français, phrases claires. Exigeant mais juste : tout ce qui est demandé a été vu en cours, rien n'est ambigu.",
@@ -705,7 +729,9 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",
     "",
     `FORMAT (à suivre exactement, "format" compris ; ${N_SITUATIONS} situations et ${N_QCM} QCM, l'exemple n'en montre qu'une partie) :`,
-    JSON.stringify({ ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies }, null, 2),
+    JSON.stringify(o.concepts?.scope.length ? { ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies, concepts: o.concepts.scope,
+      situations: MISE_EXAMPLE.situations.map((s) => ({ ...s, concepts: o.concepts!.scope.slice(0, 2) })), qcm: MISE_EXAMPLE.qcm.map((q) => ({ ...q, concepts: o.concepts!.scope.slice(0, 1) })) }
+      : { ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies }, null, 2),
   ].filter((x) => x !== null).join("\n");
 }
 

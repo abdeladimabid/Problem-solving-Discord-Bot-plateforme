@@ -7,6 +7,7 @@
 //   5. finalize: the result goes into the student's record (see learning.ts)
 // Ported from GitHub Watcher (aiAnalyze, makeChallenge, saveComment, saveMembers), now on D1 and ClassBot briefs.
 /* eslint-disable */
+import { activeCaps, briefSprint, cleanConcepts, getConcepts, masteryForAi, masteryOf } from "../concepts.ts";
 import type { Env, GuildRow, PlayerRow } from "../types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "../db.ts";
 import { extractJson, groqChat, hasKeyedAi, workersChat } from "../ai.ts";
@@ -636,6 +637,7 @@ export async function makeMemberLevel(env: Env, g: GuildRow, briefId: number, wh
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile). Réponds en français.",
     "Donne le niveau d’UN membre d’un squad pour ce brief : excellent, bon, moyen, faible ou critique.",
     "Juge SA part du travail (comparée à la moyenne du squad), ses compétences, son quiz ou oral, sa mise en situation et la note du formateur sur lui. Le travail commun du squad compte peu : un membre qui n’a rien fait n’a pas le niveau du squad.",
+    "Quand la FICHE NIVEAUX donne un niveau, c’est la référence officielle : ne t’en écarte pas de plus d’un cran, et seulement avec une raison claire.",
     'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
   ].join("\n");
   const user = [
@@ -647,6 +649,7 @@ export async function makeMemberLevel(env: Env, g: GuildRow, briefId: number, wh
     ms.mes?.r ? `MISE EN SITUATION : ${MES[ms.mes.r] || ms.mes.r}` : "",
     ms.note ? `NOTE DU FORMATEUR SUR CE MEMBRE :\n<<<\n${oneLine(ms.note, 600)}\n>>>` : "",
     `NIVEAU CALCULÉ À PARTIR DE SES DONNÉES : ${calc}`,
+    await (async () => { const st0 = await getConcepts(env, g.id); const sp0 = await briefSprint(env, g, briefId, st0); if (!sp0) return ""; const mm = await masteryOf(env, g.id, String(gid), sp0, st0).catch(() => null); return mm ? masteryForAi(sp0, mm) : ""; })(),
   ].filter(Boolean).join("\n");
   const ask = await askReview(env, system, user, 1).catch(() => null);
   const ai = ask && ask.ok && ask.data ? String(ask.data.niveau || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim() : "";
@@ -686,8 +689,12 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
     "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
     "Base-toi sur l’évaluation faite en classe (la preuve la plus sûre de ce que l’apprenant maîtrise), les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
     "Le niveau ne peut jamais dépasser d’un cran celui de l’évaluation : évaluation critique → au mieux faible ; faible → au mieux moyen ; moyen → au mieux bon.",
+    "Quand la FICHE NIVEAUX donne un niveau, c’est la référence officielle (un niveau est atteint quand au moins la moitié de ses éléments sont compris, et tous les niveaux en dessous) : ne t’en écarte pas de plus d’un cran, et seulement avec une raison claire tirée des données.",
     'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
   ].join("\n");
+  const cstore = await getConcepts(env, g.id);
+  const csp = who.startsWith("u:") ? await briefSprint(env, g, briefId, cstore) : null;
+  const cm = csp ? await masteryOf(env, g.id, who.slice(2), csp, cstore, { live: { briefId } }).catch(() => null) : null;
   const user = [
     assessForAi(rec.assess) ? `ÉVALUATION (en classe, sans aide) :\n${assessForAi(rec.assess)}` : "ÉVALUATION : aucune évaluation liée à ce brief.",
     `BRIEF : ${main.filter((i: number) => st.ex[i]).length}/${main.length} points validés (sans les bonus ni les critères de performance)${missing.length ? `\nPOINTS NON VALIDÉS :\n${missing.map((t: string) => "- " + t).join("\n")}` : ""}`,
@@ -695,6 +702,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
     oral.length ? `QUESTIONS ORALES : ${st.oral.filter(Boolean).length}/${oral.length} réussies${st.oral.some((v: boolean) => !v) ? ` ; notions à revoir : ${oral.filter((q: any, i: number) => !st.oral[i]).map((q: any) => q.notion || q.q).join(", ")}` : ""}` : "",
     st.mes.r ? `MISE EN SITUATION : ${MES[st.mes.r]}${st.mes.note ? ` (${oneLine(st.mes.note, 200)})` : ""}` : "",
     calc ? `NIVEAU CALCULÉ À PARTIR DES VALIDATIONS : ${calc}` : "",
+    cm && csp ? masteryForAi(csp, cm) : "",
     rec.remarks?.text ? `REMARQUES DU FACE-À-FACE (ce que le formateur a constaté avec l’apprenant : ça compte beaucoup) :\n<<<\n${oneLine(rec.remarks.text, 1500)}\n>>>` : "",
     text ? `COMMENTAIRE DU FORMATEUR :\n<<<\n${text}\n>>>` : "",
   ].filter(Boolean).join("\n");
@@ -762,6 +770,13 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   const levels = b.skills.filter((c) => /^C/.test(c)).map((c) => Number(c.slice(-1)));
   const lvl = levels.length ? Math.min(...levels) : 1;
   const points = (rec.result.exigences || []).filter((e: any) => e.type !== "bonus" && e.type !== "critere" && e.type !== "oral").map((e: any) => "- " + e.texte).slice(0, 25).join("\n");
+  // 📐 the Fiche niveaux: each question checks one capacity of the brief's sprint, the ones not understood yet (or not
+  // asked enough) first; its ✓ / ✗ counts like a question of an evaluation
+  const cstore = await getConcepts(env, g.id);
+  const csp = await briefSprint(env, g, b.id, cstore);
+  const ccaps = csp ? activeCaps(cstore, csp) : [];
+  const cm = csp && who.startsWith("u:") ? await masteryOf(env, g.id, who.slice(2), csp, cstore, { live: { briefId: b.id } }).catch(() => null) : null;
+  const cfirst = cm ? cm.caps.filter((c) => c.final !== "ok").map((c) => c.code) : [];
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
     "Prépare les questions orales de la soutenance : au plus 5 questions courtes que le formateur pose à l’apprenant pour vérifier qu’il comprend son projet.",
@@ -774,7 +789,8 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
     "- Pour chaque question, \"source\" : \"evaluation\" (une lacune de l’évaluation), \"projet\" (un point du projet) ou \"brief\".",
     before.length ? "- Ne repose pas une question déjà posée (liste DÉJÀ POSÉES) : d’autres notions." : "",
     "- S’il y a des PARTIES À LUI FAIRE EXPLIQUER : les 1 ou 2 premières questions lui demandent d’expliquer ce que fait cette partie de SON code, ou comment il la changerait (\"source\" : \"projet\"), sans jamais l’accuser.",
-    'Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots","source":"evaluation|projet|brief"}]}',
+    ccaps.length ? `- "concept" : le code de LA capacité de la Fiche niveaux que la question vérifie, parmi : ${ccaps.map((c) => `${c.code} « ${c.title} »`).join(" ; ")}.${cfirst.length ? ` En PRIORITÉ celles que l'apprenant n'a pas encore montrées : ${cfirst.join(", ")}.` : ""}` : "",
+    `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots","source":"evaluation|projet|brief"${ccaps.length ? ',"concept":"S2.3"' : ""}}]}`,
   ].filter(Boolean).join("\n");
   const user = [`PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`, tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", points ? `POINTS DU BRIEF :\n${points}` : "",
     lac.assess.length ? `LACUNES DE L’ÉVALUATION :\n${lac.assess.map((x) => "- " + x).join("\n")}` : "LACUNES DE L’ÉVALUATION : aucune évaluation liée (ou rien de raté).",
@@ -785,7 +801,8 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   if (!ask.ok) throw new DebriefError(ask.msg);
   const seen = new Set(before.map((x: any) => String(x.q).toLowerCase().replace(/\W+/g, "")));
   const qs = (Array.isArray(ask.data?.questions) ? ask.data.questions : [])
-    .map((x: any) => ({ q: oneLine(x?.q, 240), a: oneLine(x?.a, 400), notion: oneLine(x?.notion, 60), src: ["evaluation", "projet", "brief"].includes(String(x?.source)) ? String(x.source) : "brief" }))
+    .map((x: any) => { const cc = ccaps.length ? cleanConcepts(cstore, x?.concepts ?? x?.concept).filter((c) => ccaps.some((k) => k.code === c)) : [];
+      return { q: oneLine(x?.q, 240), a: oneLine(x?.a, 400), notion: oneLine(x?.notion, 60), src: ["evaluation", "projet", "brief"].includes(String(x?.source)) ? String(x.source) : "brief", ...(cc.length ? { concepts: cc.slice(0, 1) } : {}) }; })
     .filter((x: any) => x.q && x.a && !chOutsideBrief(x.q + " " + x.a, b.text + " " + tech).length && !seen.has(x.q.toLowerCase().replace(/\W+/g, ""))).slice(0, 5);
   if (!qs.length) throw new DebriefError(before.length ? "No new question this time. Click again." : "The AI answer could not be used. Click again.");
   const keep = reviewStates(rec).oral;

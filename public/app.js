@@ -1725,6 +1725,7 @@ async function viewSettings(arg) {
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
+    ["concepts", "📐", "Fiche niveaux", "Sprint capacities & levels"],
     ["gsheet", "📗", "Google Sheet", "Suivi Formateur, filled for you"],
     ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
@@ -1891,6 +1892,11 @@ async function viewSettings(arg) {
       <div id="set-intranet"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="concepts" hidden>
+      ${head("Fiche niveaux · sprint capacities and levels", "The official Fiche de validation of each sprint: its capacities are the concepts every evaluation must cover (5 questions each at least), and its level boxes say what each level means. Used by the assessments, the mises en situation, the debriefs and the sprint levels.")}
+      <div id="set-concepts"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="gsheet" hidden>
       ${head("Google Sheet · Suivi Formateur", "ClassBot fills your Suivi Formateur sheet: the sprint levels (Niveau technique), the briefs and where the debriefs are (Suivi et Validation Classe), and the plans d'action sent. Suivi fil rouge is never touched.")}
       <div id="set-gsheet"><p class="muted">Loading…</p></div>
@@ -1919,6 +1925,7 @@ async function viewSettings(arg) {
       if (k === "library") librarySettings($("#set-library"));
       if (k === "intranet") intranetSettings($("#set-intranet"));
       if (k === "gsheet" && typeof gsheetSettings === "function") gsheetSettings($("#set-gsheet"));
+      if (k === "concepts" && typeof conceptsSettings === "function") conceptsSettings($("#set-concepts"));
       if (k === "vscode" && typeof vscodeSettings === "function") vscodeSettings($("#set-vscode")).catch((e) => { $("#set-vscode").innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; });
     }
   };

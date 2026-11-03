@@ -19,6 +19,7 @@ import {
 } from "./mises.ts";
 import { chat, extractJson } from "./ai.ts";
 import { netFlags } from "./identity.ts";
+import { cleanConcepts, codeOf, conceptsPrompt, getConcepts, isOff, suggestScope } from "./concepts.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
@@ -33,7 +34,9 @@ export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; d
 // the teacher lets them back (like an assessment) · brief: the brief it was written for
 // oneDevice: the browser that signed in with Discord is the paper's device (another one stops it) · netAlerts: the
 // teacher sees papers opened outside the class's network, or from several networks
-export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean }
+export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean;
+  /** its scope in the Fiche niveaux: the capacities it covers (5 items each at least) */
+  concepts: string[] }
 
 const parse = <T>(s: string | null | undefined, d: T): T => { try { const v = s ? JSON.parse(s) : d; return v ?? d; } catch { return d; } };
 const str = (v: unknown, n: number) => String(v ?? "").replace(/\r\n/g, "\n").trim().slice(0, n);
@@ -41,8 +44,22 @@ export const contentOf = (m: Pick<MiseRow, "content">) => parse<MiseContent>(m.c
 export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
   return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
-    lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false };
+    lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false,
+    concepts: (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.\d{1,2}$/.test(c)).slice(0, 12) };
 };
+/**
+ * The Fiche niveaux for a request: the codes the class knows, and the capacities to cover: the ones ticked (b.concepts),
+ * else the file's own list, else (when asked) the ones of its brief or week.
+ */
+async function conceptOpts(env: Env, g: GuildRow, b: any, o: { week?: number | null; brief?: number | null; suggest: boolean; file?: unknown }) {
+  const store = await getConcepts(env, g.id);
+  const known = new Set(store.sprints.flatMap((sp) => sp.caps.map((c) => codeOf(sp.n, c.n))).filter((c) => !isOff(store, c)));
+  let scope: string[] = Array.isArray(b?.concepts) ? cleanConcepts(store, b.concepts) : [];
+  if (!scope.length && !Array.isArray(b?.concepts) && o.file && typeof o.file === "object" && Array.isArray((o.file as any).concepts)) scope = cleanConcepts(store, (o.file as any).concepts);
+  // 10 items (5 situations, 5 QCM): 5 capacities at most, each in 5 items
+  if (!scope.length && !Array.isArray(b?.concepts) && o.suggest) scope = (await suggestScope(env, g, { brief_id: o.brief, week: o.week, limit: 5 })).scope;
+  return { store, known, scope };
+}
 /** draft · scheduled (launched, starts later) · live · closed (closed by the teacher, or its time is up). */
 export function statusOf(m: Pick<MiseRow, "status" | "starts_at" | "ends_at">, t = now()): "draft" | "scheduled" | "live" | "closed" {
   if (m.status === "draft") return "draft";
@@ -128,7 +145,9 @@ export async function promptFor(env: Env, g: GuildRow, b: any) {
   const { br, w, comps } = await scopeOf(env, g, p, b);
   if (!w) throw new MiseError("Pick a week of the programme.");
   if (!comps.length) throw new MiseError("Choose at least one competency.");
-  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) }), techs: techSoFar(p, w) };
+  const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true });
+  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+    concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined }), techs: techSoFar(p, w), concepts: cn.scope };
 }
 
 /** What the AI needs to write or fix a mise en situation for a request (the week, the competencies, the brief). */
@@ -140,12 +159,14 @@ async function aiContext(env: Env, g: GuildRow, b: any) {
   if (!(await aiBudgetOk(env, 4))) throw new MiseError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI, or try again tomorrow.");
   await aiBudgetUse(env, 4);
   const techs = techSoFar(p, w);
-  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) });
+  const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true, file: b.json ? readJson(b.json).data : undefined });
+  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+    concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined });
   const ask = (extra: string) => chat(env, [
     { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
     { role: "user", content: prompt + extra },
   ], { maxTokens: 16000, temperature: 0.5, timeoutMs: 170000, json: true });
-  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n } };
+  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope } } };
 }
 const readAi = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
 
@@ -205,7 +226,7 @@ async function perfectMise(env: Env, data: any, x: Awaited<ReturnType<typeof aiC
   return {
     json: JSON.stringify(data, null, 2), problems: [...r.problems, ...review], preview: r.problems.length ? null : r.preview,
     checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title }) : [],
-    detected: { week: w.n, sprint: w.sprint ?? null, comps }, brief: br?.id ? { id: br.id, title: br.title } : null,
+    detected: { week: w.n, sprint: w.sprint ?? null, comps, concepts: opts.concepts?.scope ?? [] }, brief: br?.id ? { id: br.id, title: br.title } : null,
   };
 }
 
@@ -332,15 +353,17 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   const p = await programOf(env, g);
   const det = detectMise(b.json);
   const { br, w, comps } = await scopeOf(env, g, p, b, det);
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
-  const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title };
+  // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
+  const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope } });
+  const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
   const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title }) : [];
   if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
     g.id, str(b.title, 120) || c.title, w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps.length ? comps : c.competencies), JSON.stringify(ids(b.target)),
-    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief }), JSON.stringify(c), now());
+    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief, concepts: c.concepts ?? cn.scope }), JSON.stringify(c), now());
   return { id: Number(res.meta.last_row_id), problems: [], checks, detected, brief };
 }
 
@@ -363,7 +386,8 @@ export async function saveMise(env: Env, g: GuildRow, id: number, b: any) {
     if (m.status !== "draft") throw new MiseError("The learners already have it: its content can't change anymore.");
     const p = await programOf(env, g);
     const w = week ? weekOf(p, week) : null;
-    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
+    const cn = await conceptOpts(env, g, b, { suggest: false, file: b.json ? readJson(b.json).data : contentOf(m) });
+    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts } });
     if (r.problems.length) return { problems: r.problems };
     sets.push("content = ?", "week = ?", "sprint = ?", "comps = ?"); args.push(JSON.stringify(r.content), w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps));
   }
@@ -380,6 +404,7 @@ const pickSettings = (s: any) => {
   if (s && "brief" in s) o.brief = briefRef(s.brief);
   if (s && "oneDevice" in s) o.oneDevice = !!s.oneDevice;
   if (s && "netAlerts" in s) o.netAlerts = !!s.netAlerts;
+  if (s && "concepts" in s) o.concepts = (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.\d{1,2}$/.test(c)).slice(0, 12);
   return o;
 };
 

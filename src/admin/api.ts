@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { ConceptError, briefSprint, conceptsView, decideCapacity, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
@@ -72,7 +73,7 @@ import { competencyMap, studentBriefs } from "../shared/learning.ts";
 import { makeGuide } from "../shared/wpguide.ts";
 import { setTeacherLevel, studentInsight } from "../shared/stuinsight.ts";
 import { classHome } from "../shared/home.ts";
-import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
+import { SheetError, docsToken, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, serviceEmail, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
   status: number;
@@ -633,6 +634,44 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           return ok(await intranetMatchView(env, g.id));
         }
       } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+    }
+    // 📐 what a learner understood in a sprint (Fiche niveaux): each capacity, the questions behind it, the level it gives
+    if (path === "/concepts/mastery" && method === "GET") {
+      const g = await guild();
+      const uid = String(url.searchParams.get("uid") || "");
+      if (!/^\d{1,25}$/.test(uid)) throw new HttpError(400, "Which learner?");
+      const s = await getConcepts(env, g.id);
+      const brief = Number(url.searchParams.get("brief")) || null;
+      const sp = Number(url.searchParams.get("sprint")) || (brief ? await briefSprint(env, g, brief, s) : null);
+      if (!sp || !s.sprints.some((x) => x.n === sp)) return ok({ sprint: null, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })) });
+      const m = await masteryOf(env, g.id, uid, sp, s, brief ? { live: { briefId: brief } } : {});
+      return ok({ sprint: sp, title: s.sprints.find((x) => x.n === sp)?.title ?? "", sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: 5, ...m });
+    }
+    if (path === "/concepts/decide" && method === "POST") {
+      const g = await guild();
+      try { await decideCapacity(env, g, String(body.uid || ""), String(body.code || ""), body.ok == null ? null : !!body.ok); }
+      catch (e) { if (e instanceof ConceptError) throw new HttpError(400, e.message); throw e; }
+      return ok({ ok: true });
+    }
+    // 📐 the capacities an evaluation should cover (its brief, week or topic → its sprint): ticked, the teacher changes them
+    if (path === "/concepts/suggest" && method === "GET") {
+      const g = await guild();
+      return ok(await suggestScope(env, g, { brief_id: url.searchParams.get("brief_id"), week: url.searchParams.get("week"), sprint: url.searchParams.get("sprint"), text: url.searchParams.get("text"), limit: url.searchParams.get("limit") }));
+    }
+    // 📐 the Fiche niveaux (the sprints' capacities and levels): read from the Google Doc (or pasted), what counts
+    if (path === "/settings/concepts" || path.startsWith("/settings/concepts/")) {
+      const g = await guild();
+      try {
+        const withEmail = async (v: any) => ({ ...v, email: await serviceEmail(env) });
+        if (path === "/settings/concepts" && method === "GET") return ok(await withEmail(await conceptsView(env, g)));
+        if (path === "/settings/concepts" && method === "PUT") return ok(await withEmail(await saveConceptChoices(env, g, body)));
+        if (path === "/settings/concepts/import" && method === "POST") {
+          if (body.text) return ok(await withEmail(await importFiche(env, g, String(body.text).slice(0, 300000), { kind: "paste", doc: null })));
+          const id = docIdOf(String(body.url || (await getConcepts(env, g.id)).source.doc || ""));
+          const text = await readGoogleDoc(env, id, (await docsToken(env)) ?? undefined);
+          return ok(await withEmail(await importFiche(env, g, text, { kind: "doc", doc: id })));
+        }
+      } catch (e) { if (e instanceof ConceptError || e instanceof SheetError) throw new HttpError(400, e.message); throw e; }
     }
     // 📗 the trainer's Google Sheet (Suivi Formateur), filled by ClassBot
     if (path === "/settings/gsheet" || path.startsWith("/settings/gsheet/")) {

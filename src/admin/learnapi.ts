@@ -1,6 +1,7 @@
 // Dashboard API for the learning part: programmes (planning + competencies), briefs (generator, editor, hand-ins,
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
+import { cleanConcepts, conceptsPrompt, coverage, getConcepts, suggestScope } from "../shared/concepts.ts";
 import { netFlags } from "../shared/identity.ts";
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
@@ -29,7 +30,7 @@ import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
-import { applyGrading, checkQuiz, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
+import { applyGrading, checkQuiz, conceptsAuditPrompt, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
 import { nextProgrammeWeek, techSoFar } from "../shared/activities.ts";
 import { LinkError, changeLink, previewLink, unlinkBrief } from "../shared/assesslink.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
@@ -632,9 +633,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const avoid = [...(Array.isArray(body.existing) ? body.existing.map(String) : []), ...past.flatMap((r) => { try { return (JSON.parse(r.questions) as any[]).map((q) => String(q?.prompt || "")); } catch { return []; } })]
       .map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 10).filter((x, i, a) => a.indexOf(x) === i).slice(0, 120);
     const mix = { code: Number(body.mix?.code ?? 50), explain: Number(body.mix?.explain ?? 20), mcq: Number(body.mix?.mcq ?? 30) };
-    const qs = await generateQuestions(env, { topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
+    // the capacities of the Fiche niveaux to cover (5 questions each at least): the ones ticked, else its brief's / topic's
+    const cstore = await getConcepts(env, g.id);
+    const cscope = Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts)
+      : (await suggestScope(env, g, { brief_id: body.brief_id, week: body.week, text: `${body.topic || ""}\n${context}` })).scope;
+    const qs = await generateQuestions(env, { concepts: cscope, conceptStore: cstore, topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
       codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope, avoid });
-    return ok({ questions: qs });
+    return ok({ questions: qs, concepts: { scope: cscope, ...coverage(qs, cscope) } });
   }
   if (path === "/assessments/import-pages" && method === "POST") {
     // a quiz uploaded as a PDF (Wayground…): a few pages at a time, as pictures and their text
@@ -672,18 +677,52 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const weeks = p.weeks.filter((w) => w.kind === "brief");
     const pick = Number(url.searchParams.get("week")) || weekAt(p, new Date().toISOString().slice(0, 10))?.n || weeks[0]?.n || 0;
     const week = p.weeks.find((w) => w.n === pick) ?? null;
-    return ok({ weeks: weeks.map((w) => ({ n: w.n, title: w.title, sprint: w.sprint, start: w.start })), week: week?.n ?? null,
-      prompt: creationPrompt({ program: p, week, next: week ? nextProgrammeWeek(p, week) : null, techs: week ? techSoFar(p, week) : [] }) });
+    // the capacities of the Fiche niveaux for this week (its sprint), or the ones the teacher ticked
+    const cstore = await getConcepts(env, g.id);
+    const sug = week ? await suggestScope(env, g, { week: week.n }) : null;
+    const pickedC = url.searchParams.get("concepts");
+    const cscope = pickedC != null ? cleanConcepts(cstore, pickedC.split(",")) : sug?.scope ?? [];
+    return ok({ weeks: weeks.map((w) => ({ n: w.n, title: w.title, sprint: w.sprint, start: w.start })), week: week?.n ?? null, concepts: { sprint: sug?.sprint ?? null, caps: sug?.caps ?? [], scope: cscope },
+      prompt: creationPrompt({ program: p, week, next: week ? nextProgrammeWeek(p, week) : null, techs: week ? techSoFar(p, week) : [], concepts: cscope.length ? { block: conceptsPrompt(cstore, cscope), scope: cscope } : undefined }) });
   }
   if (path === "/assessments/claude-import" && method === "POST") {
     const g = await guild();
     const p = await programOf(env, g);
-    const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)) });
+    // the Fiche niveaux: the codes it knows, and the capacities asked (the ones of the prompt, sent back by the page)
+    const cstore = await getConcepts(env, g.id);
+    const knownC = new Set(cstore.sprints.flatMap((sp) => sp.caps.map((c) => `S${sp.n}.${c.n}`)).filter((c) => !cstore.off.includes(c)));
+    const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: Array.isArray(body.concepts) || body.concepts === undefined ? { known: knownC, scope: Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts) : [] } : undefined });
     if (r.quiz?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", r.quiz.brief_id, g.id))) r.problems.push({ where: "quiz", msg: `"brief_id": brief #${r.quiz.brief_id} isn't in this class (or null).` });
     if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
     const id = await saveAssessment(env, g, null, r.quiz);
     await libAssessment(env, g, id);
     return ok({ id, problems: [] });
+  }
+  // 📐 an existing assessment brought up to the Fiche niveaux by Claude: the prompt (its questions + the capacities), then its
+  // answer back into the SAME assessment (a draft: questions added; open: only the capacities of the questions it has)
+  if ((m = path.match(/^\/assessments\/(\d+)\/claude-concepts$/))) {
+    const g = await guild();
+    const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", Number(m[1]), g.id);
+    if (!a) throw new ApiError(404, "This assessment doesn't exist anymore.");
+    const cstore = await getConcepts(env, g.id);
+    const st = settingsOf(a);
+    const scope = Array.isArray(body?.concepts) ? cleanConcepts(cstore, body.concepts) : st.concepts.length ? cleanConcepts(cstore, st.concepts) : (await suggestScope(env, g, { brief_id: a.brief_id, text: a.title })).scope;
+    if (!scope.length) bad("Pick the capacities of the Fiche niveaux it covers first.");
+    if (method === "POST" && !body?.json) return ok({ prompt: conceptsAuditPrompt(a, questionsOf(a), st, conceptsPrompt(cstore, scope), scope), concepts: scope });
+    if (method === "POST") {
+      const knownC = new Set(cstore.sprints.flatMap((sp) => sp.caps.map((c) => `S${sp.n}.${c.n}`)).filter((c) => !cstore.off.includes(c)));
+      const p = await programOf(env, g);
+      const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: { known: knownC, scope } });
+      if (r.problems.length || !body.apply) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
+      const old = questionsOf(a);
+      let qs: any[] = r.quiz!.questions;
+      if (a.status !== "draft") {
+        // students have it: the same questions (matched by their statement) get their capacities; nothing added
+        qs = old.map((q) => { const n = r.quiz!.questions.find((x: any) => String(x.prompt).trim() === q.prompt.trim()); return n?.concepts ? { ...q, concepts: n.concepts } : q; });
+      } else qs = qs.map((x: any) => { const same = old.find((q) => q.prompt.trim() === String(x.prompt).trim()); return same ? { ...x, id: same.id } : x; });
+      await saveAssessment(env, g, a.id, { title: a.title, questions: qs, settings: { ...st, concepts: scope } });
+      return ok(await assessView(env, g, a.id));
+    }
   }
   if ((m = path.match(/^\/assessments\/(\d+)\/claude-(export|grading|prompt)$/))) {
     const g = await guild();

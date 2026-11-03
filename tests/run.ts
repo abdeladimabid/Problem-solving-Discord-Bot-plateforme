@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { intranetFake, googleFake } from "./harness.ts";
+import { intranetFake, googleFake, googleDocFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import botRaw from "../src/bot/index.ts";
@@ -7521,7 +7521,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.miseJson2 = JSON.stringify(file);
   db.prepare("DELETE FROM ai_usage").run();
   const nBefore = q("SELECT id FROM mises WHERE guild_id = ?", G).length;
-  const gen = await api("POST", "/api/mises/generate", { g: G, brief: bid, comps: ["C3N1", "C4N1"], wishes: "pas de regex" });
+  const gen = await api("POST", "/api/mises/generate", { g: G, concepts: [], brief: bid, comps: ["C3N1", "C4N1"], wishes: "pas de regex" });
   check(gen.status === 200 && !gen.data.problems.length && gen.data.preview.situations.length === 5 && gen.data.brief.id === bid && gen.data.detected.week === 3, "AI for a brief: the brief's week, a full preview " + JSON.stringify(gen.data).slice(0, 300));
   check(ai.users.some((u) => u.includes("BRIEF DE LA SEMAINE « Ittihad Al Fajr »") && u.includes("pas de regex")) && ai.users.some((u) => u.includes("TA PROPOSITION PRÉCÉDENTE NE RESPECTE PAS") && u.includes("exactly 5 questions")), "…the brief and the wishes go to the AI; a problem of the whole file: the whole file written again");
   // a situation and a QCM out of the requirements: only those two written again, until it matches
@@ -7532,7 +7532,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.miseJson = JSON.stringify(off); ai.miseJson2 = "";
   ai.miseItems = JSON.stringify({ items: { s4: file.situations[3], q5: file.qcm[4] } });
   ai.users.length = 0;
-  const gen2 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen2 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   const rep = ai.users.find((u) => u.includes("Réécris UNIQUEMENT ces éléments")) ?? "";
   check(gen2.status === 200 && !gen2.data.problems.length && JSON.parse(gen2.data.json).situations[4].notions.length === 5 && !gen2.data.json.includes("fetch"), "out of the requirements: written again until it matches (" + JSON.stringify(gen2.data.problems) + ")");
   // the QCM read again: one that can be guessed is written again
@@ -7540,38 +7540,38 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.qcmWeak = [[{ n: 2, why: "les autres choix sont hors sujet" }], []];
   ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Quel événement pour un clic ?", choices: ["click", "mousedown", "pointerup", "dblclick"], notion: "événement click" } } });
   ai.users.length = 0;
-  const gen3 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen3 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen3.status === 200 && JSON.parse(gen3.data.json).qcm[1].choices.includes("mousedown") && ai.users.some((u) => u.includes("QCM 2") && u.includes("facile à deviner")), "a QCM that can be guessed without the notion: written again with credible wrong choices");
   check(ai.users.some((u) => u.includes("PIÈGES") && u.includes("removeNode()") && u.includes("GUIDAGE PAS À PAS") && u.includes("situations 4 et 5")), "…the prompt asks for traps that look like the answer (the teacher's examples), guided steps, a progression, DOM + arrays + conditions + loops in the last two");
   // a situation too guided: written again, harder
   ai.qcmWeak = [[], []]; ai.sitEasy = [[{ n: 1, fix: "easier", why: "trop de notions pour une première situation" }], []];
   ai.miseItems = JSON.stringify({ items: { s1: { ...file.situations[0], questions: ["1. Affiche le nom de la coopérative dans le titre, sans espaces au début ni à la fin.", "2. Si le nom est vide, affiche « Sans nom »."] } } });
   ai.users.length = 0;
-  const gen4 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen4 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen4.status === 200 && JSON.parse(gen4.data.json).situations[0].questions[1].includes("Sans nom") && ai.users.some((u) => u.includes("situation 1") && u.includes("TROP DIFFICILE pour sa place")), "a situation not at its place in the progression (the first one too hard): written again");
   ai.sitEasy = [];
   // a QCM with two right answers (the AI that judges without the key finds A and C): written again until only one is
   ai.qcmJudge = [{ 1: [0, 2] }, { 1: [0, 2] }];
   ai.miseItems = JSON.stringify({ items: { q1: { ...file.qcm[0], question: "Que vaut el après : const el = document.getElementById('.carte') ?", choices: ["null", "le premier .carte", "une liste vide", "undefined"], correct: 0 } } });
   ai.users.length = 0;
-  const gen5 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen5 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen5.status === 200 && !gen5.data.problems.length && JSON.parse(gen5.data.json).qcm[0].choices[0] === "null" && ai.users.some((u) => u.includes("QCM 1") && u.includes("PLUSIEURS choix sont justes (A, C)")), "a QCM with two right answers (checked twice, without the key): written again until exactly one is right");
   // a QCM that isn't about the code of the situations: written again on it, with the situations' code to work from
   ai.qcmUnrelated = [[{ n: 3, why: "une question de culture générale sur HTTP" }], []];
   ai.miseItems = JSON.stringify({ items: { q3: { ...file.qcm[2], question: "Dans la situation 3, que vaut document.querySelector('#titre') si l'id est mal écrit ?", choices: ["null", "undefined", "une erreur", "une liste vide"], correct: 0 } } });
   ai.users.length = 0;
-  const gen7 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen7 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   const rq = ai.users.find((u) => u.includes("ne porte pas sur le code des situations")) ?? "";
   check(gen7.status === 200 && JSON.parse(gen7.data.json).qcm[2].question.startsWith("Dans la situation 3") && rq.includes("LES SITUATIONS DE CETTE MISE EN SITUATION") && rq.includes("solution :"), "a QCM not about the situations' code: written again on it (the AI gets the situations and their code)");
   check(ai.users.some((u) => u.includes("LE CODE DES MISES EN SITUATION") && u.includes("JAMAIS la solution complète")), "…and the prompt asks for QCM on the code of the situations, never their full solution");
   ai.qcmUnrelated = [];
   // still wrong after the rounds: shown, and « Fix » goes on from that JSON, rewriting only what's wrong
   ai.qcmJudge = Array.from({ length: 40 }, () => ({ 2: [1, 3] }));
-  const gen6 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen6 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen6.status === 200 && gen6.data.problems.some((x: any) => x.where === "QCM 2"), "…still wrong after every try: the problem is shown (never saved as right)");
   ai.qcmJudge = [{ 2: [1, 3] }, { 2: [1, 3] }];   // checked again: still two right answers, then fixed
   ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Que vaut [1, 2, 3].indexOf(4) ?", choices: ["-1", "0", "undefined", "null"], correct: 0 } } });
-  const fx = await api("POST", "/api/mises/fix", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: gen6.data.json });
+  const fx = await api("POST", "/api/mises/fix", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"], json: gen6.data.json });
   check(fx.status === 200 && !fx.data.problems.length && JSON.parse(fx.data.json).qcm[1].choices[0] === "-1" && JSON.parse(fx.data.json).qcm[0].question === JSON.parse(gen6.data.json).qcm[0].question, "« Fix with the AI »: only the item with a problem is rewritten, the rest is kept");
   ai.qcmJudge = [];
   check(M.outOfScope("const data = JSON.stringify(x);", ["HTML", "CSS", "JavaScript"]).length === 0 && M.outOfScope("fetch('/x')", ["HTML", "CSS", "JavaScript"])[0].includes("« fetch »"), "out of scope: JSON.stringify is plain JavaScript; the word that gave it away is named for the AI");
@@ -7579,7 +7579,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   check(rep.includes("situation 4") && rep.includes("QCM 5") && !rep.includes("situation 5 (") && rep.includes("RAPPEL DU PÉRIMÈTRE"), "…only the items with a problem are sent back, with what's out of scope; too many notions is fixed without the AI");
   check(q("SELECT id FROM mises WHERE guild_id = ?", G).length === nBefore, "…nothing saved before the teacher saves");
   ai.miseJson = "{ broken"; ai.miseJson2 = "";
-  check((await api("POST", "/api/mises/generate", { g: G, week: 3 })).status === 502, "AI from the sprint: an answer that isn't JSON is a clear error");
+  check((await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3 })).status === 502, "AI from the sprint: an answer that isn't JSON is a clear error");
   ai.miseJson = "";
   // saved with the brief, in full screen
   const sv = await api("POST", "/api/mises/import", { g: G, json: gen.data.json, brief: bid, week: 3, comps: ["C3N1", "C4N1"], save: true });
@@ -7731,6 +7731,21 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
   }
+  // 📐 the Fiche niveaux: every capacity of its scope worked on by 5 of the 10 items at least
+  {
+    const sc = ["S2.1", "S2.3"];
+    const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
+    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's capacities on its items: refused, item by item");
+    const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.1"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.3"] : ["S2.1"] })) });
+    const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
+    check(four.data.problems.some((p: any) => /capacity S2\.3 \(Fiche niveaux\): touched by 4 item\(s\), at least 5/.test(p.msg)), "…a capacity in 4 items only: refused, with how many");
+    const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
+    const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
+    check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.1,S2.3" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.3", "…in 5 each: saved, with its capacities (the mise's and each item's)");
+    const pr = await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: ["C3N1"], concepts: sc });
+    check(pr.status === 200 && pr.data.prompt.includes("CONCEPTS OBLIGATOIRES") && pr.data.prompt.includes('"concepts" en haut du fichier = ["S2.1","S2.3"]'), "the prompt for Claude: the capacities, 5 of the 10 items each, \"concepts\" on every item");
+    await api("DELETE", `/api/mises/${five.data.id}?g=${G}`);
+  }
   // the learners' work for Claude (claude.ai) to grade, and its correction back
   {
     const sv7 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
@@ -7824,6 +7839,124 @@ section("papers: Sign in with Discord, one device per paper, network alerts");
   const so = await api("POST", `/api/assessments/${aid}/options`, { g: G, oneDevice: false, netAlerts: false });
   check(so.status === 200 && so.data.assessment.settings.oneDevice === false && so.data.assessment.settings.netAlerts === false, "…the teacher can turn both off " + so.status);
   await api("DELETE", `/api/assessments/${aid}?g=${G}`);
+}
+
+section("📐 Fiche niveaux: the sprints' capacities in every evaluation, what each learner understood, the levels");
+{
+  const C = await import("../src/shared/concepts.ts");
+  // the Fiche A1 built in: Sprint 1 and 2, 12 capacities each, the 5 level boxes
+  const r = C.parseFiche(C.BUILTIN_FICHE);
+  const lv = (n: number) => C.LEVELS.map((l) => r.sprints.find((s) => s.n === n)!.levels[l].length).join(",");
+  check(r.sprints.length === 2 && r.sprints.every((s) => s.caps.length === 12) && lv(1) === "6,8,11,12,10" && lv(2) === "6,9,11,12,10" && r.sprints[0].title.startsWith("Conception") && !r.problems.length,
+    `the Fiche read: 2 sprints, 12 capacities each, every item of the 5 levels (${lv(1)} / ${lv(2)})`);
+  const s1 = r.sprints[0], s2 = r.sprints[1];
+  check(s1.caps[9].title.startsWith("Utiliser Git et GitHub") && s1.caps[9].points.length === 8 && s2.caps[2].title === "Gérer les événements", "…each capacity with its points");
+  check(s1.levels.critique[5].text.startsWith("Faire un premier commit") && s1.levels.critique[5].caps.join() === "10" && s1.levels.bon[2].caps.join() === "3,7" && s2.levels.faible[5].caps.join() === "8",
+    "…each level item linked to its capacities (the Fiche A1's links, checked by hand)");
+  // a Fiche pasted (or read from the Google Doc): bullets, no table
+  const fiche3 = ["FICHE DE VALIDATION DU SPRINT 3", "Sprint 3 A1 — Back-end PHP", "Finalité du sprint. Développer un back-end en PHP.", "Lecture de la grille de niveaux",
+    "CRITIQUE", "Ce que l’apprenant sait faire à ce niveau", "* Écrire un script PHP simple.", "* Afficher une variable.", "FAIBLE", "* Traiter un formulaire en PHP.", "MOYEN", "* Se connecter à une base avec PDO.",
+    "BON", "* Faire un CRUD complet avec PDO.", "EXCELLENT", "* Sécuriser toutes les requêtes avec PDO.", "Détail des capacités attendues", "1. Écrire du PHP", "* Variables, conditions et fonctions.",
+    "2. Traiter un formulaire", "* Lire les données envoyées et les valider.", "3. Utiliser PDO", "* Requêtes préparées et CRUD.", "Synthèse de validation du sprint", "La suite."].join("\n");
+  const r3 = C.parseFiche(fiche3);
+  check(r3.sprints.length === 1 && r3.sprints[0].n === 3 && r3.sprints[0].caps.length === 3 && r3.sprints[0].levels.moyen[0].caps.join() === "3" && r3.sprints[0].goal.startsWith("Développer"),
+    "a Fiche in plain text (Google Doc): its capacities, its levels, each item linked from its words");
+  // 5 questions per capacity at least (a question touches 2): the plan grows when it's too small
+  const pl = C.planConcepts(["S2.1", "S2.2", "S2.3", "S2.4"], 8);
+  const cov = C.coverage(pl.map((x) => ({ concepts: x })), ["S2.1", "S2.2", "S2.3", "S2.4"]);
+  check(pl.length === 10 && !cov.missing.length && pl.every((x) => x.length >= 1 && x.length <= 2 && new Set(x).size === x.length), `8 questions asked for 4 capacities: 10 (5 each at least) (${JSON.stringify(cov.count)})`);
+  check(C.planConcepts(["S2.1"], 12).length === 12 && C.coverage([{ concepts: ["S2.1"] }, { concepts: ["s2-1"] }], ["S2.1"]).missing[0].need === 3, "…more questions asked: kept; the count reads « S2-1 » too");
+  // the level: at least half of each level's items understood, and every level below
+  const st = (ok: number[]) => s2.caps.map((c) => ({ code: `S2.${c.n}`, final: (ok.includes(c.n) ? "ok" : "ko") as "ok" | "ko" }));
+  const S0 = { source: { kind: "builtin" as const, doc: null, at: 0 }, sprints: r.sprints, off: [] };
+  check(C.levelFrom(S0, 2, st([1, 2, 3, 5])).reached === "critique" && C.levelFrom(S0, 2, st([1, 2, 3, 5, 6])).reached === "faible", "Critique 4/6 → Critique; Faible needs 5/9: one more capacity → Faible");
+  check(C.levelFrom(S0, 2, st([4, 6, 7, 8, 9, 12])).reached === "critique", "a higher level half done doesn't count while a level below isn't reached");
+  check(C.levelFrom(S0, 2, st([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])).reached === "excellent" && C.levelFrom(S0, 2, s2.caps.map((c) => ({ code: `S2.${c.n}`, final: "few" as const }))).reached === null, "everything understood → Excellent; not enough questions yet → no level");
+
+  // ---- Settings → Fiche niveaux
+  let V = await api("GET", `/api/settings/concepts?g=${G}`);
+  check(V.status === 200 && V.data.source.kind === "builtin" && V.data.sprints.length === 2 && V.data.min === 5, "Settings: the Fiche A1 built in at first");
+  V = await api("POST", "/api/settings/concepts/import", { g: G, text: fiche3 });
+  check(V.status === 200 && V.data.sprints.map((x: any) => x.n).join() === "1,2,3" && V.data.read[0].caps === 3 && V.data.source.kind === "paste", "a Fiche pasted: its sprint added, the others stay");
+  googleDocFake.text = null;
+  const no = await api("POST", "/api/settings/concepts/import", { g: G, url: "https://docs.google.com/document/d/1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY/edit?tab=t.0" });
+  check(no.status === 400 && /Anyone with the link/.test(no.data.error), "a Google Doc not shared: said how to share it");
+  googleDocFake.text = fiche3.replace("Back-end PHP", "Back-end PHP et MySQL");
+  V = await api("POST", "/api/settings/concepts/import", { g: G, url: "https://docs.google.com/document/d/1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY/edit?tab=t.0" });
+  check(V.status === 200 && V.data.source.kind === "doc" && V.data.source.doc === "1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY" && V.data.sprints.find((x: any) => x.n === 3).title === "Back-end PHP et MySQL", "the Google Doc read (shared with the link): its sprints replace the same ones");
+  googleDocFake.text = null;
+  V = await api("PUT", "/api/settings/concepts", { g: G, off: { "S2.12": false } });
+  check(V.data.off.includes("S2.12") && V.data.sprints.find((x: any) => x.n === 2).caps.find((c: any) => c.code === "S2.12").off, "a capacity turned off (not asked, not counted)");
+  V = await api("PUT", "/api/settings/concepts", { g: G, link: { key: "S3.critique.2", caps: [1, 2] } });
+  check(V.data.sprints.find((x: any) => x.n === 3).levels.critique[1].caps.join() === "1,2", "a level item linked by hand");
+  const sug = await api("GET", `/api/concepts/suggest?g=${G}&week=3&text=${encodeURIComponent("événements, délégation, formulaires et regex")}`);
+  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.caps.length === 11 && !sug.data.caps.some((c: any) => c.code === "S2.12") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => c.startsWith("S2.")),
+    `an evaluation's capacities: its week's sprint, the ones its words point to (${sug.data.scope.join(", ")})`);
+
+  // ---- assessments: 5 questions per capacity, the prompts for Claude, the import
+  ai.gen = "plan";
+  const gq = await api("POST", "/api/assessments/generate", { g: G, topic: "Le DOM", count: 3, concepts: ["S2.1", "S2.3"], techs: ["JavaScript"], codeLang: "javascript", mix: { code: 40, explain: 20, mcq: 40 } });
+  ai.gen = "";
+  const per = (c: string) => gq.data.questions.filter((q: any) => (q.concepts || []).includes(c)).length;
+  check(gq.status === 200 && gq.data.questions.length >= 5 && per("S2.1") >= 5 && per("S2.3") >= 5 && !gq.data.concepts.missing.length && gq.data.questions.every((q: any) => q.concepts.every((c: string) => ["S2.1", "S2.3"].includes(c))),
+    `AI assessment: 3 questions asked for 2 capacities → at least 5 per capacity, each question tagged (${gq.status} ${gq.data.questions?.length} ${JSON.stringify(gq.data.concepts?.count)})`);
+  check(ai.prompts.some((x) => x.includes("CONCEPTS OBLIGATOIRES") && x.includes("S2.3 « Gérer les événements »") && x.includes("AU MOINS 5")), "…the AI is told the capacities, what they cover, and the rule");
+  const cp = await api("GET", `/api/assessments/claude-prompt?g=${G}&week=3&concepts=S2.1,S2.3`);
+  check(cp.status === 200 && cp.data.prompt.includes("CONCEPTS OBLIGATOIRES") && cp.data.prompt.includes('"concepts" (OBLIGATOIRE sur chaque question)') && cp.data.prompt.includes("au moins 5 questions") && cp.data.concepts.scope.join() === "S2.1,S2.3", "the prompt for Claude: the capacities, 5 questions each, \"concepts\" on every question");
+  const quiz = (n: number) => ({ format: "classbot-assessment@1", title: "DOM et événements", minutes: 40, lang: "fr", codeLang: "javascript", passAt: 60, points: 20, brief_id: null, concepts: ["S2.1", "S2.3"],
+    questions: Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Question ${i + 1} sur le DOM et les événements ?`, choices: ["A1", "B1", "C1", "D1"], correct: 0, points: 1, concepts: i < n ? ["S2.1", "S2.3"] : ["S2.1"] })) });
+  const ci = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(4)), concepts: ["S2.1", "S2.3"] });
+  check(ci.data.problems.some((p: any) => /capacity S2\.3: touched by 4 question\(s\), at least 5/.test(p.msg)), "Claude's quiz with a capacity under 5 questions: refused, with which one and how many");
+  const bad = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), questions: quiz(5).questions.map((q, i) => (i ? q : { ...q, concepts: ["S9.9"] })) }), concepts: ["S2.1", "S2.3"] });
+  check(bad.data.problems.some((p: any) => /S9\.9 unknown/.test(p.msg)), "…an unknown capacity code: refused");
+  const okq = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(5)), concepts: ["S2.1", "S2.3"], import: true });
+  const qa = (await api("GET", `/api/assessments/${okq.data.id}?g=${G}`)).data.assessment;
+  check(okq.status === 200 && !okq.data.problems.length && qa.settings.concepts.join() === "S2.1,S2.3" && qa.questions.every((q: any) => q.concepts.includes("S2.1")), "…5 each: imported, its capacities kept (the assessment's and each question's)");
+  // an existing assessment brought up to the Fiche by Claude
+  const old = await api("POST", "/api/assessments", { g: G, title: "Ancienne évaluation", questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2 }], settings: { minutes: 20 } });
+  const ap = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.3"] });
+  check(ap.status === 200 && ap.data.prompt.includes("Explique addEventListener.") && ap.data.prompt.includes("AJOUTE des questions") && ap.data.prompt.includes('"concepts": [\n    "S2.3"\n  ]'), "an existing assessment: the prompt for Claude with its questions, to tag them and add what's missing");
+  const fixed = { ...quiz(5), concepts: ["S2.3"], questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2, concepts: ["S2.3"] }, ...quiz(5).questions.slice(0, 4).map((q) => ({ ...q, concepts: ["S2.3"] }))] };
+  const ap2 = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.3"], json: JSON.stringify(fixed), apply: true });
+  check(ap2.status === 200 && ap2.data.assessment.questions.length === 5 && ap2.data.assessment.questions[0].id === old.data.assessment.questions[0].id && ap2.data.assessment.settings.concepts.join() === "S2.3",
+    "…Claude's answer back into the same assessment: its question kept (same id), the new ones added, the scope saved");
+
+  // ---- what a learner understood: every question that touched a capacity, in the sprint
+  const A = U.alice.id;
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Fiche S2", questions: [
+    ...Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Fiche question ${i + 1} sur la sélection ?`, choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.1"] })),
+    { type: "mcq", prompt: "Fiche question 6 sur les événements ?", choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.3"] }], settings: { minutes: 10, concepts: ["S2.1", "S2.3"] } });
+  const aid = mk.data.assessment.id, qids = mk.data.assessment.questions.map((q: any) => q.id);
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [A], send: true });
+  const grade = (right: number) => run1("UPDATE assessment_takers SET status = 'graded', submitted_at = ?, grades = ? WHERE assessment_id = ? AND discord_id = ?", clock.now(),
+    JSON.stringify(Object.fromEntries(qids.map((id: string, i: number) => [id, { verdict: i < 5 ? (i < right ? "correct" : "wrong") : "correct", score: 0, comment: "" }]))), aid, A);
+  grade(3);
+  let M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
+  const cap = (code: string) => M.data.caps.find((c: any) => c.code === code);
+  check(M.status === 200 && cap("S2.1").asked === 5 && cap("S2.1").got === 3 && cap("S2.1").state === "ok" && cap("S2.1").evidence.length === 5, "3 right out of 5 questions touching it: understood");
+  check(cap("S2.3").asked === 1 && cap("S2.3").state === "few" && !M.data.caps.some((c: any) => c.code === "S2.12"), "…fewer than 5 questions: not decided yet; a capacity turned off: not shown");
+  run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[3], JSON.stringify({ verdict: "partial", score: 50, comment: "" }), aid, A);
+  run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[2], JSON.stringify({ verdict: "wrong", score: 0, comment: "" }), aid, A);
+  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
+  check(cap("S2.1").got === 2.5 && cap("S2.1").state === "ko", "2 right and one partly (2.5 out of 5): exactly half is not more than half: not understood");
+  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.3", ok: true });
+  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
+  check(cap("S2.3").teacher === true && cap("S2.3").final === "ok" && cap("S2.1").final === "ko" && M.data.level.reached === "critique", "the teacher decides a capacity (a project, an oral): it counts; the level follows the Fiche");
+  // the oral questions of a finalized debrief count, each on its capacity
+  const bidF = q1("SELECT id FROM briefs WHERE guild_id = ? AND id NOT IN (SELECT brief_id FROM brief_reviews WHERE who = ?) ORDER BY id LIMIT 1", G, `u:${A}`).id;
+  const hadRev = q1("SELECT 1 AS x FROM brief_reviews WHERE brief_id = ? AND who = ?", bidF, `u:${A}`);
+  if (!hadRev) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bidF, G, `u:${A}`,
+    JSON.stringify({ oral: [{ q: "Que fait querySelectorAll ?", a: "une NodeList", concepts: ["S2.1"] }, { q: "Et closest ?", a: "le parent", concepts: ["S2.1"] }], final: { oral: [true, true] } }), clock.now());
+  M = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`);
+  check(!hadRev && (cap("S2.1").asked === 7 && cap("S2.1").got === 4.5 && cap("S2.1").state === "ok" && cap("S2.1").evidence.filter((e: any) => e.from === "oral").length === 2), "a finalized debrief's oral questions (✓) count like questions: 4.5 out of 7, understood");
+  await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.3", ok: null });
+  check((await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`)).data.caps.find((c: any) => c.code === "S2.3").teacher === null, "…the decision taken back: the questions decide again");
+  const nos = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=7`);
+  check(nos.status === 200 && nos.data.sprint === null && nos.data.sprints.length === 3, "a sprint not in the Fiche yet: said (nothing invented)");
+  // clean up
+  if (!hadRev) run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidF, `u:${A}`);
+  for (const id of [aid, okq.data.id, old.data.assessment.id]) await api("DELETE", `/api/assessments/${id}?g=${G}`);
+  run1("DELETE FROM app_settings WHERE k LIKE 'concept%'");
 }
 
 section("the assistant knows the app: its pages and how to set up");

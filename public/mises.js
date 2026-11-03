@@ -88,7 +88,8 @@ async function mesWizard(opts = {}) {
         <div><label for="mw-wk">Week</label><select id="mw-wk"></select></div></div>
         <p class="small muted" id="mw-wkinfo"></p>
         <details class="mes-cd" id="mw-cd"><summary><b>Competencies to test</b> <span id="mw-csum"></span> <span class="muted small">· change</span></summary>
-          <p class="small muted" style="margin:6px 0 0">Of the week and its sprint. Empty: the ones of the file, the brief or the week.</p><div class="mes-chips" id="mw-comps"></div></details></li>
+          <p class="small muted" style="margin:6px 0 0">Of the week and its sprint. Empty: the ones of the file, the brief or the week.</p><div class="mes-chips" id="mw-comps"></div></details>
+        <div id="mw-cn"></div></li>
       <li data-step="make"><b id="mw-mk-t">Make it</b>
         <div class="field-row" id="mw-ai-f">
           <div><label for="mw-met">Job / theme <span class="muted">(optional)</span></label><input type="text" id="mw-met" placeholder="e.g. a cooperative of argan oil, a riad in Fès, a pharmacy"></div>
@@ -124,8 +125,10 @@ async function mesWizard(opts = {}) {
     compSum();
   };
   const compSum = () => { $("#mw-csum").innerHTML = W.comps.length ? W.comps.map((c) => compChip(c)).join(" ") : `<span class="muted small">${W.src === "json" || W.src === "claude" ? "from the file" : W.src === "brief" ? "from the brief" : "none chosen"}</span>`; };
+  let loadCnLater = null;
   const setWeek = (n, why) => {
     if (!n || !st.weeks.some((w) => w.n === n)) return;
+    if (W.week !== n) { W.cn = null; setTimeout(() => loadCnLater && loadCnLater(), 0); }
     W.week = n; const w = st.weeks.find((x) => x.n === n);
     spSel.value = w?.sprint ? String(w.sprint) : ""; drawWeeks();
     $("#mw-wsrc").textContent = why ? `· ${why}` : "";
@@ -133,7 +136,7 @@ async function mesWizard(opts = {}) {
   const stale = () => { if (W.res) { $("#mw-save").disabled = true; $("#mw-check").classList.add("primary"); } };
   spSel.value = w0?.sprint ? String(w0.sprint) : "";
   spSel.onchange = () => { W.manual = true; drawWeeks(); stale(); };
-  weekSel.onchange = () => { W.week = Number(weekSel.value) || null; W.manual = true; $("#mw-wsrc").textContent = ""; drawComps(); stale(); };
+  weekSel.onchange = () => { W.week = Number(weekSel.value) || null; W.manual = true; $("#mw-wsrc").textContent = ""; drawComps(); stale(); W.cn = null; if (typeof loadCnLater === "function") loadCnLater(); };
   drawWeeks();
   // ---- how
   const showSrc = (v) => {
@@ -171,8 +174,9 @@ async function mesWizard(opts = {}) {
     const id = Number($("#mw-brief").value);
     if (!id) { W.brief = null; $("#mw-bpre").innerHTML = ""; return; }
     const B = await api(`/briefs/${id}`);
-    W.brief = id; W.briefSrc = null;
+    W.brief = id; W.briefSrc = null; W.cn = null;
     briefShown(B.brief.data.title, briefComps(B.brief.data.competencies), B.brief.week);
+    loadCn();
   };
   const readBrief = async (f) => {
     if (!f) return;
@@ -189,7 +193,14 @@ async function mesWizard(opts = {}) {
   bdrop.ondragleave = () => bdrop.classList.remove("over");
   bdrop.ondrop = (e) => { e.preventDefault(); bdrop.classList.remove("over"); readBrief(e.dataTransfer.files[0]); };
   // ---- the request: what the teacher picked (else the server reads the file / the brief)
-  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}) });
+  // 📐 the capacities of the Fiche niveaux it covers (each in 5 items): ticked from the brief / week, the teacher changes them
+  const cnBox = $("#mw-cn");
+  const loadCn = () => conceptsPicker(cnBox, { week: W.week, brief_id: W.src === "brief" ? W.brief : "", limit: 5 }, W.cn, { mise: true });
+  loadCnLater = loadCn;
+  loadCn();
+  cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });
+  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
+    ...($("[data-cncap]", cnBox) ? { concepts: pickedConcepts(cnBox) } : {}) });
   const show = (r, auto) => {
     W.res = r;
     if (r.detected) {
@@ -197,7 +208,10 @@ async function mesWizard(opts = {}) {
       else if (r.detected.week && auto) $("#mw-wsrc").textContent = "· read from the file";
       if (!W.manual && r.detected.comps?.length) { W.comps = r.detected.comps; drawComps(); }
     }
-    $("#mw-prev").innerHTML = (r.problems?.length ? problemsHtml(r.problems) : "") + (r.preview ? `<div class="mes-res">${mesPreviewHtml(r.preview)}<div><h3 class="mes-h">Checklist</h3>${mesChecksHtml(r.checks)}</div></div>` : "");
+    // 📐 how many of the 10 items work on each capacity of the Fiche niveaux (5 at least)
+    let cov = "";
+    try { const d = JSON.parse($("#mw-json").value || W.json || "{}"); const sc = r.detected?.concepts?.length ? r.detected.concepts : W.cn || []; if (sc.length) cov = conceptCoverageHtml(sc, [...(d.situations || []), ...(d.qcm || [])]); } catch { /* not JSON yet */ }
+    $("#mw-prev").innerHTML = (r.problems?.length ? problemsHtml(r.problems) : "") + cov + (r.preview ? `<div class="mes-res">${mesPreviewHtml(r.preview)}<div><h3 class="mes-h">Checklist</h3>${mesChecksHtml(r.checks)}</div></div>` : "");
     $("#mw-save").disabled = !!r.problems?.length || !r.preview;
     // problems left: the AI rewrites only the situations / QCM that have one (the rest is kept)
     $("#mw-fix").hidden = !r.problems?.length;

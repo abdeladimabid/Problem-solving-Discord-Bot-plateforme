@@ -1276,6 +1276,7 @@ function renderDebrief() {
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>`}
+      ${sq ? "" : `<section class="panel" id="db-fiche"><div class="panel-head"><h2>📐 Fiche niveaux</h2><span class="small muted">what they understood in this sprint: all its assessments, mises en situation and oral questions</span></div><div id="db-fichebox"><p class="muted small">Loading…</p></div></section>`}
       <section class="panel" id="db-cpanel"><div class="panel-head"><h2>${sq ? "Squad comment" : "Comment"}</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
@@ -1444,6 +1445,7 @@ function memberCardHtml(rec, st, m, comps, final) {
       <div><h4>Competencies <span class="muted small">suggested · your switch decides</span></h4>
         <div class="db-rows mc-comps">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span><div class="small mc-hint" data-hint="${esc(c)}"></div></div></div>`).join("")}</div>
         ${final ? "" : `<button class="ap-link small" data-mhints hidden>↻ Use the suggestions</button>`}</div>
+      <div><button type="button" class="btn small" data-mfiche="${esc(m.gid)}" data-name="${esc(name)}" title="What they understood in this sprint (Fiche niveaux)">📐 Fiche niveaux</button></div>
       <div><h4>Questions to ask ${esc(firstNameOf(name))}</h4><ol class="mc-q small" data-box="q"><li class="muted">Loading…</li></ol></div>
     </div>
     <div class="mc-cols">
@@ -1762,6 +1764,10 @@ function wireDebrief() {
   loadMemberVsc();
   wireMembers();
   loadMemberInsights();
+  // 📐 the Fiche niveaux of the brief's sprint: each capacity, from every question that touched it (this debrief's oral too)
+  DB.ficheLoad = () => { const fb = $("#db-fichebox"); if (fb && DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }); };
+  DB.ficheLoad();
+  $$("[data-mfiche]").forEach((b) => b.onclick = () => masteryDialog(b.dataset.mfiche, b.dataset.name, { brief: DB.bid }));
   loadSoloLinks();
   if ($("#db-ilk")) $("#db-ilk").onclick = (e) => busy(e.currentTarget, async () => {
     toast("⏳ Reading the Discord channels of the brief's dates…");
@@ -1924,7 +1930,8 @@ async function importQuizJsonDialog() {
   openDialog("{ } Import a quiz (JSON)", `
     <div class="cj-step"><b>1 · Write it with Claude</b>
       <p class="small muted" style="margin:4px 0 8px">Pick the programme week: the prompt gives Claude the exact format, the rules (French, beginners) and that week's objective, notions, competencies and technologies, with what comes later as out of scope.</p>
-      <div class="toolbar" style="margin:0"><select id="cj-week" style="flex:1"><option>Loading…</option></select><button class="btn small" id="cj-cp">📋 Copy the prompt for Claude (creation)</button></div></div>
+      <div class="toolbar" style="margin:0"><select id="cj-week" style="flex:1"><option>Loading…</option></select><button class="btn small" id="cj-cp">📋 Copy the prompt for Claude (creation)</button></div>
+      <div id="cj-cn"></div></div>
     <div class="cj-step"><b>2 · Paste Claude's JSON</b>
       ${jsonBox("cj-q", '{ "format": "classbot-assessment@1", "title": "…", "questions": [ … ] }')}</div>
     <div id="cj-prev"></div>`,
@@ -1932,11 +1939,11 @@ async function importQuizJsonDialog() {
     const json = $("#cj-q", dlg).value;
     if (!json.trim()) throw new Error("Paste the JSON, or choose the .json file.");
     if (checked && checked === json) {
-      const r = await api("/assessments/claude-import", { method: "POST", body: { json, import: true } });
+      const r = await api("/assessments/claude-import", { method: "POST", body: { json, import: true, concepts: cjScope() } });
       if (r.problems?.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; return; }
       dlg.close(); toast("Imported as a draft ✅"); location.hash = `#/assessment/${r.id}`; return;
     }
-    const r = await api("/assessments/claude-import", { method: "POST", body: { json } });
+    const r = await api("/assessments/claude-import", { method: "POST", body: { json, concepts: cjScope() } });
     const btn = $(".dlg-foot .btn.primary", dlg);
     if (r.problems.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
     const p = r.preview;
@@ -1949,14 +1956,21 @@ async function importQuizJsonDialog() {
   } }]);
   dlg.classList.add("wide");
   wireJsonBox(dlg, "cj-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
-  // the programme weeks (the current one first selected) and the prompt of the week picked
-  const load = async (week) => api(`/assessments/claude-prompt${week ? `?week=${encodeURIComponent(week)}` : ""}`);
+  // the programme weeks (the current one first selected) and the prompt of the week picked, with the capacities of
+  // the Fiche niveaux it must cover (ticked from its sprint; the import checks the same ones)
+  const cnBox = $("#cj-cn", dlg);
+  const cjScope = () => ($("[data-cncap]", cnBox) ? pickedConcepts(cnBox) : undefined);
+  const load = async (week, concepts) => api(`/assessments/claude-prompt?${new URLSearchParams({ ...(week ? { week } : {}), ...(concepts ? { concepts: concepts.join(",") } : {}) })}`);
   let cur = await load("").catch(() => null);
   const sel = $("#cj-week", dlg);
   if (sel && cur) sel.innerHTML = cur.weeks.length ? cur.weeks.map((w) => `<option value="${w.n}" ${w.n === cur.week ? "selected" : ""}>Week ${w.n}${w.sprint ? ` · sprint ${w.sprint}` : ""} · ${esc(w.title || "")}</option>`).join("") : `<option value="">No programme week</option>`;
-  if (sel) sel.onchange = async () => { cur = await load(sel.value).catch(() => cur); };
+  const pickCn = () => conceptsPicker(cnBox, { week: sel?.value || cur?.week || "" }, cur?.concepts?.scope);
+  if (sel) sel.onchange = async () => { cur = await load(sel.value).catch(() => cur); pickCn(); };
+  pickCn();
   $("#cj-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
-    if (!cur || String(cur.week ?? "") !== String(sel.value || cur.week || "")) cur = await load(sel.value);
+    const sc = cjScope();
+    if (sc && !sc.length) throw new Error("Tick at least one capacity of the Fiche niveaux.");
+    cur = await load(sel.value, sc);
     copyText(cur.prompt, "Prompt copied: paste it in Claude");
   });
 }
@@ -2055,6 +2069,42 @@ async function viewAssessments() {
   });
 }
 
+/**
+ * 📐 An existing assessment brought up to the Fiche niveaux by Claude: the prompt (its questions and the capacities), then
+ * Claude's JSON back into this assessment (a draft: new questions added; open: only the questions' capacities).
+ */
+function claudeConceptsDialog(a, dirty) {
+  if (dirty) throw new Error("Save your changes first.");
+  let checked = "";
+  openDialog("📋 Bring it up to the Fiche niveaux with Claude", `
+    <div class="cj-step"><b>1 · The prompt</b><p class="small muted" style="margin:4px 0 8px">Its questions and the capacities it covers (${esc((AS.cscope || []).join(", ") || "pick them first")}): Claude tags each question and adds questions where a capacity has fewer than 5.</p>
+      <button class="btn small" id="cc-cp">📋 Copy the prompt for Claude</button></div>
+    <div class="cj-step"><b>2 · Paste Claude's JSON</b>${jsonBox("cc-q", '{ "format": "classbot-assessment@1", … }')}</div>
+    <div id="cc-prev"></div>
+    ${a.status !== "draft" ? `<p class="small muted">Students already have it: only the capacities of its questions change (no question added).</p>` : ""}`,
+  [{ label: "Check", primary: true, action: async () => {
+    const json = $("#cc-q", dlg).value;
+    if (!json.trim()) throw new Error("Paste Claude's JSON first.");
+    const btn = $(".dlg-foot .btn.primary", dlg);
+    if (checked && checked === json) {
+      const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { json, apply: true, concepts: AS.cscope } });
+      if (r.problems?.length) { $("#cc-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+      dlg.close(); AS.A = r; toast("Updated ✅"); renderAssessment(); return;
+    }
+    const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { json, concepts: AS.cscope } });
+    if (r.problems.length) { $("#cc-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+    checked = json;
+    $("#cc-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(r.preview.title)}</b><p class="small">${r.preview.n} questions · every capacity has its 5 questions ✅</p></div>`;
+    btn.textContent = a.status === "draft" ? "Replace its questions" : "Update the capacities";
+  } }]);
+  dlg.classList.add("wide");
+  wireJsonBox(dlg, "cc-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
+  $("#cc-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { concepts: AS.cscope } });
+    copyText(r.prompt, "Prompt copied: paste it in Claude");
+  });
+}
+
 /** AI questions: a new assessment (onDone null) or more questions for the one being edited. */
 const lastTechs = () => { try { const v = JSON.parse(localStorage.getItem("classbot.techs") || "null"); return Array.isArray(v) && v.length ? v : ["HTML", "CSS"]; } catch { return ["HTML", "CSS"]; } };
 async function generateQuestionsDialog(onDone, preset = null) {
@@ -2073,6 +2123,7 @@ async function generateQuestionsDialog(onDone, preset = null) {
 
       <div><label for="gq-lang">Language</label><select id="gq-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
     </div>
+    <div id="gq-cn"><p class="small muted">Loading the Fiche niveaux…</p></div>
     <label>Mix <span class="muted">(%, always 100 in total)</span></label>
     <div class="field-row"><div><label class="small">Write code</label><input type="number" id="gq-mc" value="50" min="0" max="100"></div>
       <div><label class="small">Explain</label><input type="number" id="gq-me" value="20" min="0" max="100"></div>
@@ -2080,15 +2131,19 @@ async function generateQuestionsDialog(onDone, preset = null) {
     <p class="small" id="gq-st"></p>`,
     [{ label: "Generate", primary: true, action: async () => {
       $("#gq-st").textContent = "⏳ Writing the questions (up to a minute)…";
-      const body = { topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
+      const concepts = pickedConcepts($("#gq-cn", dlg));
+      if ($("[data-cncap]", dlg) && !concepts.length) throw new Error("Tick at least one capacity of the Fiche niveaux: every evaluation must cover it.");
+      const body = { concepts, topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
         techs: tagValues(dlg, "gq-tech"), codeLang: (tagValues(dlg, "gq-tech")[0] || "javascript").toLowerCase(), lang: $("#gq-lang").value, mix: { code: $("#gq-mc").value, explain: $("#gq-me").value, mcq: $("#gq-mm").value },
         existing: $$("[data-qprompt]").map((t) => t.value).filter(Boolean) };   // the questions already in the assessment: not again
       if (!body.techs.length) throw new Error("Pick at least one technology to assess.");
       try { localStorage.setItem("classbot.techs", JSON.stringify(body.techs)); } catch { /* private window */ }
       const r = await api("/assessments/generate", { method: "POST", body }).catch((e) => { $("#gq-st").textContent = ""; throw e; });
+      const low = r.concepts?.missing || [];
+      if (low.length) toast(`⚠️ ${low.map((x) => `${x.code} ${x.n}/5`).join(", ")}: add questions on ${low.length > 1 ? "them" : "it"} (✨ Add with AI)`, true);
       if (onDone) { dlg.close(); onDone(r.questions); return; }
       const title = body.topic || br.items.find((b) => String(b.id) === body.brief_id)?.title || "Assessment";
-      const a = await api("/assessments", { method: "POST", body: { title, brief_id: body.brief_id, questions: r.questions, settings: { minutes: 45, lang: body.lang, codeLang: body.codeLang, target: body.for_student ? [body.for_student] : [] } } });
+      const a = await api("/assessments", { method: "POST", body: { title, brief_id: body.brief_id, questions: r.questions, settings: { minutes: 45, lang: body.lang, codeLang: body.codeLang, target: body.for_student ? [body.for_student] : [], concepts: r.concepts?.scope || concepts } } });
       dlg.close(); toast(`${r.questions.length} questions written: check them`); location.hash = `#/assessment/${a.assessment.id}`;
     } }]);
   dlg.classList.add("wide");
@@ -2103,6 +2158,13 @@ async function generateQuestionsDialog(onDone, preset = null) {
   const setLevel = () => { const l = briefLevel($("#gq-b", dlg).value); if (l) $("#gq-l", dlg).value = String(l); };
   $("#gq-b", dlg).addEventListener("change", setLevel);
   setLevel();
+  // 📐 the capacities to cover: from the brief (or the topic), ticked; the number of questions follows (5 per capacity)
+  const cn = $("#gq-cn", dlg);
+  const loadCn = () => conceptsPicker(cn, { brief_id: $("#gq-b", dlg).value, text: $("#gq-t", dlg).value }, preset?.concepts);
+  cn.addEventListener("cnchange", (e) => { const n = $("#gq-n", dlg); if (e.detail.min && Number(n.value) < e.detail.min) n.value = String(e.detail.min); n.max = String(Math.max(30, e.detail.min)); });
+  $("#gq-b", dlg).addEventListener("change", loadCn);
+  $("#gq-t", dlg).addEventListener("change", () => { if (!$("#gq-b", dlg).value) loadCn(); });
+  loadCn();
   // the mix always adds up to 100: a value changed (at most 100) leaves the rest to the other two, in their proportion
   const mix = ["#gq-mc", "#gq-me", "#gq-mm"].map((sel) => $(sel, dlg));
   mix.forEach((inp, i) => inp.addEventListener("input", () => {
@@ -2187,13 +2249,19 @@ function assessQuestionsTab(root) {
         ${a.brief_id && !(AS.briefs || []).some((b) => b.id === a.brief_id) ? `<option value="${a.brief_id}" selected>Brief #${a.brief_id} (deleted)</option>` : ""}</select>
       <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results, with a link to their full correction (each question, their answer, what to look up)</label>
     </section>
+    <section class="panel"><div id="aq-cnpick"><p class="small muted">Loading the Fiche niveaux…</p></div><div id="aq-cov"></div>
+      <p class="toolbar" style="margin:6px 0 0"><button class="btn small" id="aq-claude-cn" title="Claude tags each question with its capacities and adds questions where a capacity has fewer than 5">📋 Bring it up to the Fiche with Claude</button></p></section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
     <div id="aq-list" class="qe-list"></div>
     ${locked ? "" : `<p class="toolbar" style="margin-top:14px"><button class="btn" data-addq="code">+ Write code</button><button class="btn" data-addq="explain">+ Explain</button><button class="btn" data-addq="mcq">+ Multiple choice</button><button class="btn" id="aq-ai">✨ Add with AI</button><button class="btn" id="aq-pdf" title="A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here">📄 Import a quiz (PDF)</button></p>`}
     ${saveBarHtml("aq-save")}`;
   let Q = JSON.parse(JSON.stringify(a.questions));
+  // 📐 the capacities of the Fiche niveaux it covers, and how many questions touch each (5 at least)
+  const cov = () => { const qs = $$(".qe", root).length ? readQuestions() : Q; $("#aq-cov").innerHTML = conceptCoverageHtml(AS.cscope || [], qs, AS.clabels || {}); };
+  AS.cscope = s.concepts || [];
   const draw = () => {
     $("#aq-list").innerHTML = Q.map((q, i) => questionCard(q, i, Q.length, locked)).join("") || `<p class="empty">No question yet.</p>`;
+    cov();
     $$(".qe", root).forEach((card) => {
       const i = Number(card.dataset.i);
       $("[data-qt]", card).onchange = (e) => { Q = readQuestions(); Q[i].type = e.target.value; if (Q[i].type === "mcq" && !Q[i].choices?.length) { Q[i].choices = ["", ""]; Q[i].answer = [0]; } draw(); mark(); };
@@ -2229,9 +2297,19 @@ function assessQuestionsTab(root) {
       onCancel: () => { bsel.value = String(was); } }).catch((e) => { bsel.value = String(was); toast(e.message, true); });
   };
   root.addEventListener("input", mark);
+  root.addEventListener("change", (e) => { if (e.target.closest("[data-qcn]")) cov(); });
   draw();
+  const pick = $("#aq-cnpick", root);
+  pick.addEventListener("cnchange", () => {
+    const was = (AS.cscope || []).join();
+    AS.cscope = pickedConcepts(pick);
+    AS.clabels = Object.fromEntries($$("[data-cncap]", pick).map((c) => [c.value, c.closest("label").textContent.trim()]));
+    if (was !== AS.cscope.join()) { if (was) mark(); Q = $$(".qe", root).length ? readQuestions() : Q; draw(); }
+  });
+  conceptsPicker(pick, { brief_id: a.brief_id, text: a.title }, s.concepts);
+  $("#aq-claude-cn", root).onclick = () => { try { claudeConceptsDialog(a, AS.dirty); } catch (e) { toast(e.message, true); } };
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });
-  if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); });
+  if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); }, { brief: a.brief_id, title: a.title, concepts: (() => { const qs = readQuestions(); const m = (AS.cscope || []).filter((c) => qs.filter((q) => (q.concepts || []).includes(c)).length < 5); return m.length ? m : AS.cscope; })() });
   if ($("#aq-pdf")) $("#aq-pdf").onclick = () => importPdfDialog((qs, title) => {
     Q = [...readQuestions(), ...qs]; draw(); mark();
     if (title && /^(new assessment|nouvelle évaluation|assessment)$/i.test($("#aq-title").value.trim())) $("#aq-title").value = title;
@@ -2242,7 +2320,7 @@ function assessQuestionsTab(root) {
     const bad = qs.findIndex((q) => q.prompt.trim().length < 5 || (q.type === "mcq" && (q.choices.filter(Boolean).length < 2 || !q.answer.length)));
     if (bad >= 0) throw new Error(`Question ${bad + 1}: write the question${qs[bad].type === "mcq" ? ", at least 2 choices and tick the right one(s)" : ""}.`);
     AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, questions: qs,
-      settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked } } });
+      settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked, concepts: AS.cscope || [] } } });
     AS.dirty = false; toast("Saved"); renderAssessment();
   });
 }
@@ -2331,6 +2409,7 @@ function questionCard(q, i, n, locked) {
       : `<label class="small">Expected answer / key points <span class="muted">(never shown; the AI grades with it)</span></label><textarea data-qexp ${q.type === "code" ? 'class="code"' : ""} style="min-height:80px">${esc(q.expected || "")}</textarea>`}
     <div class="qe-meta">
       <div class="small qe-skills"><span class="muted">Skills</span> ${tagSelect(`sk-${i}`, skillOptions(), q.skills || [], { max: 3, placeholder: "Search a skill…" })}</div>
+      <div class="small q-cn" data-qcn><span class="muted">📐 Capacities</span> ${[...new Set([...(AS?.cscope || []), ...(q.concepts || [])])].map((c) => `<label class="cn-qc" title="${esc((AS?.clabels || {})[c] || c)}"><input type="checkbox" value="${esc(c)}" ${(q.concepts || []).includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("") || `<span class="muted">pick the Fiche's capacities above</span>`}</div>
       <div class="small qe-comps"><span class="muted">Competencies</span> ${(q.comps?.length ? q.comps : q.comp ? [{ code: q.comp, level: q.level || 1 }] : []).map((c) => compRow(c, ref)).join("")}
         <button type="button" class="btn small" data-addcomp>+ Competency</button></div>
     </div></article>`;
@@ -2347,6 +2426,7 @@ function readQuestions() {
     const q = { type, prompt: $("[data-qprompt]", card).value, points: Number($("[data-qp]", card).value) || 1, code: $("[data-qcode]", card).value,
       skills: tagValues(card, `sk-${card.dataset.i}`).slice(0, 3) };
     if (card.dataset.id) q.id = card.dataset.id;
+    q.concepts = $$("[data-qcn] input:checked", card).map((c) => c.value);
     q.comps = $$(".qe-comp", card).map((r) => [$("[data-qcomp]", r).value, $("[data-qlvl]", r).value]).filter(([c]) => c).map(([c, l]) => `${c}N${l}`);
     if (type === "code") { q.lang = $("[data-qlang]", card)?.value || "javascript"; q.starter = $("[data-qstart]", card)?.value || ""; }
     if (type !== "mcq") q.expected = $("[data-qexp]", card)?.value ?? "";
@@ -2390,7 +2470,12 @@ async function inviteDialog() {
   // the options are always asked before the first invitation of an assessment
   if (!A.takers.length && AS.optsAsked !== a.id) return assessOptionsDialog(() => inviteDialog());
   const invited = new Set(A.takers.map((t) => t.discord_id));
-  openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `
+  // 📐 the Fiche niveaux: said before inviting when a capacity of its scope has fewer than 5 questions (or none was chosen)
+  const scope = a.settings.concepts || [];
+  const low = scope.filter((c) => a.questions.filter((q) => (q.concepts || []).includes(c)).length < 5);
+  const cnWarn = !scope.length ? `<div class="notice" style="margin-bottom:10px">📐 No capacity of the Fiche niveaux chosen for this assessment: its results won't count in the students' levels. Pick them in Questions → Fiche niveaux.</div>`
+    : low.length ? `<div class="notice danger" style="margin-bottom:10px">📐 ${low.map((c) => `<b>${esc(c)}</b> ${a.questions.filter((q) => (q.concepts || []).includes(c)).length}/5`).join(", ")}: fewer than 5 questions. Add questions on ${low.length > 1 ? "them" : "it"} before inviting (Questions → ✨ Add with AI, or 📋 Bring it up to the Fiche with Claude).</div>` : "";
+  openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `${cnWarn}
     <div class="iv-sum"><span class="iv-h">Options</span> ${optsChips(a.settings)} <button class="ap-link" id="iv-chg">Change</button></div>
     <p class="muted small" style="margin-top:12px">Each student gets their own link by Discord DM.</p>
     ${segHtml("who", [["some", "Chosen students"], ["all", "The whole class"]], "some")}

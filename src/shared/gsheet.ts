@@ -61,24 +61,32 @@ async function saKey(env: Env): Promise<(SaKey & { source: "secret" | "settings"
 }
 
 const b64url = (bytes: Uint8Array) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
-let tokenCache: { email: string; token: string; exp: number } | null = null;
-async function accessToken(k: SaKey): Promise<string> {
+let tokenCache: { email: string; scope: string; token: string; exp: number } | null = null;
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+async function accessToken(k: SaKey, scope = SHEETS_SCOPE): Promise<string> {
   const t0 = Math.floor(Date.now() / 1000);
-  if (tokenCache && tokenCache.email === k.client_email && tokenCache.exp > t0 + 60) return tokenCache.token;
+  if (tokenCache && tokenCache.email === k.client_email && tokenCache.scope === scope && tokenCache.exp > t0 + 60) return tokenCache.token;
   const der = Uint8Array.from(atob(k.private_key.replace(/-----(BEGIN|END)[^-]*-----/g, "").replace(/\\n/g, "").replace(/[^A-Za-z0-9+/=]/g, "")), (c) => c.charCodeAt(0));
   let key: CryptoKey;
   try { key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]); }
   catch { throw new SheetError("The private key in this JSON can't be read: download a new JSON key."); }
   const part = (o: unknown) => b64url(new TextEncoder().encode(JSON.stringify(o)));
-  const data = `${part({ alg: "RS256", typ: "JWT" })}.${part({ iss: k.client_email, scope: "https://www.googleapis.com/auth/spreadsheets", aud: "https://oauth2.googleapis.com/token", iat: t0 - 30, exp: t0 + 3500 })}`;
+  const data = `${part({ alg: "RS256", typ: "JWT" })}.${part({ iss: k.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: t0 - 30, exp: t0 + 3500 })}`;
   const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(data)));
   const res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${data}.${b64url(sig)}` });
   const j: any = await res.json().catch(() => ({}));
   if (!res.ok || !j.access_token) throw new SheetError(`Google refused the key (${j.error_description || j.error || res.status}). Is the service account still there, and the key not deleted?`);
-  tokenCache = { email: k.client_email, token: j.access_token, exp: t0 + (Number(j.expires_in) || 3600) };
+  tokenCache = { email: k.client_email, scope, token: j.access_token, exp: t0 + (Number(j.expires_in) || 3600) };
   return j.access_token;
 }
+
+/** The service account's token to read a Google Doc (the Fiche niveaux), when the class has a key; else null. */
+export async function docsToken(env: Env): Promise<(() => Promise<string>) | null> {
+  const k = await saKey(env);
+  return k ? () => accessToken(k, "https://www.googleapis.com/auth/documents.readonly") : null;
+}
+export async function serviceEmail(env: Env): Promise<string | null> { return (await saKey(env))?.client_email ?? null; }
 
 async function gapi(env: Env, path: string, init: { method?: string; body?: unknown } = {}): Promise<any> {
   const k = await saKey(env);

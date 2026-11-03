@@ -4,6 +4,7 @@
 //   • a level for the administration's report (Excellent → Critique): proposed (AI for the class, else computed), decided by the teacher
 //   • the teacher's decision (validated / not), a note, the count per level with the names, and one comment for the whole sprint
 // Ported from GitHub Watcher (Sprints tab), now on D1 and the class's programme.
+import { getConcepts, masteryOf, sprintOf } from "./concepts.ts";
 import type { Env, GuildRow } from "./types.ts";
 import { all, now, run } from "./db.ts";
 import { compLabel, parseComp, programOf } from "./program.ts";
@@ -198,11 +199,20 @@ export async function sprintView(env: Env, g: GuildRow, n: number) {
   const L = await load(env, g);
   const sp = findSprint(L, n);
   const ps = L.p.sprints.find((s) => s.n === n);
+  // 📐 the Fiche niveaux of this sprint: each learner's capacities understood and the level they give
+  const cstore = await getConcepts(env, g.id);
+  const rows = sprintRows(L, sp);
+  const fiche: Record<string, { reached: string | null; ok: number; ko: number; few: number; total: number }> = {};
+  if (sprintOf(cstore, n)) for (const r of rows) {
+    const m = await masteryOf(env, g.id, r.discord_id, n, cstore).catch(() => null);
+    if (m) fiche[r.discord_id] = { reached: m.level.reached, ok: m.caps.filter((c) => c.final === "ok").length, ko: m.caps.filter((c) => c.final === "ko").length, few: m.caps.filter((c) => c.final === "few").length, total: m.caps.length };
+  }
   return {
+    fiche: sprintOf(cstore, n) ? fiche : null,
     sprint: { n: sp.n, title: sp.title, start: sp.start, end: sp.end, codes: sp.codes },
     briefs: L.briefRows.filter((b) => sp.briefs.includes(b.id)).map((b) => ({ id: b.id, title: b.title, due_at: b.due_at })),
     names: Object.fromEntries(L.p.referential.map((c) => [c.code, c.name])),
-    rows: sprintRows(L, sp),
+    rows,
     comment: L.comments.find((c) => c.sprint === n)?.comment || "",
     objectives: ps ? oneLine(ps.situation || ps.objectives, 600) : "",
   };
@@ -241,19 +251,27 @@ const statsLine = (r: Row, codes: string[]) => {
 export async function proposeLevels(env: Env, g: GuildRow, n: number) {
   const L = await load(env, g);
   const sp = findSprint(L, n);
-  const rows = sprintRows(L, sp).map((r, i) => ({ r, id: "A" + (i + 1), rule: ruleLevel(r) })).filter((x) => x.rule);
+  // 📐 the Fiche niveaux of this sprint (when it has it): the level it gives each learner is the reference
+  const cstore = await getConcepts(env, g.id);
+  const fiche = sprintOf(cstore, n) ? n : null;
+  const fm = new Map<string, Awaited<ReturnType<typeof masteryOf>>>();
+  if (fiche) for (const r of sprintRows(L, sp)) { const m = await masteryOf(env, g.id, r.discord_id, fiche, cstore).catch(() => null); if (m) fm.set(r.discord_id, m); }
+  const rows = sprintRows(L, sp).map((r, i) => ({ r, id: "A" + (i + 1), rule: fm.get(r.discord_id)?.level.reached || ruleLevel(r) })).filter((x) => x.rule);
   if (!rows.length) throw new SprintError("No finalized debrief in this sprint yet.");
   const system = [
     "Tu aides un formateur en développement web à classer chaque apprenant à la fin d’un sprint, selon son niveau technique : \"excellent\", \"bon\", \"moyen\", \"faible\" ou \"critique\".",
     "Tu reçois pour chaque apprenant (A1, A2…) : les compétences du sprint atteintes au niveau demandé, la part de la grille des briefs validée, les briefs évalués, le niveau de chacun de ses débriefs (en squad : son niveau à lui), les étapes rendues à temps, et un niveau calculé (\"calc\").",
     "Garde le niveau calculé sauf raison claire. Ne juge que sur ces données.",
+    fiche ? "La FICHE NIVEAUX du sprint est la référence officielle : un niveau est atteint quand au moins la moitié de ses éléments sont compris (et tous les niveaux en dessous). Quand elle donne un niveau (\"fiche\"), c'est le niveau calculé : ne t'en écarte pas de plus d'un cran, et seulement avec une raison claire." : "",
     'Réponds UNIQUEMENT avec ce JSON : {"niveaux":[{"id":"A1","niveau":"bon","raison":"max 15 mots, en français"}]}',
   ].join("\n");
-  const ask = await askReview(env, system, () => `SPRINT ${sp.n} : ${sp.title}\n` + rows.map((x) => `${x.id} · ${statsLine(x.r, sp.codes)} · calc : ${x.rule}`).join("\n"), 1).catch(() => null);
+  const ficheLine = (uid: string) => { const m = fm.get(uid); if (!m) return ""; const ok = m.caps.filter((c) => c.final === "ok").length; return ` · fiche : ${m.level.reached ?? "pas assez évalué"} (${ok}/${m.caps.length} capacités comprises)`; };
+  const ask = await askReview(env, system.split("\n").filter(Boolean).join("\n"), () => `SPRINT ${sp.n} : ${sp.title}\n` + rows.map((x) => `${x.id} · ${statsLine(x.r, sp.codes)}${ficheLine(x.r.discord_id)} · calc : ${x.rule}`).join("\n"), 1).catch(() => null);
   const ai = ask && ask.ok && Array.isArray(ask.data?.niveaux) ? new Map(ask.data.niveaux.filter((v: any) => v && SPRINT_LEVELS.includes(v.niveau)).map((v: any) => [String(v.id), v])) : null;
   for (const x of rows) {
     const a: any = ai?.get(x.id);
-    await putDecision(env, g, L.p.id, n, x.r.discord_id, { plevel: a ? a.niveau : x.rule, why: a ? oneLine(a.raison, 160) : `${x.r.ok}/${sp.codes.length} compétences, grille ${x.r.pct ?? "?"} %` });
+    const fmx = fm.get(x.r.discord_id);
+    await putDecision(env, g, L.p.id, n, x.r.discord_id, { plevel: a ? a.niveau : x.rule, why: a ? oneLine(a.raison, 160) : fmx?.level.reached ? `Fiche niveaux : ${fmx.caps.filter((c) => c.final === "ok").length}/${fmx.caps.length} capacités comprises` : `${x.r.ok}/${sp.codes.length} compétences, grille ${x.r.pct ?? "?"} %` });
   }
   return { by: ai ? "ai" : "rules" };
 }

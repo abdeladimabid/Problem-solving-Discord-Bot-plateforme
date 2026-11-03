@@ -17,6 +17,8 @@ import { conceptsOf } from "./review/engine.ts";
 import { extractJson } from "./ai.ts";
 import { parseComp, techOutside } from "./program.ts";
 import { SKILL_KEYS } from "./skills.ts";
+import { capOf, codeOf, conceptsPrompt, coverage, parseCode, planConcepts } from "./concepts.ts";
+import type { ConceptStore } from "./concepts.ts";
 
 export type QType = "code" | "explain" | "mcq";
 export interface Question {
@@ -25,6 +27,7 @@ export interface Question {
   expected?: string;                               // code / explain: a model answer or the key points (never shown)
   points: number; skills: string[]; comp?: string; level?: number;
   comps?: { code: string; level: number }[];      // every competency the question checks (comp/level = the first one)
+  concepts?: string[];                             // the capacities of the Fiche niveaux it touches ("S2.3"…: concepts.ts)
 }
 export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string; showResults: boolean; points: number; passAt: number; target: string[];
   noPaste: boolean;        // copy-paste blocked in the answers
@@ -33,6 +36,7 @@ export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string
   nav: "free" | "forward"; // free: go back and change any answer; forward: one question at a time, no going back
   oneDevice: boolean;      // the browser that signed in with Discord is the paper's device: another one stops the session
   netAlerts: boolean;      // the teacher sees papers opened outside the class's network, or from several networks
+  concepts: string[];      // its scope in the Fiche niveaux: the capacities it covers (5 questions each at least)
 }
 export interface AssessRow { id: number; guild_id: string; title: string; brief_id: number | null; status: string; settings: string | null; questions: string; created_at: number; opened_at: number | null; closes_at: number | null }
 export interface Grade { verdict: "correct" | "partial" | "wrong" | "empty"; score: number; comment: string; teacher?: boolean; right?: string; wrong?: string;
@@ -68,6 +72,9 @@ export function cleanQuestion(q: any, i = 0): Question | null {
     if (pc && !comps.some((x) => x.code === pc.code)) comps.push({ code: pc.code, level: Math.max(1, Math.min(3, pc.level ?? 1)) });
   }
   if (comps.length) { out.comps = comps.slice(0, 6); out.comp = comps[0].code; out.level = comps[0].level; }
+  // the capacities of the Fiche niveaux ("S2.3", "S2-3"…: kept as « S2.3 »)
+  const concepts = [...new Set((Array.isArray(q?.concepts) ? q.concepts : String(q?.concepts ?? "").split(/[,;\s]+/)).map((c: unknown) => { const p = parseCode(c); return p ? codeOf(p.sprint, p.n) : null; }).filter(Boolean))] as string[];
+  if (concepts.length) out.concepts = concepts.slice(0, 6);
   if (q?.code) out.code = str(q.code, 4000);
   if (type === "code") {
     out.lang = LANGS.includes(String(q?.lang)) ? String(q.lang) : "javascript";
@@ -94,6 +101,7 @@ export function cleanSettings(s: any): Settings {
     target: (Array.isArray(s?.target) ? s.target : []).map(String).filter((x: string) => /^\d{1,25}$/.test(x)).slice(0, 60),
     noPaste: s?.noPaste !== false, lockScreen: s?.lockScreen !== false, shuffle: s?.shuffle !== false, nav: s?.nav === "forward" ? "forward" : "free",
     oneDevice: s?.oneDevice !== false, netAlerts: s?.netAlerts !== false,
+    concepts: [...new Set((Array.isArray(s?.concepts) ? s.concepts : []).map((c: unknown) => { const p = parseCode(c); return p ? codeOf(p.sprint, p.n) : null; }).filter(Boolean))].slice(0, 24) as string[],
   };
 }
 const parse = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
@@ -810,8 +818,10 @@ export function starterGivesAnswer(starter: string, expected: string) {
 // class had already been asked. Now: one quick call lists distinct notions first, each question gets its own
 // notion, its own kind of task and its own situation (drawn at random), the class's earlier questions are avoided,
 // and near-duplicates (the same question with other names or values) are dropped.
-type GenOpts = { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[]; referential?: { code: string; name: string }[]; scope?: string[]; avoid?: string[] };
-type PlanItem = { type: "code" | "explain" | "mcq"; notion: string; form: string };
+type GenOpts = { topic: string; count: number; mix: { code: number; explain: number; mcq: number }; lang: "fr" | "en"; codeLang: string; level: number; comps?: string[]; skills?: string[]; context?: string; techs?: string[]; referential?: { code: string; name: string }[]; scope?: string[]; avoid?: string[];
+  /** the capacities of the Fiche niveaux to cover (each at least 5 questions), and the class's Fiche */
+  concepts?: string[]; conceptStore?: ConceptStore };
+type PlanItem = { type: "code" | "explain" | "mcq"; notion: string; form: string; concepts?: string[] };
 const FORMS: Record<PlanItem["type"], [string, string][]> = {
   code: [["écrire le code demandé (quelques lignes)", "write the code asked (a few lines)"], ["compléter le code donné (le mot ou la ligne qui manque, marqué ____)", "complete the given code (the missing word or line, marked ____)"],
     ["corriger le code donné qui ne fonctionne pas", "fix the given code that doesn't work"], ["réécrire le code donné autrement (plus court, plus propre, sémantique)", "rewrite the given code another way (shorter, cleaner, semantic)"]],
@@ -861,14 +871,21 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
   const fr = o.lang !== "en";
   if (!plan) {
     // the plan: each question its type, notion, kind of task and situation; then batches of up to 6, asked together
-    const n = Math.max(1, Math.min(30, Math.round(o.count) || 10));
+    // the Fiche niveaux: each capacity of the scope gets at least 5 questions (one question may touch two): the
+    // number of questions grows when it's too small for that
+    const cs = o.conceptStore && o.concepts?.length ? o.concepts.filter((c) => capOf(o.conceptStore!, c)) : [];
+    const cplan = cs.length ? planConcepts(cs, Math.max(1, Math.min(60, Math.round(o.count) || 10))) : null;
+    const n = cplan ? Math.min(60, cplan.length) : Math.max(1, Math.min(30, Math.round(o.count) || 10));
     const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);
     const k = { code: Math.round((n * o.mix.code) / total), explain: Math.round((n * o.mix.explain) / total) };
     const types: PlanItem["type"][] = [...Array(k.code).fill("code"), ...Array(k.explain).fill("explain"), ...Array(Math.max(0, n - k.code - k.explain)).fill("mcq")];
-    const notions = n > 1 ? await planNotions(env, o, n, techs) : [];
+    // each question's notion: a point of its capacities (in turn), else one the AI plans
+    const pointN: Record<string, number> = {};
+    const capNotion = (codes: string[]) => codes.map((c) => { const cap = capOf(o.conceptStore!, c)!; const k = (pointN[c] = (pointN[c] ?? -1) + 1); return `${cap.title} : ${cap.points[k % Math.max(1, cap.points.length)] ?? ""}`; }).join(" + ");
+    const notions = cplan ? cplan.map(capNotion) : n > 1 ? await planNotions(env, o, n, techs) : [];
     const forms: Record<string, string[]> = Object.fromEntries(Object.entries(FORMS).map(([t, l]) => [t, mixUp(l.map(([f, e]) => (fr ? f : e)))]));
     const used: Record<string, number> = {};
-    const items: PlanItem[] = mixUp(types).map((type, i) => ({ type, notion: notions[i] ?? "", form: forms[type][(used[type] = (used[type] ?? -1) + 1) % forms[type].length] }));
+    const items: PlanItem[] = mixUp(types).map((type, i) => ({ type, notion: notions[i] ?? "", form: forms[type][(used[type] = (used[type] ?? -1) + 1) % forms[type].length], ...(cplan ? { concepts: cplan[i] } : {}) }));
     const batches: PlanItem[][] = [];
     for (let i = 0; i < items.length; i += 6) batches.push(items.slice(i, i + 6));
     const res = await Promise.allSettled(batches.map((b) => generateQuestions(env, o, b)));
@@ -879,6 +896,14 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
       kept.push(q);
     }
     if (!kept.length) { const bad = res.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined; throw bad ? bad.reason : new AssessError("The AI only wrote questions the class already had: change the topic a little and try again."); }
+    // a question lost (not written, or the same as another): the capacities still under 5 get new ones (twice at most)
+    if (cplan) for (let round = 0; round < 2; round++) {
+      const miss = coverage(kept, cs).missing;
+      if (!miss.length) break;
+      const more: PlanItem[] = miss.flatMap((m) => Array.from({ length: m.need }, (_, k) => ({ type: (["code", "mcq", "explain"] as const)[k % 3], notion: capNotion([m.code]), form: forms[(["code", "mcq", "explain"] as const)[k % 3]][k % 4], concepts: [m.code] })));
+      const add = await Promise.allSettled(Array.from({ length: Math.ceil(more.length / 6) }, (_, i) => generateQuestions(env, o, more.slice(i * 6, i * 6 + 6))));
+      for (const r of add) if (r.status === "fulfilled") for (const q of r.value) { const txt = `${q.prompt}\n${q.code ?? ""}`; if (!kept.some((x) => nearSame(`${x.prompt}\n${x.code ?? ""}`, txt))) kept.push(q); }
+    }
     return kept;
   }
   const n = plan.length;
@@ -902,13 +927,14 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
     compList.length ? `"comps" : UNIQUEMENT parmi ces compétences, choisies d’après ce que la question fait FAIRE à l’apprenant (le sens de la compétence, jamais l’ordre de la liste) :\n${compList.join("\n")}` : "",
     fr ? "VARIÉTÉ : chaque question suit SA ligne du plan (son type, sa notion, sa forme de tâche). Deux questions ne testent jamais la même chose : changer seulement les noms de variables ou les valeurs ne fait PAS une nouvelle question."
       : "VARIETY: each question follows ITS line of the plan (its type, notion, kind of task). No two questions test the same thing: only changing variable names or values does NOT make a new question.",
-    'Réponds UNIQUEMENT avec ce JSON : {"questions":[{"type":"code|explain|mcq","prompt":"…","code":"code à lire (facultatif)","lang":"javascript","starter":"code de départ (facultatif)","choices":["…"],"answer":[0],"expected":"…","points":2,"skills":["dom"],"comps":["C4N1"]}]}',
-  ].join("\n");
+    plan.some((x) => x.concepts?.length) && o.conceptStore ? conceptsPrompt(o.conceptStore, [...new Set(plan.flatMap((x) => x.concepts ?? []))]) + "\nChaque question travaille VRAIMENT les capacités de SA ligne du plan (elles sont données), et les garde dans \"concepts\"." : "",
+    `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"type":"code|explain|mcq","prompt":"…","code":"code à lire (facultatif)","lang":"javascript","starter":"code de départ (facultatif)","choices":["…"],"answer":[0],"expected":"…","points":2,"skills":["dom"],"comps":["C4N1"]${plan.some((x) => x.concepts?.length) ? ',"concepts":["S2.3"]' : ""}}]}`,
+  ].filter(Boolean).join("\n");
   const user = [
     `Sujet : ${o.topic || "les notions de la semaine"}`, o.context ? `Contexte (brief, concepts) :\n${o.context.slice(0, 3000)}` : "",
     o.comps?.length ? `Compétences à évaluer : ${o.comps.join(", ")}` : "", o.skills?.length ? `Notions à vérifier en priorité : ${o.skills.join(", ")}` : "",
     `Écris EXACTEMENT ${n} questions, sur ${techs.join(", ")}, une par ligne de ce plan, dans l'ordre :`,
-    plan.map((x, i) => `Q${i + 1} — "${x.type}"${x.notion ? ` · notion : ${x.notion}` : ""} · tâche : ${x.form}`).join("\n"),
+    plan.map((x, i) => `Q${i + 1} — "${x.type}"${x.notion ? ` · notion : ${x.notion}` : ""} · tâche : ${x.form}${x.concepts?.length ? ` · concepts : ${x.concepts.join(", ")}` : ""}`).join("\n"),
     o.avoid?.length ? `DÉJÀ POSÉES À CETTE CLASSE (ne les repose pas, même reformulées) :\n${o.avoid.slice(0, 40).map((x) => "- " + x.slice(0, 140)).join("\n")}` : "",
   ].filter(Boolean).join("\n");
   // room for every question asked (statement, code, expected answer, choices…: about 600 tokens each): with the
@@ -930,7 +956,10 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
   const outside = new Map<string, number>();
   const qs = raw.map((q: any, i: number) => {
     const lang = langOfTech(String(q?.lang || ""));
-    // the competencies and skills the teacher picked fill in what the AI left empty
+    // the competencies and skills the teacher picked fill in what the AI left empty; the capacities: its plan line's
+    // (always), plus the ones of the plan the AI says it touches too
+    const planC = plan[i]?.concepts ?? [];
+    if (planC.length) q = { ...q, concepts: [...new Set([...planC, ...(Array.isArray(q?.concepts) ? q.concepts : []).filter((x: unknown) => plan.some((p) => p.concepts?.includes(String(x))))])] };
     const c = cleanQuestion({ ...q, lang: allowed.has(lang) ? lang : first,
       comps: (Array.isArray(q?.comps) && q.comps.length) || q?.comp ? q.comps : (o.comps ?? []).map((c) => String(c).trim().split(/[\s(]/)[0]), skills: Array.isArray(q?.skills) && q.skills.length ? q.skills : o.skills ?? [] }, i);
     // a starter that already holds the answer is removed
