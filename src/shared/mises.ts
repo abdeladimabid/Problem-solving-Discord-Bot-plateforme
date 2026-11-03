@@ -515,7 +515,7 @@ export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string,
 // ------------------------------------------------------------------ live statistics
 /** An event of the learner page: [t (s), kind, item, n, extra]. */
 export type MiseEvent = [number, string, string, number, unknown?];
-export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock"];
+export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock", "reopen"];
 export interface LiveStats { leaves: number; awaySec: number; away: boolean; pastes: number; pasteChars: number; blockedPastes: number; runs: number; checks: number; lastAt: number | null }
 /** Leaving the page (times, total time away), pastes (times, characters), runs and AI checks of one learner. */
 export function liveStats(events: MiseEvent[], nowSec: number): LiveStats {

@@ -472,7 +472,7 @@ function mesLiveTab(root) {
           : { label: "Left page", num: true, sort: "leaves", html: (t) => (t.leaves ? `<b>${t.leaves}×</b><div class="small muted">${mesDur(t.awaySec)}</div>` : "0") },
         ...(m.settings.netAlerts ? [{ label: "Network", html: (t) => netHtml(t.net) }] : []),
         { label: "Pastes", num: true, sort: "pastes", html: (t) => (t.pastes || t.blockedPastes ? `<b>${t.pastes}</b>${t.pasteChars ? `<div class="small muted">${t.pasteChars} chars</div>` : ""}${t.blockedPastes ? `<div class="small" style="color:var(--warn)">${t.blockedPastes} blocked</div>` : ""}` : "0") },
-        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ""}</span>` },
+        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ` <button class="btn small danger" data-mdel="${t.id}" title="Delete their paper and results, then invite them again">Delete paper</button>`}</span>` },
       ], rows, { empty: MSIT.filter === "all" ? "Nobody yet: launch it for the class." : "Nobody in this filter." })}
     </section>`;
   $$("[data-mf]", root).forEach((b) => b.onclick = () => { MSIT.filter = b.dataset.mf; mesLiveTab(root); });
@@ -480,6 +480,7 @@ function mesLiveTab(root) {
   $$("[data-mr]", root).forEach((b) => b.onclick = () => busy(b, async () => { const r = await api(`/mises/${m.id}/resend`, { method: "POST", body: { taker: Number(b.dataset.mr) } }); toast(r.sent ? "Link sent by DM" : "The DM didn't go through: copy their link instead", !r.sent); }));
   $$("[data-mu]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: { taker: Number(b.dataset.mu) } }); toast("Let back in: their page asks for full screen again"); mesRender(); }));
   $$("[data-mx]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/remove`, { method: "POST", body: { taker: Number(b.dataset.mx) } }); mesRender(); }));
+  $$("[data-mdel]", root).forEach((b) => b.onclick = () => { const t = takers.find((x) => x.id === Number(b.dataset.mdel)); if (t) mesResetDialog(t); });
   $("#ml-links").onclick = (e) => busy(e.currentTarget, async () => { const l = (await api(`/mises/${m.id}/links`)).links; copyText(takers.map((t) => `${t.name || t.discord_id}: ${l[t.discord_id]}`).join("\n"), "Links copied"); });
 }
 
@@ -555,7 +556,7 @@ function mesGradeDialog(d, item, after) {
 }
 
 // ---------------------------------------------------------------- one learner: everything they did
-const MES_EV = { lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in" };
+const MES_EV = { lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in", reopen: "⏱ Reopened: continues their paper" };
 async function mesLearner(takerId) {
   const m = MSIT.d.mise, c = m.content;
   const d = await api(`/mises/${m.id}/taker/${takerId}`);
@@ -695,9 +696,29 @@ async function mesAddDialog() {
 }
 function mesExtendDialog() {
   const m = MSIT.d.mise;
-  openDialog("⏱ More time", `<p class="small muted" style="margin-top:0">${m.ends_at ? `Now it ends ${fmtDateTime(m.ends_at)}.` : "It has no end: this gives it one."} Everyone gets the same extra time${m.status === "closed" ? " and the session opens again (papers already handed in stay handed in)" : ""}.</p>
-    <label for="me-m">Extra minutes</label><input type="number" id="me-m" min="1" max="600" value="15" style="width:120px">`,
-  [{ label: "Add the time", primary: true, action: async () => { MSIT.d = await api(`/mises/${m.id}/extend`, { method: "POST", body: { minutes: Number($("#me-m").value) } }); dlg.close(); toast("Time added"); mesRender(); } }]);
+  // papers handed in: the teacher chooses who continues theirs (ticked: handed in by the closing or the time running out)
+  const done = (MSIT.d.takers || []).filter((t) => t.status === "submitted");
+  openDialog(m.status === "closed" ? "⏱ Reopen with more time" : "⏱ More time", `<p class="small muted" style="margin-top:0">${m.ends_at ? `${m.status === "closed" ? "It ended" : "Now it ends"} ${fmtDateTime(m.ends_at)}.` : "It has no end: this gives it one."} Everyone gets the same extra time${m.status === "closed" ? " and the session opens again" : ""}.</p>
+    <label for="me-m">Extra minutes</label><input type="number" id="me-m" min="1" max="600" value="15" style="width:120px">
+    ${done.length ? `<h4 style="margin:14px 0 4px">Let them continue their paper</h4>
+      <p class="small muted" style="margin:0 0 6px">They go on where they were (their answers are kept); their results come back when they hand it in again. Ticked: handed in by the closing or when the time ran out.</p>
+      <div class="mes-people">${done.map((t) => `<label class="check"><input type="checkbox" value="${t.id}" data-cont ${t.autoSub ? "checked" : ""}> <span>${esc(t.name || t.discord_id)} <span class="muted small">${t.autoSub ? "handed in by the closing" : "handed it in themselves"}</span></span></label>`).join("")}</div>` : ""}`,
+  [{ label: m.status === "closed" ? "Reopen" : "Add the time", primary: true, action: async () => {
+    const cont = $$("[data-cont]:checked", dlg).map((x) => Number(x.value));
+    const r = await api(`/mises/${m.id}/extend`, { method: "POST", body: { minutes: Number($("#me-m").value), continue: cont } });
+    MSIT.d = r; dlg.close();
+    toast(m.status === "closed" ? `Reopened${r.continued ? ` · ${r.continued} can continue: they open their link again` : ""}` : "Time added"); mesRender(); } }]);
+}
+/** Delete a learner's paper (their work and results), and invite them again with a new paper if asked. */
+function mesResetDialog(t) {
+  const m = MSIT.d.mise, closed = m.status === "closed";
+  openDialog(`Delete ${t.name || t.discord_id}'s paper?`, `<p>Their answers, their record of this mise en situation and the results it put on their profile are deleted. This can't be undone.</p>
+    <label class="check"><input type="checkbox" id="me-rinv" checked> <span><b>Invite them again</b> <span class="muted small">(a new, empty paper${closed ? "; it's closed: reopen it with more time so they can take it" : ", their new link by DM"})</span></span></label>`,
+  [{ label: "Delete their paper", danger: true, action: async () => {
+    const invite = $("#me-rinv").checked;
+    const r = await api(`/mises/${m.id}/reset`, { method: "POST", body: { taker: t.id, invite }, confirmed: true });
+    MSIT.d = r; dlg.close();
+    toast(invite ? (r.sent ? "Deleted · invited again, new link sent by DM" : closed ? "Deleted · invited again: reopen it so they can take it" : "Deleted · invited again (the DM didn't go through: copy their link)") : "Their paper is deleted"); mesRender(); } }]);
 }
 
 // « Give work » (the students' page, a plan d'action): one of the mises en situation, for the students chosen.

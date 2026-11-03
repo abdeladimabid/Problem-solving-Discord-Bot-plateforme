@@ -7694,6 +7694,36 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("GET", `/api/mises/${sv5.data.id}?g=${G}`)).data.takers.every((t: any) => t.net == null), "…network alerts off: no network column data");
     for (const id of [sv4.data.id, sv5.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
   }
+  // reopen with more time: who handed in by the closing can continue; a learner's paper deleted, then invited again
+  {
+    const sv6 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    const M6 = sv6.data.id;
+    await api("POST", `/api/mises/${M6}/launch`, { g: G, students: [U.alice.id, U.bob.id], lockScreen: false, send: false });
+    const L6 = (await api("GET", `/api/mises/${M6}/links?g=${G}`)).data.links;
+    const call6 = async (u: string, a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${L6[u].split("/mes/")[1]}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as any;
+    await call6(U.alice.id, "start", {}); await call6(U.bob.id, "start", {});
+    await call6(U.alice.id, "save", { item: "q1", answer: { choice: 0 } });
+    await api("POST", `/api/mises/${M6}/close`, { g: G });
+    const v6 = (await api("GET", `/api/mises/${M6}?g=${G}`)).data;
+    const ta = v6.takers.find((t: any) => t.discord_id === U.alice.id), tb = v6.takers.find((t: any) => t.discord_id === U.bob.id);
+    check(v6.mise.status === "closed" && ta.status === "submitted" && ta.autoSub && tb.autoSub, "closed: their papers handed in by the closing (said so)");
+    const rx = await api("POST", `/api/mises/${M6}/extend`, { g: G, minutes: 20, continue: [ta.id] });
+    const ra = rx.data.takers.find((t: any) => t.id === ta.id), rb = rx.data.takers.find((t: any) => t.id === tb.id);
+    check(rx.status === 200 && rx.data.continued === 1 && rx.data.mise.status === "live" && rx.data.mise.ends_at > clock.now() + 1100 && ra.status === "resume" && rb.status === "submitted",
+      `reopened with 20 more minutes: the one ticked can continue, the other stays handed in (${rx.status} ${ra?.status} ${rb?.status})`);
+    check(!q("SELECT 1 FROM competency_results WHERE source = 'mise' AND ref = ? AND discord_id = ?", String(M6), U.alice.id).length, "…their results wait until they hand it in again");
+    const back6 = await call6(U.alice.id, "start", {});
+    check(back6.paper && back6.answers.q1?.choice === 0 && q1("SELECT status FROM mise_takers WHERE id = ?", ta.id).status === "active", "…they go on where they were, their answers kept");
+    const c0 = discordCalls.length;
+    const rs = await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: tb.id, invite: true });
+    const nb = rs.data.takers.find((t: any) => t.discord_id === U.bob.id);
+    check(rs.status === 200 && rs.data.removed === 1 && nb && nb.id !== tb.id && nb.status === "invited" && !q1("SELECT 1 AS x FROM mise_takers WHERE id = ?", tb.id)
+      && discordCalls.slice(c0).some((x) => JSON.stringify(x.body ?? {}).includes("/mes/")), "a learner's paper deleted and invited again: a new empty paper, the new link by DM");
+    const rs2 = await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: ta.id, invite: false });
+    check(rs2.data.removed === 1 && !rs2.data.takers.some((t: any) => t.discord_id === U.alice.id), "…or only deleted (they can be added again later)");
+    check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
+    await api("DELETE", `/api/mises/${M6}?g=${G}`);
+  }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
 }
 

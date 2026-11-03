@@ -472,12 +472,48 @@ export async function links(env: Env, g: GuildRow, id: number) {
   return Object.fromEntries(await Promise.all(takers.map(async (t) => [t.discord_id, miseUrl(env, await takerToken(env, t.id, linkExp(m)))] as [string, string])));
 }
 /** More time for everyone (a session without an end gets one only when asked). */
-export async function extend(env: Env, g: GuildRow, id: number, minutes: number) {
+export async function extend(env: Env, g: GuildRow, id: number, minutes: number, cont: unknown = null) {
   const m = await getMise(env, g, id);
   const add = Math.max(1, Math.min(600, Math.round(minutes) || 0));
   if (m.status === "draft") throw new MiseError("Launch it first.");
   const base = Math.max(m.ends_at ?? now(), now());
   await run(env, "UPDATE mises SET ends_at = ?, status = 'live', closed_at = NULL WHERE id = ?", base + add * 60, id);
+  // papers handed in (often by the closing, or the time running out) that the teacher lets continue: where they were
+  const want = (Array.isArray(cont) ? cont : []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  let continued = 0;
+  if (want.length) {
+    const list = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM mise_takers WHERE mise_id = ? AND status = 'submitted' AND id IN (${want.map(() => "?").join(",")})`, id, ...want);
+    for (const t of list) {
+      const r = await run(env, "UPDATE mise_takers SET status = 'resume', submitted_at = NULL WHERE id = ? AND status = 'submitted'", t.id);
+      if (!r.meta.changes) continue;
+      // their results come back when they hand it in again
+      await clearResults(env, g.id, id, t.discord_id);
+      await pushEvent(env, t.id, [now(), "reopen", "", 0]);
+      continued++;
+    }
+  }
+  return { continued };
+}
+async function clearResults(env: Env, gid: string, miseId: number, uid: string) {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'mise' AND ref = ?").bind(gid, uid, miseId),
+    env.DB.prepare("DELETE FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND source = ?").bind(gid, uid, `mise:${miseId}`),
+  ]);
+}
+/** Delete a learner's paper (their work, events and results): they can be invited again, with a new paper. */
+export async function resetTaker(env: Env, g: GuildRow, id: number, takerId: number, invite = false) {
+  const m = await getMise(env, g, id);
+  const t = await one<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  if (!t) throw new MiseError("Unknown learner.", 404);
+  await clearResults(env, g.id, id, t.discord_id);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM mise_takers WHERE id = ?").bind(t.id),
+    env.DB.prepare("DELETE FROM app_settings WHERE k = ?").bind(`ident:mes:${t.id}`),
+  ]);
+  if (!invite) return { removed: 1, invited: 0, sent: 0 };
+  const live = statusOf(m) !== "closed";
+  const r = await addTakers(env, g, id, [t.discord_id], live);
+  return { removed: 1, invited: r.invited, sent: r.sent };
 }
 /** Close it for everyone: the papers still open are handed in as they are. */
 export async function closeMise(env: Env, g: GuildRow, id: number) {
@@ -810,6 +846,7 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
     return {
       id: t.id, discord_id: t.discord_id, name: names.get(t.discord_id) ?? null, test: staff.has(t.discord_id), status: t.status, live: liveStatus(t, st, t0),
       lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null, locks: ev.filter((e) => e[1] === "lock").length, net: net[t.id] ?? null,
+      autoSub: t.status === "submitted" && ev.filter((e) => e[1] === "submit").at(-1)?.[3] === 1,
       // right so far: a QCM answered right, a situation whose last run passed every check
       correct: itemIds(c).filter((k) => sc.items[k]?.attempted && sc.items[k]?.score === 100).length,
       item: t.cur_item, itemSince: t.item_since, answered: itemIds(c).filter((k) => attempted(c, k, d.answers[k])).length,
