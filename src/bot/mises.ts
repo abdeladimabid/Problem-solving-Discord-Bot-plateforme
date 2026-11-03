@@ -595,7 +595,7 @@ var HARNESS = function () {
   var fmt = function (v) { try { if (typeof v === "string") return v; if (v instanceof Element) return v.outerHTML.slice(0, 300); if (typeof v === "function") return "ƒ " + (v.name || "anonymous") + "()"; if (v === undefined) return "undefined"; var s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch (e) { return String(v); } };
   var LOG = [];
   ["log", "info", "warn", "error", "debug", "table"].forEach(function (k) { var o = console[k]; console[k] = function () { var a = Array.prototype.slice.call(arguments).map(fmt).join(" "); LOG.push(a); send({ type: "log", level: k === "debug" || k === "table" ? "log" : k, text: a }); try { o.apply(console, arguments); } catch (e) {} }; });
-  window.addEventListener("error", function (e) { send({ type: "log", level: "error", text: (e.message || "Erreur") + (e.lineno ? " (ligne " + e.lineno + ")" : "") }); });
+  window.addEventListener("error", function (e) { send({ type: "log", level: "error", text: e.message || "Erreur", line: e.lineno || 0 }); });
   window.addEventListener("unhandledrejection", function (e) { send({ type: "log", level: "error", text: "Uncaught (in promise) " + fmt(e.reason && e.reason.message || e.reason) }); });
   document.addEventListener("click", function (e) { var a = e.target && e.target.closest && e.target.closest("a[href]"); if (a && !/^#/.test(a.getAttribute("href") || "")) { e.preventDefault(); send({ type: "log", level: "info", text: "Lien « " + a.getAttribute("href") + " » : la navigation est désactivée dans l’aperçu." }); } }, true);
   document.addEventListener("submit", function (e) { e.preventDefault(); send({ type: "log", level: "info", text: "Formulaire envoyé (l’envoi est désactivé dans l’aperçu)." }); }, true);
@@ -627,23 +627,58 @@ var HARNESS = function () {
   });
   window.addEventListener("load", function () { wait().then(function () { send({ type: "ready" }); }); });
 };
+// The frame's page is ClassBot's helper, then the HTML file with the CSS and JS files put inside it: a line of that page
+// is not a line of their files. LINEMAP[runId] says, for each line of the page, which file and which line it is.
+var LINEMAP = {};
 function buildDoc(s, files, runId) {
   var html = s.files.filter(function (f) { return f.lang === "html"; })[0];
   var doc = html ? String(files[html.name] || "") : "";
   var css = s.files.filter(function (f) { return f.lang === "css"; }), js = s.files.filter(function (f) { return f.lang === "javascript"; });
   var safeJs = function (t) { return String(t || "").replace(/<\/script/gi, "<\\/script"); };
+  // each file put in the page is first a mark (\u0001n\u0001), replaced at the end while counting the lines
+  var blocks = [], mark = function (name, open, text, close) { blocks.push({ name: name, open: open, text: String(text || ""), close: close }); return "\u0001" + (blocks.length - 1) + "\u0001"; };
   css.forEach(function (f) {
     var re = new RegExp("<link[^>]*href=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>", "i");
-    if (re.test(doc)) doc = doc.replace(re, function () { return "<style>\n" + files[f.name] + "\n</style>"; });
-    else doc = /<\/head>/i.test(doc) ? doc.replace(/<\/head>/i, function () { return "<style>\n" + files[f.name] + "\n</style></head>"; }) : "<style>\n" + files[f.name] + "\n</style>\n" + doc;
+    var b = mark(f.name, "<style>\n", files[f.name], "\n</style>");
+    if (re.test(doc)) doc = doc.replace(re, function () { return b; });
+    else doc = /<\/head>/i.test(doc) ? doc.replace(/<\/head>/i, function () { return b + "</head>"; }) : b + doc;
   });
   js.forEach(function (f) {
     var re = new RegExp("<script[^>]*src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>\\s*<\/script>", "i");
-    if (re.test(doc)) doc = doc.replace(re, function () { return "<script>\n" + safeJs(files[f.name]) + "\n<\/script>"; });
-    else doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return "<script>\n" + safeJs(files[f.name]) + "\n<\/script></body>"; }) : doc + "\n<script>\n" + safeJs(files[f.name]) + "\n<\/script>";
+    var b = mark(f.name, "<script>\n", safeJs(files[f.name]), "\n<\/script>");
+    if (re.test(doc)) doc = doc.replace(re, function () { return b; });
+    else doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b;
   });
   var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
-  return '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><script>(' + HARNESS.toString().replace("__RUNID__", runId) + ")();</" + "script>" + doc;
+  var head = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><script>(' + HARNESS.toString().replace("__RUNID__", runId) + ")();</" + "script>";
+  // the page, line by line: [file, its line] (ClassBot's helper: null)
+  var map = [], out = head, lines = function (t) { return t.split("\n").length - 1; };
+  for (var k = 0; k <= lines(head); k++) map.push(null);
+  var htmlLine = 1, parts = doc.split(/\u0001(\d+)\u0001/);
+  for (var i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      // a piece of the HTML file: its lines go on from where the last piece stopped (the first line joins the current one)
+      var n = lines(parts[i]);
+      if (html) { map[map.length - 1] = map[map.length - 1] || [html.name, htmlLine]; for (var j = 1; j <= n; j++) map.push([html.name, htmlLine + j]); }
+      else for (var j2 = 1; j2 <= n; j2++) map.push(null);
+      htmlLine += n; out += parts[i];
+    } else {
+      var bl = blocks[Number(parts[i])], tl = lines(bl.text);
+      // « <style>\n » / « <script>\n »: the file starts on the next line
+      for (var o = 1; o <= lines(bl.open); o++) map.push(null);
+      map[map.length - 1] = [bl.name, 1];
+      for (var t = 1; t <= tl; t++) map.push([bl.name, 1 + t]);
+      for (var c = 1; c <= lines(bl.close); c++) map.push(null);
+      out += bl.open + bl.text + bl.close;
+    }
+  }
+  LINEMAP[runId] = map;
+  return out;
+}
+/** « (panier.js, ligne 3) » for a line of the frame's page; nothing when it's ClassBot's helper. */
+function whereLine(runId, line) {
+  var w = line > 0 && LINEMAP[runId] ? LINEMAP[runId][line - 1] : null;
+  return w ? " (" + w[0] + ", ligne " + w[1] + ")" : "";
 }
 function runWeb(s, files, visible) {
   return new Promise(function (resolve) {
@@ -656,6 +691,7 @@ function runWeb(s, files, visible) {
     var end = function (values) {
       if (finished) return; finished = true;
       window.removeEventListener("message", onMsg);
+      setTimeout(function () { delete LINEMAP[runId]; }, 5000);
       if (!host) fr.remove();
       if (visible) { CONSOLE[s.id] = logs.length ? logs : [{ level: "sys", text: "(Rien dans la console.)" }]; drawConsole(); }
       LASTERR[s.id] = logs.filter(function (l) { return l.level === "error"; }).map(function (l) { return l.text; }).join("\n");
@@ -663,7 +699,7 @@ function runWeb(s, files, visible) {
     };
     var onMsg = function (e) {
       if (e.source !== fr.contentWindow || !e.data || e.data.__mes !== runId) return;
-      if (e.data.type === "log") { logs.push({ level: e.data.level, text: String(e.data.text).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (e.data.type === "log") { logs.push({ level: e.data.level, text: (String(e.data.text) + (e.data.line ? whereLine(runId, Number(e.data.line)) : "")).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
       if (e.data.type === "ready") { if (probes.length) fr.contentWindow.postMessage({ __mes: runId, type: "probe", probes: probes.map(function (k) { return { id: k.id, probe: k.probe }; }) }, "*"); else end({}); }
       if (e.data.type === "probes") end(e.data.values);
     };
@@ -802,14 +838,24 @@ function timer() {
 }
 
 // ---------------------------------------------------------------- handing in
+// what « Envoyer ma copie » does, in the language they read the page in (the original French always)
+var FINISH_TR = {
+  ar: "⚠️ هذا الزر يُنهي الاختبار ويرسل ورقتك إلى المكوّن ليصحّحها. بعد ذلك لن تستطيع تعديل أي شيء. لا تضغط عليه إلا عندما تنتهي من كل شيء.",
+  en: "⚠️ This button ends the test and sends your paper to your teacher to be graded. After that you can't change anything. Only press it when you have finished everything."
+};
 function confirmFinish() {
   var missing = ORDER.filter(function (id) { return !changed(id); });
   var d = $("#dlg");
-  d.innerHTML = "<h2>Terminer et envoyer ?</h2>" + (missing.length ? '<p>Ces éléments n’ont pas de réponse :</p><ul>' + missing.map(function (id) { return "<li>" + esc(label(id)) + (sit(id) ? " · " + esc(sit(id).title) : "") + "</li>"; }).join("") + "</ul>" : "<p>Tu as répondu à tout. 👍</p>")
-    + '<p class="muted small">Après l’envoi, tu ne pourras plus modifier tes réponses.</p><div class="dlg-foot"><button class="btn" type="button" id="no">Revenir</button><button class="btn good" type="button" id="yes">Envoyer ma copie</button></div>';
+  d.innerHTML = "<h2>Envoyer ta copie au formateur ?</h2>"
+    + '<div style="border:1px solid #f59e0b;background:#fffbeb;color:#78350f;border-radius:10px;padding:10px 12px;margin:0 0 12px"><b>⚠️ Ce bouton arrête la mise en situation</b> et envoie ta copie à ton formateur pour la correction. Après l’envoi, tu ne pourras plus rien modifier.<br><b>Appuie seulement quand tu as tout terminé.</b>'
+    + (FINISH_TR[TRTO] ? '<div dir="' + (TRTO === "ar" ? "rtl" : "ltr") + '" style="margin-top:8px;padding-top:8px;border-top:1px dashed #f59e0b">' + esc(FINISH_TR[TRTO]) + "</div>" : "") + "</div>"
+    + (missing.length ? '<p><b>' + missing.length + (missing.length > 1 ? " éléments n’ont" : " élément n’a") + ' pas encore de réponse :</b></p><ul>' + missing.map(function (id) { return "<li>" + esc(label(id)) + (sit(id) ? " · " + esc(sit(id).title) : "") + "</li>"; }).join("") + "</ul>" : "<p>Tu as répondu à tout. 👍</p>")
+    + '<label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;cursor:pointer"><input type="checkbox" id="iamdone" style="margin-top:3px"> <span><b>J’ai terminé</b> et je veux envoyer ma copie maintenant.</span></label>'
+    + '<div class="dlg-foot"><button class="btn" type="button" id="no">Revenir à mon travail</button><button class="btn good" type="button" id="yes" disabled>Envoyer ma copie</button></div>';
   d.showModal();
+  $("#iamdone", d).onchange = function () { $("#yes", d).disabled = !this.checked; };
   $("#no", d).onclick = function () { d.close(); };
-  $("#yes", d).onclick = function () { d.close(); finish(false); };
+  $("#yes", d).onclick = function () { if (!$("#iamdone", d).checked) return; d.close(); finish(false); };
   $("#no", d).focus();
 }
 function finish(timeUp) {
