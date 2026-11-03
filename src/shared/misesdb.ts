@@ -908,8 +908,10 @@ export async function setGrade(env: Env, g: GuildRow, id: number, b: any) {
   const item = itemOf(contentOf(m), b.item);
   if (!item) throw new MiseError("Unknown item.");
   const grades = parse<Record<string, any>>(t.grades, {});
-  if (b.score === null || b.score === "") delete grades[item];
-  else grades[item] = { score: Math.max(0, Math.min(100, Math.round(Number(b.score) || 0))), comment: str(b.comment, 600), teacher: true };
+  const note = str(b.comment, 600);
+  // no score: back to the automatic one (a comment alone stays, for the learner)
+  if (b.score === null || b.score === "") { if (note) grades[item] = { comment: note }; else delete grades[item]; }
+  else grades[item] = { score: Math.max(0, Math.min(100, Math.round(Number(b.score) || 0))), comment: note, teacher: true };
   await run(env, "UPDATE mise_takers SET grades = ? WHERE id = ?", JSON.stringify(grades), t.id);
   await refreshScore(env, t.id);
 }
@@ -929,10 +931,20 @@ export async function sendResults(env: Env, g: GuildRow, id: number, b: any) {
     const sc = scoreMise(c, dataOf(t));
     if (sc.toGrade) { skipped++; continue; }
     const icon = (v: number | null, done: boolean) => (!done ? "⚪" : (v ?? 0) >= 85 ? "✅" : (v ?? 0) > 0 ? "🟡" : "❌");
-    const lines = [...c.situations.map((s, i) => `${icon(sc.items[s.id].score, sc.items[s.id].attempted)} **Situation ${i + 1}** · ${s.title} — ${sc.items[s.id].score ?? 0} %`),
-      ...c.qcm.map((q, i) => `${icon(sc.items[q.id].score, sc.items[q.id].attempted)} **QCM ${i + 1}** · ${q.notion}`)];
+    const d = dataOf(t);
+    // each item with what was wrong and what to study again: the teacher's (or Claude's) comment; else what we know
+    const note = (id: string, fallback: string) => str(d.grades[id]?.comment, 400) || fallback;
+    const fields = [
+      ...c.situations.map((s, i) => { const it = sc.items[s.id]; return { name: `${icon(it.score, it.attempted)} Situation ${i + 1} · ${s.title} — ${it.score ?? 0} %`.slice(0, 250),
+        value: note(s.id, !it.attempted ? `Pas faite. À travailler : ${s.notions.join(", ") || s.title}.` : (it.score ?? 0) >= 85 ? "Réussie." : `À revoir : ${s.notions.join(", ") || s.title}.`).slice(0, 1000) }; }),
+      ...c.qcm.map((q, i) => { const it = sc.items[q.id], ch = d.answers[q.id]?.choice; return { name: `${icon(it.score, it.attempted)} QCM ${i + 1} · ${q.notion}`.slice(0, 250),
+        value: note(q.id, ch === q.correct ? "Bonne réponse." : `${ch == null ? "Pas de réponse." : "Mauvaise réponse."} La bonne réponse : ${q.choices[q.correct]}. À revoir : ${q.notion}.`).slice(0, 1000) }; }),
+    ].slice(0, 25);
     const comment = str(t.comment, 1000) || defaultComment(sc.total, weakNotions(c, sc));
-    const ok = await dm(env, t.discord_id, { embeds: [{ title: `🧪 ${m.title} : ${sc.total} %`, color: sc.total >= 60 ? 0x16a34a : 0xd97706, description: [comment, "", ...lines].join("\n").slice(0, 4000) }] });
+    // an embed holds 6000 characters at most: the item comments are cut to fit
+    let room = 5600 - comment.length - m.title.length;
+    for (const f of fields) { const n = f.name.length + f.value.length; if (n > room) f.value = f.value.slice(0, Math.max(20, room - f.name.length - 1)) + "…"; room -= f.name.length + f.value.length; }
+    const ok = await dm(env, t.discord_id, { embeds: [{ title: `🧪 ${m.title} : ${sc.total} %`.slice(0, 250), color: sc.total >= 60 ? 0x16a34a : 0xd97706, description: comment.slice(0, 4000), fields: fields.filter((f) => f.value) }] });
     if (ok) { sent++; await run(env, "UPDATE mise_takers SET sent_at = ? WHERE id = ?", now(), t.id); }
   }
   return { sent, skipped };
@@ -967,8 +979,11 @@ const GRADE_PROMPT = [
   "- d'après ce que la consigne demande et le résultat attendu ; une autre façon de faire qui marche est juste (la solution modèle n'est qu'un exemple) ;",
   "- les vérifications automatiques (auto_checks) sont des indices, pas la note : vérifie le code toi-même ;",
   "- une étape faite en partie vaut une partie des points ; un code vide ou seulement le code de départ vaut 0 ;",
-  "- le commentaire (1 à 3 phrases, en français, en tutoyant l'apprenant) dit ce qui est juste, ce qui manque ou est faux et pourquoi, et une piste ; ne donne pas la solution complète.",
-  "Les QCM sont déjà corrigés automatiquement : ne les note pas.",
+  "- le commentaire (1 à 3 phrases, en français, en tutoyant l'apprenant) dit ce qui est juste, ce qui manque ou est faux et pourquoi (la ligne ou l'instruction en cause), et la notion précise à revoir ; ne donne pas la solution complète.",
+  "Écris aussi un commentaire SANS note (pas de « score ») pour :",
+  "- chaque mise en situation non faite (attempted: false) : ce qu'elle demandait et la notion à étudier ;",
+  "- chaque QCM (ils sont déjà notés automatiquement) : si la réponse est juste, une phrase qui confirme pourquoi ; sinon, pourquoi son choix est faux, ce qui est juste, et la notion à revoir.",
+  "Chaque apprenant doit donc avoir un commentaire pour CHAQUE item.",
   "Puis, pour chaque apprenant, un commentaire général (2 à 4 phrases, tutoiement) : ses points forts, ce qu'il doit retravailler.",
   "Garde exactement les identifiants donnés (« learner » et « item »).",
   "Réponds UNIQUEMENT avec un JSON au format de « output_format », sans texte autour (je l'importerai dans ClassBot).",
@@ -1008,7 +1023,7 @@ export async function answersExport(env: Env, g: GuildRow, id: number) {
     instructions: GRADE_PROMPT,
     output_format: {
       format: GRADE_FORMAT,
-      grades: [{ learner: "<learner>", item: "<item d'une mise en situation>", score: "<0 à 100>", comment: "<1 à 3 phrases>" }],
+      grades: [{ learner: "<learner>", item: "<item d'une mise en situation faite>", score: "<0 à 100>", comment: "<1 à 3 phrases>" }, { learner: "<learner>", item: "<item d'un QCM ou d'une situation non faite>", comment: "<1 à 3 phrases, sans score>" }],
       comments: [{ learner: "<learner>", comment: "<2 à 4 phrases>" }],
     },
     items, learners,
@@ -1033,9 +1048,13 @@ export async function importGrades(env: Env, g: GuildRow, id: number, text: unkn
     const sc = Number(x?.score);
     if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
     if (!ids.has(item)) { skipped.push(`unknown item « ${item.slice(0, 20)} »`); continue; }
-    if (!Number.isFinite(sc)) { skipped.push(`no score for ${item}`); continue; }
+    const note = str(x?.comment, 600);
+    const noScore = x?.score === null || x?.score === undefined || x?.score === "";
+    if (noScore && !note) { skipped.push(`nothing for ${item}`); continue; }
+    if (!noScore && !Number.isFinite(sc)) { skipped.push(`no score for ${item}`); continue; }
     const gr = byTaker.get(t.id) ?? parse<Record<string, any>>(t.grades, {});
-    gr[item] = { score: Math.max(0, Math.min(100, Math.round(sc))), comment: str(x?.comment, 600), teacher: true, by: "claude" };
+    // no score (a QCM, an item not done): only the comment; the score stays (automatic, or the one already given)
+    gr[item] = noScore ? { ...(gr[item] || {}), comment: note } : { score: Math.max(0, Math.min(100, Math.round(sc))), comment: note, teacher: true, by: "claude" };
     byTaker.set(t.id, gr); grades++;
   }
   for (const [tid, gr] of byTaker) { await run(env, "UPDATE mise_takers SET grades = ? WHERE id = ?", JSON.stringify(gr), tid); await refreshScore(env, tid); }

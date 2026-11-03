@@ -554,9 +554,10 @@ function mesGradeDialog(d, item, after) {
   openDialog(`${mesItemLabel(c, item)} · ${d.name || d.discord_id}`, `
     <p class="small muted" style="margin-top:0">Automatic: <b>${it.auto == null ? "no check (to grade)" : it.auto + "%"}</b>${it.attempted ? "" : " · not attempted"}</p>
     <div class="field-row"><div><label for="mg-s">Score (0–100)</label><input type="number" id="mg-s" min="0" max="100" value="${g.teacher ? g.score : it.auto ?? ""}"></div></div>
-    <label for="mg-c">Comment <span class="muted">(for you)</span></label><textarea id="mg-c" rows="3" style="width:100%">${esc(g.comment || "")}</textarea>`,
-  [...(g.teacher ? [{ label: "Back to automatic", action: async () => { await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: null } }); dlg.close(); after(); } }] : []),
-    { label: "Save", primary: true, action: async () => { const v = $("#mg-s").value; if (v === "") throw new Error("Give a score from 0 to 100."); await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: Number(v), comment: $("#mg-c").value } }); dlg.close(); toast("Grade saved"); after(); } }]);
+    <label for="mg-c">Comment <span class="muted">(sent to the learner with the results: what was wrong, what to study again)</span></label><textarea id="mg-c" rows="3" style="width:100%">${esc(g.comment || "")}</textarea>
+    <p class="small muted" style="margin:4px 0 0">Leave the score empty to keep the automatic one (the comment is kept).</p>`,
+  [...(g.teacher ? [{ label: "Back to automatic", action: async () => { await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: null, comment: $("#mg-c").value.trim() } }); dlg.close(); after(); } }] : []),
+    { label: "Save", primary: true, action: async () => { const v = $("#mg-s").value, cm = $("#mg-c").value.trim(); if (v === "" && !cm) throw new Error("Give a score from 0 to 100, or a comment."); await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: v === "" ? null : Number(v), comment: cm } }); dlg.close(); toast("Saved"); after(); } }]);
 }
 
 // ---------------------------------------------------------------- one learner: everything they did
@@ -583,11 +584,12 @@ async function mesLearner(takerId) {
       ${ck ? `<ul class="small mes-ck">${ck.results.map((r) => `<li class="${r.ok ? "ok" : "ko"}">${r.ok ? "✓" : "✗"} ${esc(r.label)}</li>`).join("")}</ul>` : ""}
       <p class="small" style="margin:8px 0 4px"><b>AI categories</b> ${ai.length ? "" : `<span class="muted">· none asked</span>`}</p>
       ${ai.length ? `<ul class="small">${ai.map((x) => `<li><span class="muted">${fmtDateTime(x.at)}${x.submit ? " · at hand-in" : ""}</span> ${x.categories.map((k) => `<span class="tag ${k.id === "none" ? "easy" : "medium"}">${esc(k.label)}</span>`).join(" ")}</li>`).join("")}</ul>` : ""}
+      ${d.grades[s.id]?.comment ? `<p class="small mes-note">💬 ${esc(d.grades[s.id].comment)}</p>` : ""}
       <div class="toolbar" style="margin:8px 0 0">${visits.length ? `<button class="btn small" data-rp="${s.id}">⏯ Typing replay (${visits.length} visit${visits.length > 1 ? "s" : ""})</button>` : `<span class="small muted">No typing record.</span>`}<button class="btn small" data-gr="${s.id}">✎ Grade</button></div></details>`;
   };
   const qcmHtml = (q, i) => {
     const a = d.answers[q.id], it = d.items[q.id], pick = a && a.choice != null ? a.choice : null;
-    return `<li><b>Q${i + 1}</b> ${esc(q.question.slice(0, 120))} — ${pick == null ? `<span class="lvl none">no answer</span>` : `${"ABCD"[pick]}. ${esc(q.choices[pick])} ${pick === q.correct ? "<span class='tag easy'>right</span>" : `<span class='tag hard'>wrong</span> <span class="muted small">(right: ${"ABCD"[q.correct]})</span>`}`}${it.teacher ? ` ✎ ${it.score}%` : ""} <button class="btn small" data-gr="${q.id}">✎</button></li>`;
+    return `<li><b>Q${i + 1}</b> ${esc(q.question.slice(0, 120))} — ${pick == null ? `<span class="lvl none">no answer</span>` : `${"ABCD"[pick]}. ${esc(q.choices[pick])} ${pick === q.correct ? "<span class='tag easy'>right</span>" : `<span class='tag hard'>wrong</span> <span class="muted small">(right: ${"ABCD"[q.correct]})</span>`}`}${it.teacher ? ` ✎ ${it.score}%` : ""}${d.grades[q.id]?.comment ? `<div class="small mes-note">💬 ${esc(d.grades[q.id].comment)}</div>` : ""} <button class="btn small" data-gr="${q.id}">✎</button></li>`;
   };
   openDialog(`${d.name || d.discord_id} · ${m.title}`, `
     <div class="figures cs-figs mes-figs">

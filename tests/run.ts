@@ -7759,6 +7759,23 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
       `📥 Claude's grades imported (even wrapped in text): your grade of the item, their comment; unknown learners and items skipped, and said (${gi.status} ${JSON.stringify(gi.data.skipped)})`);
     check(d7.score >= before, "…the score follows");
     check((await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: "pas du json" })).status === 400, "…not Claude's JSON: refused, with what to paste");
+    // a comment for every item (QCM and items not done: no score), then the results by DM with each one
+    const q2id = st7.paper.qcm[1].id, s2 = st7.paper.situations[1].id;
+    const autoQ = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data.items[q1id].score;
+    const gc = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: JSON.stringify({ format: "classbot-mise-grades@1", grades: [
+      { learner: al.learner, item: q1id, comment: "Tu as choisi « change le style » : textContent change le texte. À revoir : textContent." },
+      { learner: al.learner, item: s2, comment: "Pas faite : revois addEventListener." }] }) });
+    const d8 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    check(gc.data.grades === 2 && d8.grades[q1id].comment.includes("textContent") && !d8.grades[q1id].teacher && d8.items[q1id].score === autoQ && d8.grades[s1].score === 100,
+      "a comment without a score (a QCM, an item not done): kept, the automatic score stays, the other grades too");
+    await api("PUT", `/api/mises/${M7}/grade`, { g: G, taker: Number(al.learner), item: s2, score: 0, comment: "Pas faite : revois addEventListener." });
+    const c9 = discordCalls.length;
+    const sr = await api("POST", `/api/mises/${M7}/results`, { g: G });
+    const dmMsg = discordCalls.slice(c9).find((x) => x.body?.embeds?.[0]?.fields);
+    const fl = dmMsg?.body.embeds[0].fields || [];
+    check(sr.data.sent >= 1 && fl.length === 10 && fl[0].value === "Bien sélectionné et modifié." && fl.some((f: any) => /textContent change le texte/.test(f.value)) && fl.some((f: any) => /Pas faite : revois addEventListener/.test(f.value))
+      && fl.some((f: any) => /La bonne réponse :/.test(f.value)) && dmMsg.body.embeds[0].description.includes("Bon travail sur le DOM"),
+      `the results by DM: each question with what was wrong and what to study again (its comment, else the right answer and the notion) (${JSON.stringify(fl.map((f: any) => f.value)).slice(0, 300)})`);
     await api("DELETE", `/api/mises/${M7}?g=${G}`);
   }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
