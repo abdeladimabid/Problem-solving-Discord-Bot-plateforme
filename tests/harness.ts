@@ -443,7 +443,7 @@ export const ai = {
   searchCalls: [] as string[],   // the hosts the web search asked
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups" | "plan",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
   miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
   planSum: "Écrire une page en Flexbox et répondre à une question sur Git.", planSumDown: false,   // the sheet's « Actions »: what a plan d'action asks, summed up
