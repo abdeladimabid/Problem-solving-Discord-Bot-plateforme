@@ -435,7 +435,7 @@ export const ai = {
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
-  miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
+  miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
 };
 
@@ -531,7 +531,7 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       // Mises en situation, "Vérifier mon code": categories, plus what must never reach the learner (a line, a fix, unknown ids)
-      if (sys.includes("qui relit une évaluation")) { const w = ai.qcmWeak.shift(); const e = ai.sitEasy.shift(); return { response: JSON.stringify({ weak: w ?? [], level: e ?? [] }) }; }
+      if (sys.includes("qui relit une évaluation")) { const w = ai.qcmWeak.shift(); const e = ai.sitEasy.shift(); const u = ai.qcmUnrelated.shift(); return { response: JSON.stringify({ weak: w ?? [], unrelated: u ?? [], level: e ?? [] }) }; }
       // the QCM's answers judged without the key: by default the first choice of each is the only right one
       if (sys.includes("expert en développement web très rigoureux")) { const qs = JSON.parse(user); const j = ai.qcmJudge.shift(); return { response: JSON.stringify({ q: qs.map((x: any) => ({ n: x.n, right: j?.[x.n] ?? [0] })) }) }; }
       if (sys.includes("Tu réponds UNIQUEMENT avec un objet JSON valide, complet")) return { response: user.includes("Réécris UNIQUEMENT ces éléments") ? ai.miseItems : user.includes("TA PROPOSITION PRÉCÉDENTE") ? ai.miseJson2 || ai.miseJson : ai.miseJson };

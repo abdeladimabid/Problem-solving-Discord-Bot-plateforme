@@ -7483,6 +7483,15 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.users.length = 0;
   const gen5 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
   check(gen5.status === 200 && !gen5.data.problems.length && JSON.parse(gen5.data.json).qcm[0].choices[0] === "null" && ai.users.some((u) => u.includes("QCM 1") && u.includes("PLUSIEURS choix sont justes (A, C)")), "a QCM with two right answers (checked twice, without the key): written again until exactly one is right");
+  // a QCM that isn't about the code of the situations: written again on it, with the situations' code to work from
+  ai.qcmUnrelated = [[{ n: 3, why: "une question de culture générale sur HTTP" }], []];
+  ai.miseItems = JSON.stringify({ items: { q3: { ...file.qcm[2], question: "Dans la situation 3, que vaut document.querySelector('#titre') si l'id est mal écrit ?", choices: ["null", "undefined", "une erreur", "une liste vide"], correct: 0 } } });
+  ai.users.length = 0;
+  const gen7 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const rq = ai.users.find((u) => u.includes("ne porte pas sur le code des situations")) ?? "";
+  check(gen7.status === 200 && JSON.parse(gen7.data.json).qcm[2].question.startsWith("Dans la situation 3") && rq.includes("LES SITUATIONS DE CETTE MISE EN SITUATION") && rq.includes("solution :"), "a QCM not about the situations' code: written again on it (the AI gets the situations and their code)");
+  check(ai.users.some((u) => u.includes("LE CODE DES MISES EN SITUATION") && u.includes("JAMAIS la solution complète")), "…and the prompt asks for QCM on the code of the situations, never their full solution");
+  ai.qcmUnrelated = [];
   // still wrong after the rounds: shown, and « Fix » goes on from that JSON, rewriting only what's wrong
   ai.qcmJudge = Array.from({ length: 40 }, () => ({ 2: [1, 3] }));
   const gen6 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
@@ -7544,6 +7553,17 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   check(again.data.error === "locked" && JSON.parse(q1("SELECT events FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).events).filter((e: any) => e[1] === "lock").at(-1)[4] === "reload", "opening the page again while working (a reload) stops it too");
   await api("POST", `/api/mises/${mid}/close`, { g: G });
   check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.alice.id).status === "submitted", "closed: a stopped paper is handed in like the others");
+  // linked to the brief: step 2 of its validation, after the assessment (optional)
+  const bv = (await api("GET", `/api/briefs/${bid}?g=${G}`)).data;
+  check(bv.mises?.length === 1 && bv.mises[0].id === mid && bv.mises[0].done === 1, "the brief's page lists the mise en situation linked to it, and who handed it in");
+  const { briefAssessments: BA, lacunesOf: LO } = await import("../src/shared/review/debrief.ts");
+  const ba = await BA(env, bid, `u:${U.alice.id}`);
+  const bm = ba.find((x: any) => x.kind === "mise");
+  check(!!bm && bm.id === mid && bm.score != null && bm.members?.[U.alice.id] && Array.isArray(bm.scope) && bm.scope.length > 0, "the debrief reads it like an assessment: the score, each learner's notions, what it's about " + JSON.stringify(bm).slice(0, 200));
+  check(Object.keys(bm.comps).length > 0 && ba.indexOf(bm) === ba.length - 1, "…the competencies it validated or not count, after the assessments");
+  check((await LO(env, bid, `u:${U.alice.id}`, null)).assess.some((x: string) => x.startsWith("Mise en situation")), "…what they missed in it goes to the oral questions");
+  await api("PUT", `/api/mises/${mid}`, { g: G, settings: { brief: null } });
+  check(!(await BA(env, bid, `u:${U.alice.id}`)).some((x: any) => x.kind === "mise"), "link removed: the drafts don't use it anymore");
   // without the full screen rule: leaving is only written down
   const sv2 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
   await api("POST", `/api/mises/${sv2.data.id}/launch`, { g: G, students: [U.bob.id], lockScreen: false, send: false });

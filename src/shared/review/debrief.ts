@@ -31,6 +31,7 @@ import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
 import { aiLevel, assessSignal, codeSignals, pushSignals } from "./aicheck.ts";
 import type { AiCheck } from "./aicheck.ts";
+import { briefMises, miseLacunes } from "./misebrief.ts";
 
 const AI_DIFF_BUDGET = 12000, AI_DIFF_BUDGET_WITH_BRIEF = 5000, AI_FILES_BUDGET = 9000;
 
@@ -178,13 +179,15 @@ async function currentNames(env: Env, gid: string, who: string, rec: any) {
  */
 export async function briefAssessments(env: Env, briefId: number, who: string, rec: any = null) {
   const list = await all<{ id: number; title: string; questions: string | null }>(env, "SELECT id, title, questions FROM assessments WHERE brief_id = ? ORDER BY id", briefId).catch(() => []);
-  if (!list.length) return [];
   let ids: string[] = who.startsWith("u:") ? [who.slice(2)] : (rec?.squad?.members ?? []).map((m: any) => String(m.gid));
   if (!ids.length && who.startsWith("s:")) {
     const b = await one<{ squads: string | null }>(env, "SELECT squads FROM briefs WHERE id = ?", briefId);
     ids = (cleanSquads(b?.squads || "[]").find((x) => `s:${x.id}` === who)?.members ?? []).map(String);
   }
   if (!ids.length) return [];
+  // step 2 of the validation (optional): the mises en situation linked to the brief, after the assessments
+  const mises: any[] = await briefMises(env, briefId, ids).catch(() => []);
+  if (!list.length) return mises;
   const out: { id: number; title: string; score: number | null; done: number; of: number; comps: Record<string, { ok: boolean; level: number | null; note: string | null }>; gaps?: string[]; members?: Record<string, MemberAssessFacts>; scope?: string[] }[] = [];
   for (const a of list) {
     const takers = await all<{ discord_id: string; score: number | null; status: string; grades: string | null; answers: string | null; summary: string | null }>(env,
@@ -213,7 +216,7 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     });
     out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(qs, papers), members, scope });
   }
-  return out;
+  return [...out, ...mises];
 }
 /** One learner's assessment, for their own comment. */
 export interface MemberAssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
@@ -736,6 +739,7 @@ export async function lacunesOf(env: Env, briefId: number, who: string, rec: any
       }
     }
   }
+  if (ids.length) assess.push(...(await miseLacunes(env, briefId, ids).catch(() => [])));
   const brief: string[] = [];
   if (rec?.result) {
     const st = reviewStates(rec);

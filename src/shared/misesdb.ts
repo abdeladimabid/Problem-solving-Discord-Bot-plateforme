@@ -244,14 +244,14 @@ async function reviewQuality(env: Env, c: MiseContent): Promise<{ where: string;
   try {
     const raw = await chat(env, [
       { role: "system", content: `Tu es un formateur exigeant qui relit une évaluation de développement web avant de la donner.
-QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Règles :
+QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Chaque QCM porte-t-il bien sur le code d'une des situations (ses méthodes, ses concepts, ses noms) ? Montre-t-il la solution complète d'une situation (interdit) ? Règles :
 ${QCM_RULES.join("\n")}
 SITUATIONS : chacune est-elle à sa place dans la progression (la 1 accessible, puis une marche à la fois ; la 4 et la 5 combinent DOM + tableaux + conditions + boucles) ? Règles :
 ${SIT_RULES.join("\n")}
-Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "level": [{"n": 1, "fix": "easier" | "harder" | "combine", "why": "…"}]} ("weak" = QCM devinables à refaire ; "level" = situations pas à leur place : trop difficile → easier, trop facile → harder, la 4 ou la 5 ne combine pas le DOM, les tableaux, les conditions et les boucles → combine ; listes vides si tout est bon).` },
+Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "unrelated": [{"n": 3, "why": "…"}], "level": [{"n": 1, "fix": "easier" | "harder" | "combine", "why": "…"}]} ("weak" = QCM devinables à refaire ; "unrelated" = QCM qui ne portent pas sur le code d'une situation, ou qui en montrent la solution complète ; "level" = situations pas à leur place : trop difficile → easier, trop facile → harder, la 4 ou la 5 ne combine pas le DOM, les tableaux, les conditions et les boucles → combine ; listes vides si tout est bon).` },
       { role: "user", content: JSON.stringify({
         qcm: c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] })),
-        situations: c.situations.map((y, i) => ({ n: i + 1, difficulty: y.difficulty, context: y.context, questions: y.questions, notions: y.notions, checks: y.checks.map((k) => k.label) })),
+        situations: c.situations.map((y, i) => ({ n: i + 1, difficulty: y.difficulty, context: y.context, questions: y.questions, notions: y.notions, checks: y.checks.map((k) => k.label), solution: y.solution.map((f) => f.content).join("\n").slice(0, 1500) })),
       }) },
     ], { maxTokens: 2500, temperature: 0.1, timeoutMs: 90000, json: true });
     const j = readAi(raw);
@@ -261,7 +261,9 @@ Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "level": [
       harder: "TROP FACILE pour sa place : ajoute une notion ou un cas limite, garde le guidage par étapes ; mets à jour la solution et les vérifications.",
       combine: "doit COMBINER ce qui a été vu dans le sprint : le DOM (sélectionner, créer, modifier des éléments, événements) + un TABLEAU à parcourir / filtrer / modifier + des CONDITIONS + une BOUCLE, guidé par étapes ; mets à jour la solution et les vérifications.",
     };
+    const weakN = new Set(pick(j?.weak, c.qcm.length).map((y: any) => Number(y.n)));
     return [
+      ...pick(j?.unrelated, c.qcm.length).filter((y: any) => !weakN.has(Number(y.n))).map((y: any) => ({ where: `QCM ${Number(y.n)}`, msg: `ne porte pas sur le code des situations : ${String(y.why ?? "").slice(0, 200)}. Réécris-le sur le code d'une situation (de préférence la situation ${Number(y.n)}) : ses méthodes, ses concepts, les mêmes noms ; un extrait ou une variante, jamais la solution complète ; 3 pièges qui ressemblent à la bonne réponse, UNE SEULE réponse juste.` })),
       ...pick(j?.weak, c.qcm.length).map((y: any) => ({ where: `QCM ${Number(y.n)}`, msg: `trop facile à deviner : ${String(y.why ?? "").slice(0, 200)}. Garde la notion ; réécris la question et les 4 choix : 3 pièges qui ressemblent à la bonne réponse (même forme, un détail exact change), UNE SEULE réponse juste.` })),
       ...pick(j?.level, c.situations.length).map((y: any) => ({ where: `situation ${Number(y.n)}`, msg: `${String(y.why ?? "").slice(0, 200)}. ${FIX[y.fix] ?? FIX.harder}` })),
     ];
@@ -305,7 +307,11 @@ async function repairMise(data: any, problems: { where: string; msg: string }[],
     if (o.fresh?.(where)) return `- ${where} (clé "${kind === "QCM" ? "q" : "s"}${n}") : les corrections précédentes n'ont pas suffi. Écris un ${kind === "QCM" ? "QCM" : "exercice"} ENTIÈREMENT NOUVEAU à cette place (même notion, même difficulté), en évitant : ${msgs.join(" | ")}`;
     return `- ${where} (clé "${kind === "QCM" ? "q" : "s"}${n}") :\n  problèmes : ${msgs.join(" | ")}\n  actuel : ${JSON.stringify(cur ?? {}).slice(0, 9000)}`;
   });
-  const d = o.read(await o.ask(`\n\nDANS TA PROPOSITION, CES ÉLÉMENTS NE RESPECTENT PAS LES EXIGENCES. Réécris UNIQUEMENT ces éléments, entièrement, en réglant chaque problème (garde le même thème, la même difficulté et la même notion quand c'est possible ; si une notion est hors périmètre, remplace-la par une notion du périmètre) :\n${list.join("\n")}\n${scope}\nRéponds UNIQUEMENT avec ce JSON : {"items": {"s5": { …la mise en situation complète… }, "q5": { …le QCM complet… }}}`).catch(() => ""));
+  // a QCM is about the code of the situations: they come with it (their task and their solution, for the AI only)
+  const sits = [...items.keys()].some((k) => k.startsWith("QCM")) && Array.isArray(out.situations)
+    ? `\nLES SITUATIONS DE CETTE MISE EN SITUATION (les QCM portent sur leur code ; ne recopie jamais une solution complète dans un QCM) :\n${out.situations.map((y: any, i: number) => `- situation ${i + 1} « ${String(y?.title ?? "")} » : ${(Array.isArray(y?.questions) ? y.questions : []).join(" ")}\n  solution : ${(Array.isArray(y?.solution) ? y.solution : []).map((f: any) => String(f?.content ?? "")).join("\n").slice(0, 1200)}`).join("\n")}`
+    : "";
+  const d = o.read(await o.ask(`\n\nDANS TA PROPOSITION, CES ÉLÉMENTS NE RESPECTENT PAS LES EXIGENCES. Réécris UNIQUEMENT ces éléments, entièrement, en réglant chaque problème (garde le même thème, la même difficulté et la même notion quand c'est possible ; si une notion est hors périmètre, remplace-la par une notion du périmètre) :\n${list.join("\n")}${sits}\n${scope}\nRéponds UNIQUEMENT avec ce JSON : {"items": {"s5": { …la mise en situation complète… }, "q5": { …le QCM complet… }}}`).catch(() => ""));
   const got = d?.items && typeof d.items === "object" ? d.items : null;
   if (!got) return null;
   for (const [k, v] of Object.entries(got)) {

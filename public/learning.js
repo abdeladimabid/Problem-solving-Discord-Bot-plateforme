@@ -726,8 +726,16 @@ function debriefToolsHtml() {
         <span class="dbt-asact"><button class="btn small" data-asmove="${a.id}" title="Link it to another brief">Change the brief</button><button class="btn small" data-asunlink="${a.id}" title="This brief's draft debriefs will use the project only">Remove the link</button></span></div>`).join("")
     : `<div class="dbt-none"><span>No assessment linked. Link one and it counts in <b>every</b> student's debrief.</span>
         <div class="dbt-link"><select id="dbt-sel" aria-label="Assessment to link"><option value="">Loading…</option></select><button class="btn small" id="dbt-link">Link to this brief</button><button class="btn small" id="dbt-ai">✨ Generate one</button></div></div>`;
-  return `<section class="panel dbt"><div class="dbt-col"><span class="dbt-h">Assessment of the brief</span>${asHtml}
+  // step 2 (optional): the mises en situation of the brief
+  const ms = B.mises || [];
+  const msHtml = ms.length
+    ? ms.map((m) => `<div class="dbt-asrow"><a class="dbt-as" href="#/mise/${m.id}"><b>${esc(m.title)}</b><span>${m.takers ? `${m.done}/${m.takers} handed in` : "not launched yet: open it to launch it"}</span></a>
+        <span class="dbt-asact"><button class="btn small" data-msunlink="${m.id}" title="This brief's draft debriefs won't use it anymore">Remove the link</button></span></div>`).join("")
+    : `<div class="dbt-none"><span>Optional: a mise en situation linked here counts in every student's debrief, after the assessment.</span>
+        <div class="dbt-link"><select id="dbt-msel" aria-label="Mise en situation to link"><option value="">Loading…</option></select><button class="btn small" id="dbt-mlink">Link to this brief</button><button class="btn small" id="dbt-mnew">✨ Make one for this brief</button></div></div>`;
+  return `<section class="panel dbt"><div class="dbt-col"><span class="dbt-h">1 · Assessment of the brief</span>${asHtml}
       ${list.length ? `<p class="small muted" style="margin:6px 0 0">Linked once for the whole class: each debrief reads each student's own result. Students must be invited to it (Assessment → Invite).</p>` : ""}</div>
+    <div class="dbt-col"><span class="dbt-h">2 · Mise en situation <span class="muted">(optional)</span></span>${msHtml}</div>
     <div class="dbt-col dbt-run"><span class="dbt-h">Debriefs</span>
       <p class="small" style="margin:0 0 8px">${waiting ? `<b>${waiting}</b> ${B.kind === "squad" ? "squad(s)" : "student(s)"} handed in and not analyzed yet.` : debriefQueue(true).length ? "Every hand-in is analyzed." : all ? "Nothing handed in yet: Analyze all can use the repos they pushed to during the brief." : "Every debrief is finalized."}</p>
       <button class="btn ${waiting ? "primary" : ""}" id="dbt-all" ${all ? "" : "disabled"}>🔍 Analyze all…</button></div></section>`;
@@ -801,6 +809,26 @@ function wireDebriefTools(root) {
   $$("[data-asunlink]", root).forEach((b) => b.onclick = () => busy(b, async () => {
     const briefs = (await api("/briefs")).items || [];
     await briefLinkFlow(b.dataset.asunlink, null, { briefs, onDone: async () => { BR.B = await api(`/briefs/${id}`); renderBrief(); } });
+  }));
+  // step 2: link a mise en situation to this brief, or make one for it (the new one is linked when it's saved)
+  const reload = async () => { BR.B = await api(`/briefs/${id}`); renderBrief(); };
+  if ($("#dbt-msel", root)) {
+    api("/mises").then((r) => {
+      const sel = $("#dbt-msel", root); if (!sel) return;
+      const list = (r.items || []).filter((m) => String(m.settings?.brief?.id || "") !== String(id));
+      sel.innerHTML = list.length ? `<option value="">Choose a mise en situation…</option>` + list.map((m) => `<option value="${m.id}">${esc(m.title)}${m.settings?.brief ? ` (linked to « ${esc(m.settings.brief.title)} »)` : ""}</option>`).join("") : `<option value="">No mise en situation yet</option>`;
+    }).catch(() => {});
+    $("#dbt-mlink", root).onclick = (e) => busy(e.currentTarget, async () => {
+      const v = $("#dbt-msel", root).value;
+      if (!v) throw new Error("Choose the mise en situation to link");
+      await api(`/mises/${v}`, { method: "PUT", body: { settings: { brief: { id: Number(id), title: B.brief.data.title } } } });
+      toast("Linked: the draft debriefs use its results"); await reload();
+    });
+    $("#dbt-mnew", root).onclick = () => { MSIT.openNew = { brief: Number(id) }; location.hash = "#/mises-en-situation"; };
+  }
+  $$("[data-msunlink]", root).forEach((b) => b.onclick = () => busy(b, async () => {
+    await api(`/mises/${b.dataset.msunlink}`, { method: "PUT", body: { settings: { brief: null } } });
+    toast("Link removed: finalized debriefs don't change"); await reload();
   }));
   $("#dbt-all", root).onclick = () => analyzeAllDialog(root);
 }
@@ -1050,8 +1078,28 @@ function wireAssessLink(root) {
     } });
   }));
 }
+// step 1: the assessments; step 2 (optional): the mises en situation linked to the brief (rec.assess, kind "mise")
 function assessPanelHtml(assess) {
-  const list = assess || [];
+  return assessOnlyHtml((assess || []).filter((x) => x.kind !== "mise")) + misePanelHtml((assess || []).filter((x) => x.kind === "mise"));
+}
+function misePanelHtml(list) {
+  const who = String(DB?.who || "").startsWith("u:") ? DB.who.slice(2) : "";
+  if (!list.length) return `<section class="panel db-step1 asl-min"><span class="asl-mi" aria-hidden="true">🧪</span>
+    <span><b>2 · Mise en situation</b> <span class="muted">optional · none linked to this brief</span></span><a class="btn small" href="#/brief/${esc(DB?.bid || "")}" data-mes-link>Link one</a></section>`;
+  return `<section class="panel db-step1"><h2>2 · Mise en situation <span class="muted">optional · code written in class, after the assessment: its results count like it</span></h2>
+    <div class="db-rows">${list.map((x) => {
+      const ok = Object.entries(x.comps || {}).filter(([, v]) => v.ok), ko = Object.entries(x.comps || {}).filter(([, v]) => !v.ok);
+      const lv = x.score != null ? SC_LVL(x.score) : "";
+      const mine = who && x.members ? x.members[who] : null;
+      return `<div class="db-row"><span class="db-i">🧪</span><div><a href="#/mise/${x.id}" title="Open the mise en situation"><b>${esc(x.title.replace(/^Mise en situation · /, ""))}</b></a>
+        ${x.score != null ? ` <b style="color:${masteryInk(x.score)}">${x.score}%</b> <span class="lvl"><i class="pg-dot pgc-${lv}"></i>${SC_LVL_NAME[lv]}</span>${x.of > 1 ? ` <span class="small muted">${x.done}/${x.of} handed in</span>` : ""}`
+          : ` <span class="lvl warn">${x.of ? "Not handed in yet" : "Not taken"}</span>`}
+        ${ok.length || ko.length ? `<div style="margin-top:6px">${ok.map(([k]) => `<span class="lvl good">✓ ${esc(k)}</span>`).join(" ")} ${ko.map(([k, v]) => `<span class="lvl bad" title="${esc(v.note || "")}">✗ ${esc(k)}</span>`).join(" ")}</div>` : ""}
+        ${mine && (mine.ok.length || mine.ko.length) ? `<div class="small" style="margin-top:6px">${mine.ok.length ? `<span class="muted">Mastered:</span> ${mine.ok.map(esc).join(", ")}` : ""}${mine.ko.length ? `${mine.ok.length ? " · " : ""}<span class="muted">Missed:</span> ${mine.ko.map(esc).join(", ")}` : ""}</div>` : ""}
+        ${x.score == null ? `<div class="small muted">${x.of ? "When they hand it in (and nothing is left for you to grade), it counts here." : "This learner didn't get it: the debrief doesn't use it for them."}</div>` : ""}</div></div>`;
+    }).join("")}</div></section>`;
+}
+function assessOnlyHtml(list) {
   if (!list.length) {
     const bid = (typeof DB !== "undefined" && DB && DB.bid) || "";
     let hidden = false; try { hidden = localStorage.getItem(`cb-noassess:${bid}`) === "1"; } catch { /* private window */ }
@@ -1175,7 +1223,7 @@ function renderDebrief() {
   body.innerHTML = `<div class="db-grid${sq ? " db-sq" : ""}">
     <div class="stack">
       ${sq ? "" : assessPanelHtml(rec.assess)}
-      <section class="panel"><div class="panel-head"><h2>2 · Project (GitHub)</h2><span id="db-pct"></span></div>
+      <section class="panel"><div class="panel-head"><h2>3 · Project (GitHub)</h2><span id="db-pct"></span></div>
         <div id="db-meter"></div>
         ${r.resume ? `<p>${esc(r.resume)}</p>` : ""}
         <div class="grid cols-2-even">

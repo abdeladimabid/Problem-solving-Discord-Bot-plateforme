@@ -51,7 +51,7 @@ async function viewMises() {
       { label: "Created", sort: "created_at", html: (m) => `<span class="small">${fmtDate(m.created_at)}</span>` },
     ], r.items, { onRow: (m) => (location.hash = `#/mise/${m.id}`), empty: "No mise en situation yet: click “New mise en situation”." })}</section>`;
   $("#mes-new").onclick = (e) => busy(e.currentTarget, () => mesWizard());
-  if (MSIT.openNew) { MSIT.openNew = false; mesWizard().catch((e) => toast(e.message, true)); }
+  if (MSIT.openNew) { const o = typeof MSIT.openNew === "object" ? MSIT.openNew : {}; MSIT.openNew = false; mesWizard(o).catch((e) => toast(e.message, true)); }
 }
 
 // ======================================================================= « New »: like a brief
@@ -59,7 +59,7 @@ async function viewMises() {
 // (one of ours or a Simplonline page), the AI writes it from the sprint's and the week's objectives, or a prompt for
 // Claude. Then the preview and the checklist (warnings and reminders), and Save. Who takes it is chosen when launching.
 const MES_SRC = [["json", "📄 Upload a JSON"], ["brief", "✨ AI · for a brief"], ["sprint", "✨ AI · from the sprint"], ["claude", "🤖 Prompt for Claude"]];
-async function mesWizard() {
+async function mesWizard(opts = {}) {
   const [st] = await Promise.all([MSIT.setup ? Promise.resolve(MSIT.setup) : api("/mises/setup"), loadRef().catch(() => null)]);
   MSIT.setup = st;
   const w0 = st.weeks.find((w) => w.n === st.current) || st.weeks[0];
@@ -249,6 +249,13 @@ async function mesWizard() {
   });
   $("#mw-x").onclick = () => { box.innerHTML = ""; };
   showSrc("json");
+  // from a brief's page (« Make one for this brief »): the AI writes it for that brief, linked to it when saved
+  if (opts.brief) {
+    $('[data-seg="mw-src"] [data-v="brief"]', box)?.click();
+    await loadBriefs();
+    $("#mw-brief").value = String(opts.brief);
+    await $("#mw-brief").onchange();
+  }
 }
 /** The checklist: what to fix (✗), what's fine (✓), reminders (ℹ). */
 const mesChecksHtml = (list) => `<ul class="bchecks mes-checks">${(list || []).map((c) => `<li class="${c.tip ? "tip" : c.ok ? "ok" : "ko"}">${c.tip ? "ℹ" : c.ok ? "✓" : "⚠"} ${esc(c.text)}</li>`).join("") || `<li class="muted">—</li>`}</ul>`;

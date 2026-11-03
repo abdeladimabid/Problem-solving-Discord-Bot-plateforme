@@ -841,6 +841,11 @@ async function briefView(env: Env, g: GuildRow, id: number) {
               (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status IN ('submitted', 'graded')) AS done,
               (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'graded') AS graded
          FROM assessments a WHERE a.brief_id = ? AND a.guild_id = ? ORDER BY a.id`, id, g.id).catch(() => []),
+    // step 2 (optional): the mises en situation linked to it, and where the class is with them
+    mises: await all<{ id: number; title: string; status: string; takers: number; done: number }>(env,
+      `SELECT m.id, m.title, m.status, (SELECT COUNT(*) FROM mise_takers t WHERE t.mise_id = m.id) AS takers,
+              (SELECT COUNT(*) FROM mise_takers t WHERE t.mise_id = m.id AND t.status = 'submitted') AS done
+         FROM mises m WHERE json_extract(m.settings, '$.brief.id') = ? AND m.guild_id = ? ORDER BY m.id`, id, g.id).catch(() => []),
   };
 }
 
