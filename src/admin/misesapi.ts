@@ -8,7 +8,7 @@
 //   GET  /mises/:id/taker/:t        one learner        PUT /mises/:id/grade|comment        GET /mises/:id/live.csv|results.csv
 import type { Ctx, Env, GuildRow } from "../shared/types.ts";
 import {
-  MiseError, addTakers, closeMise, deleteMise, extend, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
+  MiseError, addTakers, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
   saveMise, sendResults, setComment, setGrade, setupView, takerDetail, unlockTakers,
 } from "../shared/misesdb.ts";
 
@@ -33,6 +33,7 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
   if (path === "/mises/prompt" && method === "POST") return ok(await promptFor(env, await guild(), body));
   if (path === "/mises/import" && method === "POST") return ok(await importMise(env, await guild(), body));
   if (path === "/mises/generate" && method === "POST") return ok(await generateMise(env, await guild(), body));
+  if (path === "/mises/fix" && method === "POST") return ok(await fixMise(env, await guild(), body));
   if ((m = path.match(/^\/mises\/(\d+)\/(live|results)\.csv$/)) && method === "GET") {
     const g = await guild(), id = Number(m[1]);
     return csv(m[2] === "live" ? await liveCsv(env, g, id) : await resultsCsv(env, g, id), `mise-${id}-${m[2] === "live" ? "live" : "resultats"}.csv`);

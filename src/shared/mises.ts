@@ -9,7 +9,7 @@
 // This file is pure (no D1, no network): formats, checks, prompt, scoring, the AI filter, the live statistics.
 // The database side is misesdb.ts.
 import type { Program, ProgramWeek } from "./program.ts";
-import { compLabel, parseComp, techOfWeek, techOutside } from "./program.ts";
+import { TECHS, compLabel, parseComp, techOfWeek, techOutside } from "./program.ts";
 import { SKILL_KEYS } from "./skills.ts";
 
 export const MISE_FORMAT = "classbot-mise-en-situation@1";
@@ -241,7 +241,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     // nothing out of scope: no technology the class hasn't seen (Tailwind, React, fetch… before their week)
     if (techs.length) {
       const all = [t, ctx, ...qs, expected, ...files.map((f) => f.starter), ...sol.map((f: { content: string }) => f.content)].join("\n");
-      const out = techOutside(all, techs);
+      const out = outOfScope(all, techs);
       if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
     sits.push({ id: `m${i + 1}`, title: t, context: ctx, difficulty: diff, competencies: comps(s.competencies, bad), notions: notions.slice(0, 5), skills: skills(s.skills, bad),
@@ -279,7 +279,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     const pts = q.points == null ? 1 : Number(q.points);
     if (!Number.isInteger(pts) || pts < 1 || pts > 5) bad(`"points": a whole number from 1 to 5 (1 if left out).`);
     if (techs.length) {
-      const out = techOutside([question, c, choices[k] ?? ""].join("\n"), techs);
+      const out = outOfScope([question, c, choices[k] ?? ""].join("\n"), techs);
       if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
     qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad), notion, skills: skills(q.skills, bad), points: pts });
@@ -287,6 +287,17 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
   if (p.length) return { problems: p };
   const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm };
   return { problems: [], content, preview: previewOf(content) };
+}
+/** What's out of scope, with the words that gave it away (the AI needs them to fix it). JSON.parse / JSON.stringify
+ *  is plain JavaScript: not « Fetch / API » when JavaScript was seen. */
+export function outOfScope(text: string, techs: string[]): string[] {
+  const js = !techOutside("JavaScript", techs).length;
+  return techOutside(text, techs).map((name) => {
+    const t = TECHS.find((x) => x.name === name);
+    const hits = t ? [...new Set((text.match(new RegExp(t.rx.source, "gi")) ?? []).map((h) => h.trim()))] : [];
+    if (name === "Fetch / API" && js && hits.length && hits.every((h) => /^json$/i.test(h))) return null;
+    return hits.length ? `${name} (the words « ${hits.slice(0, 3).join(" », « ")} »)` : name;
+  }).filter((x): x is string => !!x);
 }
 const squash = (s: string) => String(s ?? "").replace(/\s+/g, "");
 export const normComp = (c: unknown): string | null => {
@@ -613,18 +624,22 @@ export const QCM_RULES = [
   "    · « Quelle méthode supprime un élément enfant du DOM ? » → removeChild() ✓ · removeNode() · deleteElement() · detachChild() (des noms qui SONNENT juste mais n'existent pas)",
   "    · « Que fait la classe Tailwind p-4 ? » → padding de 1rem ✓ · padding de 4% · padding de 4px · padding de 4rem (la même phrase, seule l'unité ou la valeur change)",
   "- Donc : même forme, même longueur, même vocabulaire pour les 4 choix ; la différence tient à un détail exact (le nom réel, la casse, l'unité, la valeur, le type, l'ordre, un off-by-one, liste vivante / statique, référence / copie…).",
-  "- UNE SEULE réponse est juste, sans discussion : aucun mauvais choix ne doit aussi marcher (ex. INTERDIT : querySelector('.carte') ✓ avec getElementsByClassName('carte')[0] qui donne aussi le premier élément).",
+  "- UNE SEULE réponse est juste, sans discussion possible : vérifie CHAQUE mauvais choix un par un et assure-toi qu'il est FAUX (il ne marche pas, ou ne donne pas le résultat demandé). INTERDIT par exemple : querySelector('.carte') ✓ avec getElementsByClassName('carte')[0], getElementsByClassName('carte').item(0) ou querySelectorAll('.carte')[0], qui donnent AUSSI le premier élément. Si plusieurs écritures sont justes, change la question.",
   "- Jamais un choix qu'on écarte sans connaître la notion (hors sujet, absurde, d'un autre type) ; la bonne réponse ne reprend pas un mot de la question et n'est pas la plus longue ; varie sa place (\"correct\").",
   "- Au moins 3 QCM sur 5 demandent de LIRE du code (\"code\") : qu'affiche-t-il, que vaut cette variable, quelle ligne a le bug, quel est l'effet de cet ordre d'instructions.",
 ];
 /** What makes a situation test the class's limits (in the prompt, and what the AI review checks). */
 export const SIT_RULES = [
-  "- C'est une ÉVALUATION exigeante, pas un exercice guidé : elle doit révéler les limites de la classe. La situation 1 est accessible mais demande déjà de réfléchir ; les situations 4 et 5 ne sont réussies que par les meilleurs.",
-  "- Chaque situation combine 2 à 4 notions de la semaine (et des semaines d'avant) dans un vrai besoin du métier : données à transformer, plusieurs éléments, conditions, cas limites (liste vide, valeur invalide, doublon, majuscules / espaces, zéro, élément absent).",
-  "- Les sous-questions disent CE QUE le programme doit faire (le comportement, les règles, les cas limites), JAMAIS COMMENT : ne nomme pas la méthode, la propriété, l'événement ni la boucle à utiliser (pas « utilise querySelector », « change textContent », « écoute l'événement click »).",
-  "- Le code de départ ne mâche pas le travail : pas de commentaires « 1. sélectionne… 2. écoute… » qui donnent les étapes ; seulement le HTML / les données nécessaires.",
-  "- Les vérifications testent aussi les cas limites (au moins une vérification par cas limite demandé), pour qu'une solution approximative ne passe pas.",
+  "- La difficulté monte PROGRESSIVEMENT, une marche à la fois :",
+  "    · situation 1 (difficulty 1) : ACCESSIBLE, une seule notion de base de la semaine, 2 ou 3 sous-questions courtes, réussie par presque toute la classe ;",
+  "    · situation 2 (difficulty 2) : une notion de plus, un petit cas à gérer ;",
+  "    · situation 3 (difficulty 3) : 2 ou 3 notions ensemble, une condition ou un cas limite ;",
+  "    · situations 4 et 5 (difficulty 4 et 5) : des exercices de CODE plus longs qui COMBINENT tout ce qui a été vu dans le sprint : le DOM (sélectionner, créer, modifier, supprimer des éléments, écouter des événements) + la manipulation de TABLEAUX (parcourir, filtrer, chercher, ajouter, compter, trier…) + les CONDITIONS + les BOUCLES (et les fonctions, objets… s'ils ont été vus). La 5 est la plus exigeante (plusieurs cas limites, plusieurs vérifications).",
+  "- GUIDAGE PAS À PAS (on garde l'aide) : les sous-questions sont des étapes numérotées dans l'ordre où on code (« 1. Sélectionne… 2. Écoute le clic… 3. … ») et peuvent nommer la notion ou la méthode à utiliser ; le code de départ peut contenir des commentaires qui donnent les étapes (« // 1. Sélectionne le bouton »). Les situations 4 et 5 restent guidées mais avec des étapes plus larges.",
+  "- Les \"notions\" de chaque situation sont affichées à l'apprenant comme indices : mets-y les vraies notions utiles (querySelector, addEventListener, filter, for…of…).",
+  "- Les vérifications testent ce qui est demandé, cas limites compris, pour qu'une solution approximative ne passe pas.",
 ];
+
 
 export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string }): string {
   const w = o.week;

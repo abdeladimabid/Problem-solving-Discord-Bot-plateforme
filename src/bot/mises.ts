@@ -368,11 +368,14 @@ function drawQcm(q) {
 // ---------------------------------------------------------------- translation (Arabic, French, English), like the assessment
 // The original stays; the translation shows under it. Code and file names are never translated.
 var TRTO = store.get("cb-mes-tr") || "", TRCACHE = {};
+if (TRTO === "fr") TRTO = "";
 var TRL = [["ar", "العربية"], ["fr", "FR"], ["en", "EN"]];
-function trBar() { return '<span class="trbar" title="Traduire (Google Translate)">' + TRL.map(function (x) { return '<button type="button" data-tr="' + x[0] + '" class="' + (TRTO === x[0] ? "on" : "") + '">' + x[1] + "</button>"; }).join("") + "</span>"; }
+// FR is the original text (nothing more shown); العربية and EN show the translation under it
+var trOn = function (k) { return k === "fr" ? !TRTO : TRTO === k; };
+function trBar() { return '<span class="trbar" title="Traduire (Google Translate)">' + TRL.map(function (x) { return '<button type="button" data-tr="' + x[0] + '" class="' + (trOn(x[0]) ? "on" : "") + '">' + x[1] + "</button>"; }).join("") + "</span>"; }
 function isCode(t) { t = String(t || "").trim(); return /^[<{\[(.#$@0-9-]/.test(t) || /[;{}=<>]|\(\)|=>/.test(t) || /^[a-z]+(-[a-z]+)+$/.test(t) || /^[a-z]+[A-Z]\w*$/.test(t) || /^\w+\.\w+/.test(t) || !/[A-Za-zÀ-ÿ]{2,}/.test(t) || /^[a-z]+$/.test(t); }
 function wireTr(item) {
-  $$("[data-tr]").forEach(function (b) { b.onclick = function () { TRTO = TRTO === b.dataset.tr ? "" : b.dataset.tr; store.set("cb-mes-tr", TRTO); $$("[data-tr]").forEach(function (x) { x.classList.toggle("on", x.dataset.tr === TRTO); }); translateItem(item); }; });
+  $$("[data-tr]").forEach(function (b) { b.onclick = function () { TRTO = b.dataset.tr === "fr" || TRTO === b.dataset.tr ? "" : b.dataset.tr; store.set("cb-mes-tr", TRTO); $$("[data-tr]").forEach(function (x) { x.classList.toggle("on", trOn(x.dataset.tr)); }); translateItem(item); }; });
   if (TRTO) translateItem(item);
 }
 function translateItem(item) {
@@ -415,7 +418,7 @@ function drawSituation(s) {
   OUTTAB[s.id] = OUTTAB[s.id] || (hasPreview ? "preview" : "console");
   $("#main").innerHTML = '<div class="sit"><div class="col">'
     + '<div class="card"><div class="meta"><span class="kicker">Mise en situation ' + (i + 1) + " / " + P.situations.length + '</span><span class="diff" aria-label="Difficulté ' + s.difficulty + ' sur 5">' + dots + "</span><span>· " + s.points + " pts</span>" + trBar() + "</div>"
-    + '<h1 translate="no">' + esc(s.title) + '</h1><p class="ctx" translate="no">' + esc(s.context) + '</p><div id="trs"></div></div>'
+    + '<h1 translate="no">' + esc(s.title) + '</h1><p class="ctx" translate="no">' + esc(s.context) + '</p><div id="trs"></div><div class="chips">' + s.notions.map(function (n) { return '<span class="chip">' + esc(n) + "</span>"; }).join("") + "</div></div>"
     + '<details class="card sdet" id="sdet"' + (STARTOPEN ? " open" : "") + '><summary><h2>Code de départ</h2><span class="muted small sdet-h">' + (STARTOPEN ? "masquer" : "afficher") + "</span></summary>" + tabs("sf") + '<div class="starter cmbox" id="starter"></div>' + (s.schema ? '<details style="margin-top:10px"><summary class="small">La base de données</summary><div class="starter cmbox" id="schema" style="margin-top:6px"></div></details>' : "") + "</details>"
     + '<div class="card"><h2>Ce que tu dois faire</h2><ol class="qs" translate="no">' + qs + '</ol><div id="trq"></div></div>'
     + (s.checks.length ? '<div class="card"><h2>Vérifications automatiques</h2><ul class="checks" id="cklist"></ul><p class="muted small" style="margin:8px 0 0">Elles se lancent à chaque exécution.</p></div>' : "")

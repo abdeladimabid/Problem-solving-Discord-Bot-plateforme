@@ -95,7 +95,7 @@ async function mesWizard() {
         <div id="mw-jbox">${jsonBox("mw-json", '{ "format": "classbot-mise-en-situation@1", "title": "…", "week": 3, "competencies": ["C4N1"], "situations": [ … ], "qcm": [ … ] }')}</div></li>
       <li><b>Check and save</b>
         <div id="mw-prev"><p class="small muted">The preview and the checklist show here.</p></div>
-        <div class="toolbar" style="margin:10px 0 0"><button class="btn" id="mw-check" type="button">Check again</button><button class="btn primary" id="mw-save" type="button" disabled>Save</button>
+        <div class="toolbar" style="margin:10px 0 0"><button class="btn" id="mw-check" type="button">Check again</button><button class="btn primary" id="mw-fix" type="button" hidden>✨ Fix only what's wrong with the AI</button><button class="btn primary" id="mw-save" type="button" disabled>Save</button>
           <span class="small muted">You choose who takes it when you launch it.</span></div></li>
     </ol></section>`;
   box.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -196,6 +196,8 @@ async function mesWizard() {
     }
     $("#mw-prev").innerHTML = (r.problems?.length ? problemsHtml(r.problems) : "") + (r.preview ? `<div class="mes-res">${mesPreviewHtml(r.preview)}<div><h3 class="mes-h">Checklist</h3>${mesChecksHtml(r.checks)}</div></div>` : "");
     $("#mw-save").disabled = !!r.problems?.length || !r.preview;
+    // problems left: the AI rewrites only the situations / QCM that have one (the rest is kept)
+    $("#mw-fix").hidden = !r.problems?.length;
     $("#mw-check").classList.remove("primary");
   };
   const check = async (auto = false) => {
@@ -223,11 +225,21 @@ async function mesWizard() {
       const r = await api("/mises/generate", { method: "POST", body });
       $("#mw-json").value = r.json; W.json = r.json; $("#mw-jbox").hidden = false;
       show(r);
-      $("#mw-st").textContent = r.problems?.length ? "Written, with problems left: fix them in the JSON (or generate again), then Check again." : "✓ Written: read it, change what you want, then Save.";
+      $("#mw-st").textContent = r.problems?.length ? `Written, ${r.problems.length} problem(s) left: click « Fix only what's wrong with the AI » (the rest is kept), or change the JSON.` : "✓ Written: read it, change what you want, then Save.";
       $("#mw-prev").scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) { $("#mw-st").textContent = ""; throw err; }
   });
   $("#mw-cp").onclick = () => copyText(W.prompt, "Prompt copied");
+  $("#mw-fix").onclick = (e) => busy(e.currentTarget, async () => {
+    if (!W.week) throw new Error("Pick a week of the programme.");
+    $("#mw-st").textContent = "⏳ The AI rewrites only what's wrong, then checks it again (1 to 4 minutes)…";
+    try {
+      const r = await api("/mises/fix", { method: "POST", body: { ...scope(), week: W.week, comps: W.comps, metier: $("#mw-met").value, wishes: $("#mw-wish").value, json: $("#mw-json").value } });
+      $("#mw-json").value = r.json; W.json = r.json; $("#mw-jbox").hidden = false;
+      show(r);
+      $("#mw-st").textContent = r.problems?.length ? `${r.problems.length} problem(s) left: click « Fix » again, or change the JSON.` : "✓ Fixed: read it, then Save.";
+    } catch (err) { $("#mw-st").textContent = ""; throw err; }
+  });
   $("#mw-save").onclick = (e) => busy(e.currentTarget, async () => {
     const json = $("#mw-json").value;
     if (json !== W.json) { await check(); if (W.res?.problems?.length) return; }

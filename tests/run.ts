@@ -7469,14 +7469,30 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.users.length = 0;
   const gen3 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
   check(gen3.status === 200 && JSON.parse(gen3.data.json).qcm[1].choices.includes("mousedown") && ai.users.some((u) => u.includes("QCM 2") && u.includes("facile à deviner")), "a QCM that can be guessed without the notion: written again with credible wrong choices");
-  check(ai.users.some((u) => u.includes("PIÈGES") && u.includes("removeNode()") && u.includes("JAMAIS COMMENT")), "…the prompt asks for traps that look like the answer (the teacher's examples) and demanding situations that don't say how");
+  check(ai.users.some((u) => u.includes("PIÈGES") && u.includes("removeNode()") && u.includes("GUIDAGE PAS À PAS") && u.includes("situations 4 et 5")), "…the prompt asks for traps that look like the answer (the teacher's examples), guided steps, a progression, DOM + arrays + conditions + loops in the last two");
   // a situation too guided: written again, harder
-  ai.qcmWeak = [[], []]; ai.sitEasy = [[{ n: 1, why: "la consigne nomme querySelector et textContent" }], []];
+  ai.qcmWeak = [[], []]; ai.sitEasy = [[{ n: 1, fix: "easier", why: "trop de notions pour une première situation" }], []];
   ai.miseItems = JSON.stringify({ items: { s1: { ...file.situations[0], questions: ["1. Affiche le nom de la coopérative dans le titre, sans espaces au début ni à la fin.", "2. Si le nom est vide, affiche « Sans nom »."] } } });
   ai.users.length = 0;
   const gen4 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
-  check(gen4.status === 200 && JSON.parse(gen4.data.json).situations[0].questions[1].includes("Sans nom") && ai.users.some((u) => u.includes("situation 1") && u.includes("trop facile ou trop guidée")), "a situation too easy or too guided: written again, more demanding");
+  check(gen4.status === 200 && JSON.parse(gen4.data.json).situations[0].questions[1].includes("Sans nom") && ai.users.some((u) => u.includes("situation 1") && u.includes("TROP DIFFICILE pour sa place")), "a situation not at its place in the progression (the first one too hard): written again");
   ai.sitEasy = [];
+  // a QCM with two right answers (the AI that judges without the key finds A and C): written again until only one is
+  ai.qcmJudge = [{ 1: [0, 2] }, { 1: [0, 2] }];
+  ai.miseItems = JSON.stringify({ items: { q1: { ...file.qcm[0], question: "Que vaut el après : const el = document.getElementById('.carte') ?", choices: ["null", "le premier .carte", "une liste vide", "undefined"], correct: 0 } } });
+  ai.users.length = 0;
+  const gen5 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  check(gen5.status === 200 && !gen5.data.problems.length && JSON.parse(gen5.data.json).qcm[0].choices[0] === "null" && ai.users.some((u) => u.includes("QCM 1") && u.includes("PLUSIEURS choix sont justes (A, C)")), "a QCM with two right answers (checked twice, without the key): written again until exactly one is right");
+  // still wrong after the rounds: shown, and « Fix » goes on from that JSON, rewriting only what's wrong
+  ai.qcmJudge = Array.from({ length: 40 }, () => ({ 2: [1, 3] }));
+  const gen6 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  check(gen6.status === 200 && gen6.data.problems.some((x: any) => x.where === "QCM 2"), "…still wrong after every try: the problem is shown (never saved as right)");
+  ai.qcmJudge = [{ 2: [1, 3] }, { 2: [1, 3] }];   // checked again: still two right answers, then fixed
+  ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Que vaut [1, 2, 3].indexOf(4) ?", choices: ["-1", "0", "undefined", "null"], correct: 0 } } });
+  const fx = await api("POST", "/api/mises/fix", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: gen6.data.json });
+  check(fx.status === 200 && !fx.data.problems.length && JSON.parse(fx.data.json).qcm[1].choices[0] === "-1" && JSON.parse(fx.data.json).qcm[0].question === JSON.parse(gen6.data.json).qcm[0].question, "« Fix with the AI »: only the item with a problem is rewritten, the rest is kept");
+  ai.qcmJudge = [];
+  check(M.outOfScope("const data = JSON.stringify(x);", ["HTML", "CSS", "JavaScript"]).length === 0 && M.outOfScope("fetch('/x')", ["HTML", "CSS", "JavaScript"])[0].includes("« fetch »"), "out of scope: JSON.stringify is plain JavaScript; the word that gave it away is named for the AI");
   ai.qcmWeak = [];
   check(rep.includes("situation 4") && rep.includes("QCM 5") && !rep.includes("situation 5 (") && rep.includes("RAPPEL DU PÉRIMÈTRE"), "…only the items with a problem are sent back, with what's out of scope; too many notions is fixed without the AI");
   check(q("SELECT id FROM mises WHERE guild_id = ?", G).length === nBefore, "…nothing saved before the teacher saves");

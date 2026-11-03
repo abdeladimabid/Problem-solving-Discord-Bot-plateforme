@@ -21,7 +21,7 @@ import { chat, extractJson } from "./ai.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { QCM_RULES, SIT_RULES } from "./mises.ts";
+import { QCM_RULES, SIT_RULES, readJson } from "./mises.ts";
 
 export class MiseError extends Error { status: number; constructor(msg: string, status = 400) { super(msg); this.status = status; } }
 
@@ -128,12 +128,8 @@ export async function promptFor(env: Env, g: GuildRow, b: any) {
   return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) }), techs: techSoFar(p, w) };
 }
 
-/**
- * The AI writes it here (no copy-paste through Claude): for the brief of the week, or the objectives of the sprint and
- * the week. Checked like an import; when the AI's file has problems it gets them back once to fix them. Nothing is
- * saved: the teacher reads it, can change it, then saves.
- */
-export async function generateMise(env: Env, g: GuildRow, b: any) {
+/** What the AI needs to write or fix a mise en situation for a request (the week, the competencies, the brief). */
+async function aiContext(env: Env, g: GuildRow, b: any) {
   const p = await programOf(env, g);
   const { br, w, comps } = await scopeOf(env, g, p, b);
   if (!w) throw new MiseError("Pick the week of the programme: the AI keeps to what the class has seen by then.");
@@ -142,64 +138,132 @@ export async function generateMise(env: Env, g: GuildRow, b: any) {
   await aiBudgetUse(env, 4);
   const techs = techSoFar(p, w);
   const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) });
-  const opts = { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n };
   const ask = (extra: string) => chat(env, [
     { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
     { role: "user", content: prompt + extra },
   ], { maxTokens: 16000, temperature: 0.5, timeoutMs: 170000, json: true });
-  const read = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
-  let data = read(await ask("").catch((e) => { throw new MiseError(`The AI couldn't write it right now (${String((e as Error)?.message || e).slice(0, 120)}). Try again in a minute.`, 502); }));
-  if (!data) throw new MiseError("The AI's answer wasn't a complete JSON. Try again (or ask for it with fewer words in your wishes).", 502);
-  if (data.week == null) data.week = w.n;
-  // until it matches the requirements: what can be fixed here is fixed here, the rest is written again by the AI
-  // (only the situations / QCM that have a problem; the whole file when the problem is the file's), 4 rounds at most
-  tidyMise(data);
+  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n } };
+}
+const readAi = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
+
+/**
+ * The AI writes it here (no copy-paste through Claude): for the brief of the week, or the objectives of the sprint and
+ * the week. Then it's made right (perfectMise). Nothing is saved: the teacher reads it, can change it, then saves.
+ */
+export async function generateMise(env: Env, g: GuildRow, b: any) {
+  const x = await aiContext(env, g, b);
+  const data = readAi(await x.ask("").catch((e) => { throw new MiseError(`The AI couldn't write it right now (${String((e as Error)?.message || e).slice(0, 120)}). Try again in a minute.`, 502); }));
+  if (!data || typeof data !== "object") throw new MiseError("The AI's answer wasn't a complete JSON. Try again (or ask for it with fewer words in your wishes).", 502);
+  return perfectMise(env, data, x);
+}
+/** « Fix with the AI »: a JSON that still has problems (from the AI or uploaded): only what's wrong is written again. */
+export async function fixMise(env: Env, g: GuildRow, b: any) {
+  const x = await aiContext(env, g, b);
+  const { data } = readJson(b.json);
+  if (!data || typeof data !== "object") throw new MiseError("This isn't a JSON the AI can fix: paste or upload it again.");
+  return perfectMise(env, data, x);
+}
+
+/**
+ * Until it matches the requirements. What needs no AI is fixed here; each situation or QCM with a problem is written
+ * again by the AI, ALONE (the others are kept), as many times as needed (a fresh one after two failed repairs); the
+ * whole file only when the problem is the file's. Once valid, it's reviewed: every QCM's choices are checked one by
+ * one, twice, by an AI that doesn't know which is marked right (exactly one must be), and each situation against its
+ * place in the progression. A round that makes it worse is dropped.
+ */
+async function perfectMise(env: Env, data: any, x: Awaited<ReturnType<typeof aiContext>>) {
+  const { w, br, comps, techs, ask, opts, p } = x;
+  const fix = (d: any) => { if (d && typeof d === "object") { if (d.week == null) d.week = w.n; tidyMise(d); } return d; };
+  data = fix(data);
   let r = checkMise(data, opts);
-  // once the file is valid: a second look at the QCM (can they be guessed without knowing the notion?), twice at most
-  let reviews = 0;
-  const weakQcm = async () => (r.problems.length || reviews >= 2 ? [] : (reviews++, await reviewQcm(env, r.content!)));
-  let weak = await weakQcm();
-  for (let round = 0; round < 5 && (r.problems.length || weak.length); round++) {
-    const todo = r.problems.length ? r.problems : weak;
-    const next = await repairMise(data, todo, { ask, read, techs, next: nextProgrammeWeek(p, w) });
+  // 6 minutes at most (each round is an AI call or two): what's left is shown, with « Fix with the AI » to go on
+  const until = Date.now() + 6 * 60_000;
+  // the review only runs on a valid file; a file changed after the last review it may have is said to be unchecked
+  const MAX_REVIEWS = 4;
+  let reviews = 0, review: { where: string; msg: string }[] = [], reviewed = false;
+  const doReview = async () => {
+    reviewed = false;
+    if (r.problems.length) { review = []; return; }
+    if (reviews >= MAX_REVIEWS || Date.now() > until) { review = [{ where: "review", msg: "The QCM answers and the progression couldn't be checked again after the last changes: click « Fix only what's wrong with the AI » to check them." }]; return; }
+    reviews++; review = await reviewMise(env, r.content!); reviewed = true;
+  };
+  await doReview();
+  const tries = new Map<string, number>();
+  for (let round = 0; round < 10 && (r.problems.length || (review.length && reviewed)) && Date.now() < until; round++) {
+    // a review left that nothing can check again afterwards: stop here, the problems are shown
+    if (!r.problems.length && reviews >= MAX_REVIEWS) break;
+    const todo = r.problems.length ? r.problems : review;
+    for (const t of new Set(todo.map((y) => y.where))) tries.set(t, (tries.get(t) ?? 0) + 1);
+    const next = fix(await repairMise(data, todo, { ask, read: readAi, techs, next: nextProgrammeWeek(p, w), fresh: (where) => (tries.get(where) ?? 0) > 2 }));
     if (!next) continue;
-    if (next.week == null) next.week = w.n;
-    tidyMise(next);
     const r2 = checkMise(next, opts);
-    // a round that makes it worse is dropped (the next one starts again from the better file)
-    if (r2.problems.length <= r.problems.length) { data = next; r = r2; weak = await weakQcm(); }
+    if (r2.problems.length <= r.problems.length) { data = next; r = r2; await doReview(); }
   }
   return {
-    json: JSON.stringify(data, null, 2), problems: r.problems, preview: r.problems.length ? null : r.preview,
+    json: JSON.stringify(data, null, 2), problems: [...r.problems, ...review], preview: r.problems.length ? null : r.preview,
     checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title }) : [],
     detected: { week: w.n, sprint: w.sprint ?? null, comps }, brief: br?.id ? { id: br.id, title: br.title } : null,
   };
 }
 
+/** Each QCM's choices judged one by one by an AI that isn't told which is marked right: the ones it finds right. */
+async function judgeQcm(env: Env, c: MiseContent): Promise<Map<number, number[]> | null> {
+  try {
+    const raw = await chat(env, [
+      { role: "system", content: `Tu es un expert en développement web très rigoureux. Pour chaque QCM, examine CHAQUE choix SÉPARÉMENT, comme si tu exécutais le code dans un navigateur récent : ce choix répond-il correctement et exactement à la question ? Attention aux écritures équivalentes (querySelector('.x') et querySelectorAll('.x')[0] et getElementsByClassName('x')[0] et .item(0) donnent le même élément), aux détails (casse, unités, valeurs, off-by-one). Réponds UNIQUEMENT avec ce JSON : {"q": [{"n": 1, "right": [0, 2], "why": "…"}]} — "right" = les index (0 = A) de TOUS les choix justes, y compris s'il y en a plusieurs ou aucun.` },
+      { role: "user", content: JSON.stringify(c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices.map((t, k) => `${"ABCD"[k]} (index ${k}) : ${t}`) }))) },
+    ], { maxTokens: 2500, temperature: 0, timeoutMs: 90000, json: true });
+    const j = readAi(raw);
+    if (!Array.isArray(j?.q)) return null;
+    const out = new Map<number, number[]>();
+    for (const y of j.q) if (Number.isInteger(Number(y?.n)) && Array.isArray(y.right)) out.set(Number(y.n), y.right.map(Number).filter((k: number) => Number.isInteger(k) && k >= 0 && k < 4));
+    return out;
+  } catch { return null; }
+}
 /**
- * The file read again by the AI as a strict reviewer: QCM that can be guessed (traps too easy to rule out, or two right
- * answers) and situations too easy or too guided (the instructions name the method, the starter code gives the steps)
- * come back as problems to rewrite. An unavailable AI: nothing.
+ * The review: the QCM's answers checked twice (independently, without the key), how easy each QCM is to guess, and each
+ * situation against its place in the progression. Problems come back to be rewritten. An unavailable AI: nothing.
  */
-async function reviewQcm(env: Env, c: MiseContent): Promise<{ where: string; msg: string }[]> {
+async function reviewMise(env: Env, c: MiseContent): Promise<{ where: string; msg: string }[]> {
+  const [j1, j2, quality] = await Promise.all([judgeQcm(env, c), judgeQcm(env, c), reviewQuality(env, c)]);
+  const out: { where: string; msg: string }[] = [];
+  c.qcm.forEach((q, i) => {
+    const seen = [j1?.get(i + 1), j2?.get(i + 1)].filter((v): v is number[] => !!v);
+    const bad = seen.find((v) => v.length !== 1 || v[0] !== q.correct);
+    if (!bad) return;
+    const L = (ks: number[]) => ks.map((k) => "ABCD"[k]).join(", ") || "aucun";
+    out.push({ where: `QCM ${i + 1}`, msg: bad.length > 1 ? `PLUSIEURS choix sont justes (${L(bad)}) alors qu'un seul doit l'être. Réécris la question et les choix pour qu'UN SEUL soit juste sans discussion, et vérifie chaque mauvais choix.`
+      : !bad.length ? `AUCUN choix n'est juste (la réponse marquée, ${"ABCD"[q.correct]}, est fausse). Corrige la question, les choix et "correct".`
+      : `la bonne réponse est ${L(bad)}, pas ${"ABCD"[q.correct]} comme marqué. Corrige "correct" ou les choix pour qu'il n'y ait aucun doute.` });
+  });
+  for (const y of quality) if (!out.some((z) => z.where === y.where)) out.push(y);
+  return out;
+}
+/** How easy each QCM is to guess, and each situation against its place in the progression. */
+async function reviewQuality(env: Env, c: MiseContent): Promise<{ where: string; msg: string }[]> {
   try {
     const raw = await chat(env, [
       { role: "system", content: `Tu es un formateur exigeant qui relit une évaluation de développement web avant de la donner.
-QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Un mauvais choix est-il AUSSI juste ? Règles :
+QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Règles :
 ${QCM_RULES.join("\n")}
-SITUATIONS : sont-elles trop faciles ou trop guidées (sous-questions qui nomment la méthode / la propriété / l'événement à utiliser, code de départ qui donne les étapes en commentaires, une seule notion triviale, aucun cas limite) ? Règles :
+SITUATIONS : chacune est-elle à sa place dans la progression (la 1 accessible, puis une marche à la fois ; la 4 et la 5 combinent DOM + tableaux + conditions + boucles) ? Règles :
 ${SIT_RULES.join("\n")}
-Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "easy": [{"n": 1, "why": "…"}]} ("weak" = numéros des QCM à refaire, "easy" = numéros des situations à rendre plus exigeantes ; listes vides si tout est bon).` },
+Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "level": [{"n": 1, "fix": "easier" | "harder" | "combine", "why": "…"}]} ("weak" = QCM devinables à refaire ; "level" = situations pas à leur place : trop difficile → easier, trop facile → harder, la 4 ou la 5 ne combine pas le DOM, les tableaux, les conditions et les boucles → combine ; listes vides si tout est bon).` },
       { role: "user", content: JSON.stringify({
         qcm: c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] })),
-        situations: c.situations.map((x, i) => ({ n: i + 1, difficulty: x.difficulty, context: x.context, questions: x.questions, starter: x.files.map((f) => f.starter).join("\n").slice(0, 1500), checks: x.checks.map((k) => k.label) })),
+        situations: c.situations.map((y, i) => ({ n: i + 1, difficulty: y.difficulty, context: y.context, questions: y.questions, notions: y.notions, checks: y.checks.map((k) => k.label) })),
       }) },
     ], { maxTokens: 2500, temperature: 0.1, timeoutMs: 90000, json: true });
-    const j = extractJson(raw);
-    const pick = (v: any, max: number) => (Array.isArray(v) ? v : []).filter((x: any) => Number.isInteger(Number(x?.n)) && Number(x.n) >= 1 && Number(x.n) <= max).slice(0, max);
+    const j = readAi(raw);
+    const pick = (v: any, max: number) => (Array.isArray(v) ? v : []).filter((y: any) => Number.isInteger(Number(y?.n)) && Number(y.n) >= 1 && Number(y.n) <= max).slice(0, max);
+    const FIX: Record<string, string> = {
+      easier: "TROP DIFFICILE pour sa place : rends-la plus accessible (moins de notions, des étapes plus petites et guidées), garde le métier ; mets à jour la solution et les vérifications.",
+      harder: "TROP FACILE pour sa place : ajoute une notion ou un cas limite, garde le guidage par étapes ; mets à jour la solution et les vérifications.",
+      combine: "doit COMBINER ce qui a été vu dans le sprint : le DOM (sélectionner, créer, modifier des éléments, événements) + un TABLEAU à parcourir / filtrer / modifier + des CONDITIONS + une BOUCLE, guidé par étapes ; mets à jour la solution et les vérifications.",
+    };
     return [
-      ...pick(j?.weak, c.qcm.length).map((x: any) => ({ where: `QCM ${Number(x.n)}`, msg: `trop facile à deviner : ${String(x.why ?? "").slice(0, 200)}. Garde la notion ; réécris la question et les 4 choix : 3 pièges qui ressemblent à la bonne réponse (même forme, un détail exact change), une seule réponse juste.` })),
-      ...pick(j?.easy, c.situations.length).map((x: any) => ({ where: `situation ${Number(x.n)}`, msg: `trop facile ou trop guidée : ${String(x.why ?? "").slice(0, 200)}. Rends-la plus exigeante (même difficulté relative, même métier) : plusieurs notions combinées, des cas limites, des sous-questions qui disent quoi faire sans dire comment, un code de départ sans les étapes, des vérifications sur les cas limites ; mets à jour la solution et les vérifications.` })),
+      ...pick(j?.weak, c.qcm.length).map((y: any) => ({ where: `QCM ${Number(y.n)}`, msg: `trop facile à deviner : ${String(y.why ?? "").slice(0, 200)}. Garde la notion ; réécris la question et les 4 choix : 3 pièges qui ressemblent à la bonne réponse (même forme, un détail exact change), UNE SEULE réponse juste.` })),
+      ...pick(j?.level, c.situations.length).map((y: any) => ({ where: `situation ${Number(y.n)}`, msg: `${String(y.why ?? "").slice(0, 200)}. ${FIX[y.fix] ?? FIX.harder}` })),
     ];
   } catch { return []; }
 }
@@ -224,7 +288,7 @@ function tidyMise(d: any) {
  * the rules), with their problems and what's out of scope spelled out. Problems of the file (how many, the difficulty
  * going up…): the whole file again.
  */
-async function repairMise(data: any, problems: { where: string; msg: string }[], o: { ask: (extra: string) => Promise<string>; read: (raw: string) => any; techs: string[]; next: ProgramWeek | null }) {
+async function repairMise(data: any, problems: { where: string; msg: string }[], o: { ask: (extra: string) => Promise<string>; read: (raw: string) => any; techs: string[]; next: ProgramWeek | null; fresh?: (where: string) => boolean }) {
   const scope = `RAPPEL DU PÉRIMÈTRE : seulement ${o.techs.join(", ") || "les notions vues"}${o.next ? `. INTERDIT (pas encore vu) : ${o.next.concepts || o.next.title} et tout ce qui vient après (fetch, API, async/await, promesses, frameworks… s'ils n'ont pas été vus)` : ""}.`;
   const items = new Map<string, string[]>();
   const whole: string[] = [];
@@ -237,6 +301,8 @@ async function repairMise(data: any, problems: { where: string; msg: string }[],
   const list = [...items.entries()].map(([where, msgs]) => {
     const [kind, n] = where.split(" ");
     const cur = kind === "QCM" ? out.qcm?.[Number(n) - 1] : out.situations?.[Number(n) - 1];
+    // repaired twice already and still wrong: a NEW one (same place, same notion), not a third patch
+    if (o.fresh?.(where)) return `- ${where} (clé "${kind === "QCM" ? "q" : "s"}${n}") : les corrections précédentes n'ont pas suffi. Écris un ${kind === "QCM" ? "QCM" : "exercice"} ENTIÈREMENT NOUVEAU à cette place (même notion, même difficulté), en évitant : ${msgs.join(" | ")}`;
     return `- ${where} (clé "${kind === "QCM" ? "q" : "s"}${n}") :\n  problèmes : ${msgs.join(" | ")}\n  actuel : ${JSON.stringify(cur ?? {}).slice(0, 9000)}`;
   });
   const d = o.read(await o.ask(`\n\nDANS TA PROPOSITION, CES ÉLÉMENTS NE RESPECTENT PAS LES EXIGENCES. Réécris UNIQUEMENT ces éléments, entièrement, en réglant chaque problème (garde le même thème, la même difficulté et la même notion quand c'est possible ; si une notion est hors périmètre, remplace-la par une notion du périmètre) :\n${list.join("\n")}\n${scope}\nRéponds UNIQUEMENT avec ce JSON : {"items": {"s5": { …la mise en situation complète… }, "q5": { …le QCM complet… }}}`).catch(() => ""));
