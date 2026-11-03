@@ -18,6 +18,7 @@ import {
   evaluateChecks, filterCategories, itemIds, liveStats, liveStatus, miseChecks, normComp, paperOf, previewOf, scoreMise, toCsv,
 } from "./mises.ts";
 import { chat, extractJson } from "./ai.ts";
+import { netFlags } from "./identity.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
@@ -30,7 +31,9 @@ export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; d
   cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null }
 // testers: staff who take it to try it (never "the class") · lockScreen: in full screen, leaving it stops the session until
 // the teacher lets them back (like an assessment) · brief: the brief it was written for
-export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null }
+// oneDevice: the browser that signed in with Discord is the paper's device (another one stops it) · netAlerts: the
+// teacher sees papers opened outside the class's network, or from several networks
+export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean }
 
 const parse = <T>(s: string | null | undefined, d: T): T => { try { const v = s ? JSON.parse(s) : d; return v ?? d; } catch { return d; } };
 const str = (v: unknown, n: number) => String(v ?? "").replace(/\r\n/g, "\n").trim().slice(0, n);
@@ -38,7 +41,7 @@ export const contentOf = (m: Pick<MiseRow, "content">) => parse<MiseContent>(m.c
 export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
   return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
-    lockScreen: s.lockScreen === true, brief: briefRef(s.brief) };
+    lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false };
 };
 /** draft · scheduled (launched, starts later) · live · closed (closed by the teacher, or its time is up). */
 export function statusOf(m: Pick<MiseRow, "status" | "starts_at" | "ends_at">, t = now()): "draft" | "scheduled" | "live" | "closed" {
@@ -375,6 +378,8 @@ const pickSettings = (s: any) => {
   if (s && "testers" in s) o.testers = ids(s.testers).slice(0, 10);
   if (s && "lockScreen" in s) o.lockScreen = !!s.lockScreen;
   if (s && "brief" in s) o.brief = briefRef(s.brief);
+  if (s && "oneDevice" in s) o.oneDevice = !!s.oneDevice;
+  if (s && "netAlerts" in s) o.netAlerts = !!s.netAlerts;
   return o;
 };
 
@@ -555,11 +560,18 @@ export async function startTaker(env: Env, takerId: number) {
 /** Full screen rule: they left it (or the tab, the window): the session stops until the teacher lets them back. */
 export async function lockTaker(env: Env, takerId: number, what: unknown) {
   const x = await loadTaker(env, takerId);
-  if (!x || x.t.status !== "active" || !settingsOf(x.m).lockScreen) return { ok: false };
-  const why = ["fullscreen", "hidden", "blur", "reload"].includes(String(what)) ? String(what) : "fullscreen";
+  // another device stops it whatever the full screen rule; leaving the page only with the full screen rule
+  if (!x || x.t.status !== "active" || (what !== "device" && !settingsOf(x.m).lockScreen)) return { ok: false };
+  const why = ["fullscreen", "hidden", "blur", "reload", "device"].includes(String(what)) ? String(what) : "fullscreen";
   const r = await run(env, "UPDATE mise_takers SET status = 'locked', last_seen = ? WHERE id = ? AND status = 'active'", now(), x.t.id);
   if (r.meta.changes) await pushEvent(env, x.t.id, [now(), "lock", x.t.cur_item ?? "", 0, why]);
   return { ok: true, status: "locked" };
+}
+/** The paper behind a link, for the Discord sign-in: who it was sent to, whether it started, the options. */
+export async function miseTakerIdent(env: Env, takerId: number) {
+  const x = await loadTaker(env, takerId);
+  if (!x) return null;
+  return { uid: x.t.discord_id, started: ["active", "locked", "resume"].includes(x.t.status), oneDevice: settingsOf(x.m).oneDevice };
 }
 /** The teacher lets them back in (one learner, or everyone stopped): their page asks again for full screen and goes on. */
 export async function unlockTakers(env: Env, g: GuildRow, id: number, takerId: number | null) {
@@ -787,6 +799,8 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
   const names = await nameOf(env, g);
   const t0 = now();
   const staff = await staffIds(env, g.id);
+  // network alerts (an option): opened outside the class's network, or from several networks
+  const net = settingsOf(m).netAlerts ? await netFlags(env, "mes", takers.map((t) => t.id)) : {};
   const rows = takers.map((t) => {
     const ev = parse<MiseEvent[]>(t.events, []);
     const st = liveStats(ev, t0);
@@ -795,7 +809,7 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
     const spent = parse<Record<string, number>>(t.spent, {});
     return {
       id: t.id, discord_id: t.discord_id, name: names.get(t.discord_id) ?? null, test: staff.has(t.discord_id), status: t.status, live: liveStatus(t, st, t0),
-      lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null, locks: ev.filter((e) => e[1] === "lock").length,
+      lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null, locks: ev.filter((e) => e[1] === "lock").length, net: net[t.id] ?? null,
       // right so far: a QCM answered right, a situation whose last run passed every check
       correct: itemIds(c).filter((k) => sc.items[k]?.attempted && sc.items[k]?.score === 100).length,
       item: t.cur_item, itemSince: t.item_since, answered: itemIds(c).filter((k) => attempted(c, k, d.answers[k])).length,

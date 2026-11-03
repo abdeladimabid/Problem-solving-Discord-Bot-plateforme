@@ -173,6 +173,12 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (f) { f.n--; return new Response(JSON.stringify({ message: "fake error", code: f.code }), { status: f.status }); }
     if (method === "GET" && discordFake.chan[path]) return Response.json(discordFake.chan[path]);
     if (/^\/channels\/[^/]+\/threads$/.test(path) && method === "POST") return Response.json({ id: `th-${msgId++}` });
+    // the Discord sign-in of a paper: the token « tok-<id> » is the account <id>
+    if (path === "/users/@me" && method === "GET") {
+      const h: any = init.headers || {}; const auth = String(h.authorization ?? h.Authorization ?? "");
+      const m = /^Bearer tok-(\w+)$/.exec(auth);
+      return m ? Response.json({ id: m[1], username: "u" + m[1] }) : new Response(JSON.stringify({ message: "401: Unauthorized" }), { status: 401 });
+    }
     if (path === "/users/@me/channels") return Response.json({ id: `dm-${body.recipient_id}` });
     if (/^\/channels\/[^/]+\/messages$/.test(path)) return Response.json({ id: String(msgId++) });
     if (/^\/guilds\/[^/]+\/channels$/.test(path)) return Response.json([{ id: "c1", name: "general", type: 0, position: 0 }, { id: "c2", name: "contests", type: 0, position: 1 }, { id: "arena1", name: "⚔️-arena", type: 0, position: 2 }, { id: "v1", name: "voice", type: 2, position: 3 }, ...discordFake.channels]);

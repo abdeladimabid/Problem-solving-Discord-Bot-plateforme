@@ -12,6 +12,7 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
+import { identOk, noteIp, signInUrl } from "../shared/identity.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
 import { MiseError, aiCheck, learnerEvent, learnerInfo, readTakerToken, runItem, saveItem, startTaker, submitTaker } from "../shared/misesdb.ts";
 
@@ -24,12 +25,17 @@ export async function handleMise(request: Request, env: Env, ctx: Ctx, token: st
   const tk = await env.DB.prepare("SELECT guild_id FROM mise_takers WHERE id = ?").bind(takerId).first<{ guild_id: string }>().catch(() => null);
   if (!tk) return json({ error: "expired" }, 404);
   env = forClass(env, tk.guild_id);   // the AI check uses this class's keys
+  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title
+  if (!(await identOk(env, "mes", takerId, request))) {
+    if (request.method === "GET" && action === "info") { const i = await learnerInfo(env, takerId); return json({ ident: false, signIn: signInUrl(env, "mes", token), title: i?.title ?? "", metier: i?.metier ?? "", status: i?.status ?? "closed" }); }
+    return json({ error: "identify" }, 401);
+  }
   try {
     if (request.method === "GET" && action === "info") return json(await learnerInfo(env, takerId));
     if (request.method !== "POST") return json({ error: "method" }, 405);
     let b: any = {};
     try { b = await request.json(); } catch { b = {}; }
-    if (action === "start") return json(await startTaker(env, takerId));
+    if (action === "start") { await noteIp(env, "mes", takerId, request).catch(() => null); return json(await startTaker(env, takerId)); }
     if (action === "translate") {
       const to = String(b.to ?? "") as TrLang;
       if (!TR_LANGS.includes(to) || !Array.isArray(b.texts)) return json({ error: "bad" }, 400);
@@ -208,9 +214,24 @@ $("#theme").onclick = function () { store.set("cb-mes-theme", dark() ? "light" :
 applyTheme();
 
 // ---------------------------------------------------------------- server
+// this browser's id, given when signing in with Discord: every call says which device it comes from
+var DEV = ""; try { DEV = localStorage.getItem("cb-dev") || ""; } catch (e) {}
+var IDENTING = false;
 function call(path, body) {
-  return fetch(BASE + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), keepalive: JSON.stringify(body).length < 60000 } : { cache: "no-store" })
-    .then(function (r) { return r.json().catch(function () { return { error: "network" }; }); });
+  var h = { "x-cb-dev": DEV };
+  if (body) h["content-type"] = "application/json";
+  return fetch(BASE + path, body ? { method: "POST", headers: h, body: JSON.stringify(body), keepalive: JSON.stringify(body).length < 60000 } : { cache: "no-store", headers: h })
+    .then(function (r) { return r.json().catch(function () { return { error: "network" }; }); })
+    .then(function (r) {
+      // signed out here (another device signed in, or never signed in): the Discord sign-in again
+      if (r && r.error === "identify" && !IDENTING) { IDENTING = true; DONE = true; if (document.fullscreenElement) document.exitFullscreen().catch(function () {}); fetch(BASE + "/info", { cache: "no-store", headers: { "x-cb-dev": DEV } }).then(function (x) { return x.json(); }).then(signInScreen, function () { signInScreen({}); }); }
+      return r;
+    });
+}
+function signInScreen(i) {
+  $("#title").textContent = (i && i.title) || "Mise en situation"; $("#sub").textContent = (i && i.metier) || "";
+  screen('<div class="big">🔐</div><h1>Connecte-toi avec Discord</h1><p class="muted">Ce lien est personnel : pour l’ouvrir, connecte-toi avec le compte Discord qui l’a reçu en message privé. Un autre compte ne peut pas l’ouvrir.</p>'
+    + (i && i.signIn ? '<a class="btn primary" style="background:#5865f2;border-color:#5865f2;text-decoration:none" href="' + esc(i.signIn) + '">Se connecter avec Discord</a>' : '<p class="notice">Recharge la page.</p>'));
 }
 function toast(m) { var e = $("#toast"); e.textContent = m; e.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(function () { e.classList.remove("on"); }, 3200); }
 function savedMsg(m) { $("#saved").textContent = m; }
@@ -736,7 +757,7 @@ document.addEventListener("fullscreenchange", function () { if (!document.fullsc
 window.addEventListener("blur", function () { setTimeout(function () { var a = document.activeElement; if (!document.hasFocus() && !(a && a.tagName === "IFRAME")) leave("blur"); }, 250); });
 
 // ---------------------------------------------------------------- the session stopped (full screen rule)
-var LOCKWHY = { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d’onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs." };
+var LOCKWHY = { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d’onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs.", device: "Ta copie a été ouverte sur un autre appareil." };
 function lockedNow(why, already) {
   if (!P || DONE || LOCKED || (!already && Date.now() < GRACE)) return;
   LOCKED = true;
@@ -808,7 +829,7 @@ function finish(timeUp) {
 }
 $("#finish").onclick = confirmFinish;
 
-call("/info").then(function (i) { if (!i || i.error) return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); intro(i); });
+call("/info").then(function (i) { if (i && i.ident === false) return signInScreen(i); if (!i || i.error) { if (i && i.error === "identify") return; return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); } intro(i); });
 })();
 </script>
 </body>

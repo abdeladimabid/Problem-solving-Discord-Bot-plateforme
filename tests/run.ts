@@ -6,7 +6,24 @@ import { fileURLToPath } from "node:url";
 import { intranetFake, googleFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
-import bot from "../src/bot/index.ts";
+import botRaw from "../src/bot/index.ts";
+// Papers (/quiz, /mes) open only after « Sign in with Discord »: the old tests act as an already signed-in browser
+// (device "testdev-0000000000"), unless they send x-test-noident (the sign-in tests).
+const TEST_DEV = "testdev-0000000000";
+const bot = {
+  ...botRaw,
+  async fetch(req: Request, e: any, c: any) {
+    const m = /^\/(quiz|mes)\/(\d+)\./.exec(new URL(req.url).pathname);
+    if (m && !req.headers.get("x-cb-dev") && !req.headers.get("x-test-noident")) {
+      const kind = m[1], id = Number(m[2]);
+      (e.DB as any).raw.prepare("INSERT OR IGNORE INTO app_settings (k, v, updated_at) VALUES (?, ?, 0)").run(`ident:${kind}:${id}`, JSON.stringify({ uid: "test", devices: [TEST_DEV], ips: [], at: 0 }));
+      const h = new Headers(req.headers); h.set("x-cb-dev", TEST_DEV);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.text();
+      req = new Request(req.url, { method: req.method, headers: h, body });
+    }
+    return (botRaw as any).fetch(req, e, c);
+  },
+};
 import { backfillSkills } from "../src/shared/skills.ts";
 import admin from "../src/admin/index.ts";
 import { safeNext } from "../src/admin/password.ts";
@@ -7575,7 +7592,93 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   const sv3 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
   const t3 = await api("POST", `/api/mises/${sv3.data.id}/launch`, { g: G, only: true, testers: [U.prof.id], send: false });
   check(t3.data.takers.length === 1 && t3.data.takers[0].discord_id === U.prof.id, "launch « only me (a test) »: nobody else gets it");
+  // Sign in with Discord (always), one device per paper and network alerts (options, on by default)
+  {
+    const sv4 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    const l4 = await api("POST", `/api/mises/${sv4.data.id}/launch`, { g: G, students: [U.alice.id, U.bob.id], lockScreen: false, send: false });
+    const st4 = JSON.parse(q1("SELECT settings FROM mises WHERE id = ?", sv4.data.id).settings);
+    check(l4.status === 200 && st4.oneDevice === true && st4.netAlerts === true, "one device per paper and network alerts: on by default");
+    const tk4 = (await api("GET", `/api/mises/${sv4.data.id}/links?g=${G}`)).data.links[U.alice.id].split("/mes/")[1];
+    const raw = async (path: string, init: any = {}) => { const c = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev${path}`, { ...init, headers: { "x-test-noident": "1", ...(init.headers ?? {}) } }), env, c); await c.flush(); return { status: r.status, data: (r.headers.get("content-type") ?? "").includes("json") ? await r.json() as any : await r.text() }; };
+    const devA = "devA-aaaaaaaaaaaaaaaa", devB = "devB-bbbbbbbbbbbbbbbb";
+    const i0 = await raw(`/mes/${tk4}/info`);
+    check(i0.status === 200 && i0.data.ident === false && i0.data.title && !i0.data.n && String(i0.data.signIn).startsWith("https://discord.com/oauth2/authorize?") && String(i0.data.signIn).includes("scope=identify") && String(i0.data.signIn).includes(encodeURIComponent("mes~" + tk4)) && String(i0.data.signIn).includes(encodeURIComponent("/auth/discord")), "not signed in: only the title and the « Sign in with Discord » address");
+    check((await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}" })).data.error === "identify" && (await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).status === 401, "…nothing else opens (not even with a made-up device)");
+    const ap = await raw("/auth/discord");
+    check(ap.status === 200 && String(ap.data).includes("access_token") && String(ap.data).includes("cb-dev"), "/auth/discord: the page Discord sends back to");
+    const auth = (token: string, dev: string, ip = "10.1.1.5", state = "mes~" + tk4) => raw("/auth/discord", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": ip }, body: JSON.stringify({ state, token, dev }) });
+    const wrong = await auth("tok-" + U.bob.id, devA);
+    check(wrong.status === 403 && wrong.data.error === "wrong-account", "another Discord account (the link was forwarded): refused");
+    check((await auth("nope!", devA)).status === 401 && (await auth("tok-" + U.alice.id, devA, "1.1.1.1", "mes~1.2.AAAA")).status === 400, "…a bad Discord token or a broken link too");
+    const okA = await auth("tok-" + U.alice.id, devA);
+    check(okA.status === 200 && okA.data.ok && !okA.data.switched, "the right account: signed in, this browser is the paper's device");
+    const iA = await raw(`/mes/${tk4}/info`, { headers: { "x-cb-dev": devA } });
+    check(iA.data.status === "live" && iA.data.ident === undefined, "…the paper opens on it");
+    check(!!(await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA, "cf-connecting-ip": "10.1.1.5" } })).data.paper, "…and starts");
+    const okB = await auth("tok-" + U.alice.id, devB, "41.200.3.4");
+    const row = () => q1("SELECT status, events FROM mise_takers WHERE mise_id = ? AND discord_id = ?", sv4.data.id, U.alice.id);
+    check(okB.data.ok && okB.data.switched && row().status === "locked" && JSON.parse(row().events).at(-1)[4] === "device", "signing in on another device while working: stopped (even without full screen)");
+    check((await raw(`/mes/${tk4}/save`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).data.error === "identify", "…the first device is signed out");
+    const iB = await raw(`/mes/${tk4}/info`, { headers: { "x-cb-dev": devB } });
+    check(iB.data.taker === "locked" && iB.data.lockWhy === "device", "…the new one says why it's stopped");
+    const lv4 = (await api("GET", `/api/mises/${sv4.data.id}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+    check(lv4.live === "locked" && lv4.lockWhy === "device" && lv4.net && lv4.net.nets === 2, "the teacher sees it: another device, 2 networks");
+    const ul4 = await api("POST", `/api/mises/${sv4.data.id}/unlock`, { g: G, taker: lv4.id });
+    check(ul4.data.unlocked === 1 && !!(await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devB } })).data.paper, "let back in by the teacher: continues on the new device");
+    // the option off: no stop, both devices work
+    const sv5 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    await api("POST", `/api/mises/${sv5.data.id}/launch`, { g: G, students: [U.bob.id], lockScreen: false, oneDevice: false, netAlerts: false, send: false });
+    const st5 = JSON.parse(q1("SELECT settings FROM mises WHERE id = ?", sv5.data.id).settings);
+    check(st5.oneDevice === false && st5.netAlerts === false, "the teacher can turn both off");
+    const tk5 = (await api("GET", `/api/mises/${sv5.data.id}/links?g=${G}`)).data.links[U.bob.id].split("/mes/")[1];
+    await auth("tok-" + U.bob.id, devA, "10.1.1.6", "mes~" + tk5);
+    await raw(`/mes/${tk5}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } });
+    const b2 = await auth("tok-" + U.bob.id, devB, "10.1.1.6", "mes~" + tk5);
+    check(b2.data.ok && !b2.data.switched && q1("SELECT status FROM mise_takers WHERE mise_id = ?", sv5.data.id).status === "active" && !!(await raw(`/mes/${tk5}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).data.paper, "…one device off: another device doesn't stop it, both work");
+    check((await api("GET", `/api/mises/${sv5.data.id}?g=${G}`)).data.takers.every((t: any) => t.net == null), "…network alerts off: no network column data");
+    for (const id of [sv4.data.id, sv5.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
+  }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
+}
+
+section("papers: Sign in with Discord, one device per paper, network alerts");
+{
+  const { netFlags, netOf } = await import("../src/shared/identity.ts");
+  const ins = (id: number, ips: string[]) => run1("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, 0)", `ident:quiz:${id}`, JSON.stringify({ uid: "x", devices: [], ips: ips.map((ip) => ({ ip, at: 1 })), at: 1 }));
+  ins(900001, ["10.9.0.11"]); ins(900002, ["10.9.0.12"]); ins(900003, ["10.9.0.13"]); ins(900004, ["10.9.0.14", "105.66.1.2"]); ins(900005, ["10.9.0.15", "105.66.1.2", "10.9.0.15"]);
+  const nf = await netFlags(env, "quiz", [900001, 900002, 900003, 900004, 900005, 900006]);
+  check(netOf("10.9.0.11") === "10.9.0" && !nf[900001].outside && nf[900001].nets === 1, "the class's network: where most papers come from");
+  check(nf[900004].outside && nf[900004].nets === 2, "…a paper last opened elsewhere: outside the class, 2 networks");
+  check(!nf[900005].outside && nf[900005].nets === 2 && !nf[900006], "…back on the class network: not outside, but still 2 networks; no sign-in: nothing");
+  ins(900001, ["10.9.0.11"]); run1("DELETE FROM app_settings WHERE k IN ('ident:quiz:900002','ident:quiz:900003')");
+  check(!(await netFlags(env, "quiz", [900001, 900004]))[900004].outside, "…fewer than 3 papers agree: no class network, no « outside »");
+  run1("DELETE FROM app_settings WHERE k LIKE 'ident:quiz:9000%'");
+
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox (sign-in)", questions: [{ type: "explain", prompt: "Explique margin et padding.", expected: "dehors / dedans", points: 1 }], settings: { minutes: 30 } });
+  const aid = mk.data.assessment.id;
+  check(mk.data.assessment.settings.oneDevice === true && mk.data.assessment.settings.netAlerts === true, "assessments: one device per paper and network alerts on by default");
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.alice.id], send: true });
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[U.alice.id].split("/quiz/")[1];
+  const raw = async (path: string, init: any = {}) => { const c = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev${path}`, { ...init, headers: { "x-test-noident": "1", "content-type": "application/json", ...(init.headers ?? {}) } }), env, c); await c.flush(); return { status: r.status, data: await r.json().catch(() => null) as any }; };
+  const devA = "devA-aaaaaaaaaaaaaaaa", devB = "devB-bbbbbbbbbbbbbbbb";
+  const i0 = await raw(`/quiz/${tok}/info`);
+  check(i0.data.ident === false && String(i0.data.signIn).includes(encodeURIComponent("quiz~" + tok)) && !i0.data.questions, "not signed in: the « Sign in with Discord » address only");
+  check((await raw(`/quiz/${tok}/start`, { method: "POST", body: JSON.stringify({ sid: "sessionIDENTAAAAAAAAAA1" }) })).data.error === "identify", "…nothing else opens");
+  const auth = (token: string, dev: string, ip: string) => raw("/auth/discord", { method: "POST", headers: { "cf-connecting-ip": ip }, body: JSON.stringify({ state: "quiz~" + tok, token, dev }) });
+  check((await auth("tok-" + U.bob.id, devA, "10.1.1.5")).data.error === "wrong-account", "a forwarded link: another account is refused");
+  check((await auth("tok-" + U.alice.id, devA, "10.1.1.5")).data.ok, "the right account: signed in");
+  const s1 = await raw(`/quiz/${tok}/start`, { method: "POST", body: JSON.stringify({ sid: "sessionIDENTAAAAAAAAAA1" }), headers: { "x-cb-dev": devA } });
+  check(s1.status === 200 && !s1.data.error, "…the assessment starts " + JSON.stringify(s1.data).slice(0, 120));
+  const sw = await auth("tok-" + U.alice.id, devB, "41.200.3.4");
+  const tr = q1("SELECT status, lock_reason FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  check(sw.data.switched && tr.status === "locked" && tr.lock_reason === "device", "another device while working: stopped, « opened on another device »");
+  check((await raw(`/quiz/${tok}/info`, { headers: { "x-cb-dev": devA } })).data.ident === false && (await raw(`/quiz/${tok}/answer`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).data.error === "identify", "…the first device is signed out");
+  const av = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data;
+  const at = (av.takers ?? []).find((t: any) => t.discord_id === U.alice.id);
+  check(at && at.net && at.net.nets === 2, "the teacher's live view has the networks " + JSON.stringify(at?.net));
+  const so = await api("POST", `/api/assessments/${aid}/options`, { g: G, oneDevice: false, netAlerts: false });
+  check(so.status === 200 && so.data.assessment.settings.oneDevice === false && so.data.assessment.settings.netAlerts === false, "…the teacher can turn both off " + so.status);
+  await api("DELETE", `/api/assessments/${aid}?g=${G}`);
 }
 
 section("the assistant knows the app: its pages and how to set up");

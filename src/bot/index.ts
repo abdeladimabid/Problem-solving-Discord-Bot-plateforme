@@ -21,6 +21,7 @@ import { one } from "../shared/db.ts";
 import { certPage, profilePage } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
 import { handleMise } from "./mises.ts";
+import { handleAuth } from "./auth.ts";
 import { handleWorkPlan } from "./wplan.ts";
 import { leagueFeed } from "../shared/league.ts";
 import { handleBattle } from "./battle.ts";
@@ -68,6 +69,7 @@ export default {
     if (prof && request.method === "GET") return profilePage(env, prof[1]);
     const cert = url.pathname.match(/^\/cert\/([A-Za-z0-9._-]{40,260})$/);
     if (cert && request.method === "GET") return certPage(env, cert[1]);
+    if (url.pathname === "/auth/discord") return handleAuth(request, env);
     const quiz = url.pathname.match(/^\/quiz\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|answer|event|state|submit|translate|results))?$/);
     if (quiz) return handleQuiz(request, env, ctx, quiz[1], quiz[2]);
     const mes = url.pathname.match(/^\/mes\/(\d+\.\d+\.[A-Za-z0-9_-]{32}|expired)(?:\/(info|start|save|event|run|check|submit|translate))?$/);

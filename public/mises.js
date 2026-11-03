@@ -9,7 +9,10 @@ window.addEventListener("hashchange", () => { if (!location.hash.startsWith("#/m
 const MES_STATUS = { draft: ["draft", "Saved · not launched"], scheduled: ["pending", "Scheduled"], live: ["active", "Live"], closed: ["closed", "Closed"] };
 const mesStatus = (s) => status(...(MES_STATUS[s] || ["draft", s]));
 const MES_LIVE = { "not-started": ["none", "Not started"], working: ["ok", "Working"], done: ["good", "Done"], absent: ["warn", "Absent"], locked: ["bad", "🔒 Stopped"] };
-const MES_LOCK = { fullscreen: "left full screen", hidden: "switched tab", blur: "left the window", reload: "reloaded the page" };
+const MES_LOCK = { fullscreen: "left full screen", hidden: "switched tab", blur: "left the window", reload: "reloaded the page", device: "opened on another device" };
+/** Network alerts: opened outside the class's network, or from several networks. */
+const netHtml = (n) => (!n ? `<span class="muted">—</span>` : n.outside ? `<span class="lvl warn" title="Its last connection isn't the class's network (where most of the class is)">⚠ outside the class</span>${n.nets > 1 ? `<div class="small muted">${n.nets} networks</div>` : ""}`
+  : n.nets > 1 ? `<span class="lvl warn" title="Opened from several networks">${n.nets} networks</span>` : `<span class="small muted">class network</span>`);
 const mesLive = (s) => `<span class="lvl ${(MES_LIVE[s] || ["none"])[0]}">${esc((MES_LIVE[s] || ["", s])[1])}</span>`;
 const mesDur = (s) => (!s ? "—" : s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}` : s >= 60 ? `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}` : `${s} s`);
 const RUNTIME = { web: "HTML/CSS/JS (browser)", node: "Node.js (runner)", php: "PHP (runner)", sql: "SQL (sql.js)" };
@@ -467,6 +470,7 @@ function mesLiveTab(root) {
         { label: "Correct", num: true, sort: "correct", html: (t) => `<b style="color:${t.correct ? "var(--up)" : "inherit"}">${t.correct}</b><span class="small muted">/${n}</span>` },
         m.settings.lockScreen ? { label: "Sessions stopped", num: true, sort: "locks", html: (t) => (t.locks ? `<b>${t.locks}×</b>` : "0") }
           : { label: "Left page", num: true, sort: "leaves", html: (t) => (t.leaves ? `<b>${t.leaves}×</b><div class="small muted">${mesDur(t.awaySec)}</div>` : "0") },
+        ...(m.settings.netAlerts ? [{ label: "Network", html: (t) => netHtml(t.net) }] : []),
         { label: "Pastes", num: true, sort: "pastes", html: (t) => (t.pastes || t.blockedPastes ? `<b>${t.pastes}</b>${t.pasteChars ? `<div class="small muted">${t.pasteChars} chars</div>` : ""}${t.blockedPastes ? `<div class="small" style="color:var(--warn)">${t.blockedPastes} blocked</div>` : ""}` : "0") },
         { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ""}</span>` },
       ], rows, { empty: MSIT.filter === "all" ? "Nobody yet: launch it for the class." : "Nobody in this filter." })}
@@ -637,6 +641,9 @@ async function mesLaunchDialog(pre = []) {
       <div><label for="ml-at">Time</label><input type="datetime-local" id="ml-at" value="${local(Math.ceil(Date.now() / 1000 / 900) * 900 + 900)}" disabled></div>
       <div><label for="ml-min">Duration (minutes)</label><input type="number" id="ml-min" min="0" max="600" value="${m.settings.minutes || 90}"><small class="muted">0 = open until you close it</small></div>
     </div>
+    <p class="small" style="margin:12px 0 4px">🔐 <b>Sign in with Discord</b> is always required: the link only opens for the account it was sent to.</p>
+    <label class="check"><input type="checkbox" id="ml-od" ${m.settings.oneDevice !== false ? "checked" : ""}> <span><b>One device per paper</b> <span class="muted small">(signing in on another computer or phone while working stops their session until you let them back in)</span></span></label>
+    <label class="check"><input type="checkbox" id="ml-net" ${m.settings.netAlerts !== false ? "checked" : ""}> <span><b>Network alerts</b> <span class="muted small">(the Live tab flags a paper opened outside the class's network, or from several networks; nothing is blocked)</span></span></label>
     <label class="check"><input type="checkbox" id="ml-fs" ${m.settings.lockScreen !== false ? "checked" : ""}> <span><b>Full screen, like an assessment</b> <span class="muted small">(leaving full screen, the tab or the window stops their session until you let them back in from the Live tab)</span></span></label>
     <label class="check"><input type="checkbox" id="ml-np" ${m.settings.noPaste ? "checked" : ""}> <span><b>Block copy-paste</b> in the editor <span class="muted small">(off: pastes are allowed and recorded, with what was pasted)</span></span></label>
     <label class="check"><input type="checkbox" id="ml-ch" ${m.settings.channel ? "checked" : ""}> <span>Post a short message in the class channel</span></label>
@@ -652,7 +659,7 @@ async function mesLaunchDialog(pre = []) {
     const at = $("#ml-when").value === "at" ? Math.round(new Date($("#ml-at").value).getTime() / 1000) : 0;
     if ($("#ml-when").value === "at" && !(at > 0)) throw new Error("Pick the start time.");
     const r = await api(`/mises/${m.id}/launch`, { method: "POST", body: { students, only: who === "test", testers, startsAt: at || null, minutes: Number($("#ml-min").value) || 0,
-      lockScreen: $("#ml-fs").checked, noPaste: $("#ml-np").checked, channel: $("#ml-ch").checked, send: $("#ml-dm").checked } });
+      lockScreen: $("#ml-fs").checked, oneDevice: $("#ml-od").checked, netAlerts: $("#ml-net").checked, noPaste: $("#ml-np").checked, channel: $("#ml-ch").checked, send: $("#ml-dm").checked } });
     dlg.close(); MSIT.d = r; MSIT.tab = "live";
     toast(`${r.invited} learner(s) · ${r.sent} DM sent${r.sent < r.invited ? " · copy the links of the others in Live" : ""}`);
     mesRender();

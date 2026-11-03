@@ -1,6 +1,7 @@
 // Dashboard API for the learning part: programmes (planning + competencies), briefs (generator, editor, hand-ins,
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
+import { netFlags } from "../shared/identity.ts";
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
 import { all, now, one, run } from "../shared/db.ts";
@@ -865,6 +866,8 @@ async function assessView(env: Env, g: GuildRow, id: number) {
     `SELECT t.*, p.name FROM assessment_takers t LEFT JOIN players p ON p.guild_id = t.guild_id AND p.discord_id = t.discord_id WHERE t.assessment_id = ? ORDER BY p.name`, id);
   const students = await withoutStaff(env, g.id, await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? ORDER BY name", g.id));
   const released = await releasedOf(env, id);
+  // network alerts (an option): opened outside the class's network, or from several networks
+  const net = settingsOf(a).netAlerts ? await netFlags(env, "quiz", takers.map((t) => t.id)) : {};
   return {
     assessment: { ...a, questions: qs, settings: settingsOf(a) }, students,
     takers: takers.map((tk) => {
@@ -875,7 +878,7 @@ async function assessView(env: Env, g: GuildRow, id: number) {
       // a paper with a question not graded yet (old ones: "Correction automatique indisponible") shows as "to grade"
       return { id: tk.id, discord_id: tk.discord_id, name: tk.name, status: tk.status === "graded" && needsGrading(tk) ? "submitted" : tk.status, pos: tk.pos, answered: Object.values(answers).filter((v: any) => (Array.isArray(v) ? v.length : String(v ?? "").trim())).length,
         started_at: tk.started_at, deadline: tk.deadline, submitted_at: tk.submitted_at, locked_at: tk.locked_at, lock_reason: tk.lock_reason, resume_ok: tk.resume_ok, unlocks: tk.unlocks,
-        score: tk.score, summary: tk.summary, answers, grades, events, open_until: tk.open_until ?? null, sent: released.has(tk.id), order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id) };
+        score: tk.score, summary: tk.summary, answers, grades, events, open_until: tk.open_until ?? null, sent: released.has(tk.id), order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id), net: net[tk.id] ?? null };
     }),
   };
 }

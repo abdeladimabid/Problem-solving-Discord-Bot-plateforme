@@ -1842,7 +1842,7 @@ function analyzeDialog() {
 
 // ================================================================= ASSESSMENTS
 const QTYPE = { code: "Write code", explain: "Explain", mcq: "Multiple choice" };
-const LOCK = { fullscreen: "left full screen", hidden: "switched tab or app", blur: "left the window", reload: "reloaded the page", paste: "pasted" };
+const LOCK = { fullscreen: "left full screen", hidden: "switched tab or app", blur: "left the window", reload: "reloaded the page", paste: "pasted", device: "opened on another device" };
 const CODE_LANGS = ["javascript", "php", "python", "java", "c", "cpp", "sql", "html", "css", "typescript", "text"];
 
 /** Another teacher shared an assessment: paste the link, see what's in it, get a draft copy in this class. */
@@ -2330,9 +2330,9 @@ function readQuestions() {
 }
 
 // The assessment's anti-cheat options, in words (shown before inviting, and on the assessment page)
-const optsOf = (st = {}) => ({ lockScreen: st.lockScreen !== false, noPaste: st.noPaste !== false, shuffle: st.shuffle !== false, nav: st.nav === "forward" ? "forward" : "free" });
+const optsOf = (st = {}) => ({ lockScreen: st.lockScreen !== false, noPaste: st.noPaste !== false, shuffle: st.shuffle !== false, nav: st.nav === "forward" ? "forward" : "free", oneDevice: st.oneDevice !== false, netAlerts: st.netAlerts !== false });
 const optsChips = (st) => { const o = optsOf(st);
-  return [o.lockScreen ? "🔒 Full screen lock" : "🔓 No full screen lock", o.noPaste ? "✋ Copy-paste blocked" : "📋 Copy-paste allowed", o.shuffle ? "🔀 Shuffled" : "➡️ Same order for all", o.nav === "forward" ? "⏭️ No going back" : "↩️ Can go back"]
+  return [o.lockScreen ? "🔒 Full screen lock" : "🔓 No full screen lock", o.noPaste ? "✋ Copy-paste blocked" : "📋 Copy-paste allowed", o.shuffle ? "🔀 Shuffled" : "➡️ Same order for all", o.nav === "forward" ? "⏭️ No going back" : "↩️ Can go back", "🔐 Discord sign-in", o.oneDevice ? "📱 One device" : "📱 Any device", o.netAlerts ? "📶 Network alerts" : "📶 No network alerts"]
     .map((x) => `<span class="tag">${x}</span>`).join(" "); };
 /** Step 1: the anti-cheat options (always asked before the first invitation; "Change" later while nobody started). */
 function assessOptionsDialog(next = null) {
@@ -2345,9 +2345,12 @@ function assessOptionsDialog(next = null) {
       ${opt("op-paste", o.noPaste, "Block copy-paste", "No pasting in the answers (and no right click).")}
       ${opt("op-shuf", o.shuffle, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
       ${opt("op-back", o.nav === "forward", "Disable going back", "One question at a time: once a question is passed they can't come back to it. Untick to let them go back and change their answers.", started)}
+      ${opt("op-od", o.oneDevice, "One device per paper", "The browser that signed in with Discord is the paper's device. Signing in on another computer or phone while working stops their session until you let them back in.")}
+      ${opt("op-net", o.netAlerts, "Network alerts", "The Live tab flags a paper opened outside the class's network (where most of the class is), or from several networks. Nothing is blocked.")}
+      <p class="muted small" style="margin:6px 0 0">🔐 <b>Sign in with Discord</b> is always required: the link only opens for the Discord account it was sent to.</p>
       ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>`,
     [{ label: next ? "Next: choose the students →" : "Save", primary: true, action: async (d) => {
-      AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "forward" : "free" } });
+      AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "forward" : "free", oneDevice: $("#op-od", d).checked, netAlerts: $("#op-net", d).checked } });
       AS.optsAsked = a.id;
       if (next) next(); else { d.close(); toast("Options saved"); renderAssessment(); }
     } }]);
@@ -2419,6 +2422,7 @@ function assessLiveTab(root) {
       { label: "Progress", html: (t) => `${meter(n ? (100 * t.answered) / n : 0)}<span class="small muted">${t.answered}/${n} answered ${left(t)}</span>` },
       { label: "Stops", num: true, html: (t) => `${t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length}${t.events.some((e) => e[1] === "paste") ? ` <span class="lvl warn" title="Tried to paste">paste</span>` : ""}` },
       { label: "Last event", html: (t) => `<span class="small">${lastEv(t)}</span>` },
+      ...(optsOf(a.settings).netAlerts ? [{ label: "Network", html: (t) => (!t.net ? `<span class="muted">—</span>` : t.net.outside ? `<span class="lvl warn" title="Its last connection isn't the class's network (where most of the class is)">⚠ outside the class</span>${t.net.nets > 1 ? `<div class="small muted">${t.net.nets} networks</div>` : ""}` : t.net.nets > 1 ? `<span class="lvl warn">${t.net.nets} networks</span>` : `<span class="small muted">class network</span>`) }] : []),
       { label: "", html: (t) => `${t.status === "locked" && !t.resume_ok ? `<button class="btn small primary" data-unlock="${t.id}">Let back in</button>` : ""}
           <button class="btn small" data-ev="${t.id}">Events</button> <button class="btn small" data-link="${esc(t.discord_id)}">Link</button>
           ${["invited", "active", "locked"].includes(t.status) ? `<button class="btn small danger" data-rm="${t.id}" title="Take back the invitation: their link stops working">Remove</button>` : ""}` },
