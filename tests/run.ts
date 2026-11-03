@@ -6255,6 +6255,21 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   discordFake.chan["/channels/c1/messages"] = [1, 2, 3].map((i) => ({ id: String(9010 + i), timestamp: ts(600 + i), author: { id: A }, content: "", embeds: [] }));
   const Lh = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who });
   check(Lh.data.links.hidden === true && !Lh.data.members[A].hints.T5, "…Discord hides the messages' text (Message Content intent off): said, and CT5 isn't guessed");
+  // an individual debrief: the same check, for the learner themself
+  {
+    const solo = `u:${A}`;
+    const had = q1("SELECT 1 AS x FROM brief_reviews WHERE brief_id = ? AND who = ?", id, solo);
+    if (!had) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'draft', ?)", id, G, solo, clock.now());
+    discordFake.chan["/channels/c1/messages"] = [
+      { id: "9023", timestamp: ts(500), author: { id: A }, content: "le lien de mon site https://alice.github.io/projet", embeds: [] },
+      { id: "9022", timestamp: ts(700), author: { id: B }, content: "https://bob.example.com (not theirs)", embeds: [] }];
+    const S0 = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${encodeURIComponent(solo)}`);
+    const S1 = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who: solo });
+    const S2 = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${encodeURIComponent(solo)}`);
+    check(S0.status === 200 && S1.status === 200 && S1.data.links.mine.length === 1 && /alice\.github\.io/.test(S1.data.links.mine[0].url) && S2.data.links.mine.length === 1 && !S1.data.links.hidden,
+      `an individual debrief: the links the learner shared on Discord (not the others'), kept with it (${S1.status} ${JSON.stringify(S1.data).slice(0, 200)})`);
+    if (!had) run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, solo);
+  }
   delete discordFake.chan["/channels/c1/messages"];
   // 🔍 the lines an AI wrote: index.html (AI in VS Code) and style.css (typed)
   const pemK = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";

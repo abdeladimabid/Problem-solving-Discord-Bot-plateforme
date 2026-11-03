@@ -341,17 +341,21 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     // a squad, member by member: their assessment, AI flags, questions to ask, suggested switches; the Discord links (CT5)
     // and the AI lines of their commits on demand
+    // an individual debrief: the links of the learner themself (CT5), same as a squad member's
+    const solo = who.startsWith("u:") ? who.slice(2) : null;
+    const linksOut = (rec: any) => (rec?.links ? { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null, ...(solo ? { mine: rec.links.byMember?.[solo] ?? [] } : {}) } : null);
     if (act === "insights" && method === "GET") {
       const r = await getReview(env, id, who);
-      return ok({ members: r?.rec ? await memberInsights(env, g, b, r.rec) : {}, links: r?.rec?.links ? { at: r.rec.links.at, scanned: r.rec.links.scanned, hidden: r.rec.links.hidden, error: r.rec.links.error ?? null } : null });
+      return ok({ members: r?.rec && !solo ? await memberInsights(env, g, b, r.rec) : {}, links: linksOut(r?.rec) });
     }
     if (act === "links" && method === "POST") {
       const r = await getReview(env, id, who);
-      if (!r?.rec?.contrib?.length) bad("Analyze the squad's repo first.");
+      if (!r?.rec) bad("Open the debrief first.");
       const rec = r!.rec;
-      rec.links = await scanLinks(env, g, rec.contrib.map((x: any) => String(x.gid)), b.start - 86400, (b.due || now()) + 86400);
+      if (!solo && !rec.contrib?.length) bad("Analyze the squad's repo first.");
+      rec.links = await scanLinks(env, g, solo ? [solo] : rec.contrib.map((x: any) => String(x.gid)), b.start - 86400, (b.due || now()) + 86400);
       await putReview(env, g, id, who, rec);
-      return ok({ members: await memberInsights(env, g, b, rec), links: { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null } });
+      return ok({ members: solo ? {} : await memberInsights(env, g, b, rec), links: linksOut(rec) });
     }
     // precise oral questions on the notions behind what each member missed (the AI, once; again with force)
     if (act === "probes" && method === "POST") {

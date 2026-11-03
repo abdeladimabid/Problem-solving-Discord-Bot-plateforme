@@ -1263,6 +1263,7 @@ function renderDebrief() {
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
       ${sq ? "" : `<section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+        ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
@@ -1270,6 +1271,7 @@ function renderDebrief() {
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span>
             <div style="margin-top:4px">${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
               <span class="lvl ${a[0]}">📁 project: ${esc(a[1])}</span>${(rec.assess || []).some((x) => x.score != null) && !ax.length ? ` <span class="small muted">not in the assessment</span>` : ""}</div>
+            ${/^C?T5/.test(c.code) ? `<div class="db-ilinks" data-ilinks></div>` : ""}
             ${compAdvice(c.avis, aV[base])}
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
@@ -1459,6 +1461,27 @@ function memberCardHtml(rec, st, m, comps, final) {
 }
 const firstNameOf = (n) => String(n || "").trim().split(/\s+/)[0] || "";
 
+// an individual debrief: the links the learner shared on Discord during the brief (CT5), like a squad member's
+async function loadSoloLinks() {
+  if (!$("#db-ilk") && !$("[data-ilinks]")) return;
+  const key = `${DB.bid}~${DB.who}`;
+  if (!DB.ins || DB.ins.key !== key) {
+    try { DB.ins = { key, ...(await api(`/briefs/${DB.bid}/review/insights?who=${encodeURIComponent(DB.who)}`)) }; } catch { return; }
+  }
+  drawSoloLinks();
+}
+function drawSoloLinks() {
+  const lk = DB.ins?.links;
+  if ($("#db-lkst")) $("#db-lkst").innerHTML = !lk ? "Not checked yet" : lk.error ? `<span style="color:var(--down)">${esc(lk.error)}</span>`
+    : lk.hidden ? `<span style="color:var(--down)">Discord hides the text of the messages: turn on the bot's <b>Message Content Intent</b> (Discord Developer Portal → your app → Bot), then check again.</span>`
+    : `Checked ${fmtAgo(lk.at)} · ${lk.scanned} message(s) read`;
+  const mine = lk && !lk.error && Array.isArray(lk.mine) ? lk.mine : null;
+  for (const box of $$("[data-ilinks]")) {
+    box.innerHTML = !mine ? "" : mine.length
+      ? `<span class="lvl good" title="A suggestion: your switch decides">🔗 Discord: ${mine.length} link${mine.length > 1 ? "s" : ""} shared during the brief</span> <details class="mc-lk"><summary>See them</summary>${mine.map((l) => `<div><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, "").slice(0, 70))}</a> <span class="muted">#${esc(l.channel)} · ${esc(fmtDateTime(l.at))}</span></div>`).join("")}</details>`
+      : lk.hidden ? "" : `<span class="lvl bad" title="A suggestion: your switch decides">🔗 Discord: no link shared during the brief</span>`;
+  }
+}
 // what ClassBot knows about each member (assessment, AI flags, questions, suggestions): kept for this debrief
 async function loadMemberInsights(fresh = false) {
   const cards = $$(".mc");
@@ -1739,6 +1762,13 @@ function wireDebrief() {
   loadMemberVsc();
   wireMembers();
   loadMemberInsights();
+  loadSoloLinks();
+  if ($("#db-ilk")) $("#db-ilk").onclick = (e) => busy(e.currentTarget, async () => {
+    toast("⏳ Reading the Discord channels of the brief's dates…");
+    const r = await api(`/briefs/${DB.bid}/review/links`, { method: "POST", body: { who: DB.who } });
+    DB.ins = { key: `${DB.bid}~${DB.who}`, ...r };
+    drawSoloLinks();
+  });
   // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data. Their fields are saved
   // first: the page is drawn again after, and nothing you typed may be lost.
   $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
