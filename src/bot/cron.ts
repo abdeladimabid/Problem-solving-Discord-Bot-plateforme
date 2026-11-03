@@ -29,6 +29,7 @@ import { COMMANDS, commandsVersion } from "../shared/commands.ts";
 import { dapi } from "../shared/discord.ts";
 import { purgeRaw } from "../shared/vscodedb.ts";
 import { sheetCron } from "../shared/gsheet.ts";
+import { idleCron } from "../shared/idle.ts";
 
 async function safe(name: string, fn: () => Promise<unknown>) {
   try {
@@ -63,6 +64,8 @@ export async function runCron(env: Env) {
   await safe("github", () => githubCron(env));
   await safe("assessments", () => assessCron(env));
   await safe("mises en situation", () => miseCron(env));
+  // 💤 students idle for too long in class time: a DM with « need help? » (every 5 minutes, the classes that want it)
+  await safe("idle", () => idleCron(env, (uid, payload) => dm(env, uid, payload)));
   // VS Code activity: once a night, the raw heartbeats past each class's retention days go (the day totals stay)
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 17) await safe("vscode retention", () => purgeRaw(env)); }
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 23) await safe("intranet profiles", () => syncIntranetProfiles(env)); }

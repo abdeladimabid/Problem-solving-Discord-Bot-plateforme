@@ -411,34 +411,51 @@ async function viewPathPage() {
   S.skillDefs = d.skills; S.pathDefaults = d.defaults;
   let steps = d.steps.map((x) => ({ ...x }));
   const lessons = { ...d.lessons };
+  let customSkills = [...(d.customSkills || [])];
   let cov = d.coverage || {};
   const langNames = d.track.family === "sql" ? "SQL" : d.langs.map((l) => LANG[l] || l).join(" + ");
-  const skillOpt = (s, sel) => `<option value="${s.key}" ${s.key === sel ? "selected" : ""}>${esc(s.emoji + " " + s.en)}${s.fits ? "" : " (not in this track)"}</option>`;
-  // lessons list: this track's roadmap first (in order), then the other skills of the track, then the rest
-  const roadKeys = [...new Set(d.steps.map((x) => x.skill))];
-  const byKey = Object.fromEntries(d.skills.map((s) => [s.key, s]));
-  const lessonSkills = [
-    ...roadKeys.map((k) => byKey[k]).filter(Boolean),
-    ...d.skills.filter((s) => !roadKeys.includes(s.key) && s.fits),
-    ...d.skills.filter((s) => !roadKeys.includes(s.key) && !s.fits),
-  ];
-  const lessonOpts = () => {
-    const g = (label, arr) => arr.length ? `<optgroup label="${label}">${arr.map((s) => skillOpt(s)).join("")}</optgroup>` : "";
-    return g("In this roadmap", lessonSkills.filter((s) => roadKeys.includes(s.key)))
-      + g("Other skills of this track", lessonSkills.filter((s) => !roadKeys.includes(s.key) && s.fits))
-      + g("Other tracks", lessonSkills.filter((s) => !roadKeys.includes(s.key) && !s.fits));
+  const skillOpt = (s, sel) => `<option value="${s.key}" ${s.key === sel ? "selected" : ""}>${esc(s.emoji + " " + s.en)}${s.custom ? " (custom)" : s.fits ? "" : " (not in this track)"}</option>`;
+
+  // Dynamically compute skills so newly added custom skills show up everywhere immediately
+  const getRoadKeys = () => [...new Set(steps.map((x) => x.skill))];
+  const getByKey = () => Object.fromEntries(d.skills.map((s) => [s.key, s]));
+  const getLessonSkills = () => {
+    const rk = getRoadKeys();
+    const bk = getByKey();
+    const inRoad = rk.map((k) => bk[k]).filter(Boolean);
+    const custom = d.skills.filter((s) => s.custom && !rk.includes(s.key));
+    const trackSkills = d.skills.filter((s) => !rk.includes(s.key) && !s.custom && s.fits);
+    const otherTracks = d.skills.filter((s) => !rk.includes(s.key) && !s.custom && !s.fits);
+    return [...inRoad, ...custom, ...trackSkills, ...otherTracks];
   };
+
+  const skillOptionsHtml = (selectedSkill) => {
+    const ls = getLessonSkills();
+    const rk = getRoadKeys();
+    const g = (label, arr) => arr.length ? `<optgroup label="${label}">${arr.map((s) => skillOpt(s, selectedSkill)).join("")}</optgroup>` : "";
+    return g("In this roadmap", ls.filter((s) => rk.includes(s.key)))
+      + g("Custom skills", ls.filter((s) => !rk.includes(s.key) && s.custom))
+      + g("Other skills of this track", ls.filter((s) => !rk.includes(s.key) && !s.custom && s.fits))
+      + g("Other tracks", ls.filter((s) => !rk.includes(s.key) && !s.custom && !s.fits))
+      + `<optgroup label="Actions"><option value="__new__">➕ Add a new skill…</option></optgroup>`;
+  };
+
   view.innerHTML = `
     <div class="page-head"><div><h1>Path &amp; lessons</h1><p class="sub">The step-by-step route students follow with <code>/path</code>. A step is done after enough solves of that skill at that level or harder. Each track has its own roadmap and lessons.</p>
       <label class="track-pick">This class learns <select id="p-track">${trackOptions(d.track.key)}</select></label></div>
-      <div class="toolbar" style="margin:0">${d.custom ? `<button class="btn" id="p-reset">Back to the default path</button>` : ""}<button class="btn primary" id="p-save">Save</button></div></div>
+      <div class="toolbar" style="margin:0"><button class="btn" id="p-new-skill">${icon("plus")} New skill</button>${d.custom ? `<button class="btn" id="p-reset">Back to the default path</button>` : ""}<button class="btn primary" id="p-save">Save</button></div></div>
     <div class="grid path-grid">
       <section class="panel"><h2>Steps</h2>
         <p class="muted small">The number in each row is how many challenges your bank has for that skill and level in this track. Under twice the solves needed, it's shown in orange: press ✨ to have the AI write more.</p>
-        <div id="p-steps"></div><p><button class="btn small" id="p-add">${icon("plus")} Add a step</button></p></section>
+        <div id="p-steps"></div>
+        <p class="toolbar" style="margin:10px 0 0">
+          <button class="btn small" id="p-add">${icon("plus")} Add a step</button>
+          <button class="btn small" id="p-add-skill">${icon("plus")} Add a new skill</button>
+        </p>
+      </section>
       <section class="panel"><h2>Lessons</h2>
         <p class="muted small">Students open them with 📖 in <code>/path</code>. Empty = the built-in lesson below (written for this track, examples in ${esc(langNames)}). Markdown and \`\`\`code blocks\`\`\` work.</p>
-        <label for="p-skill">Skill</label><select id="p-skill" style="width:100%">${lessonOpts()}</select>
+        <label for="p-skill">Skill</label><select id="p-skill" style="width:100%">${skillOptionsHtml()}</select>
         <div class="toolbar" style="margin:10px 0 0">
           <button class="btn small primary" id="p-ai">✨ Write with AI</button>
           <button class="btn small" id="p-copy">Edit the built-in lesson</button>
@@ -452,24 +469,39 @@ async function viewPathPage() {
         <div class="lesson-preview" id="p-preview"></div>
       </section>
     </div>`;
+
   const covOf = (st) => cov[`${st.skill}-${st.level}`] ?? 0;
   const drawSteps = () => {
     $("#p-steps").innerHTML = `<ol class="path-steps">${steps.map((st, i) => {
       const n = covOf(st), low = n < st.need * 2;
       return `<li>
-      <select data-i="${i}" data-f="skill">${lessonSkills.map((s) => skillOpt(s, st.skill)).join("")}</select>
+      <select data-i="${i}" data-f="skill">${skillOptionsHtml(st.skill)}</select>
       <select data-i="${i}" data-f="level">${["easy", "medium", "hard"].map((l) => `<option value="${l}" ${l === st.level ? "selected" : ""}>${DIFF[l]}</option>`).join("")}</select>
       <input type="number" min="1" max="10" data-i="${i}" data-f="need" value="${st.need}" title="Solves needed">
       <span class="cov ${low ? "low" : ""}" title="${n} challenge(s) in your bank for this skill and level">${n}</span>
       <span class="toolbar" style="margin:0"><button class="icon-btn" data-gen="${i}" title="Generate challenges for this step with AI">✨</button><button class="icon-btn" data-up="${i}" title="Move up" ${i ? "" : "disabled"}>↑</button><button class="icon-btn" data-down="${i}" title="Move down" ${i < steps.length - 1 ? "" : "disabled"}>↓</button><button class="icon-btn" data-del="${i}" title="Remove">×</button></span>
     </li>`;
     }).join("")}</ol>`;
-    $$("[data-f]").forEach((el) => el.onchange = () => { const st = steps[Number(el.dataset.i)]; st[el.dataset.f] = el.dataset.f === "need" ? Number(el.value) : el.value; drawSteps(); });
+    $$("[data-f]").forEach((el) => el.onchange = () => {
+      const i = Number(el.dataset.i);
+      const st = steps[i];
+      if (el.dataset.f === "skill" && el.value === "__new__") {
+        el.value = st.skill;
+        openNewSkillDialog((newKey) => {
+          st.skill = newKey;
+          drawSteps();
+        });
+        return;
+      }
+      st[el.dataset.f] = el.dataset.f === "need" ? Number(el.value) : el.value;
+      drawSteps();
+    });
     $$("[data-up]").forEach((b) => b.onclick = () => { const i = Number(b.dataset.up); [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; drawSteps(); });
     $$("[data-down]").forEach((b) => b.onclick = () => { const i = Number(b.dataset.down); [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; drawSteps(); });
     $$("[data-del]").forEach((b) => b.onclick = () => { steps.splice(Number(b.dataset.del), 1); drawSteps(); });
     $$("[data-gen]").forEach((b) => b.onclick = () => { const st = steps[Number(b.dataset.gen)]; genForSkillDialog(st.skill, st.level, (c) => { cov = c; drawSteps(); }); });
   };
+
   let cur = $("#p-skill").value;
   let pvLang = "en";
   const preview = () => {
@@ -477,13 +509,13 @@ async function viewPathPage() {
     $("#p-preview").innerHTML = discordMarkdown(own || d.defaults.lessons[cur]?.[pvLang] || "");
   };
   $$("[data-pv]").forEach((b) => b.onclick = () => { pvLang = b.dataset.pv; $$("[data-pv]").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); preview(); });
-  const state = () => { $("#p-state").textContent = lessons[cur] ? "your own lesson" : "built-in lesson"; preview(); };
+  const state = () => { $("#p-state").textContent = lessons[cur] ? "your own lesson" : (d.defaults.lessons[cur] ? "built-in lesson" : "no lesson yet"); preview(); };
   const loadLesson = () => {
     cur = $("#p-skill").value;
     $("#p-en").value = lessons[cur]?.en ?? "";
     $("#p-fr").value = lessons[cur]?.fr ?? "";
-    $("#p-en").placeholder = d.defaults.lessons[cur]?.en ?? "";
-    $("#p-fr").placeholder = d.defaults.lessons[cur]?.fr ?? "";
+    $("#p-en").placeholder = d.defaults.lessons[cur]?.en ?? "Write the English lesson here (markdown, code blocks)...";
+    $("#p-fr").placeholder = d.defaults.lessons[cur]?.fr ?? "Écrivez la leçon en français ici...";
     state();
   };
   const keepLesson = () => {
@@ -491,17 +523,111 @@ async function viewPathPage() {
     if (en || fr) lessons[cur] = { en, fr }; else delete lessons[cur];
     state();
   };
-  $("#p-skill").onchange = () => { keepLesson(); loadLesson(); };
+
+  const openNewSkillDialog = (cb) => {
+    openDialog("✨ Add a new skill", `
+      <p class="muted small">Create a custom skill for your class's path, lessons, and practice challenges.</p>
+      <label for="sk-name-en">Skill name (English) <span class="muted">*</span></label>
+      <input type="text" id="sk-name-en" placeholder="e.g. React Native, Tailwind CSS, Docker" style="width:100%" autocomplete="off">
+      <div class="field-row" style="margin-top:10px">
+        <div style="flex:1">
+          <label for="sk-name-fr">Nom en français <span class="muted">(optionnel)</span></label>
+          <input type="text" id="sk-name-fr" placeholder="e.g. React Native, Tailwind CSS, Docker" style="width:100%" autocomplete="off">
+        </div>
+        <div style="width:90px">
+          <label for="sk-emoji">Emoji</label>
+          <input type="text" id="sk-emoji" value="📘" maxlength="4" style="width:100%;text-align:center">
+        </div>
+      </div>
+      <label for="sk-key" style="margin-top:10px">Identifier (slug) <span class="muted">*</span></label>
+      <input type="text" id="sk-key" placeholder="e.g. react_native" style="width:100%;font-family:monospace" autocomplete="off">
+      <p class="muted small">Lowercase letters, numbers and underscores (1–30 chars)</p>
+    `, [
+      {
+        label: "Add skill",
+        primary: true,
+        action: async (dlg) => {
+          const en = $("#sk-name-en", dlg).value.trim();
+          const fr = $("#sk-name-fr", dlg).value.trim() || en;
+          const emoji = $("#sk-emoji", dlg).value.trim() || "📘";
+          let key = $("#sk-key", dlg).value.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 30);
+          if (!key && en) key = en.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30);
+          if (!key) throw new Error("Please enter a skill name or identifier.");
+          if (!/^[a-z0-9_]{1,30}$/.test(key)) throw new Error("Identifier must use lowercase letters, numbers, and underscores (1–30 chars).");
+          if (d.skills.some((s) => s.key === key)) throw new Error(`A skill with identifier "${key}" already exists.`);
+
+          const newSkill = { key, en: en || key, fr: fr || en || key, emoji, fits: true, custom: true };
+          customSkills.push({ key, en: newSkill.en, fr: newSkill.fr, emoji: newSkill.emoji, custom: true });
+          d.skills.push(newSkill);
+          S.skillDefs = d.skills;
+
+          // Save immediately so backend /path/lesson-ai and challenges know about this skill right away
+          try {
+            await api("/path", { method: "PUT", body: { steps, lessons, customSkills } });
+          } catch (e) {
+            console.error("Auto-save skill failed:", e);
+          }
+
+          dlg.close();
+          toast(`Skill "${newSkill.emoji} ${newSkill.en}" added`);
+
+          // Refresh dropdowns and UI
+          $("#p-skill").innerHTML = skillOptionsHtml(key);
+          $("#p-skill").value = key;
+          loadLesson();
+          drawSteps();
+
+          if (cb) cb(key);
+        }
+      }
+    ]);
+
+    const nameIn = $("#sk-name-en", dlg);
+    const keyIn = $("#sk-key", dlg);
+    let keyTouched = false;
+    keyIn.oninput = () => { keyTouched = true; };
+    nameIn.oninput = () => {
+      if (!keyTouched) {
+        keyIn.value = nameIn.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30);
+      }
+    };
+    setTimeout(() => nameIn.focus(), 60);
+  };
+
+  $("#p-skill").onchange = () => {
+    if ($("#p-skill").value === "__new__") {
+      $("#p-skill").value = cur;
+      openNewSkillDialog((newKey) => {
+        cur = newKey;
+        $("#p-skill").innerHTML = skillOptionsHtml(cur);
+        $("#p-skill").value = newKey;
+        loadLesson();
+        drawSteps();
+      });
+      return;
+    }
+    keepLesson();
+    loadLesson();
+  };
   $("#p-en").oninput = $("#p-fr").oninput = keepLesson;
-  $("#p-copy").onclick = () => { $("#p-en").value = d.defaults.lessons[cur]?.en ?? ""; $("#p-fr").value = d.defaults.lessons[cur]?.fr ?? ""; keepLesson(); };
+  $("#p-copy").onclick = () => {
+    if (d.defaults.lessons[cur]) {
+      $("#p-en").value = d.defaults.lessons[cur]?.en ?? "";
+      $("#p-fr").value = d.defaults.lessons[cur]?.fr ?? "";
+      keepLesson();
+    } else {
+      toast("No built-in lesson for custom skills");
+    }
+  };
   $("#p-clear").onclick = () => { $("#p-en").value = ""; $("#p-fr").value = ""; keepLesson(); };
   $("#p-ai").onclick = () => {
-    openDialog(`✨ Lesson · ${skillLabel(cur)}`, `<p class="muted small">The AI writes a short lesson (idea, a tiny example in ${esc(langNames)}, one tip, links to read more) in English and French. It goes into the boxes: read it, change what you want, then <b>Save</b>.</p>
-      <label for="ai-hint">Your wishes <span class="muted">(optional)</span></label><input type="text" id="ai-hint" style="width:100%" maxlength="400" placeholder="e.g. use a shopping-cart example, mention foreach">`,
+    openDialog(`✨ Lesson · ${skillLabel(cur)}`, `<p class="muted small">The AI writes a full lesson in English and French: what it is and why, the key ideas, a commented example (in ${esc(langNames)}, or the topic's own language: a Dockerfile for Docker, SQL for databases…), the common mistakes, a small exercise, a tip, and resources (each link is opened to check it exists). It goes into the boxes: read it, change what you want, then <b>Save</b>.</p>
+      <label for="ai-hint">Your requirements <span class="muted">(optional · the AI must follow them)</span></label><textarea id="ai-hint" style="width:100%;min-height:80px" maxlength="800" placeholder="e.g. use a shopping-cart example, mention foreach, compare with a for loop, an exercise on a list of products"></textarea>`,
     [{ label: "Write it", primary: true, action: async () => {
       const b = $("[data-b='0']", dlg);
-      b.textContent = "Writing… (up to 1 min)";
-      const r = await api("/path/lesson-ai", { method: "POST", body: { skill: cur, hint: $("#ai-hint", dlg).value } });
+      b.textContent = "Writing and checking the links… (up to 2 min)";
+      const customSkill = d.skills.find((s) => s.key === cur);
+      const r = await api("/path/lesson-ai", { method: "POST", body: { skill: cur, hint: $("#ai-hint", dlg).value, customSkill } });
       $("#p-en").value = r.en; $("#p-fr").value = r.fr; keepLesson();
       dlg.close();
       toast("Lesson written: check it, then Save");
@@ -511,7 +637,14 @@ async function viewPathPage() {
   loadLesson();
   drawSteps();
   $("#p-add").onclick = () => { steps.push({ skill: "loops", level: "medium", need: 3 }); drawSteps(); };
-  $("#p-save").onclick = (e) => busy(e.currentTarget, async () => { keepLesson(); await api("/path", { method: "PUT", body: { steps, lessons } }); toast("Path saved"); viewPathPage(); });
+  $("#p-add-skill").onclick = () => openNewSkillDialog();
+  $("#p-new-skill").onclick = () => openNewSkillDialog();
+  $("#p-save").onclick = (e) => busy(e.currentTarget, async () => {
+    keepLesson();
+    await api("/path", { method: "PUT", body: { steps, lessons, customSkills } });
+    toast("Path saved");
+    viewPathPage();
+  });
   if ($("#p-reset")) $("#p-reset").onclick = () => confirmDialog("Back to the default path?", "Your steps and lessons are replaced by the built-in ones. Students keep their progress.", "Reset", async () => { await api("/path", { method: "PUT", body: { reset: true } }); toast("Default path restored"); viewPathPage(); }, true);
 }
 
@@ -562,6 +695,37 @@ function discordMarkdown(md) {
   }).join("").replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
 }
 
+
+// ===================================================== 💤 idle students (Settings → Notifications)
+async function loadIdle(state) {
+  const box = $("#s-idle");
+  if (!box) return;
+  let d = state;
+  try { d = d || (await api("/idle")); } catch (e) { box.innerHTML = `<p class="notice">${esc(e.message)}</p>`; return; }
+  const c = d.cfg, DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  box.innerHTML = `
+    <h3 style="margin:0 0 4px">💤 Students idle for too long</h3>
+    <p class="muted small" style="margin:0 0 10px">During class time, a student who was working and then shows no activity for too long gets a DM: <i>« Tu as besoin d'aide ? »</i> with buttons to raise their hand (✋ Help queue), ask a question (❓ Questions) or say all is fine. Activity: their use of the bot, their GitHub pushes, their VS Code time. Never a student who didn't come today, never one whose hand is already raised.</p>
+    <label class="check"><input type="checkbox" id="id-on" ${c.on ? "checked" : ""}><span>Send the DM</span></label>
+    <div class="field-row" style="margin-top:8px">
+      <div><label for="id-min">Too long means</label><select id="id-min">${[15, 20, 30, 45, 60, 90, 120, 180].map((m) => `<option value="${m}" ${m === c.minutes ? "selected" : ""}>${m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60}` : ""}`}</option>`).join("")}${[15, 20, 30, 45, 60, 90, 120, 180].includes(c.minutes) ? "" : `<option value="${c.minutes}" selected>${c.minutes} min</option>`}</select></div>
+      <div><label for="id-from">Class from</label><input type="time" id="id-from" value="${esc(c.from)}"></div>
+      <div><label for="id-to">to</label><input type="time" id="id-to" value="${esc(c.to)}"></div>
+      <div><label for="id-max">At most</label><select id="id-max">${[1, 2, 3].map((n) => `<option value="${n}" ${n === c.max ? "selected" : ""}>${n} DM${n > 1 ? "s" : ""} a day</option>`).join("")}</select></div>
+    </div>
+    <label style="margin-top:8px">Class days</label>
+    <div class="chips" id="id-days">${DAYS.map((x, i) => `<button type="button" class="chip" data-d="${i}" aria-pressed="${c.days.includes(i)}">${x}</button>`).join("")}</div>
+    <p class="small muted" style="margin:6px 0 0">Hours are Morocco time. One DM per idle spell: after it, a second one only if they worked again and went idle again.</p>
+    <p class="toolbar" style="margin-top:12px"><button class="btn primary" id="id-save">Save</button></p>
+    ${d.today.length ? `<p class="small" style="margin:8px 0 0"><b>Today:</b> ${d.today.map((x) => `<a href="#/student/${esc(x.id)}">${esc(x.name)}</a> <span class="muted">${esc(fmtAgo(x.at))}${x.n > 1 ? ` · ×${x.n}` : ""}${x.ok ? "" : " · DMs closed"}</span>`).join(", ")}</p>` : `<p class="small muted" style="margin:8px 0 0">Nobody got it today.</p>`}`;
+  $$("#id-days [data-d]", box).forEach((b) => b.onclick = () => b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true")));
+  $("#id-save", box).onclick = (e) => busy(e.currentTarget, async () => {
+    const days = $$("#id-days [aria-pressed='true']", box).map((b) => Number(b.dataset.d));
+    const r = await api("/idle", { method: "PUT", body: { on: $("#id-on", box).checked, minutes: Number($("#id-min", box).value), from: $("#id-from", box).value, to: $("#id-to", box).value, max: Number($("#id-max", box).value), days } });
+    toast(r.cfg.on ? `Saved: a DM after ${r.cfg.minutes} min without activity, ${r.cfg.from}–${r.cfg.to}` : "Saved: off");
+    loadIdle(r);
+  });
+}
 
 // ===================================================== 🔔 notifications (Settings)
 async function loadNotify(state) {

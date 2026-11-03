@@ -173,6 +173,12 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (f) { f.n--; return new Response(JSON.stringify({ message: "fake error", code: f.code }), { status: f.status }); }
     if (method === "GET" && discordFake.chan[path]) return Response.json(discordFake.chan[path]);
     if (/^\/channels\/[^/]+\/threads$/.test(path) && method === "POST") return Response.json({ id: `th-${msgId++}` });
+    // the Discord sign-in of a paper: the token « tok-<id> » is the account <id>
+    if (path === "/users/@me" && method === "GET") {
+      const h: any = init.headers || {}; const auth = String(h.authorization ?? h.Authorization ?? "");
+      const m = /^Bearer tok-(\w+)$/.exec(auth);
+      return m ? Response.json({ id: m[1], username: "u" + m[1] }) : new Response(JSON.stringify({ message: "401: Unauthorized" }), { status: 401 });
+    }
     if (path === "/users/@me/channels") return Response.json({ id: `dm-${body.recipient_id}` });
     if (/^\/channels\/[^/]+\/messages$/.test(path)) return Response.json({ id: String(msgId++) });
     if (/^\/guilds\/[^/]+\/channels$/.test(path)) return Response.json([{ id: "c1", name: "general", type: 0, position: 0 }, { id: "c2", name: "contests", type: 0, position: 1 }, { id: "arena1", name: "⚔️-arena", type: 0, position: 2 }, { id: "v1", name: "voice", type: 2, position: 3 }, ...discordFake.channels]);
@@ -435,6 +441,7 @@ export const ai = {
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
 };
 
@@ -530,6 +537,10 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       // Mises en situation, "Vérifier mon code": categories, plus what must never reach the learner (a line, a fix, unknown ids)
+      if (sys.includes("qui relit une évaluation")) { const w = ai.qcmWeak.shift(); const e = ai.sitEasy.shift(); const u = ai.qcmUnrelated.shift(); return { response: JSON.stringify({ weak: w ?? [], unrelated: u ?? [], level: e ?? [] }) }; }
+      // the QCM's answers judged without the key: by default the first choice of each is the only right one
+      if (sys.includes("expert en développement web très rigoureux")) { const qs = JSON.parse(user); const j = ai.qcmJudge.shift(); return { response: JSON.stringify({ q: qs.map((x: any) => ({ n: x.n, right: j?.[x.n] ?? [0] })) }) }; }
+      if (sys.includes("Tu réponds UNIQUEMENT avec un objet JSON valide, complet")) return { response: user.includes("Réécris UNIQUEMENT ces éléments") ? ai.miseItems : user.includes("TA PROPOSITION PRÉCÉDENTE") ? ai.miseJson2 || ai.miseJson : ai.miseJson };
       if (sys.includes("Tu classes le code d'un apprenant")) {
         if (ai.miseDown) throw new Error("AI down");
         return { response: JSON.stringify({ categories: ["selection", "Erreur de syntaxe", "give-the-answer", "logic", "event"], ligne: 3, explication: "Corrige la ligne 3 : écris document.querySelector('#titre')", solution: "titre.textContent = 'x'" }) };
@@ -673,8 +684,9 @@ function fakeAI() {
         const src = JSON.parse(user);
         return { response: JSON.stringify({ title: "FR " + src.title, question: "FR " + (src.question ?? ""), choices: src.choices ? src.choices.map((c: string) => "FR " + c) : null, hint: null }) };
       }
-      if (sys.includes("lessons for complete BEGINNERS")) {
-        return { response: JSON.stringify({ en: "**Loops**\nA loop repeats instructions.\n```py\nfor i in range(3):\n    print(i)\n```\n💡 Check the last turn.", fr: "**Boucles**\nUne boucle répète des instructions." }) };
+      if (sys.includes("lesson for BEGINNER students")) {
+        return { response: JSON.stringify({ en: "**Loops**\nA loop repeats instructions, see [this page](https://links.example.org/made-up).\n```py\nfor i in range(3):\n    print(i)\n```\n💡 Check the last turn.", fr: "**Boucles**\nUne boucle répète des instructions.",
+          resources: [{ title: "A real page", url: "https://links.example.org/ok", lang: "en" }, { title: "An invented page", url: "https://links.example.org/nope", lang: "en" }, { title: "Pas un lien", url: "javascript:alert(1)", lang: "fr" }], followed: [] }) };
       }
       if (sys.includes("design small programming projects")) {
         return { response: JSON.stringify({ title: "Add two numbers", description: "Read two integers and print their sum.\n**Input** two integers. **Output** their sum.", reference: "a, b = map(int, input().split())\nprint(a + b)", inputs: ["1 2\n", "10 -4\n", "0 0\n", "oops\n"] }) };

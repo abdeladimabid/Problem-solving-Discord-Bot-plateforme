@@ -31,6 +31,8 @@ export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string
   lockScreen: boolean;     // full screen: leaving it (or the tab) stops the session until the teacher lets them back in
   shuffle: boolean;        // each student gets the questions (and the choices) in their own order
   nav: "free" | "forward"; // free: go back and change any answer; forward: one question at a time, no going back
+  oneDevice: boolean;      // the browser that signed in with Discord is the paper's device: another one stops the session
+  netAlerts: boolean;      // the teacher sees papers opened outside the class's network, or from several networks
 }
 export interface AssessRow { id: number; guild_id: string; title: string; brief_id: number | null; status: string; settings: string | null; questions: string; created_at: number; opened_at: number | null; closes_at: number | null }
 export interface Grade { verdict: "correct" | "partial" | "wrong" | "empty"; score: number; comment: string; teacher?: boolean; right?: string; wrong?: string;
@@ -91,6 +93,7 @@ export function cleanSettings(s: any): Settings {
     // the students it was written for (pre-selected when inviting)
     target: (Array.isArray(s?.target) ? s.target : []).map(String).filter((x: string) => /^\d{1,25}$/.test(x)).slice(0, 60),
     noPaste: s?.noPaste !== false, lockScreen: s?.lockScreen !== false, shuffle: s?.shuffle !== false, nav: s?.nav === "forward" ? "forward" : "free",
+    oneDevice: s?.oneDevice !== false, netAlerts: s?.netAlerts !== false,
   };
 }
 const parse = <T>(s: string | null | undefined, d: T): T => { try { return s ? (JSON.parse(s) as T) : d; } catch { return d; } };
@@ -287,6 +290,19 @@ async function loadTaker(env: Env, takerId: number) {
 const sidOk = (s: unknown) => typeof s === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(s);
 const pushEvent = (tk: TakerRow, what: string) => JSON.stringify([...parse<[number, string][]>(tk.events, []), [now(), what]].slice(-80));
 
+/** Signed in with Discord on another device while working (« one device per paper »): the session stops. */
+export async function deviceLock(env: Env, takerId: number) {
+  const x = await loadTaker(env, takerId);
+  if (!x || x.tk.status !== "active") return;
+  await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = 'device', resume_ok = 0, events = ? WHERE id = ? AND status = 'active'", now(), pushEvent(x.tk, "device"), x.tk.id);
+}
+/** The paper behind a link, for the Discord sign-in: who it was sent to, whether it started, the options. */
+export async function takerIdent(env: Env, takerId: number) {
+  const x = await loadTaker(env, takerId);
+  if (!x) return null;
+  const st = settingsOf(x.a);
+  return { uid: x.tk.discord_id, started: ["active", "locked"].includes(x.tk.status), oneDevice: st.oneDevice };
+}
 /** What the page shows before starting (no questions). */
 export async function sessionInfo(env: Env, takerId: number): Promise<SessionView | null> {
   const x = await loadTaker(env, takerId);
@@ -1080,7 +1096,7 @@ export async function saveOptions(env: Env, g: GuildRow, id: number, b: any) {
   if (!a) throw new AssessError("This assessment doesn't exist anymore.");
   const cur = settingsOf(a);
   const started = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status != 'invited'", id);
-  const next = cleanSettings({ ...cur, ...pick(b, ["noPaste", "lockScreen", "shuffle", "nav"]) });
+  const next = cleanSettings({ ...cur, ...pick(b, ["noPaste", "lockScreen", "shuffle", "nav", "oneDevice", "netAlerts"]) });
   // the order of the questions can't change once a student has started (their paper would change under them)
   if ((started?.n ?? 0) > 0) { next.shuffle = cur.shuffle; next.nav = cur.nav; }
   await run(env, "UPDATE assessments SET settings = ? WHERE id = ?", JSON.stringify(next), id);

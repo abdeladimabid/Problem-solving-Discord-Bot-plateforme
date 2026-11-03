@@ -10,6 +10,7 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
+import { identOk, noteIp, signInUrl } from "../shared/identity.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
 import { AssessError, leaveEvent, lockState, readTakerToken, resultsView, saveAnswer, sessionInfo, startSession, submit } from "../shared/assess.ts";
 
@@ -23,6 +24,11 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
     if (tk?.guild_id) env = forClass(env, tk.guild_id);
   }
   if (!action && request.method === "GET") return new Response(PAGE(token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" } });
+  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title
+  if (!(await identOk(env, "quiz", takerId, request))) {
+    if (request.method === "GET" && action === "info") { const i = await sessionInfo(env, takerId); return json({ ident: false, signIn: signInUrl(env, "quiz", token), title: i?.title ?? "", lang: i?.lang ?? "fr" }); }
+    return json({ error: "identify" }, 401);
+  }
   if (request.method === "GET" && action === "info") return json(await sessionInfo(env, takerId));
   if (request.method === "GET" && action === "state") return json(await lockState(env, takerId));
   if (request.method === "GET" && action === "results") return json(await resultsView(env, takerId));
@@ -35,7 +41,7 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
       if (!TR_LANGS.includes(to) || !Array.isArray(b.texts)) return json({ error: "bad" }, 400);
       return json({ texts: await translateTexts(env, b.texts.map(String), to) });
     }
-    if (action === "start") return json(await startSession(env, takerId, String(b.sid ?? "")));
+    if (action === "start") { await noteIp(env, "quiz", takerId, request).catch(() => null); return json(await startSession(env, takerId, String(b.sid ?? ""))); }
     if (action === "answer") { await saveAnswer(env, takerId, String(b.sid ?? ""), String(b.qid ?? ""), b.answer, Number(b.pos) || 0); return json({ ok: true }); }
     if (action === "event") { await leaveEvent(env, takerId, String(b.sid ?? ""), String(b.what ?? "")); return json({ ok: true }); }
     if (action === "submit") { await submit(env, takerId, String(b.sid ?? ""), ctx); return json({ ok: true }); }
@@ -104,7 +110,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       prev: "← Précédente", next: "Suivante →", finish: "Terminer", sure: "Rendre ta copie ?", answered: "réponses données sur", send: "Rendre", back: "Revenir",
       saved: "Enregistré", saving: "Enregistrement…", code: "Code", explain: "Explication", mcq: "QCM", several: "Plusieurs réponses possibles", pts: "pt",
       typecode: "Écris ton code ici…", typetext: "Écris ta réponse ici…",
-      locked: "Session arrêtée", lockwhy: { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d'onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs.", left: "Tu as quitté l'évaluation." },
+      locked: "Session arrêtée", lockwhy: { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d'onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs.", left: "Tu as quitté l'évaluation.", device: "Ta copie a été ouverte sur un autre appareil." },
       askteacher: "Demande à ton formateur de te laisser reprendre. Cette page se met à jour toute seule.", resumeok: "Ton formateur t'a laissé reprendre.",
       done: "Copie rendue ✅", donesub: "Ton formateur te transmettra les résultats.", closed: "L'évaluation est fermée.", nofs: "Ouvre ce lien sur un ordinateur : l'évaluation se fait en plein écran.",
       timeup: "Temps écoulé : ta copie est rendue.", paste: "Le copier-coller est désactivé pendant l'évaluation.", hello: "Bonjour",
@@ -119,7 +125,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       prev: "← Previous", next: "Next →", finish: "Finish", sure: "Hand in your paper?", answered: "answered out of", send: "Hand in", back: "Go back",
       saved: "Saved", saving: "Saving…", code: "Code", explain: "Explain", mcq: "Multiple choice", several: "Several answers possible", pts: "pt",
       typecode: "Write your code here…", typetext: "Write your answer here…",
-      locked: "Session stopped", lockwhy: { fullscreen: "You left full screen.", hidden: "You switched tab or minimized the window.", blur: "You switched window.", reload: "The page was reloaded or opened somewhere else.", left: "You left the assessment." },
+      locked: "Session stopped", lockwhy: { fullscreen: "You left full screen.", hidden: "You switched tab or minimized the window.", blur: "You switched window.", reload: "The page was reloaded or opened somewhere else.", left: "You left the assessment.", device: "Your paper was opened on another device." },
       askteacher: "Ask your teacher to let you continue. This page updates by itself.", resumeok: "Your teacher let you continue.",
       done: "Paper handed in ✅", donesub: "Your teacher will send you the results.", closed: "This assessment is closed.", nofs: "Open this link on a computer: the assessment runs in full screen.",
       timeup: "Time is up: your paper is handed in.", paste: "Copy-paste is disabled during the assessment.", hello: "Hello",
@@ -135,8 +141,17 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   if (!sid) { sid = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, "0")).join(""); try { sessionStorage.setItem("cbq:" + TOKEN, sid); } catch {} }
   let R = { noPaste: true, lockScreen: true, nav: "free" };   // the assessment's options (set by the teacher)
   let S = null, paper = [], answers = {}, cur = 0, running = false, leaving = false, graceUntil = 0, timer = null, saveT = null, offset = 0;
-  const post = (path, body) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sid, ...body }), keepalive: true }).then((r) => r.json().catch(() => ({})));
-  const get = (path) => fetch(base + path, { cache: "no-store" }).then((r) => r.json());
+  // this browser's id, given when signing in with Discord: every call says which device it comes from
+  let DEV = ""; try { DEV = localStorage.getItem("cb-dev") || ""; } catch (e) {}
+  let identing = false;
+  const signedOut = (r) => { if (r && r.error === "identify" && !identing) { identing = true; running = false; if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); fetch(base + "/info", { cache: "no-store", headers: { "x-cb-dev": DEV } }).then((x) => x.json()).then(signInScreen, () => signInScreen({})); } return r; };
+  const post = (path, body) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json", "x-cb-dev": DEV }, body: JSON.stringify({ sid, ...body }), keepalive: true }).then((r) => r.json().catch(() => ({}))).then(signedOut);
+  const get = (path) => fetch(base + path, { cache: "no-store", headers: { "x-cb-dev": DEV } }).then((r) => r.json()).then(signedOut);
+  function signInScreen(i) {
+    const fr = (i && i.lang) !== "en";
+    screen('<div class="big-ico">🔐</div><h1>' + (fr ? "Connecte-toi avec Discord" : "Sign in with Discord") + '</h1><p class="muted">' + (fr ? "Ce lien est personnel : pour l’ouvrir, connecte-toi avec le compte Discord qui l’a reçu en message privé. Un autre compte ne peut pas l’ouvrir." : "This link is personal: to open it, sign in with the Discord account it was sent to by DM. Another account can't open it.") + "</p>"
+      + (i && i.signIn ? '<a class="btn big" style="background:#5865f2;text-decoration:none" href="' + esc(i.signIn) + '">' + (fr ? "Se connecter avec Discord" : "Sign in with Discord") + "</a>" : ""));
+  }
 
   function screen(html) { app.className = "full"; app.innerHTML = '<div class="card center" style="max-width:560px">' + html + "</div>"; }
   function intro(info) {
@@ -340,6 +355,6 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + (timeUp ? tr("timeup") : tr("donesub")) + "</p>");
   }
   if (TOKEN === "expired") return screen("<h1>" + tr("expired") + "</h1>");
-  get("/info").then((info) => { if (!info) return screen("<h1>" + tr("expired") + "</h1>"); if (info.lang) L = info.lang; show(info); }).catch(() => screen("<h1>" + tr("expired") + "</h1>"));
+  get("/info").then((info) => { if (!info) return screen("<h1>" + tr("expired") + "</h1>"); if (info.lang) L = info.lang; if (info.ident === false) return signInScreen(info); show(info); }).catch(() => screen("<h1>" + tr("expired") + "</h1>"));
 })();
 </script></body></html>`;

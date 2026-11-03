@@ -4,11 +4,13 @@
 import type { Env, GuildRow } from "./types.ts";
 import { all, findPlayer, run } from "./db.ts";
 import { SKILL_KEYS, skillsOf } from "./skills.ts";
+import type { SkillDef } from "./skills.ts";
+import { cleanCustomSkill, mergedSkills, rememberCustomSkills } from "./skills.ts";
 import { renderLesson } from "./lessons.ts";
 import { roadmapFor, trackOf } from "./tracks.ts";
 
 export interface PathStep { skill: string; level: "easy" | "medium" | "hard"; need: number }
-export interface PathCfg { steps: PathStep[]; lessons: Record<string, { en?: string; fr?: string }> }
+export interface PathCfg { steps: PathStep[]; lessons: Record<string, { en?: string; fr?: string }>; customSkills: SkillDef[] }
 type G = { path_cfg?: string | null; code_lang?: string | null; track?: string | null };
 
 const S = (skill: string, level: PathStep["level"], need = 3): PathStep => ({ skill, level, need });
@@ -22,7 +24,7 @@ export const defaultSteps = (g: G) => roadmapFor(g);
  * Saved paths, one per track: {"v": 2, "tracks": {"javascript": {"steps": [...], "lessons": {...}}}}.
  * An older save ({steps, lessons}) belongs to the class's current track.
  */
-function allCfg(g: G): Record<string, { steps?: unknown; lessons?: Record<string, { en?: string; fr?: string }> }> {
+function allCfg(g: G): Record<string, { steps?: unknown; lessons?: Record<string, { en?: string; fr?: string }>; customSkills?: unknown[] }> {
   let o: any = {};
   try { o = g.path_cfg ? JSON.parse(g.path_cfg) : {}; } catch { o = {}; }
   if (o && o.v === 2 && o.tracks && typeof o.tracks === "object") return o.tracks;
@@ -31,20 +33,26 @@ function allCfg(g: G): Record<string, { steps?: unknown; lessons?: Record<string
 
 export function pathCfg(g: G): PathCfg {
   const own = allCfg(g)[trackOf(g).key] ?? {};
+  const customSkills = (Array.isArray(own.customSkills) ? own.customSkills : []).map(cleanCustomSkill).filter((s): s is SkillDef => !!s);
+  rememberCustomSkills(customSkills);
+  const { keys: allKeys } = mergedSkills(customSkills);
   const steps = Array.isArray(own.steps) && own.steps.length
-    ? (own.steps as any[]).filter((s) => SKILL_KEYS.includes(s?.skill) && ["easy", "medium", "hard"].includes(s?.level)).map((s) => S(s.skill, s.level, Math.min(10, Math.max(1, Math.round(Number(s.need) || 3)))))
+    ? (own.steps as any[]).filter((s) => allKeys.includes(s?.skill) && ["easy", "medium", "hard"].includes(s?.level)).map((s) => S(s.skill, s.level, Math.min(10, Math.max(1, Math.round(Number(s.need) || 3)))))
     : defaultSteps(g);
-  return { steps: steps.length ? steps : defaultSteps(g), lessons: own.lessons && typeof own.lessons === "object" ? own.lessons : {} };
+  return { steps: steps.length ? steps : defaultSteps(g), lessons: own.lessons && typeof own.lessons === "object" ? own.lessons : {}, customSkills };
 }
 /** Is the current track's path customized? */
 export const pathCustom = (g: G) => !!allCfg(g)[trackOf(g).key];
 
 /** Save (or reset) the current track's path; other tracks keep theirs. */
-export async function savePath(env: Env, g: G & { id: string }, b: { steps?: PathStep[]; lessons?: PathCfg["lessons"]; reset?: boolean }) {
+export async function savePath(env: Env, g: G & { id: string }, b: { steps?: PathStep[]; lessons?: PathCfg["lessons"]; customSkills?: SkillDef[]; reset?: boolean }) {
   const all = allCfg(g);
   const key = trackOf(g).key;
   if (b.reset) delete all[key];
-  else all[key] = { steps: b.steps ?? pathCfg(g).steps, lessons: b.lessons ?? pathCfg(g).lessons };
+  else {
+    const customSkills = (b.customSkills ?? pathCfg(g).customSkills).map(cleanCustomSkill).filter((s): s is SkillDef => !!s).slice(0, 50);
+    all[key] = { steps: b.steps ?? pathCfg(g).steps, lessons: b.lessons ?? pathCfg(g).lessons, customSkills: customSkills.length ? customSkills : undefined };
+  }
   await run(env, "UPDATE guilds SET path_cfg = ? WHERE id = ?", Object.keys(all).length ? JSON.stringify({ v: 2, tracks: all }) : null, g.id);
 }
 export const stepId = (s: PathStep) => `${s.skill}-${s.level}`;

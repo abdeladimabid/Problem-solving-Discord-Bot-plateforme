@@ -185,7 +185,7 @@ function stepHtml(s, i) {
     }
   }
   if (s.work && s.work.verdict && s.kind !== "challenge") h += '<div class="fb ' + s.work.verdict + '"><b>' + (s.kind === "brief" ? "Envoyé à ton formateur" : VERDICT[s.work.verdict] || "") + '</b>' + rich(s.work.comment || (s.kind === "brief" ? "Il te dira s'il est validé." : "")) + '</div>';
-  if (s.review) h += '<div class="teacher"><b>' + (s.review.ok ? "✓ Validé par ton formateur" : "↻ Ton formateur te demande de le reprendre") + '</b>' + (s.review.comment ? '<div>' + rich(s.review.comment) + '</div>' : "") + '</div>';
+  if (s.review) h += '<div class="teacher"><b>' + (s.review.ok ? "✓ Validé par ton formateur" : "↻ Ton formateur te demande de le reprendre") + '</b>' + (s.review.comment ? '<div style="white-space:pre-wrap">' + rich(s.review.comment) + '</div>' : "") + '</div>';
   return h + '</article>';
 }
 var TAB = location.hash === "#notions" ? "guide" : "actions", GL = "fr", G = {};

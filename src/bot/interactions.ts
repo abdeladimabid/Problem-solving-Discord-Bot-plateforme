@@ -37,7 +37,7 @@ import { playLinks } from "./gamecmd.ts";
 import { askButton, bossButton, bountyButton, cmdShop, doBuy, explainButton, explainSubmit, quizButton, rateButton, shopButton } from "./events.ts";
 import { cmdPath, cmdSkills, cmdToday, pathButton, planButton, reportButton, trainSkill } from "./coach.ts";
 import {
-  certButton, cmdAsk, cmdFaq, cmdHelpMe, cmdInterview, cmdLeague, faqButton, handButton, handSubmit,
+  certButton, cmdAsk, cmdFaq, cmdHelpMe, cmdInterview, cmdLeague, faqButton, handButton, handSubmit, idleButton,
   interviewButton, interviewSubmit, profileButtons, shareButton,
 } from "./extras.ts";
 import { sendCertificates } from "../shared/share.ts";
@@ -869,6 +869,7 @@ async function component(ix: Ix): Promise<Response> {
     }
     case "today": return cmdToday(ix, null);
     case "hand": return handButton(ix, x, Number(y));
+    case "idle": return idleButton(ix, x);
     case "tr": {
       const a = await getAttempt(ix.env, id);
       const c = a ? await getChallenge(ix.env, a.challenge_id) : null;
@@ -1088,6 +1089,7 @@ async function modalSubmit(ix: Ix): Promise<Response> {
   if (kind === "mcreate") return createSubmit(ix, x, ix.raw.data.components ?? []);
   if (kind === "mshop") return doBuy(ix, x, value);
   if (kind === "mhand") return handSubmit(ix, ix.raw.data.components ?? []);
+  if (kind === "mask") return value.trim() ? cmdAsk(ix, value.trim()) : say(t(L, "err.unknown"));
   if (kind === "mpfa" || kind === "mpfc") return portfolioSubmit(ix, kind, ix.raw.data.components ?? []);
   if (kind === "miv") return interviewSubmit(ix, id, value);
   if (kind === "mhelp") return explainSubmit(ix, id, value);

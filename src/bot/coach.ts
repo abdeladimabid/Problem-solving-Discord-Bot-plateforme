@@ -6,7 +6,7 @@ import { COLORS, btn, dm, row } from "../shared/discord.ts";
 import { all, findPlayer, getPlayer, now, one, run } from "../shared/db.ts";
 import { dayKey } from "../shared/game.ts";
 import { getOrCreatePlan, planRef, savePlanItems } from "../shared/plan.ts";
-import { lessonFor, newlyDone, pathProgress, STEP_COINS } from "../shared/path.ts";
+import { lessonFor, newlyDone, pathCfg, pathProgress, STEP_COINS } from "../shared/path.ts";
 import type { StepState } from "../shared/path.ts";
 import { latestReport } from "../shared/report.ts";
 import { SKILLS, bar, skillName, studentProfile } from "../shared/skills.ts";
@@ -84,7 +84,7 @@ export async function trainSkill(ix: Ix, skill: string, difficulty: Difficulty) 
       if (kind === "none") return { content: quickBlockedText(L, block, difficulty), embeds: [], components: [] };
       const job = await enqueue(ix.env, ix.guild, {
         discordId: ix.userId, kind, difficulty,
-        topic: SKILLS.find((s) => s.key === skill)!.en, token: ix.raw.token, codeLang: langs[Math.floor(Math.random() * langs.length)],
+        topic: (pathCfg(ix.guild).customSkills.find((s) => s.key === skill)?.en ?? SKILLS.find((s) => s.key === skill)?.en ?? skill), token: ix.raw.token, codeLang: langs[Math.floor(Math.random() * langs.length)],
       });
       return { content: job ? t(L, "skills.none_left", { skill: skillName(skill, L) }) : t(L, "ch.queue_busy"), embeds: [], components: [] };
     }
@@ -251,7 +251,7 @@ export async function pathButton(ix: Ix, arg: string, extra: string | undefined)
       const c = await pickForSkill(ix.env, ix.guild, ix.userId, s.skill, s.level, { prefer: CODE_SKILLS.includes(s.skill) ? "write" : undefined });
       if (!c) {
         const langs = guildLangs(ix.guild);
-        const job = await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: CODE_SKILLS.includes(s.skill) ? "write" : "quick", difficulty: s.level, topic: SKILLS.find((x) => x.key === s.skill)!.en, token: ix.raw.token, codeLang: langs[0] });
+        const job = await enqueue(ix.env, ix.guild, { discordId: ix.userId, kind: CODE_SKILLS.includes(s.skill) ? "write" : "quick", difficulty: s.level, topic: (pathCfg(ix.guild).customSkills.find((x) => x.key === s.skill)?.en ?? SKILLS.find((x) => x.key === s.skill)?.en ?? s.skill), token: ix.raw.token, codeLang: langs[0] });
         return { content: job ? t(L, "skills.none_left", { skill: skillName(s.skill, L) }) : t(L, "ch.queue_busy") };
       }
       const a = await startAttempt(ix.env, ix.guild, ix.userId, c, "path");

@@ -1,5 +1,5 @@
 // ================================================= plan d'action for one student: diagnosis, then actions built for them
-// « Give work » asks first: a challenge (one or more students), or a plan d'action (one student). The plan is built
+// « Give work » asks first: a mise en situation (one or more students), or a plan d'action (one student). The plan is built
 // like an assessment: the AI reads the student's debriefs, assessments and practice and explains their lacunes, it
 // proposes actions (a challenge of the library, a code to write, a question, a QCM, a mini brief made for them), and
 // writes or improves any of them; the teacher decides. Sent, the student answers on their own page and the AI corrects
@@ -16,7 +16,7 @@ const WP_STATE = { todo: ["", "To do"], done: ["up", "✓ Done"], partial: ["war
 const WP_LANGS = ["html", "css", "javascript", "php", "sql", "python", "java", "bash"];
 const WPS = { plan: null, status: null, url: null, open: new Set(), timer: null, saving: null, lib: null, busy: new Set() };
 
-// ------------------------------------------------------------------ « Give work »: a challenge or a plan d'action
+// ------------------------------------------------------------------ « Give work »: a mise en situation or a plan d'action
 async function giveWorkDialog(preStudents = [], rows = []) {
   const students = rows.length ? rows : (await loadStudents()).map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id }));
   const one = preStudents.length === 1 ? students.find((s) => s.discord_id === preStudents[0]) || { discord_id: preStudents[0], name: preStudents[0] } : null;
@@ -24,12 +24,12 @@ async function giveWorkDialog(preStudents = [], rows = []) {
   const draft = one ? plans.find((p) => p.status === "draft") : null;
   const pickList = one ? "" : `<label for="gw-s" class="small">For</label><select id="gw-s" style="width:100%">${students.map((s) => `<option value="${esc(s.discord_id)}" ${preStudents[0] === s.discord_id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>`;
   openDialog("Give work", `<div class="gw">
-      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🎯</span><b>A challenge</b><span class="muted small">One challenge of your library, for ${one ? esc(one.name) : "one or more students"}. Solved in Discord, tracked here.</span><span class="btn">Choose a challenge →</span></button>
+      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation (5 situations with code + 5 QCM), for ${one ? esc(one.name) : "one or more students"}. Taken in their browser, followed live.</span><span class="btn">Choose a mise en situation →</span></button>
       <div class="gw-opt gw-plan" role="group"><span class="gw-ico">🧭</span><b>A plan d'action</b><span class="muted small">A series of actions built for ${one ? esc(one.name) : "one student"}: the AI first explains their lacunes and proposes challenges, code to write, questions, a QCM or a mini brief. You choose, edit, then send.</span>
         ${pickList}<button class="btn primary" id="gw-pl">${draft ? "Continue the draft" : "Build the plan"} →</button></div>
     </div>`);
   dlg.classList.add("wide");
-  $("#gw-ch", dlg).onclick = () => { dlg.close(); assignDialog(preStudents); };
+  $("#gw-ch", dlg).onclick = (e) => busy(e.currentTarget, () => mesGiveDialog(preStudents, students));
   $("#gw-pl", dlg).onclick = (e) => busy(e.currentTarget, async () => {
     const sid = one ? one.discord_id : $("#gw-s", dlg).value;
     let id = draft?.id;
@@ -176,7 +176,9 @@ function trackHtml(s, st, short = false) {
     else if (s.kind === "brief") {
       const ck = new Set(s.checks || []), n = (s.brief?.tasks || []).length;
       h += `<div class="wp-ctx">${wpCtx(s.brief?.context || "")}</div><div class="wp-h">Objectives ${WPS.plan.status === "draft" ? "" : `<span class="wp-objn">${ck.size}/${n} ticked by ${wpFirst()}${s.checked_at ? ` · ${esc(fmtAgo(s.checked_at))}` : ""}</span>`}</div>
-        <ul class="wp-objl ${WPS.plan.status === "draft" ? "" : "ticks"}">${(s.brief?.tasks || []).map((t, k) => `<li class="${ck.has(k) ? "on" : ""}"><span class="wp-tick" aria-label="${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</span>${esc(t)}</li>`).join("")}</ul>`;
+        <ul class="wp-objl ${WPS.plan.status === "draft" ? "" : "ticks"}">${(s.brief?.tasks || []).map((t, k) => WPS.plan.status === "draft" ? `<li>${esc(t)}</li>`
+          : `<li class="${ck.has(k) ? "on" : ""}"><button type="button" class="wp-tick" data-tck="${esc(s.id)}" data-k="${k}" data-on="${ck.has(k) ? 0 : 1}" title="${ck.has(k) ? "Done: click to mark it not done" : "Not done: click to mark it done"}" aria-label="${esc(t)}: ${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</button>${esc(t)}</li>`).join("")}</ul>
+        ${WPS.plan.status === "draft" ? "" : `<p class="small muted" style="margin:-4px 0 8px">Tick what you saw done; ${wpFirst()} sees the same list.</p>`}`;
     }
     else h += `<p class="wp-q">${esc(s.prompt)}</p>`;
   }
@@ -187,8 +189,11 @@ function trackHtml(s, st, short = false) {
       ${s.kind === "brief" ? `<p><a href="${esc(w.link)}" target="_blank" rel="noopener noreferrer">${esc(w.link)}</a></p>${w.note ? `<p class="small">« ${esc(w.note)} »</p>` : ""}` : ans != null ? `<pre class="wp-ans">${esc(ans)}</pre>` : ""}
       ${w.comment && s.kind !== "brief" ? `<p class="small"><b>The AI:</b> ${esc(w.comment)}</p>` : ""}</div>`;
   }
-  if (s.review) h += `<div class="wp-rev ${s.review.ok ? "ok" : "ko"}"><b>${s.review.ok ? "✓ You validated it" : "↻ You asked to redo it"}</b>${s.review.comment ? ` · ${esc(s.review.comment)}` : ""}</div>`;
-  if (!short && s.kind !== "challenge" && (w || s.kind === "brief")) h += `<div class="wp-revf"><input type="text" data-rvc="${esc(s.id)}" placeholder="A word for ${wpFirst()} (optional)"><button class="btn small primary" data-rv="${esc(s.id)}" data-ok="1">✓ Validate</button><button class="btn small" data-rv="${esc(s.id)}" data-ok="0">↻ Ask to redo</button></div>`;
+  if (s.review) h += `<div class="wp-rev ${s.review.ok ? "ok" : "ko"}"><b>${s.review.ok ? "✓ You marked it done" : "✗ You marked it not done (to redo)"}</b>${s.review.comment ? `<p class="wp-revc">${esc(s.review.comment)}</p>` : ""}</div>`;
+  // the teacher marks every action done or not, with a comment (an answer, a challenge, a mini brief, or done in class)
+  if (!short && WPS.plan.status !== "draft") h += `<div class="wp-revf">
+      <textarea data-rvc="${esc(s.id)}" rows="3" maxlength="1000" placeholder="A comment for ${wpFirst()} (optional): what's right, what to fix…">${esc(s.review?.comment || "")}</textarea>
+      <div class="wp-revb"><button class="btn small primary" data-rv="${esc(s.id)}" data-ok="1">✓ Done</button><button class="btn small" data-rv="${esc(s.id)}" data-ok="0">✗ Not done</button>${s.review ? `<button class="btn small" data-rvclear="${esc(s.id)}" title="Remove your mark: the action's state comes from ${wpFirst()}'s work again">Remove the mark</button>` : ""}</div></div>`;
   return h;
 }
 // a brief's context: its parts (a line starting with an emoji) as headings, « - » lines as lists
@@ -361,7 +366,15 @@ function wireWorkPlan() {
     $$("[data-rv]").forEach((b) => b.onclick = () => busy(b, async () => {
       const c = $(`[data-rvc="${CSS.escape(b.dataset.rv)}"]`)?.value || "";
       const r = await api(`/wplans/${p.id}/review`, { method: "POST", body: { step: b.dataset.rv, ok: b.dataset.ok === "1", comment: c } });
-      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Validated" : `${p.name} will see it's to redo`);
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan(); toast(b.dataset.ok === "1" ? "Marked done" : `Marked not done: ${p.name} will see it's to redo`);
+    }));
+    $$("[data-rvclear]").forEach((b) => b.onclick = () => busy(b, async () => {
+      const r = await api(`/wplans/${p.id}/review`, { method: "POST", body: { step: b.dataset.rvclear, clear: true } });
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan(); toast("Mark removed");
+    }));
+    $$("[data-tck]").forEach((b) => b.onclick = () => busy(b, async () => {
+      const r = await api(`/wplans/${p.id}/check`, { method: "POST", body: { step: b.dataset.tck, i: Number(b.dataset.k), on: b.dataset.on === "1" } });
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan();
     }));
     return;
   }

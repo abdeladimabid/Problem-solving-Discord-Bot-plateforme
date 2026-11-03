@@ -401,11 +401,12 @@ export async function planStatus(env: Env, p: WorkPlan) {
   const asg = ids.length ? await all<{ id: number; status: string; completed_at: number | null }>(env, `SELECT id, status, completed_at FROM assignments WHERE id IN (${ids.map(() => "?").join(",")})`, ...ids).catch(() => []) : [];
   const steps = p.steps.map((s) => {
     let state: "todo" | "done" | "partial" | "submitted" | "failed" | "redo";
-    if (s.kind === "challenge") {
+    // the teacher's mark wins, on any action (done in class, checked by hand, a challenge solved elsewhere…)
+    if (s.review) state = s.review.ok ? "done" : "redo";
+    else if (s.kind === "challenge") {
       const a = asg.find((x) => x.id === s.asg_id);
       state = !a ? "todo" : a.status === "done" || a.status === "late" ? "done" : a.status === "failed" || a.status === "missed" ? "failed" : "todo";
-    } else if (s.review) state = s.review.ok ? "done" : "redo";
-    else if (!s.work) state = "todo";
+    } else if (!s.work) state = "todo";
     else if (s.kind === "brief" || s.work.verdict === "submitted") state = "submitted";
     else state = s.work.verdict === "correct" ? "done" : s.work.verdict === "partial" ? "partial" : "failed";
     // how far they are in it: done = all of it; a mini brief = the objectives they ticked
@@ -547,6 +548,23 @@ export async function studentCheck(env: Env, gid: string, id: number, b: any) {
   s.checked_at = now();
   await putPlan(env, p);
   return { checks: s.checks };
+}
+
+/** A mini brief's objective ticked (or unticked) by the teacher: the same list as the student's. */
+export async function teacherCheck(env: Env, g: GuildRow, id: number, b: any) {
+  const p = await getPlan(env, g.id, id);
+  if (!p || p.status === "draft") throw new WorkPlanError("Send the plan first: the objectives are ticked once it's sent.");
+  const s = p.steps.find((x) => x.id === String(b.step || ""));
+  if (!s || s.kind !== "brief" || !s.brief) throw new WorkPlanError("Unknown action.");
+  const k = Math.floor(Number(b.i));
+  if (!(k >= 0 && k < s.brief.tasks.length)) throw new WorkPlanError("Unknown objective.");
+  const set = new Set((s.checks || []).filter((x) => x >= 0 && x < s.brief!.tasks.length));
+  if (b.on) set.add(k); else set.delete(k);
+  s.checks = [...set].sort((x, y) => x - y);
+  s.checked_at = now();
+  await putPlan(env, p);
+  await settle(env, p);
+  return p;
 }
 
 /** The student's questions from their page: each one raises their hand (✋ Help queue); the teacher answers there (by DM too). */
