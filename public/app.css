@@ -99,6 +99,8 @@ svg.i { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none;
 .icon-btn:hover { color: var(--blue); border-color: var(--line-strong); }
 
 main { padding: 26px 32px 64px; max-width: 1320px; width: 100%; min-width: 0; }
+/* a wide screen: the pages use its width (no big empty band on the right) */
+@media (min-width: 1500px) { main { max-width: 1800px; } }
 main:focus { outline: none; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
 h1 { font-size: 28px; line-height: 1.15; margin: 0; letter-spacing: -0.02em; font-weight: 750; }
