@@ -2132,7 +2132,7 @@ async function generateQuestionsDialog(onDone, preset = null) {
       <div><label for="gq-s">For one student <span class="muted">(their weak points)</span></label><select id="gq-s"><option value="">—</option>${students.map((s) => `<option value="${s.discord_id}">${esc(s.name || s.discord_id)}</option>`).join("")}</select></div>
     </div>
     <div class="field-row">
-      <div><label for="gq-n">Questions</label><input type="number" id="gq-n" min="1" max="30" value="10"></div>
+      <div><label for="gq-n">Questions</label><input type="number" id="gq-n" min="1" max="30" value="10"><div class="small" id="gq-nw"></div></div>
       <div><label for="gq-l">Level</label><select id="gq-l">${LV_NAMES.map((l, i) => `<option value="${i + 1}">N${i + 1} · ${l}</option>`).join("")}</select></div>
 
       <div><label for="gq-lang">Language</label><select id="gq-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
@@ -2146,7 +2146,8 @@ async function generateQuestionsDialog(onDone, preset = null) {
     [{ label: "Generate", primary: true, action: async () => {
       $("#gq-st").textContent = "⏳ Writing the questions (up to a minute)…";
       const concepts = pickedConcepts($("#gq-cn", dlg));
-      if ($("[data-cncap]", dlg) && !concepts.length) throw new Error("Tick at least one capacity of the Fiche niveaux: every evaluation must cover it.");
+      if ($("[data-cncap]", dlg) && !concepts.length) throw new Error("Tick at least one item of the Fiche niveaux: every evaluation must cover it.");
+      if (cnMin && Number($("#gq-n").value) < cnMin) { $("#gq-n").value = String(cnMin); nWarn(); }   // every item its 5 questions
       const body = { concepts, topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
         techs: tagValues(dlg, "gq-tech"), codeLang: (tagValues(dlg, "gq-tech")[0] || "javascript").toLowerCase(), lang: $("#gq-lang").value, mix: { code: $("#gq-mc").value, explain: $("#gq-me").value, mcq: $("#gq-mm").value },
         existing: $$("[data-qprompt]").map((t) => t.value).filter(Boolean) };   // the questions already in the assessment: not again
@@ -2175,7 +2176,24 @@ async function generateQuestionsDialog(onDone, preset = null) {
   // 📐 the capacities to cover: from the brief (or the topic), ticked; the number of questions follows (5 per capacity)
   const cn = $("#gq-cn", dlg);
   const loadCn = () => conceptsPicker(cn, { brief_id: $("#gq-b", dlg).value, text: $("#gq-t", dlg).value }, preset?.concepts);
-  cn.addEventListener("cnchange", (e) => { const n = $("#gq-n", dlg); if (e.detail.min && Number(n.value) < e.detail.min) n.value = String(e.detail.min); n.max = String(Math.max(30, e.detail.min)); });
+  // 📐 the number of questions follows the items ticked (5 each, up to 3 per question); a bigger number typed by hand stays,
+  // a smaller one is said (and raised when generating: otherwise some items wouldn't get their 5 questions)
+  let cnMin = 0, cnN = 0, nByHand = false;
+  const nWarn = () => {
+    const n = $("#gq-n", dlg), w = $("#gq-nw", dlg);
+    w.innerHTML = cnMin && Number(n.value) < cnMin ? `<span style="color:var(--down)">⚠ ${cnN} items of the Fiche need at least <b>${cnMin}</b> questions (5 each): with ${Number(n.value) || 0}, some wouldn't be checked enough. <button type="button" class="ap-link small" id="gq-nfix">Use ${cnMin}</button></span>`
+      : cnMin ? `<span class="muted">${cnN} item${cnN > 1 ? "s" : ""} × 5 → ${cnMin} at least</span>` : "";
+    const f = $("#gq-nfix", dlg);
+    if (f) f.onclick = () => { n.value = String(cnMin); nByHand = false; nWarn(); };
+  };
+  $("#gq-n", dlg).addEventListener("input", () => { nByHand = true; nWarn(); });
+  cn.addEventListener("cnchange", (e) => {
+    const n = $("#gq-n", dlg);
+    cnMin = e.detail.min || 0; cnN = e.detail.n || 0;
+    n.max = String(Math.max(30, cnMin));
+    if (cnMin && (!nByHand || Number(n.value) < cnMin)) { n.value = String(cnMin); nByHand = false; }
+    nWarn();
+  });
   $("#gq-b", dlg).addEventListener("change", loadCn);
   $("#gq-t", dlg).addEventListener("change", () => { if (!$("#gq-b", dlg).value) loadCn(); });
   loadCn();
