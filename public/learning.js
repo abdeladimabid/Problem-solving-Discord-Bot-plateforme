@@ -1262,7 +1262,8 @@ function renderDebrief() {
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" id="db-rmai">✨ Check the competencies</button><span class="small muted" id="db-rmst">Saved by itself as you type</span></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
-      ${sq ? "" : `<section class="panel" id="db-comps"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+      ${sq ? "" : `<section class="panel" id="db-comps"><div class="panel-head" style="align-items:flex-start"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+        ${final ? "" : `<button class="btn small" id="db-coreset" title="Set each competency again from what the debrief shows now: the one-to-one first, then the assessment, then the project (unless skipped)">↻ Recalculate</button>`}</div>
         ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
@@ -1318,6 +1319,24 @@ function renderDebrief() {
     $("#db-rm").addEventListener("blur", save);
   }
   if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
+  // the competencies set again from the debrief as it is now (once switched, a competency kept its first value)
+  if ($("#db-coreset")) $("#db-coreset").onclick = () => {
+    const rec = DB.R?.review || {}, comps = rec.result?.competences || [];
+    const aV = assessVerdicts(rec.assess), skipProject = !!(DB?.skip || DB?.R?.states?.skip || {}).project;
+    const changed = [], kept = [];
+    for (const c of comps) {
+      const box = $(`[data-co="${CSS.escape(c.code)}"]`);
+      if (!box) continue;
+      // the most recent evidence first: the one-to-one, then the assessment done in class, then the project's code
+      const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code);
+      const base = (parseC(c.code) || {}).code;
+      const want = ad ? ad.avis === "ok" : typeof aV[base] === "boolean" ? aV[base] : skipProject ? null : c.avis === "validable";
+      if (want === null) { kept.push(c.code); continue; }
+      if (box.checked !== want) { box.checked = want; box.dispatchEvent(new Event("change")); changed.push(`${c.code} ${want ? "✓" : "✗"}`); }
+    }
+    toast(changed.length ? `${changed.length} competenc${changed.length > 1 ? "ies" : "y"} changed: ${changed.join(", ")}` : "Already up to date: nothing changed"
+      + (kept.length ? ` · kept as they are (project skipped, nothing else to go on): ${kept.join(", ")}` : ""));
+  };
   updateMeter();
   wireDebrief();
   renderSteps(final);
