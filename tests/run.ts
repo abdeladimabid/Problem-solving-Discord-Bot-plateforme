@@ -3072,7 +3072,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/Les points à travailler en priorité :\n[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/Ce que tu dois apprendre en priorité :\n[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -3081,7 +3081,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  const notP = fb.split("\n\n").find((x: string) => /points? à travailler/.test(x)) || "";
+  const notP = fb.split("\n\n").find((x: string) => /apprendre en priorité/.test(x)) || "";
   check(notP.toLowerCase().includes(o2.data.review.oral[2].notion.toLowerCase()) && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => notP.toLowerCase().includes(x.notion.toLowerCase())) && !/Cordialement|Notions à revoir/.test(fb) && !/\b(vous|votre|vos)\b/i.test(fb), "the comment: the oral question not answered is a notion to review, in « tu »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
@@ -4043,7 +4043,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il vous reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(sqm),
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
-  const not = paras.find((x) => /points? à travailler/.test(x)) || "";
+  const not = paras.find((x) => /apprendre en priorité/.test(x)) || "";
   check(not.toLowerCase().includes("la différence entre margin et padding") && not.toLowerCase().includes("le rôle de la balise <main>") && !/flexbox|attribut alt|à l’oral|échange|évaluation/i.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
   check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
@@ -4068,7 +4068,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
   check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && !pr.includes("BONUS") && pr.includes("INDIVIDUEL, TECHNIQUE") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nLes points à travailler en priorité :\n1. CSS : la différence entre margin et padding, la base de tout espacement. Dessine une boîte et observe-la dans l’inspecteur.\n2. HTML : le rôle de la balise <main>. Reprends une de tes pages et explique le rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois apprendre en priorité :\n1. La différence entre margin et padding : la base de tout espacement autour et à l’intérieur d’un bloc.\n2. Le rôle de la balise <main> : choisir la balise qui correspond au rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
@@ -4084,31 +4084,34 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     check(C.aiCommentText(withApi, { commentaire: extra }) !== null, "…and accepted when the brief or the assessment is about it");
   }
   {
-    // what is still to learn: by subject, one short line each, from every source, never where it was seen nor the level
+    // what is still to learn: said directly (never « HTML : », « CSS : »), one short line each, from every source, one
+    // notion once; never where it was seen, the level, the Fiche, a feature of the project
     const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
-      assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "Flexbox"], summary: "" } } }],
+      assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
       level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
-    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Les points à travailler en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
-    check(/^1\. CSS : la différence entre margin et padding/.test(lines[0]) && lines.some((l: string) => /^\d\. HTML : [^\n]*structure de base[^\n]*attribut alt/.test(l)) && lines.some((l: string) => /^\d\. JavaScript : [^\n]*sélectionner un élément du DOM[^\n]*les événements/.test(l))
-      && lines.some((l: string) => /^\d\. Git : création branche/.test(l)) && !/fonctionnalités du projet|bouton supprimer/i.test(list),
-      `by subject: the remarks, the Fiche, the oral, the assessment together; never the project's features (${lines.join(" | ")})`);
-    check(lines.every((l: string) => C.wordCount(l) <= 45) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)|Voici ce que/i.test(list) && !/Flexbox/.test(list.split("\n").find((l: string) => /CSS/.test(l)) || "x") === false,
+    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
+    check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
+      && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
+      && lines.filter((l: string) => /margin/.test(l)).length === 1 && !/bouton supprimer|^\d\. (HTML|CSS|JavaScript|Git) :/m.test(list),
+      `what to learn, directly: the remarks, the Fiche, the oral, the assessment; one notion once; never a category nor a feature (${lines.join(" | ")})`);
+    check(lines.every((l: string) => C.wordCount(l) <= 35) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list),
       "…short lines, never where it was seen, the level or the Fiche");
     check(C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…in the scope: the AI may talk about them");
     const sq2 = C.buildComment("", { ...r2, squad: { name: "Les Pixels" } }, r2.final);
-    check(!/Sélectionner un élément du DOM/.test(sq2) && /Les points à travailler en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous » in the tips too, and no learner's Fiche items");
+    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez apprendre en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
     const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires : margin, padding, alt, main et le DOM. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
     check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment without the numbered list of what is still to learn is refused");
-    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nLes points à travailler en priorité :\n${lines.join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
-    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: okAi.replace("1. CSS :", "1. CSS, vu à l’oral :") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null,
-      "an AI comment that says where a point was seen or the learner's level is refused");
-    // a remark that only names a subject: its essential points, without what they showed they master
+    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre en priorité :\n${lines.join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. La différence, vue à l’oral,") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null
+      && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. CSS : la différence") }) === null,
+      "an AI comment that says where a point was seen, the learner's level, or a category head (« CSS : ») is refused");
+    // a remark that only names a subject: its essentials, without what they showed they master
     check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
     const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
     const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
-    const pl = t3.split("\n").find((l: string) => /^1\. La planification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. Tailwind/.test(l)) || "";
-    check(/user stories/.test(pl) && /tâches/.test(pl) && /Jira ou Trello/.test(pl) && C.wordCount(pl) <= 50, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
+    const pl = t3.split("\n").find((l: string) => /^1\. La planification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. L’utilisation de Tailwind/.test(l)) || "";
+    check(/user stories/.test(pl) && /tâches/.test(pl) && C.wordCount(pl) <= 40, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
     check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/\(|a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
     const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
     check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
@@ -4120,9 +4123,15 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
       assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
     const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
-    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Laravel : les relations Eloquent, écrire une migration, passage de données à la vue et composer et Artisan\./.test(tl) && /\n\d\. PHP : les fonctions\./.test(tl)
-      && !/JavaScript|bonus|il manque|articles|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
-      `one learner: what they master, then what blocks them by subject (Laravel, PHP), never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Les relations Eloquent : définir hasMany et belongsTo/.test(tl) && /\n2\. Écrire une migration : créer une table avec Schema::create\(\)/.test(tl)
+      && /\n\d\. Les fonctions : écrire une fonction/.test(tl) && !/JavaScript|bonus|il manque|articles|Mode sombre|\(hasMany/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
+      `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
+    // never said mastered when it is also to learn (the same notion, from another source)
+    const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
+      assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
+    const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n1\. La manipulation du DOM et les sélecteurs JavaScript : sélectionner un élément/.test(th) && /\n2\. Flexbox : aligner/.test(th),
+      `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
@@ -4142,7 +4151,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
   const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
-  check(/\n\d\. HTML : écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  check(/\n\d\. Écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
   await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
@@ -6337,7 +6346,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   // ↻ Switches: the comment written again from their switches and the one-to-one note (the text that was there goes)
   const note = "Il a su répondre aux questions sur flex, mais il doit revoir grid";
   const rw = await api("POST", `/api/briefs/${id}/review/membercomment?g=${G}`, { who, gid: A, members: { [A]: { quiz: 80, note, coSet: true, co: { C3: true }, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !" } } });
-  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/.test(rw.data.comment) && rw.data.members[A].note === note && rw.data.members[A].text === rw.data.comment && rw.data.comments[A] === rw.data.comment,
+  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/i.test(rw.data.comment) && rw.data.members[A].note === note && rw.data.members[A].text === rw.data.comment && rw.data.comments[A] === rw.data.comment,
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
@@ -6348,8 +6357,8 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     const R = (await getReview(env, id, who))!.rec;
     const mA = R.contrib.find((x: any) => x.gid === A), dA = memberCommentData(mA, R, R.members[A]);
     const pA = aiCommentPrompt(dA);
-    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL MAÎTRISE :\n- /.test(pA)
-      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Tu maîtrises (déjà|notamment)/.test(commentText(dA)),
+    check(dA.mode === "assess" && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL MAÎTRISE :/.test(pA)
+      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && !/sélecteurs/.test(commentText(dA).split("\n\n")[1]),
       `a member's comment: what goes well comes from their assessment (what they mastered, the grader's comment), never the project's features (${dA.mode} ${JSON.stringify(dA.assess)})`);
     const dS = commentData({ first: R.squad.name, group: R.squad.name, project: R.brief, rec: R }), pS = aiCommentPrompt(dS);
     check(dS.mode === "group" && !dS.assess && /TYPE DE COMMENTAIRE : ÉQUIPE/.test(pS) && /CE QUI EST RÉUSSI DANS LE PROJET|CE QUI EST À AMÉLIORER DANS LE PROJET/.test(pS) && /CONTRIBUTION DE CHAQUE MEMBRE :?[\s\S]*commits/.test(pS) && !/MAÎTRISÉ À L’ÉVALUATION/.test(pS),
@@ -6360,7 +6369,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   discordCalls.length = 0;
   const fz = await api("POST", `/api/briefs/${id}/review/finalize?g=${G}`, { who, notify: true });
   const dmA = text(discordCalls.find((c) => c.path === `/channels/dm-${A}/messages`)?.body), dmB = text(discordCalls.find((c) => c.path === `/channels/dm-${B}/messages`)?.body);
-  check(fz.status === 200 && fz.data.sent === 2 && dmA.includes("grid") && !dmA.includes("SQUAD-COMMENT") && dmB.length > 50 && !dmB.includes("SQUAD-COMMENT") && dmA !== dmB,
+  check(fz.status === 200 && fz.data.sent === 2 && /grid/i.test(dmA) && !dmA.includes("SQUAD-COMMENT") && dmB.length > 50 && !dmB.includes("SQUAD-COMMENT") && dmA !== dmB,
     `Finalize with DM: each member gets their own comment (the one on their card, else from their switches), never the squad's (${fz.status} sent ${fz.data.sent})`);
   delete github.commitFiles[sha];
   run1("UPDATE players SET gh_inst = ? WHERE guild_id = ? AND discord_id = ?", bobGh, G, B);

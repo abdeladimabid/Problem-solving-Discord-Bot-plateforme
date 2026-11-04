@@ -235,7 +235,14 @@ const verdictOf = (q: any, p: { g: any; an: any }) => {
   return p.g?.[q.id]?.verdict || (empty ? "empty" : "");
 };
 // the question's own notion first (its prompt), then its expected answer when the prompt says nothing
-const notionsOfQ = (q: any) => { const cs = conceptsOf(String(q.prompt || "")); return (cs.length ? cs : conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`)).slice(0, 3); };
+// (« les fonctions », « les variables » match nearly any JavaScript question: only when the question is about nothing else)
+const BROAD = ["les fonctions", "les variables"];
+const notionsOfQ = (q: any) => {
+  const cs0 = conceptsOf(String(q.prompt || ""));
+  const cs = cs0.length ? cs0 : conceptsOf(`${q.expected || ""} ${(q.skills || []).join(" ")}`);
+  const sharp = cs.filter((c: string) => !BROAD.includes(c));
+  return (sharp.length ? sharp : cs).slice(0, 3);
+};
 /** A learner's notions: mastered (every question on it right) and missed (at least one wrong, partly right or empty). */
 export function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
   const good = new Map<string, number>(), bad = new Map<string, number>();
@@ -245,7 +252,8 @@ export function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; k
     for (const c of notionsOfQ(q)) (v === "correct" ? good : bad).set(c, ((v === "correct" ? good : bad).get(c) || 0) + 1);
   }
   const top = (m: Map<string, number>) => [...m.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c);
-  return { ok: top(good).filter((c) => !bad.has(c)).slice(0, 6), ko: top(bad).slice(0, 6) };
+  // mastered: at least two questions on it, all right (one right answer isn't a proof)
+  return { ok: top(good).filter((c) => !bad.has(c) && (good.get(c) || 0) >= 2).slice(0, 6), ko: top(bad).slice(0, 6) };
 }
 /** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
  *  what to study, grouped (the most missed first), never the list of questions. */
