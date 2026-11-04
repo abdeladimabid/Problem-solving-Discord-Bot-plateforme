@@ -377,7 +377,7 @@ export function planConcepts(scope: string[], n: number, perQuestion = perQuesti
 export interface Evidence { code: string; got: number; from: "assessment" | "mise" | "oral" | "code" | "task"; ref: string; at: number; label: string }
 export interface ItemState { code: string; level: Level; k: number; text: string; caps: number[]; asked: number; got: number; pct: number | null; state: "ok" | "ko" | "few"; teacher: boolean | null; final: "ok" | "ko" | "few"; evidence: Evidence[] }
 /**
- * Every question that touched an item of a sprint, for one learner: the assessments (correct = 1, partly = ½), the
+ * Every question that touched an item of a sprint, for one learner: the assessments (its score: 60% = 0.6), the
  * mises en situation (the item's score), the debrief's oral questions (✓ = 1).
  */
 export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptStore, sprintN: number, o: { live?: { briefId: number } } = {}): Promise<Evidence[]> {
@@ -395,7 +395,9 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
       if (!hasPre(q?.concepts)) return;
       const g = gr[q.id];
       if (!g || g.pending) return;   // not graded yet: not counted
-      const got = g.verdict === "correct" ? 1 : g.verdict === "partial" ? 0.5 : 0;
+      // its real score: a code or explain question graded 60% is 0.6 of a right answer (an MCQ: 1 or 0)
+      const sc = Number(g.score);
+      const got = Number.isFinite(sc) && (sc > 0 || g.verdict !== "correct") ? Math.max(0, Math.min(1, sc / 100)) : g.verdict === "correct" ? 1 : g.verdict === "partial" ? 0.5 : 0;
       for (const c of cleanConcepts(s, q.concepts)) if (c.startsWith(pre)) ev.push({ code: c, got, from: "assessment", ref: `a${a.id}:${q.id}`, at: a.submitted_at ?? 0, label: `${a.title} · Q${i + 1}` });
     });
   }

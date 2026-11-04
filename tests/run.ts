@@ -7970,6 +7970,15 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
   run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[2], JSON.stringify({ verdict: "wrong", score: 0, comment: "" }), aid, A);
   M = await mastery();
   check(it("S2.M2").got === 2.5 && it("S2.M2").state === "ko", "2 right and one partly (2.5 out of 5): exactly half is not more than half: not known");
+  // a code answer counts its real score: 85% + 60% instead of a wrong one and a half one → 2 + 0.85 + 0.6 = 3.45 / 5: known
+  const setG = (qi: number, v: string, sc: number) => run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[qi], JSON.stringify({ verdict: v, score: sc, comment: "" }), aid, A);
+  setG(3, "correct", 85); setG(2, "partial", 60);
+  M = await mastery();
+  check(it("S2.M2").got === 3.5 && it("S2.M2").state === "ok" && it("S2.M2").evidence.some((e: any) => e.got === 0.85), `a code answer counts its score (85% = 0.85, 60% = 0.6): 3.5 out of 5, known (${it("S2.M2").got})`);
+  setG(3, "partial", 25); setG(2, "partial", 45); setG(1, "wrong", 0);
+  M = await mastery();
+  check(it("S2.M2").got === 1.7 && it("S2.M2").state === "ko", `…1 right, 25%, 45% and 2 wrong: 1.7 out of 5, not known (${it("S2.M2").got})`);
+  setG(3, "partial", 50); setG(2, "wrong", 0); setG(1, "correct", 100);
   check(M.data.level.reached === null && M.data.level.toCheck && M.data.level.probe === "faible" && M.data.level.next.level === "faible", "a Moyen item not known: under Moyen, Faible to check in the debrief");
   // the teacher decides an item, or every item of a capacity (Git judged on the repo)
   for (const c of ["S2.M3", "S2.M4", "S2.M5"]) await api("POST", "/api/concepts/decide", { g: G, uid: A, code: c, ok: true });
