@@ -13,6 +13,7 @@ import { type AssessRow, type Grade, type Question, type TakerRow, applyResults,
 import { SKILL_KEYS } from "./skills.ts";
 import type { Program, ProgramWeek } from "./program.ts";
 import { compLabel, parseComp, techOfWeek } from "./program.ts";
+import { perQuestionFor, questionsFor } from "./concepts.ts";
 
 export const QUIZ_FORMAT = "classbot-assessment@1";
 export const EXPORT_FORMAT = "classbot-grading-export@1";
@@ -199,7 +200,7 @@ export function creationPrompt(o: { program: Pick<Program, "name" | "referential
     `- "skills" (facultatif, 3 au plus) parmi : ${SKILL_KEYS.join(", ")}.`,
     "- \"notion\" : la notion évaluée, en 2 à 5 mots.",
     o.concepts?.scope.length ? `- "concepts" (OBLIGATOIRE sur chaque question) : les codes des éléments de la Fiche niveaux qu'elle vérifie (voir ci-dessous) ; et "concepts" en haut du fichier : la liste des éléments couverts (${o.concepts.scope.join(", ")}).` : "",
-    o.concepts?.scope.length ? `- Assez de questions pour que CHAQUE élément soit vérifié par au moins 5 questions (une question peut en toucher plusieurs) : au moins ${Math.ceil((o.concepts.scope.length * 5) / 2)} questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; "minutes" : une durée réaliste pour des débutants.`
+    o.concepts?.scope.length ? `- Assez de questions pour que CHAQUE élément soit vérifié par au moins 5 questions (une question peut en vérifier jusqu'à ${perQuestionFor(o.concepts.scope.length)} quand ils vont ensemble) : au moins ${questionsFor(o.concepts.scope.length)} questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; "minutes" : une durée réaliste pour des débutants.`
       : "- 8 à 15 questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; \"minutes\" : une durée réaliste pour des débutants.",
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",
     o.concepts?.block ? `\n${o.concepts.block}` : "",

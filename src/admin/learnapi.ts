@@ -12,7 +12,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, decideFicheCode, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
@@ -294,7 +294,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|membercomment|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck|insights|links|ailines|probes))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|membercomment|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck|insights|links|ailines|probes|fiche))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
@@ -339,6 +339,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "commentai" && method === "POST") { const w = await writeComment(env, g, id, who, body.states ?? null); return ok({ ...w, ...(await reviewView(env, g, id, who)) }); }
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || ""), String(body.lang || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
+    if (act === "fiche" && method === "POST") {
+      try { return ok({ fiche: await decideFicheCode(env, g, id, who, body ?? {}) }); }
+      catch (e) { if (e instanceof DebriefError) bad(e.message); throw e; }
+    }
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     // a squad, member by member: their assessment, AI flags, questions to ask, suggested switches; the Discord links (CT5)
     // and the AI lines of their commits on demand

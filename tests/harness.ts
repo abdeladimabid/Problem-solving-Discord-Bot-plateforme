@@ -857,6 +857,12 @@ function fakeAI() {
           table: { title: "Faux", columns: ["X"], rows: [["inventé"]] } }) };
         return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
       }
+      // 📐 old evaluations linked to the Fiche: question n → the n-th Moyen item listed (a fake but stable answer); "aucun" → none
+      if (sys.includes("RELIER À LA FICHE NIVEAUX")) {
+        const moyen = [...user.matchAll(/^(S\d+\.M\d+) \[/gm)].map((x) => x[1]);
+        const qs = [...user.matchAll(/^(\d+)\. (.*)$/gm)];
+        return { response: JSON.stringify({ links: qs.map((q) => ({ n: Number(q[1]), concepts: /hors sujet/i.test(q[2]) ? [] : [moyen[(Number(q[1]) - 1) % moyen.length], "S9.M1"] })) }) };
+      }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
         // one distinct question per line of the plan (with the capacities of its line): the Fiche niveaux tests
         if (ai.gen === "plan") { const lines = [...user.matchAll(/^Q(\d+) — "(\w+)"[^\n]*?(?:concepts : ([^\n]+))?$/gm)];

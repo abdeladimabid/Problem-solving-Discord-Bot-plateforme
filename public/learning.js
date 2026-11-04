@@ -1276,7 +1276,7 @@ function renderDebrief() {
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>`}
-      ${sq ? "" : `<section class="panel" id="db-fiche"><div class="panel-head"><h2>📐 Fiche niveaux</h2><span class="small muted">what they understood in this sprint: all its assessments, mises en situation and oral questions</span></div><div id="db-fichebox"><p class="muted small">Loading…</p></div></section>`}
+      ${sq && !rec.fiche?.items?.length ? "" : `<section class="panel" id="db-fiche"><div class="panel-head"><h2>📐 Fiche niveaux</h2><span class="small muted">${sq ? "the squad's code (counts for every member)" : "what they know in this sprint: assessments, mises en situation, oral questions, the live task and the project's code"}</span></div><div id="db-fichebox">${sq ? "" : `<p class="muted small">Loading…</p>`}</div></section>`}
       <section class="panel" id="db-cpanel"><div class="panel-head"><h2>${sq ? "Squad comment" : "Comment"}</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
@@ -1765,7 +1765,21 @@ function wireDebrief() {
   wireMembers();
   loadMemberInsights();
   // 📐 the Fiche niveaux of the brief's sprint: each capacity, from every question that touched it (this debrief's oral too)
-  DB.ficheLoad = () => { const fb = $("#db-fichebox"); if (fb && DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }); };
+  DB.ficheLoad = () => {
+    const fb = $("#db-fichebox");
+    if (!fb) return;
+    // the project's code, item by item (the AI's proofs, confirmed here), then what the learner knows
+    let cb = $("#db-fichecode");
+    if (!cb) { cb = document.createElement("div"); cb.id = "db-fichecode"; fb.before(cb); }
+    const fiche = DB.R?.review?.fiche;
+    cb.innerHTML = ficheCodeHtml(fiche);
+    $$("[data-fc],[data-fcall]", cb).forEach((b) => b.onclick = () => busy(b, async () => {
+      const r = await api(`/briefs/${DB.bid}/review/fiche`, { method: "POST", body: b.dataset.fcall ? { who: DB.who, all: true } : { who: DB.who, code: b.dataset.fc, ok: b.dataset.v === "auto" ? null : b.dataset.v === "true" } });
+      if (DB.R?.review) DB.R.review.fiche = r.fiche;
+      DB.ficheLoad();
+    }));
+    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid });
+  };
   DB.ficheLoad();
   $$("[data-mfiche]").forEach((b) => b.onclick = () => masteryDialog(b.dataset.mfiche, b.dataset.name, { brief: DB.bid }));
   loadSoloLinks();
@@ -2250,7 +2264,7 @@ function assessQuestionsTab(root) {
       <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results, with a link to their full correction (each question, their answer, what to look up)</label>
     </section>
     <section class="panel"><div id="aq-cnpick"><p class="small muted">Loading the Fiche niveaux…</p></div><div id="aq-cov"></div>
-      <p class="toolbar" style="margin:6px 0 0"><button class="btn small" id="aq-claude-cn" title="Claude tags each question with its capacities and adds questions where a capacity has fewer than 5">📋 Bring it up to the Fiche with Claude</button></p></section>
+      <p class="toolbar" style="margin:6px 0 0"><button class="btn small" id="aq-claude-cn" title="Claude tags each question with its items and adds questions where an item has fewer than 5">📋 Bring it up to the Fiche with Claude</button><button class="btn small" id="aq-link-cn" title="The AI links each existing question to the items it checks: nothing else changes, the past answers count at once">📐 Link its questions to the Fiche (AI)</button></p></section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
     <div id="aq-list" class="qe-list"></div>
     ${locked ? "" : `<p class="toolbar" style="margin-top:14px"><button class="btn" data-addq="code">+ Write code</button><button class="btn" data-addq="explain">+ Explain</button><button class="btn" data-addq="mcq">+ Multiple choice</button><button class="btn" id="aq-ai">✨ Add with AI</button><button class="btn" id="aq-pdf" title="A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here">📄 Import a quiz (PDF)</button></p>`}
@@ -2308,6 +2322,7 @@ function assessQuestionsTab(root) {
   });
   conceptsPicker(pick, { brief_id: a.brief_id, text: a.title }, s.concepts);
   $("#aq-claude-cn", root).onclick = () => { try { claudeConceptsDialog(a, AS.dirty); } catch (e) { toast(e.message, true); } };
+  $("#aq-link-cn", root).onclick = () => { if (AS.dirty) return toast("Save your changes first.", true); ficheLinkDialog("assessment", a.id, a.title, () => route()); };
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });
   if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); }, { brief: a.brief_id, title: a.title, concepts: (() => { const qs = readQuestions(); const m = (AS.cscope || []).filter((c) => qs.filter((q) => (q.concepts || []).includes(c)).length < 5); return m.length ? m : AS.cscope; })() });
   if ($("#aq-pdf")) $("#aq-pdf").onclick = () => importPdfDialog((qs, title) => {

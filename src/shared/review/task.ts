@@ -143,7 +143,7 @@ export const TASK_SYSTEM = (o: { duree: string; lvl: number; lvlName: string; lv
 
 export function taskPrompt(o: {
   project: string; brief: string; target: TaskTarget; week?: { n: number; concepts: string; tech: string[] } | null; next?: string;
-  files: string[]; mine: string[]; excerpts: { path: string; text: string }[]; lacunes: string[]; remarks: string; others: string[]; proposal: string; extra?: string;
+  files: string[]; mine: string[]; excerpts: { path: string; text: string }[]; lacunes: string[]; remarks: string; others: string[]; proposal: string; extra?: string; fiche?: string;
 }): string {
   const T = o.target;
   return [
@@ -158,6 +158,7 @@ export function taskPrompt(o: {
     o.lacunes.length ? `SES LACUNES À L’ÉVALUATION :\n${o.lacunes.slice(0, 6).map((x) => "- " + x).join("\n")}` : "",
     o.remarks ? `REMARQUES DU FORMATEUR (face-à-face) : ${line(o.remarks, 400)}` : "",
     o.others.length ? `TÂCHES DES AUTRES MEMBRES DU SQUAD (la sienne doit être différente) :\n${o.others.map((x) => "- " + x).join("\n")}` : "",
+    o.fiche || "",
     o.proposal ? `PROPOSITION DU FORMATEUR (consigne principale, dans les règles et le périmètre) :\n<<<\n${o.proposal.slice(0, 1000)}\n>>>` : "",
     o.extra || "",
   ].filter(Boolean).join("\n");

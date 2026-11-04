@@ -14,10 +14,10 @@ async function conceptsSettings(root, d = null) {
     <div class="panel set-card">
       <h3 style="margin-top:0">The rules</h3>
       <ul class="small cn-rules">
-        <li>The <b>concepts</b> are the <b>items of each level</b> (Critique → Excellent). Each item is the <b>minimum</b> a learner must show for that level, and is checked <b>on its own</b> (code <code>S2.C3</code> = Sprint 2, Critique, 3rd item).</li>
-        <li>Each evaluation covers the items of its scope (its week or brief) with <b>at least ${d.min} questions each</b>, each question at its item's level (a question can check several). The AI and the prompts for Claude are told so, and ClassBot checks it.</li>
-        <li>An item is <b>known</b> when, over all the sprint's evaluations, at least ${d.min} questions checked it and <b>more than half</b> are right (correct = 1, partly = ½). You can decide it yourself (a project, an oral), item by item or for a whole capacity (e.g. Git on the repo).</li>
-        <li>A <b>level</b> is reached only when <b>all</b> of its items are known (100%), and every level below too. Not all of Critique yet: <b>Critique, under the minimum</b>. <b>Bon</b> is the level expected to validate the sprint.</li>
+        <li>The <b>concepts</b> are the <b>items of each level</b>. Each item is the <b>minimum</b> a learner must show for that level, and is checked <b>on its own</b> (code <code>S2.M3</code> = Sprint 2, Moyen, 3rd item).</li>
+        <li>The class evaluations (assessments, mises en situation) check <b>Moyen and Bon</b>, with <b>at least ${d.min} questions per item</b> (one question can check up to 3 items that go together). <b>Critique is never asked</b>: it's the floor.</li>
+        <li>An item is <b>known</b> when at least ${d.min} proofs checked it and <b>more than half</b> are right. The proofs add up over the sprint: assessments, mises en situation, the debrief's oral questions and live task, and the project's code (proposed by the AI, confirmed by you). You can also decide an item yourself, or a whole capacity.</li>
+        <li>A <b>level</b> needs <b>all</b> its items known. Moyen reached means Faible and Critique are there too. <b>Under Moyen</b>, the debrief checks the <b>Faible</b> items: all known → Faible, otherwise Critique. Bon reached: the debrief checks <b>Excellent</b>.</li>
         <li>Untick an item, or a whole capacity, to leave it out: it is no longer asked or counted.</li>
       </ul>
     </div>
@@ -31,6 +31,12 @@ async function conceptsSettings(root, d = null) {
         <textarea id="cn-text" rows="8" style="width:100%;margin-top:6px" placeholder="FICHE DE VALIDATION DU SPRINT 3 …"></textarea>
         <p style="margin:6px 0 0"><button class="btn" id="cn-paste">Read this text</button></p></details>
       <div id="cn-msg"></div>
+    </div>
+    <div class="panel set-card">
+      <h3 style="margin-top:0">Old evaluations</h3>
+      <p class="small">The assessments, mises en situation and debrief oral questions made before the Fiche (or tagged with the old capacity codes) don't count yet. The AI reads each question and links it to the items it really checks: their past answers then count at once, so the past sprints and debriefs give a level too. Nothing else changes in them.</p>
+      <p class="toolbar" style="margin:0"><button class="btn primary" id="cn-old">📐 Link the old evaluations with the AI</button> <span class="small muted" id="cn-oldst"></span></p>
+      <div id="cn-oldlog" class="small"></div>
     </div>
     ${d.sprints.map((sp) => cnSprintHtml(sp)).join("")}`;
   const after = (r, msg) => {
@@ -47,6 +53,24 @@ async function conceptsSettings(root, d = null) {
     if (!t) throw new Error("Paste the text of the Fiche first.");
     const r = await api("/settings/concepts/import", { method: "POST", body: { text: t } });
     after(r, `Read: ${r.read.map((x) => `Sprint ${x.n}`).join(", ")}`);
+  });
+  $("#cn-old", root).onclick = (e) => busy(e.currentTarget, async () => {
+    const { items } = await api("/concepts/old");
+    const st = $("#cn-oldst", root), log = $("#cn-oldlog", root);
+    if (!items.length) { st.textContent = "Everything is already linked."; return; }
+    if (!confirm(`${items.length} evaluation(s) not linked yet. The AI links each one (about ${Math.ceil(items.length / 4)} min). Go?`)) return;
+    const KIND = { assessment: "📝 Assessment", mise: "🧪 Mise en situation", oral: "🗣️ Debrief orals of" };
+    let done = 0;
+    for (const it of items) {
+      st.textContent = `${done}/${items.length}…`;
+      try {
+        const r = await api("/concepts/link", { method: "POST", body: { kind: it.kind, id: it.id, apply: true } });
+        const n = r.units.filter((u) => u.after.length).length;
+        log.insertAdjacentHTML("beforeend", `<div>✓ ${KIND[it.kind]} « ${esc(it.title)} » · Sprint ${r.sprint} · ${n}/${r.units.length} linked</div>`);
+      } catch (err) { log.insertAdjacentHTML("beforeend", `<div style="color:var(--down)">✗ ${KIND[it.kind]} « ${esc(it.title)} »: ${esc(err.message)}</div>`); }
+      done++;
+    }
+    st.textContent = `Done: ${done}/${items.length}. Each learner's Fiche counts them now.`;
   });
   $$("[data-cnoff]", root).forEach((c) => c.onchange = async () => {
     const r = await api("/settings/concepts", { method: "PUT", body: { off: { [c.dataset.cnoff]: c.checked } } });
@@ -76,7 +100,7 @@ function cnSprintHtml(sp) {
     <h3 style="margin:0">Sprint ${sp.n}${sp.title ? ` · ${esc(sp.title)}` : ""}</h3>
     ${sp.goal ? `<p class="small muted" style="margin:4px 0 10px">${esc(sp.goal)}</p>` : ""}
     <h4 class="cn-h">Items of the levels <span class="muted small">${on}/${items.length} counted · each one the minimum of its level</span></h4>
-    ${CN_LV.map(([k, l]) => `<div class="cn-lv"><h5>${l} <span class="muted small">${(sp.levels[k] || []).length} items</span>${k === "bon" ? ` <span class="tag">expected to validate</span>` : ""}</h5>
+    ${CN_LV.map(([k, l]) => `<div class="cn-lv"><h5>${l} <span class="muted small">${(sp.levels[k] || []).length} items</span>${k === "bon" ? ` <span class="tag">expected to validate</span>` : ""}${k === "critique" ? ` <span class="small muted">· never asked: the floor (a learner not Faible is Critique)</span>` : k === "faible" ? ` <span class="small muted">· checked in the debrief of a learner under Moyen</span>` : k === "excellent" ? ` <span class="small muted">· checked in the debrief of a learner who has Bon</span>` : ` <span class="small muted">· checked in the class evaluations</span>`}</h5>
       <div class="cn-items">${(sp.levels[k] || []).map((it, i) => `<div class="cn-item ${it.off ? "off" : ""}"><label class="check"><input type="checkbox" data-cnoff="${esc(it.code)}" ${it.off ? "" : "checked"}> <span><b class="cn-code">${esc(it.code)}</b> ${esc(it.text)}</span></label>
         <button class="cn-chip" data-cnlink="S${sp.n}.${k}.${i + 1}" title="Its capacities (click to change)">${it.caps.length ? it.caps.map((n) => `S${sp.n}.${n}`).join(" + ") : "no capacity"}</button></div>`).join("")}</div></div>`).join("")}
     <details class="cn-levels"><summary><b>Capacities</b> <span class="muted small">· ${sp.caps.filter((c) => !c.off).length}/${sp.caps.length} counted · untick one to leave out all its items</span></summary>
@@ -106,19 +130,24 @@ async function conceptsPicker(box, q = {}, picked = null, o = {}) {
     return;
   }
   const cap = Object.fromEntries((r.caps || []).map((c) => [c.n, c.title]));
-  box.innerHTML = `<div class="cn-pickbox"><div><b>📐 Fiche niveaux · Sprint ${r.sprint}</b> <span class="small muted">· ${o.mise ? `the items it checks: each one by ${r.min} of the 10 situations and QCM at least` : `the items this one checks, ${r.min} questions each at least (a question can check two)`}. Ticked: the ones its subject points to.</span></div>
-    ${CN_LV.map(([k, l]) => { const its = r.items.filter((c) => c.level === k); return its.length ? `<details class="cn-pl" ${its.some((c) => on.has(c.code)) ? "open" : ""}><summary><b>${l}</b> <span class="small muted" data-cnlvn="${k}"></span> <button type="button" class="cn-chip" data-cnall="${k}">all</button> <button type="button" class="cn-chip" data-cnnone="${k}">none</button></summary>
+  const CL = r.classLevels || ["moyen", "bon"];
+  box.innerHTML = `<div class="cn-pickbox"><details class="cn-auto" ${box.dataset.open === "1" ? "open" : ""}><summary><b>📐 Fiche niveaux · Sprint ${r.sprint}</b> <span data-cnsum></span> <span class="cn-chip">change</span></summary><p class="small muted" style="margin:6px 0">${o.mise ? `the items it checks: each one by ${r.min} of the 10 situations and QCM at least` : `the items this one checks, ${r.min} questions each at least (a question can check up to 3 that go together)`}. The class is checked on <b>Moyen and Bon</b>; Critique is never asked. Chosen automatically from its subject: change them if you want.</p>
+    ${CN_LV.map(([k, l]) => { const its = r.items.filter((c) => c.level === k); return its.length ? `<details class="cn-pl" ${CL.includes(k) || its.some((c) => on.has(c.code)) ? "open" : ""}><summary><b>${l}</b> <span class="small muted" data-cnlvn="${k}"></span>${CL.includes(k) ? "" : ` <span class="small muted">· ${k === "faible" ? "checked in the debrief of a learner under Moyen" : "checked in the debrief of a learner who has Bon"}</span>`} <button type="button" class="cn-chip" data-cnall="${k}">all</button> <button type="button" class="cn-chip" data-cnnone="${k}">none</button></summary>
       <div class="cn-picklist">${its.map((c) => `<label class="check" title="${esc(c.caps.map((n) => cap[n] || "").filter(Boolean).join(" · "))}"><input type="checkbox" data-cncap data-lv="${k}" value="${esc(c.code)}" ${on.has(c.code) ? "checked" : ""}> <span><b class="cn-code">${esc(c.code)}</b> ${esc(c.text)}</span></label>`).join("")}</div></details>` : ""; }).join("")}
-    <p class="small" data-cnneed></p></div>`;
+    <p class="small" data-cnneed></p></details></div>`;
   const need = () => {
     const n = $$("[data-cncap]:checked", box).length;
     for (const [k] of CN_LV) { const s = $(`[data-cnlvn="${k}"]`, box); if (s) s.textContent = `${$$(`[data-cncap][data-lv="${k}"]:checked`, box).length}/${$$(`[data-cncap][data-lv="${k}"]`, box).length}`; }
     $("[data-cnneed]", box).innerHTML = !n ? `<span style="color:var(--down)">Tick at least one item: every evaluation must cover the Fiche.</span>`
       : o.mise ? (n > 6 ? `<span style="color:var(--down)">${n} items: too many for 10 situations and QCM (each would have to check ${Math.ceil((n * r.min) / 10)}). Keep 6 at most, and cover the others in another mise en situation or an assessment.</span>` : `→ <b>${n}</b> item${n > 1 ? "s" : ""}, each checked by ${r.min} of the 10.`)
-      : `→ <b>${n}</b> item${n > 1 ? "s" : ""}: at least <b>${Math.ceil((n * r.min) / 2)}</b> questions (${r.min} per item).`;
-    box.dispatchEvent(new CustomEvent("cnchange", { detail: { n, min: Math.ceil((n * r.min) / 2) } }));
+      : `→ <b>${n}</b> item${n > 1 ? "s" : ""}: at least <b>${Math.ceil((n * r.min) / (n > 6 ? 3 : 2))}</b> questions (${r.min} per item, up to ${n > 6 ? 3 : 2} per question).`;
+    // the line shown when it's closed: what it checks, by level, and the questions it asks
+    const by = CN_LV.map(([k, l]) => [l, $$(`[data-cncap][data-lv="${k}"]:checked`, box).map((c) => c.value.split(".")[1])]).filter(([, v]) => v.length);
+    $("[data-cnsum]", box).innerHTML = n ? `<span class="small">· checks <b>${n}</b> item${n > 1 ? "s" : ""}: ${by.map(([l, v]) => `${l} ${v.join(", ")}`).join(" · ")}${o.mise ? "" : ` → at least <b>${Math.ceil((n * r.min) / (n > 6 ? 3 : 2))}</b> questions`}</span>` : `<span class="small" style="color:var(--down)">· no item: open to choose</span>`;
+    box.dispatchEvent(new CustomEvent("cnchange", { detail: { n, min: Math.ceil((n * r.min) / (n > 6 ? 3 : 2)) } }));
   };
   $$("[data-cncap]", box).forEach((c) => c.onchange = need);
+  $(".cn-auto", box).ontoggle = (e) => { box.dataset.open = e.currentTarget.open ? "1" : ""; };
   $$("[data-cnall],[data-cnnone]", box).forEach((b) => b.onclick = (e) => { e.preventDefault(); const k = b.dataset.cnall || b.dataset.cnnone; $$(`[data-cncap][data-lv="${k}"]`, box).forEach((c) => { c.checked = !!b.dataset.cnall; }); need(); });
   need();
 }
@@ -135,7 +164,7 @@ function conceptCoverageHtml(scope, items, labels = {}) {
 
 // ---------------------------------------------------------------- what a learner knows (Fiche niveaux)
 const CN_STATE = { ok: ["✓ known", "good"], ko: ["✗ not known", "bad"], few: ["… fewer than 5 questions", "warn"] };
-const CN_FROM = { assessment: "📝", mise: "🧪", oral: "🗣️" };
+const CN_FROM = { assessment: "📝", mise: "🧪", oral: "🗣️", code: "💻", task: "🎯" };
 const cnDecBtns = (code, teacher, what) => `<span class="cn-dec">${[[true, "✓"], [false, "✗"]].map(([v, l]) => `<button type="button" class="btn small ${teacher === v ? "primary" : ""}" data-cndec="${esc(code)}" data-v="${v}" title="${v ? `Known (you decide${what}: a project, an oral…)` : `Not known (you decide${what})`}">${l}</button>`).join("")}${teacher != null || what ? `<button type="button" class="btn small" data-cndec="${esc(code)}" data-v="auto" title="Let the questions decide again">↺</button>` : ""}</span>`;
 /** Each item of the sprint, by level: questions asked, right, known or not, your decision; the level the Fiche gives. */
 function masteryHtml(r, uid) {
@@ -143,9 +172,9 @@ function masteryHtml(r, uid) {
   const lv = r.level;
   const nx = lv.next;
   return `<div class="cn-mast">
-    <p style="margin:0 0 4px">Level by the Fiche: ${lv.reached ? `<b class="cn-lvl cn-${esc(lv.reached)}">${esc(cnLvName(lv.reached))}</b>${lv.belowMinimum ? ` <span class="lvl bad">under the minimum</span>` : ""}` : `<span class="muted">not enough questions yet</span>`}
-      <span class="small muted">· a level needs <b>all</b> its items known, and every level below</span></p>
-    ${nx ? `<p class="small" style="margin:0 0 8px">${lv.belowMinimum ? "To reach the minimum of" : "For"} <b>${esc(cnLvName(nx.level))}</b>: ${nx.missing} item${nx.missing > 1 ? "s" : ""} missing${nx.ko ? ` · ${nx.ko} not known` : ""}${nx.few ? ` · ${nx.few} not checked enough yet` : ""}.</p>` : lv.reached ? `<p class="small" style="margin:0 0 8px">Every item of the sprint known.</p>` : ""}
+    <p style="margin:0 0 4px">Level by the Fiche: ${lv.toCheck ? `<b class="lvl bad">Under Moyen</b> <span class="small">Faible or Critique: <b>check the Faible items in the debrief</b> (all known → Faible, otherwise Critique)</span>` : lv.reached ? `<b class="cn-lvl cn-${esc(lv.reached)}">${esc(cnLvName(lv.reached))}</b>${lv.below ? ` <span class="small muted">(under Moyen)</span>` : ""}` : `<span class="muted">not enough proofs yet</span>`}
+      <span class="small muted">· a level needs <b>all</b> its items known; Moyen reached means Faible and Critique too</span></p>
+    ${nx ? `<p class="small" style="margin:0 0 8px">${lv.probe === "faible" ? "To check in the debrief," : lv.probe === "excellent" ? "To check in the debrief," : "For"} <b>${esc(cnLvName(nx.level))}</b>: ${nx.missing} item${nx.missing > 1 ? "s" : ""} missing${nx.ko ? ` · ${nx.ko} not known` : ""}${nx.few ? ` · ${nx.few} not checked enough yet` : ""}.${lv.probe ? " The debrief's oral questions and live task go to them first." : ""}</p>` : lv.reached ? `<p class="small" style="margin:0 0 8px">Every item of the sprint known.</p>` : ""}
     <div class="cn-lvls">${lv.per.filter((p) => p.items).map((p) => `<span class="cn-lvp ${p.full ? "ok" : ""}" title="${p.ko} not known · ${p.few} not checked enough"><b>${esc(cnLvName(p.level))}</b> ${p.known}/${p.items}${p.full ? " ✓" : ""}</span>`).join("")}</div>
     <table class="grid-table cn-mtab"><thead><tr><th>Item</th><th class="num">Asked</th><th class="num">Right</th><th>State</th><th>Your decision</th></tr></thead><tbody>
     ${CN_LV.map(([k, l]) => { const its = r.items.filter((c) => c.level === k); return its.length ? `<tr class="cn-lvrow"><th colspan="5">${l}</th></tr>${its.map((c) => `<tr><td><b class="cn-code">${esc(c.code)}</b> ${esc(c.text)}${c.evidence.length ? `<details class="small"><summary class="muted">${c.evidence.length} question(s)</summary>${c.evidence.map((e) => `<div>${CN_FROM[e.from] || ""} ${esc(e.label)} — <b>${e.got === 1 ? "✓" : e.got === 0 ? "✗" : "½"}</b></div>`).join("")}</details>` : ""}</td>
@@ -155,7 +184,7 @@ function masteryHtml(r, uid) {
     </tbody></table>
     ${r.caps?.length ? `<details class="small" style="margin-top:8px"><summary><b>Decide a whole capacity</b> <span class="muted">· e.g. Git or Jira judged on the repo: applies to all its items, every level</span></summary>
       <table class="grid-table cn-mtab"><tbody>${r.caps.map((c) => `<tr><td><b class="cn-code">${esc(c.code)}</b> ${esc(c.title)}</td><td class="num">${c.known}/${c.items} known</td><td>${cnDecBtns(c.code, null, " for all its items")}</td></tr>`).join("")}</tbody></table></details>` : ""}
-    <p class="small muted">📝 assessments · 🧪 mises en situation · 🗣️ debrief oral questions (counted once the debrief is finalized). Correct = 1, partly = ½.</p></div>`;
+    <p class="small muted">📝 assessments · 🧪 mises en situation · 🗣️ debrief oral questions and 🎯 live task (counted once the debrief is finalized) · 💻 the project's code (each proof you confirmed). Correct = 1, partly = ½.</p></div>`;
 }
 async function loadMastery(box, uid, q = {}) {
   const qs = new URLSearchParams(Object.entries({ uid, ...q }).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]));
@@ -171,4 +200,42 @@ function masteryDialog(uid, name, q = {}) {
   openDialog(`📐 ${name || uid} · Fiche niveaux`, `<div id="cn-md"><p class="muted small">Loading…</p></div>`, []);
   dlg.classList.add("wide");
   loadMastery($("#cn-md", dlg), uid, q);
+}
+
+// ---------------------------------------------------------------- an old evaluation linked to the Fiche by the AI
+/** 📐 The AI links each question of an assessment / mise / brief's debrief orals to the items it checks: shown, then saved. */
+function ficheLinkDialog(kind, id, title, after, sprint = null) {
+  openDialog(`📐 Link « ${title} » to the Fiche niveaux`, `<div id="fl-box"><p class="muted small">The AI reads each question… (up to a minute)</p></div>`, []);
+  dlg.classList.add("wide");
+  const box = $("#fl-box", dlg);
+  api("/concepts/link", { method: "POST", body: { kind, id, sprint } }).then((r) => {
+    const covered = r.items.filter((c) => c.n);
+    box.innerHTML = `<p class="small">Sprint ${r.sprint} · <b>${r.units.filter((u) => u.after.length).length}/${r.units.length}</b> question(s) linked. Only the items: nothing else changes, and the past answers count at once.</p>
+      <table class="grid-table"><thead><tr><th>Question</th><th>Before</th><th>Items (AI)</th></tr></thead><tbody>
+      ${r.units.map((u) => `<tr><td class="small">${esc(u.text)}</td><td class="small muted">${esc(u.before.join(", ") || "—")}</td><td>${u.after.map((c) => `<span class="cn-code" title="${esc(r.items.find((x) => x.code === c)?.text || "")}">${esc(c)}</span>`).join(" ") || `<span class="muted small">none</span>`}</td></tr>`).join("")}</tbody></table>
+      <p class="small" style="margin-top:8px"><b>Items checked:</b> ${covered.map((c) => `<span class="cn-covc ${c.n >= 5 ? "ok" : "ko"}" title="${esc(c.text)}"><b>${esc(c.code)}</b> ${c.n}</span>`).join(" ") || "none"}</p>
+      <p class="toolbar"><button class="btn primary" id="fl-save">Save these links</button><button class="btn" id="fl-again">Ask again</button></p>`;
+    $("#fl-save", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+      await api("/concepts/link", { method: "POST", body: { kind, id, sprint: r.sprint, apply: true, links: Object.fromEntries(r.units.map((u) => [u.n, u.after])) } });
+      dlg.close(); toast("Linked: their answers count in each learner's Fiche"); after && after();
+    });
+    $("#fl-again", dlg).onclick = () => ficheLinkDialog(kind, id, title, after, r.sprint);
+  }).catch((e) => {
+    box.innerHTML = `<p style="color:var(--down)">${esc(e.message)}</p>${/sprint/i.test(e.message) ? `<label class="small">Sprint <select id="fl-sp"><option value="">—</option>${[1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}">Sprint ${n}</option>`).join("")}</select></label>` : ""}`;
+    const sel = $("#fl-sp", dlg);
+    if (sel) sel.onchange = () => sel.value && ficheLinkDialog(kind, id, title, after, Number(sel.value));
+  });
+}
+
+/** 💻 The project's code, item by item: the AI's proof, your confirmation (only confirmed proofs count). */
+function ficheCodeHtml(f) {
+  if (!f || !f.items?.length) return "";
+  const ok = f.ok || {};
+  const AI = { ok: ["✓ shown", "good"], ko: ["✗ not shown", "bad"], na: ["not visible", "warn"] };
+  const todo = f.items.filter((it) => (it.ai === "ok" || it.ai === "ko") && !(it.code in ok)).length;
+  return `<div class="cn-code-proofs"><div class="panel-head" style="margin:0 0 6px"><b>💻 The project's code</b> <span class="small muted">· what the AI saw in the repo for the brief's items; counted once you confirm</span>
+    ${todo ? `<button type="button" class="btn small primary" data-fcall="1">Confirm the AI's ${todo}</button>` : ""}</div>
+    <table class="grid-table cn-mtab"><tbody>${f.items.map((it) => `<tr><td><b class="cn-code">${esc(it.code)}</b> ${esc(it.text)}<div class="small muted">${esc(it.proof || "")}</div></td>
+      <td><span class="lvl ${AI[it.ai]?.[1] || "warn"}">AI: ${AI[it.ai]?.[0] || it.ai}</span></td>
+      <td><span class="cn-dec">${[[true, "✓"], [false, "✗"]].map(([v, l]) => `<button type="button" class="btn small ${ok[it.code] === v ? "primary" : ""}" data-fc="${esc(it.code)}" data-v="${v}" title="${v ? "Shown in the code: counts as a right answer" : "Not shown: counts as a wrong answer"}">${l}</button>`).join("")}${it.code in ok ? `<button type="button" class="btn small" data-fc="${esc(it.code)}" data-v="auto" title="Not counted">↺</button>` : ""}</span></td></tr>`).join("")}</tbody></table></div>`;
 }

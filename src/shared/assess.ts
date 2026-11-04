@@ -871,9 +871,11 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
   const fr = o.lang !== "en";
   if (!plan) {
     // the plan: each question its type, notion, kind of task and situation; then batches of up to 6, asked together
-    // the Fiche niveaux: each capacity of the scope gets at least 5 questions (one question may touch two): the
+    // the Fiche niveaux: each item of the scope gets at least 5 questions (one question may check up to three): the
     // number of questions grows when it's too small for that
-    const cs = o.conceptStore && o.concepts?.length ? o.concepts.filter((c) => conceptOf(o.conceptStore!, c)) : [];
+    // items of the same capacity side by side: a question checks items that go together
+    const capKey = (c: string) => { const x = conceptOf(o.conceptStore!, c)!; return (x.caps[0] ?? 99) * 100 + x.k; };
+    const cs = o.conceptStore && o.concepts?.length ? o.concepts.filter((c) => conceptOf(o.conceptStore!, c)).sort((a, b) => capKey(a) - capKey(b)) : [];
     const cplan = cs.length ? planConcepts(cs, Math.max(1, Math.min(60, Math.round(o.count) || 10))) : null;
     const n = cplan ? Math.min(60, cplan.length) : Math.max(1, Math.min(30, Math.round(o.count) || 10));
     const total = Math.max(1, o.mix.code + o.mix.explain + o.mix.mcq);

@@ -647,6 +647,18 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const m = await masteryOf(env, g.id, uid, sp, s, brief ? { live: { briefId: brief } } : {});
       return ok({ sprint: sp, title: s.sprints.find((x) => x.n === sp)?.title ?? "", sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: 5, ...m });
     }
+    // 📐 old evaluations linked to the Fiche's items by the AI: one (preview, then apply), or the list of those not linked yet
+    if (path === "/concepts/link" && method === "POST") {
+      const g = await guild();
+      const { FicheLinkError, linkFiche } = await import("../shared/fichelink.ts");
+      try { return ok(await linkFiche(env, g, body ?? {})); }
+      catch (e) { if (e instanceof FicheLinkError) throw new HttpError(400, e.message); throw e; }
+    }
+    if (path === "/concepts/old" && method === "GET") {
+      const g = await guild();
+      const { oldEvaluations } = await import("../shared/fichelink.ts");
+      return ok({ items: await oldEvaluations(env, g) });
+    }
     if (path === "/concepts/decide" && method === "POST") {
       const g = await guild();
       try { await decideConcept(env, g, String(body.uid || ""), String(body.code || ""), body.ok == null ? null : !!body.ok); }

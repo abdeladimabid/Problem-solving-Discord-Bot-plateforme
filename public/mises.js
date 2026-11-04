@@ -339,8 +339,8 @@ function mesRender() {
 // ---------------------------------------------------------------- content (the reference solutions are here: teacher only)
 function mesContentTab(root) {
   const m = MSIT.d.mise, c = m.content;
-  root.innerHTML = `${m.status === "draft" ? `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="mc-edit">Edit</button><button class="btn" id="mc-json">{ } Edit the JSON</button><button class="btn" id="mc-dl">⬇ Download the JSON</button></div>`
-      : `<div class="toolbar" style="margin:0 0 12px"><button class="btn" id="mc-dl">⬇ Download the JSON</button><span class="muted small">The learners have it: its content can't change anymore.</span></div>`}
+  root.innerHTML = `${m.status === "draft" ? `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="mc-edit">Edit</button><button class="btn" id="mc-json">{ } Edit the JSON</button><button class="btn" id="mc-dl">⬇ Download the JSON</button><button class="btn" id="mc-link" title="The AI links each situation and QCM to the Fiche's items it checks: nothing else changes, the past answers count at once">📐 Link to the Fiche (AI)</button></div>`
+      : `<div class="toolbar" style="margin:0 0 12px"><button class="btn" id="mc-dl">⬇ Download the JSON</button><button class="btn" id="mc-link" title="The AI links each situation and QCM to the Fiche's items it checks: nothing else changes, the past answers count at once">📐 Link to the Fiche (AI)</button><span class="muted small">The learners have it: its content can't change anymore.</span></div>`}
     ${(m.checks || []).length ? `<section class="panel mes-cl"><details ${m.status === "draft" ? "open" : ""}><summary><b>Checklist</b> <span class="small muted">${m.checks.filter((x) => !x.ok && !x.tip).length ? `${m.checks.filter((x) => !x.ok && !x.tip).length} warning(s)` : "nothing to fix"}</span></summary>${mesChecksHtml(m.checks)}</details></section>` : ""}
     ${c.situations.map((s, i) => `<section class="panel mes-sit">
       <div class="panel-head"><h2>S${i + 1} · ${esc(s.title)}</h2><span class="small muted">difficulty ${s.difficulty}/5 · ${s.points} pts (${mesWeight(c, s.id).pct}% of the score) · ${esc(RUNTIME[s.runtime] || s.runtime)}</span></div>
@@ -356,6 +356,7 @@ function mesContentTab(root) {
     <section class="panel"><h2>QCM</h2>${c.qcm.map((q, i) => `<div class="mes-qcm"><p style="margin:0 0 6px"><b>Q${i + 1}.</b> ${esc(q.question)} <span class="small muted">${q.points} pt (${mesWeight(c, q.id).pct}%)</span> ${q.competencies.map((x) => compChip(x)).join(" ")} <span class="tag lang">${esc(q.notion)}</span></p>
       ${q.code ? `<pre class="code-view">${esc(q.code)}</pre>` : ""}<ul class="mcq-res small">${q.choices.map((ch, k) => `<li class="${k === q.correct ? "right" : ""}">${"ABCD"[k]}. ${esc(ch)}${k === q.correct ? " <span class='tag easy'>right answer</span>" : ""}</li>`).join("")}</ul></div>`).join("")}</section>`;
   const json = () => JSON.stringify({ ...c, situations: c.situations.map(({ id, ...s }) => ({ ...s, checks: s.checks.map(({ id: _, ...k }) => k) })), qcm: c.qcm.map(({ id, ...q }) => q) }, null, 2);
+  $("#mc-link").onclick = () => ficheLinkDialog("mise", m.id, m.title, () => route());
   $("#mc-dl").onclick = () => saveBlob(new Blob([json()], { type: "application/json" }), `mise-en-situation-${m.id}.json`);
   if ($("#mc-edit")) $("#mc-edit").onclick = (e) => busy(e.currentTarget, () => mesEditor(root));
   if ($("#mc-json")) $("#mc-json").onclick = () => {

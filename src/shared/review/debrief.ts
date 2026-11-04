@@ -7,7 +7,7 @@
 //   5. finalize: the result goes into the student's record (see learning.ts)
 // Ported from GitHub Watcher (aiAnalyze, makeChallenge, saveComment, saveMembers), now on D1 and ClassBot briefs.
 /* eslint-disable */
-import { LEVEL_LABEL, activeConcepts, briefSprint, cleanConcepts, getConcepts, masteryForAi, masteryOf, scopeFromText } from "../concepts.ts";
+import { LEVEL_LABEL, askedConcepts, briefSprint, cleanConcepts, debriefTargets, getConcepts, masteryForAi, masteryOf, scopeFromText } from "../concepts.ts";
 import type { Env, GuildRow, PlayerRow } from "../types.ts";
 import { aiBudgetOk, aiBudgetUse, all, now, one, run } from "../db.ts";
 import { extractJson, groqChat, hasKeyedAi, workersChat } from "../ai.ts";
@@ -452,6 +452,11 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   // the assessment linked to the brief (done in class, without help): the AI compares the project with it
   const assess = await briefAssessments(env, b.id, who, squad ? { squad: { members: members.map((m) => ({ gid: m.discord_id })) } } : null);
   const assessText = assessForAi(assess);
+  // 📐 the Fiche niveaux: the brief's items (Faible, Moyen, Bon) the code can prove; the AI proposes, the teacher confirms
+  const fst = await getConcepts(env, g.id).catch(() => null);
+  const fsp = fst ? await briefSprint(env, g, b.id, fst) : null;
+  const fpick = fst && fsp ? new Set(scopeFromText(fst, fsp, `${b.title}\n${b.text}`, 18, ["faible", "moyen", "bon"])) : new Set<string>();
+  const fitems = fst && fsp ? askedConcepts(fst, fsp).filter((c) => fpick.has(c.code)) : [];
   const system = [
     "Tu es l’assistant d’un formateur (titre Développeur Web et Web Mobile, approche par compétences, niveaux 1 imiter, 2 adapter, 3 transposer). Réponds en français, simplement.",
     "Tu reçois : le brief" + (items.length ? " et une CHECKLIST numérotée tirée du brief" : "") + ", les compétences visées avec leurs preuves, l’état actuel du dépôt GitHub (VÉRIFICATIONS AUTOMATIQUES, liste des fichiers, contenu des fichiers principaux) et les derniers commits.",
@@ -470,7 +475,9 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     '{"resume":"2-3 phrases sur l’état du projet",',
     items.length ? '"exigences":[{"n":1,"statut":"fait|partiel|absent|non_verifiable","preuve":"max 15 mots"}],' : '"exigences":[{"type":"story|bonus|livrable|critere","texte":"max 12 mots","statut":"fait|partiel|absent|non_verifiable","preuve":"max 15 mots"}],',
     '"competences":[{"code":"C3N1","avis":"validable|a_verifier|non_visible","raison":"max 25 mots"}],',
+    fitems.length ? '"fiche":[{"code":"S2.M3","statut":"acquis|pas_acquis|non_visible","preuve":"fichier et ce qu’on y voit, max 20 mots"}],' : "",
     '"commits":[{"sha":"7 premiers caractères","ok":true,"note":"le code correspond-il au message ? max 12 mots"}]}',
+    fitems.length ? `"fiche" : EXACTEMENT une entrée par élément de la Fiche niveaux listé (${fitems.length}) : "acquis" seulement avec une preuve précise dans le code (fichier, fonction, ce qu'elle fait bien) ; "pas_acquis" si le code montre le contraire (mal fait, ou absent alors que le brief le demande) ; sinon "non_visible". Ce que le code ne peut pas montrer (Jira, réunion, oral) : "non_visible".` : "",
     items.length ? `"exigences" : EXACTEMENT ${items.length} entrées, une par numéro (n = 1 à ${items.length}). Une ligne [oral] est toujours "non_verifiable".` : "",
     '"competences" : une entrée par compétence visée, avec exactement le code donné (ex. "C3N1", "CT5N1").',
     `"commits" : EXACTEMENT une entrée par commit listé (${commits.length}). Un message vague (« update », « data ») est ok: false.`,
@@ -487,6 +494,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     `\nTOUS LES FICHIERS :\n${fence(compact ? snap.files.split("\n").slice(0, 40).join("\n") : snap.files)}`,
     `\nCONTENU DES FICHIERS PRINCIPAUX (le début de chaque fichier) :\n<<<${fence(compact ? snap.contents.slice(0, 3000) : snap.contents)}\n>>>`,
     snap.outline ? `\nPLAN COMPLET DES PAGES (lu sur TOUT le fichier : titres, sections, formulaires, liens) :\n<<<${fence(compact ? snap.outline.slice(0, 1500) : snap.outline)}\n>>>` : "",
+    fitems.length ? `\nÉLÉMENTS DE LA FICHE NIVEAUX À JUGER SUR LE CODE (chacun est le minimum de son niveau) :\n${fitems.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] ${c.text}`).join("\n")}` : "",
     squad ? `\nPROJET DE GROUPE : squad « ${squad.name} » (${squad.members.length} membres). Juge le projet du squad dans son ensemble.` : "",
     commits.length ? `\n##### DERNIERS COMMITS ${squad ? "DU SQUAD" : "DE " + login}\n<<<${commitBlock(compact)}\n>>>` : `\nAucun commit depuis le début du brief : "commits" doit être [].`,
   ].filter(Boolean).join("\n");
@@ -498,11 +506,22 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
   result.exigences = rescueFound(reconcile(result.exigences, snap.checks), snap);
   const first = squad ? squad.name : firstNameOf(lead.name, login);
   const prev = await getReview(env, b.id, who);
+  const fcodes = new Set(fitems.map((c) => c.code));
+  const fseen = new Set<string>();
+  const fiche = (Array.isArray(ask.data?.fiche) ? ask.data.fiche : []).map((x: any) => {
+    const code = fst ? cleanConcepts(fst, [x?.code])[0] : null;
+    if (!code || !fcodes.has(code) || fseen.has(code)) return null;
+    fseen.add(code);
+    const c = fitems.find((y) => y.code === code)!;
+    return { code, level: c.level, text: c.text, ai: x?.statut === "acquis" ? "ok" : x?.statut === "pas_acquis" ? "ko" : "na", proof: oneLine(x?.preuve, 160) };
+  }).filter(Boolean);
   const rec: any = {
     at: Date.now(), first, model: ask.model, brief: b.title, repos: [snap.repo], count: commits.length, files: true, checks: snap.checks,
     backlog: snap.backlog || undefined, skills, result,
     // what the teacher already decided stays (a challenge, notes); switches start again from the new evidence
     challenge: prev?.rec?.challenge ?? null,
+    // 📐 the code's proofs for the Fiche niveaux: proposed by the AI, counted once the teacher confirms each one
+    fiche: fiche.length || prev?.rec?.fiche ? { at: Date.now(), sprint: fsp, items: fiche.length ? fiche : prev?.rec?.fiche?.items ?? [], ok: prev?.rec?.fiche?.ok ?? {} } : undefined,
     // what a finalize already gave (points, coins): analyzing again never gives it twice
     ...(prev?.rec?.awarded ? { awarded: prev.rec.awarded } : {}),
   };
@@ -774,14 +793,18 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   // asked enough) first; its ✓ / ✗ counts like a question of an evaluation
   const cstore = await getConcepts(env, g.id);
   const csp = await briefSprint(env, g, b.id, cstore);
-  // the items the questions may check: a learner's next level's missing items first (the minimum not shown yet), else the brief's
+  // the items the questions may check: the level this learner's debrief must settle first (under Moyen: Faible, to tell
+  // Faible from Critique; Bon reached: Excellent; else the next level's missing items), then the brief's Moyen and Bon
   const cm = csp && who.startsWith("u:") ? await masteryOf(env, g.id, who.slice(2), csp, cstore, { live: { briefId: b.id } }).catch(() => null) : null;
-  const all = csp ? activeConcepts(cstore, csp) : [];
-  const fromBrief = csp ? new Set(scopeFromText(cstore, csp, `${b.title}\n${b.text}`, 20)) : new Set<string>();
-  const missing = cm ? cm.items.filter((i) => i.final !== "ok") : [];
-  const firstLv = missing.length ? missing[0].level : null;
-  const ccaps = all.filter((c) => fromBrief.has(c.code) || (firstLv && missing.some((m) => m.code === c.code && m.level === firstLv))).slice(0, 24);
-  const cfirst = firstLv ? missing.filter((m) => m.level === firstLv).map((m) => m.code) : [];
+  const tg = debriefTargets(cm);
+  const all = csp ? askedConcepts(cstore, csp) : [];
+  const fromBrief = csp ? new Set(scopeFromText(cstore, csp, `${b.title}\n${b.text}`, 16)) : new Set<string>();
+  const ccaps = all.filter((c) => fromBrief.has(c.code) || !!tg?.items.some((m) => m.code === c.code)).slice(0, 28);
+  const cfirst = tg ? tg.items.map((m) => m.code) : [];
+  const why = !tg ? "" : cm!.level.toCheck || (cm!.level.below && tg.level === "faible")
+    ? ` L'apprenant est SOUS MOYEN : au moins 3 des questions vérifient les éléments FAIBLE (simples, sur son projet) pour savoir s'il est Faible (tous acquis) ou Critique : ${cfirst.join(", ")}.`
+    : tg.level === "excellent" ? ` L'apprenant a le niveau Bon : au moins 2 questions vérifient les éléments EXCELLENT (choisir, justifier, améliorer) : ${cfirst.join(", ")}.`
+    : ` En PRIORITÉ ceux du niveau ${LEVEL_LABEL[tg.level]} qu'il n'a pas encore montrés : ${cfirst.join(", ")}.`;
   const system = [
     "Tu aides un formateur en développement web (titre Développeur Web et Web Mobile, approche par compétences). Réponds en français, simplement.",
     "Prépare les questions orales de la soutenance : au plus 5 questions courtes que le formateur pose à l’apprenant pour vérifier qu’il comprend son projet.",
@@ -794,7 +817,7 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
     "- Pour chaque question, \"source\" : \"evaluation\" (une lacune de l’évaluation), \"projet\" (un point du projet) ou \"brief\".",
     before.length ? "- Ne repose pas une question déjà posée (liste DÉJÀ POSÉES) : d’autres notions." : "",
     "- S’il y a des PARTIES À LUI FAIRE EXPLIQUER : les 1 ou 2 premières questions lui demandent d’expliquer ce que fait cette partie de SON code, ou comment il la changerait (\"source\" : \"projet\"), sans jamais l’accuser.",
-    ccaps.length ? `- "concept" : le code de L'ÉLÉMENT de la Fiche niveaux que la question vérifie (chaque élément est le minimum de son niveau), parmi : ${ccaps.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »`).join(" ; ")}.${cfirst.length ? ` En PRIORITÉ ceux du niveau ${LEVEL_LABEL[missing[0].level]} que l'apprenant n'a pas encore montrés : ${cfirst.join(", ")}.` : ""}` : "",
+    ccaps.length ? `- "concept" : le code de L'ÉLÉMENT de la Fiche niveaux que la question vérifie (chaque élément est le minimum de son niveau), parmi : ${ccaps.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »`).join(" ; ")}.${why} Chaque question est au niveau d'exigence de son élément.` : "",
     `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"q":"la question","a":"la réponse attendue","notion":"2 à 4 mots","source":"evaluation|projet|brief"${ccaps.length ? ',"concept":"S2.M3"' : ""}}]}`,
   ].filter(Boolean).join("\n");
   const user = [`PROJET : ${b.title}`, `BRIEF :\n${b.text.slice(0, 5000)}`, tech ? `TECHNOLOGIES DU BRIEF : ${tech}` : "", points ? `POINTS DU BRIEF :\n${points}` : "",
@@ -814,6 +837,24 @@ export async function makeOral(env: Env, g: GuildRow, b: BriefCtx, who: string) 
   rec.oral = [...before, ...qs];
   rec.final = { ...(rec.final || {}), oral: [...keep, ...qs.map(() => false)] };
   await putReview(env, g, b.id, who, rec);
+}
+/**
+ * 📐 The teacher confirms the code's proofs for the Fiche niveaux: one item (true / false, null to take it back), or every
+ * proof the AI found ("acquis" → ✓, "pas acquis" → ✗; "not visible" stays out). Counted like a question from then on.
+ */
+export async function decideFicheCode(env: Env, g: GuildRow, briefId: number, who: string, b: { code?: unknown; ok?: unknown; all?: unknown }) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.fiche?.items?.length) throw new DebriefError("Analyze the work first: the code's proofs come with the analysis.");
+  const f = r.rec.fiche;
+  f.ok = f.ok && typeof f.ok === "object" ? f.ok : {};
+  if (b.all) { for (const it of f.items) if (it.ai === "ok" || it.ai === "ko") f.ok[it.code] = it.ai === "ok"; }
+  else {
+    const it = f.items.find((x: any) => x.code === String(b.code || ""));
+    if (!it) throw new DebriefError("This item isn't among the code's proofs.");
+    if (b.ok == null) delete f.ok[it.code]; else f.ok[it.code] = !!b.ok;
+  }
+  await putReview(env, g, briefId, who, r.rec);
+  return f;
 }
 /** Removes one question; the other switches as they are on the screen are kept. */
 export async function delOral(env: Env, g: GuildRow, briefId: number, who: string, i: number, sent: unknown) {
@@ -998,13 +1039,20 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
   // the repo: every file, the member's own files (their last commits), two files to read
   const read = await repoForTask(env, g, rec, who, mine, target).catch(() => ({ files: [] as string[], mine: [] as string[], excerpts: [] as { path: string; text: string }[] }));
   const lac = await lacunesOf(env, b.id, who, rec);
+  // 📐 the Fiche niveaux: the live task checks the level this learner's debrief must settle (under Moyen: Faible)
+  const fst = await getConcepts(env, g.id);
+  const fsp = await briefSprint(env, g, b.id, fst);
+  const fuid = mine || (who.startsWith("u:") ? who.slice(2) : "");
+  const ftg = fsp && fuid ? debriefTargets(await masteryOf(env, g.id, fuid, fsp, fst, { live: { briefId: b.id } }).catch(() => null)) : null;
+  const fiche = ftg ? ftg.items.slice(0, 2) : [];
   // the language of the task: the teacher's, else the brief's, else the repo's (never HTML/CSS only by default)
   const lang = taskLang({ brief: b.text, tech, files: read.files, teacher: langWanted });
   const js = !isHtmlCss(lang);
   const scope = `${b.text} ${tech} ${week?.concepts || ""} ${langWanted}`;
   const base = { project: b.title, brief: b.text, target, week, next: next ? next.concepts || next.objective : "", files: read.files, mine: read.mine, excerpts: read.excerpts,
     lacunes: lac.assess, remarks: (mine ? (rec.members || {})[mine]?.note : "") || rec.remarks?.text || "", others: others.map((c: any) => `${c.titre} (${c.point || c.consigne || ""})`.slice(0, 200)),
-    proposal: String(proposal || "").trim().slice(0, 1000) };
+    proposal: String(proposal || "").trim().slice(0, 1000),
+    fiche: fiche.length ? `ÉLÉMENTS DE LA FICHE NIVEAUX QUE LA TÂCHE DOIT VÉRIFIER (niveau ${LEVEL_LABEL[ftg!.level]}${ftg!.level === "faible" ? " : l'apprenant est sous Moyen, la tâche dit s'il est Faible ou Critique" : ""}) :\n${fiche.map((c) => `- ${c.code} « ${c.text} »`).join("\n")}\nLa tâche reste à ce niveau d'exigence.` : "" };
   const system = TASK_SYSTEM({ duree, lvl, lvlName, lvlRule, js, lang });
   let task: Task | null = null, by = "template", extra = "";
   for (let attempt = 0; attempt < 2 && !task; attempt++) {
@@ -1020,6 +1068,7 @@ export async function makeChallenge(env: Env, g: GuildRow, b: BriefCtx, who: str
     ...task, consigne: task.consigne, observer: task.criteres, duree, niveau: lvl, by,
     item: target.item, point: target.item != null ? oneLine(ex[target.item].texte, 200) : `Notion : ${target.notion}`, done: target.done, why: target.why,
     proposal: base.proposal, lang, langAsked: String(langWanted || "").trim().slice(0, 60), at: Date.now(), result: "", note: "",
+    ...(fiche.length ? { concepts: fiche.map((c) => c.code) } : {}),
   };
   if (mine) { rec.members = rec.members || {}; rec.members[mine] = { ...(rec.members[mine] || {}), ch: cand }; }
   else rec.challenge = cand;

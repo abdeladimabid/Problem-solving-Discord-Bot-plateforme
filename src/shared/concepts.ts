@@ -17,6 +17,16 @@ export const LEVELS = ["critique", "faible", "moyen", "bon", "excellent"] as con
 export type Level = (typeof LEVELS)[number];
 export const LEVEL_LABEL: Record<Level, string> = { critique: "Critique", faible: "Faible", moyen: "Moyen", bon: "Bon", excellent: "Excellent" };
 export const MIN_QUESTIONS = 5;
+/**
+ * The levels the class evaluations check (assessments, mises en situation): Moyen and Bon. Critique is the floor, never
+ * asked (not Faible = Critique). Faible is checked in the debrief of a learner under Moyen, Excellent in the debrief of a
+ * learner who has Bon. Reaching a level means every level below is there.
+ */
+export const CLASS_LEVELS: Level[] = ["moyen", "bon"];
+export const ASKED_LEVELS: Level[] = ["faible", "moyen", "bon", "excellent"];
+/** How many items one question may check: 2, up to 3 when the scope is large (so 1 or 2 briefs are enough). */
+export const perQuestionFor = (n: number) => (n > 6 ? 3 : 2);
+export const questionsFor = (n: number) => Math.ceil((n * MIN_QUESTIONS) / perQuestionFor(n));
 export interface Capacity { n: number; title: string; points: string[] }
 export interface LevelItem { text: string; caps: number[] }
 export interface FicheSprint { n: number; title: string; goal: string; levels: Record<Level, LevelItem[]>; caps: Capacity[] }
@@ -172,6 +182,8 @@ export function isOff(s: ConceptStore, code: string): boolean {
 }
 /** The items of a sprint that count (not turned off). */
 export const activeConcepts = (s: ConceptStore, n: number | null | undefined) => sprintConcepts(s, n).filter((c) => !isOff(s, c.code));
+/** The items questions may check and the levels count: every active item but Critique's (the floor, never asked). */
+export const askedConcepts = (s: ConceptStore, n: number | null | undefined) => activeConcepts(s, n).filter((c) => c.level !== "critique");
 export const conceptLabel = (s: ConceptStore, code: string) => { const c = conceptOf(s, code); return c ? `${c.code} (${LEVEL_LABEL[c.level]}) ${c.text}` : code; };
 
 /** What the teacher sees and changes (Settings → Fiche niveaux). */
@@ -283,40 +295,49 @@ export async function suggestScope(env: Env, g: GuildRow, b: { brief_id?: unknow
   if (b.week) { const w = p.weeks.find((x) => x.n === Number(b.week)); sprint = sprint || w?.sprint || null; if (w) text += `\n${w.title}\n${w.objective}\n${w.concepts}\n${w.deliverables}`; }
   if (!sprint) sprint = weekAt(p, new Date().toISOString().slice(0, 10))?.sprint ?? null;
   const fiche = sprint && sprintOf(s, sprint) ? sprint : null;
-  const items = fiche ? activeConcepts(s, fiche) : [];
+  const items = fiche ? askedConcepts(s, fiche) : [];
   const sp = sprintOf(s, fiche);
   return {
-    sprint: fiche, programmeSprint: sprint, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: MIN_QUESTIONS,
+    sprint: fiche, programmeSprint: sprint, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: MIN_QUESTIONS, classLevels: CLASS_LEVELS,
     items: items.map((c) => ({ code: c.code, level: c.level, text: c.text, caps: c.caps, capTitles: c.capTitles })),
     caps: sp ? sp.caps.map((c) => ({ code: codeOf(sp.n, c.n), n: c.n, title: c.title })) : [],
     scope: fiche ? scopeFromText(s, fiche, text, Math.max(1, Math.min(60, Number(b.limit) || 12))) : [],
   };
 }
-/** The items an evaluation should cover, from its text (a brief, a week, a topic): the ones its words point to. */
-export function scopeFromText(s: ConceptStore, sprintN: number | null | undefined, text: string, limit = 12): string[] {
-  const items = activeConcepts(s, sprintN);
+/**
+ * The items an evaluation should cover, from its text (a brief, a week, a topic): Moyen AND Bon (the class levels), half
+ * each, the ones its words point to first (else the first of each level). `levels` to pick others (a debrief's Faible).
+ */
+export function scopeFromText(s: ConceptStore, sprintN: number | null | undefined, text: string, limit = 12, levels: Level[] = CLASS_LEVELS): string[] {
+  const items = askedConcepts(s, sprintN).filter((c) => levels.includes(c.level));
   if (!items.length) return [];
   const sp = sprintOf(s, sprintN)!;
   const w = words(text);
   const byLevel = (a: Concept, b: Concept) => LEVELS.indexOf(a.level) - LEVELS.indexOf(b.level) || a.k - b.k;
-  if (!w.size) return items.sort(byLevel).slice(0, limit).map((c) => c.code);
   const hit = items.map((c) => {
     const own = words(c.text), cap = words(c.caps.map((n) => { const x = sp.caps.find((y) => y.n === n); return x ? [x.title, ...x.points].join(" ") : ""; }).join(" "));
     let x = 0; for (const k of w) { if (own.has(k)) x += 2; else if (cap.has(k)) x += 1; }
     return { c, x };
   });
-  const top = Math.max(...hit.map((h) => h.x));
-  const picked = hit.filter((h) => h.x >= Math.max(2, top * 0.4)).sort((a, b) => b.x - a.x || byLevel(a.c, b.c)).slice(0, limit).map((h) => h.c);
-  return (picked.length ? picked : items.slice(0, limit)).sort(byLevel).map((c) => c.code);
+  const lvs = levels.filter((lv) => items.some((c) => c.level === lv));
+  const per = Math.max(1, Math.floor(limit / Math.max(1, lvs.length)));
+  const out: Concept[] = [];
+  for (const lv of lvs) {
+    const mine = hit.filter((h) => h.c.level === lv);
+    const top = Math.max(...mine.map((h) => h.x));
+    let pick = top > 0 ? mine.filter((h) => h.x >= Math.max(2, top * 0.4)).sort((a, b) => b.x - a.x || a.c.k - b.c.k) : [];
+    if (pick.length < 2) pick = [...pick, ...mine.filter((h) => !pick.includes(h)).sort((a, b) => b.x - a.x || a.c.k - b.c.k)].slice(0, Math.min(per, 2));
+    out.push(...pick.slice(0, per).map((h) => h.c));
+  }
+  return out.sort(byLevel).map((c) => c.code);
 }
-/** The block of the AI prompts (and the prompts for Claude): the items to cover, at their level, and the rules. */
 export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: string; lang?: "fr" | "en" } = {}): string {
   const items = scope.map((c) => conceptOf(s, c)).filter((c): c is Concept => !!c && !isOff(s, c.code));
   if (!items.length) return "";
   const per = o.per ?? "question";
   return [
     `CONCEPTS OBLIGATOIRES (Fiche de validation du sprint, exigence administrative) : ce sont les éléments des niveaux (Critique → Excellent), chacun est le MINIMUM à savoir pour ce niveau. Chaque ${per} porte "concepts", la liste des codes des éléments qu'elle vérifie VRAIMENT (un ${per} peut en toucher un ou plusieurs).`,
-    `Chacun de ces éléments doit être vérifié par AU MOINS ${MIN_QUESTIONS} ${per}s différentes ; un élément est considéré comme acquis quand plus de la moitié des ${per}s qui le touchent sont réussies (au moins 3 sur 5).`,
+    `Chacun de ces éléments doit être vérifié par AU MOINS ${MIN_QUESTIONS} ${per}s différentes ; une ${per} peut en vérifier jusqu'à ${perQuestionFor(items.length)} à la fois quand ils vont ensemble (même notion, même code) ; un élément est considéré comme acquis quand plus de la moitié des ${per}s qui le touchent sont réussies (au moins 3 sur 5).`,
     "Chaque question est au niveau d'exigence de SON élément : un élément « Bon » ou « Excellent » se vérifie par une question de ce niveau (choisir, justifier, corriger, organiser), pas par une question de niveau Critique.",
     "Les éléments, avec leur niveau et leur capacité :",
     ...items.map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »${c.capTitles.length ? ` (capacité : ${c.capTitles.join(" ; ")})` : ""}`),
@@ -332,15 +353,15 @@ export function coverage(items: { concepts?: string[] }[], scope: string[]) {
 }
 /** The concept codes of a question, cleaned: known items only, the ones turned off left out. */
 export function cleanConcepts(s: ConceptStore, v: unknown): string[] {
-  return [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\s]+/)).map(normConcept).filter((c): c is string => !!c && !!conceptOf(s, c) && !isOff(s, c)))].slice(0, 60);
+  return [...new Set((Array.isArray(v) ? v : String(v ?? "").split(/[,;\s]+/)).map(normConcept).filter((c): c is string => !!c && conceptOf(s, c)?.level !== "critique" && !!conceptOf(s, c) && !isOff(s, c)))].slice(0, 60);
 }
 /** Every concept code the class knows (not turned off): what a file may use. */
-export const knownConcepts = (s: ConceptStore) => new Set(s.sprints.flatMap((sp) => activeConcepts(s, sp.n).map((c) => c.code)));
+export const knownConcepts = (s: ConceptStore) => new Set(s.sprints.flatMap((sp) => askedConcepts(s, sp.n).map((c) => c.code)));
 /**
- * The plan of an assessment: n questions, each with 1 or 2 items, so that every item of the scope gets at least 5.
+ * The plan of an assessment: n questions, each with 1 to 3 items (scope sorted by capacity: neighbours go together), so that every item of the scope gets at least 5.
  * When n is too small for that, n grows (the minimum always wins); returns the plan's items per question.
  */
-export function planConcepts(scope: string[], n: number, perQuestion = 2): string[][] {
+export function planConcepts(scope: string[], n: number, perQuestion = perQuestionFor(scope.length)): string[][] {
   if (!scope.length) return Array.from({ length: n }, () => []);
   const need = Math.ceil((scope.length * MIN_QUESTIONS) / perQuestion);
   const total = Math.max(n, need);
@@ -353,7 +374,7 @@ export function planConcepts(scope: string[], n: number, perQuestion = 2): strin
 }
 
 // ------------------------------------------------------------------ mastery: what each learner knows
-export interface Evidence { code: string; got: number; from: "assessment" | "mise" | "oral"; ref: string; at: number; label: string }
+export interface Evidence { code: string; got: number; from: "assessment" | "mise" | "oral" | "code" | "task"; ref: string; at: number; label: string }
 export interface ItemState { code: string; level: Level; k: number; text: string; caps: number[]; asked: number; got: number; pct: number | null; state: "ok" | "ko" | "few"; teacher: boolean | null; final: "ok" | "ko" | "few"; evidence: Evidence[] }
 /**
  * Every question that touched an item of a sprint, for one learner: the assessments (correct = 1, partly = ½), the
@@ -398,15 +419,28 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
       }
     }
   }
-  // the oral questions of the learner's debriefs: counted once the debrief is finalized, or the one being done now
-  const revs = await all<{ brief_id: number; record: string; status: string; updated_at: number | null }>(env,
-    "SELECT brief_id, record, status, updated_at FROM brief_reviews WHERE guild_id = ? AND who = ? AND record LIKE ?", gid, `u:${uid}`, `%"${pre}%`).catch(() => []);
+  // the learner's debriefs (theirs, and their squad's): the project's code (each proof the teacher confirmed, at once),
+  // then, once the debrief is finalized (or the one being done now), the oral questions (✓ = 1) and the live task
+  const revs = await all<{ brief_id: number; who: string; record: string; status: string; updated_at: number | null }>(env,
+    "SELECT brief_id, who, record, status, updated_at FROM brief_reviews WHERE guild_id = ? AND (who = ? OR (who LIKE 's:%' AND record LIKE ?)) AND record LIKE ?", gid, `u:${uid}`, `%"${uid}"%`, `%"${pre}%`).catch(() => []);
   if (revs.length) {
     const { reviewStates } = await import("./review/engine.ts");
+    const TASK: Record<string, number> = { valide: 1, partiel: 0.5, non_valide: 0 };
     for (const r of revs) {
-      if (r.status !== "final" && !(o.live && o.live.briefId === r.brief_id)) continue;
       let rec: any = null;
       try { rec = JSON.parse(r.record); } catch { rec = null; }
+      if (!rec) continue;
+      const squad = r.who.startsWith("s:");
+      if (squad && !(rec.squad?.members || []).some((m: any) => String(m.gid) === uid)) continue;
+      const okc: Record<string, boolean> = rec.fiche?.ok && typeof rec.fiche.ok === "object" ? rec.fiche.ok : {};
+      for (const [code, v] of Object.entries(okc)) for (const c of cleanConcepts(s, [code])) if (c.startsWith(pre) && typeof v === "boolean") {
+        const it = (rec.fiche.items || []).find((x: any) => x.code === c);
+        ev.push({ code: c, got: v ? 1 : 0, from: "code", ref: `b${r.brief_id}:c${c}`, at: r.updated_at ?? 0, label: `Code${squad ? " (squad)" : ""} · ${rec.brief || "brief"}${it?.proof ? ` : ${String(it.proof).slice(0, 80)}` : ""}` });
+      }
+      if (r.status !== "final" && !(o.live && o.live.briefId === r.brief_id)) continue;
+      const ch = squad ? rec.members?.[uid]?.ch : rec.challenge;
+      if (ch && ch.result in TASK) for (const c of cleanConcepts(s, ch.concepts)) if (c.startsWith(pre)) ev.push({ code: c, got: TASK[ch.result], from: "task", ref: `b${r.brief_id}:t`, at: r.updated_at ?? 0, label: `Mise en situation du débrief : ${String(ch.titre || "").slice(0, 80)}` });
+      if (squad) continue;
       const oral: any[] = Array.isArray(rec?.oral) ? rec.oral : [];
       if (!oral.length) continue;
       const st = reviewStates(rec);
@@ -420,7 +454,7 @@ export async function masteryOf(env: Env, gid: string, uid: string, sprintN: num
   const S = s ?? (await getConcepts(env, gid));
   const ev = await evidenceOf(env, gid, uid, S, sprintN, o);
   const dec = await decisionsOf(env, gid, uid);
-  const items: ItemState[] = activeConcepts(S, sprintN).map((c) => {
+  const items: ItemState[] = askedConcepts(S, sprintN).map((c) => {
     const e = ev.filter((x) => x.code === c.code);
     const asked = e.length, got = Math.round(e.reduce((a, x) => a + x.got, 0) * 10) / 10;
     const state: ItemState["state"] = asked < MIN_QUESTIONS ? "few" : got / asked > 0.5 ? "ok" : "ko";
@@ -432,22 +466,44 @@ export async function masteryOf(env: Env, gid: string, uid: string, sprintN: num
   return { items, caps, level: levelFrom(items) };
 }
 /**
- * The level: each item of a level box is the MINIMUM of that level. A level is reached when EVERY one of its items is
- * known, and every level below too. Not reached yet: what's missing (not known, or not evaluated enough).
+ * The level. Each item of a level box is the MINIMUM of that level, and a level is reached when EVERY one of its items is
+ * known. The class evaluations check Moyen and Bon; reaching one means every level below is there. Under Moyen (a Moyen
+ * item not known), the debrief checks Faible: all known → Faible, one not known → Critique, not checked yet → "Faible or
+ * Critique, to check in the debrief". Critique is the floor, never asked. `probe`: the level the debrief should check.
  */
 export function levelFrom(items: Pick<ItemState, "code" | "level" | "final">[]) {
-  const per = LEVELS.map((lv) => {
+  const per = ASKED_LEVELS.map((lv) => {
     const its = items.filter((i) => i.level === lv);
     const known = its.filter((i) => i.final === "ok").length, ko = its.filter((i) => i.final === "ko").length, few = its.filter((i) => i.final === "few").length;
     return { level: lv, items: its.length, known, ko, few, full: its.length > 0 && known === its.length };
   });
-  let reached: Level | null = null;
-  for (const p of per) { if (!p.items) continue; if (p.full) reached = p.level; else break; }
-  const evaluated = items.some((i) => i.final !== "few");
-  // the lowest level is Critique: not all its minimum shown yet → still Critique, said as such
-  const below = !reached && evaluated;
-  const next = per.find((p) => p.items && !p.full) ?? null;
-  return { reached: reached ?? (evaluated ? "critique" as Level : null), belowMinimum: below, next: next ? { level: next.level, missing: next.items - next.known, ko: next.ko, few: next.few } : null, per };
+  const P = (lv: Level) => per.find((p) => p.level === lv)!;
+  const st = (lv: Level) => { const p = P(lv); return !p.items ? "none" : p.full ? "full" : p.ko ? "failed" : "open"; };
+  const M = st("moyen"), B = st("bon"), E = st("excellent"), F = st("faible");
+  let reached: Level | null = null, below = false, probe: Level | null = null, nextLv: Level | null = null;
+  if (M === "full" || (M === "none" && (B === "full"))) {
+    reached = "moyen"; nextLv = "bon";
+    if (B === "full" || B === "none") { reached = "bon"; nextLv = E === "none" ? null : "excellent"; if (E === "full") { reached = "excellent"; nextLv = null; } else if (E !== "none") probe = "excellent"; }
+  } else if (M === "failed") {
+    below = true;
+    if (F === "full" || F === "none") { reached = "faible"; nextLv = "moyen"; }
+    else { reached = F === "failed" ? "critique" : null; nextLv = "faible"; probe = "faible"; }
+  } else {
+    // Moyen not settled yet (no item of it not known): Faible already shown in a debrief counts, a Faible item not known is Critique
+    nextLv = M === "none" ? null : "moyen";
+    if (F === "full") reached = "faible";
+    else if (F === "failed") { reached = "critique"; nextLv = "faible"; probe = "faible"; }
+  }
+  const n = nextLv ? P(nextLv) : null;
+  return {
+    reached, below, toCheck: below && reached === null, probe,
+    next: n && n.items ? { level: n.level, missing: n.items - n.known, ko: n.ko, few: n.few } : null, per,
+  };
+}
+/** The level in words (the sprint pages, the Suivi). */
+export function ficheLevelText(L: ReturnType<typeof levelFrom>): string {
+  if (L.toCheck) return "sous Moyen : Faible ou Critique, à préciser en débrief";
+  return L.reached ? LEVEL_LABEL[L.reached] : "pas assez évalué";
 }
 /** The sprint of the Fiche a brief belongs to (its sprint, else its week's), or null when the Fiche hasn't it. */
 export async function briefSprint(env: Env, g: GuildRow, briefId: number, s?: ConceptStore): Promise<number | null> {
@@ -462,11 +518,19 @@ export async function briefSprint(env: Env, g: GuildRow, briefId: number, s?: Co
 export function masteryForAi(sprintN: number, m: Awaited<ReturnType<typeof masteryOf>>): string {
   const L = m.level;
   const miss = L.next ? m.items.filter((i) => i.level === L.next!.level && i.final !== "ok") : [];
-  return [`FICHE NIVEAUX DU SPRINT ${sprintN} (référence officielle ; chaque élément d'un niveau est le MINIMUM de ce niveau : un niveau n'est atteint que si TOUS ses éléments sont acquis, et tous les niveaux en dessous)`,
+  return [`FICHE NIVEAUX DU SPRINT ${sprintN} (référence officielle ; chaque élément d'un niveau est le MINIMUM de ce niveau : un niveau n'est atteint que si TOUS ses éléments sont acquis. Les évaluations de la classe vérifient Moyen et Bon ; Moyen atteint veut dire Faible et Critique acquis. Sous Moyen, le débrief vérifie Faible : tout acquis → Faible, sinon Critique. Critique est le plancher)`,
     ...L.per.filter((p) => p.items).map((p) => `- ${LEVEL_LABEL[p.level]} : ${p.known}/${p.items} éléments acquis${p.ko ? `, ${p.ko} pas acquis` : ""}${p.few ? `, ${p.few} pas assez évalués` : ""}`),
-    L.reached ? `- NIVEAU SELON LA FICHE : ${LEVEL_LABEL[L.reached]}${L.belowMinimum ? " (même le minimum Critique n'est pas encore entièrement montré)" : ""}` : "- niveau selon la Fiche : pas encore assez de questions pour le dire",
-    miss.length ? `- pour atteindre ${LEVEL_LABEL[L.next!.level]}, il manque : ${miss.slice(0, 8).map((i) => `${i.code} « ${i.text} »${i.final === "few" ? " (pas assez évalué)" : ""}`).join(" ; ")}` : "",
+    `- NIVEAU SELON LA FICHE : ${L.toCheck ? "SOUS MOYEN, Faible ou Critique : à préciser en débrief par des questions sur les éléments Faible" : L.reached ? LEVEL_LABEL[L.reached] : "pas encore assez de questions pour le dire"}`,
+    miss.length ? `- ${L.toCheck ? "à vérifier pour Faible" : `pour atteindre ${LEVEL_LABEL[L.next!.level]}, il manque`} : ${miss.slice(0, 8).map((i) => `${i.code} « ${i.text} »${i.final === "few" ? " (pas assez évalué)" : ""}`).join(" ; ")}` : "",
   ].filter(Boolean).join("\n");
+}
+/** The items a learner's debrief should check (oral questions, the live task): the level to probe, else the next one, not known first. */
+export function debriefTargets(m: Awaited<ReturnType<typeof masteryOf>> | null): { level: Level; items: ItemState[] } | null {
+  if (!m) return null;
+  const lv = m.level.probe ?? m.level.next?.level ?? null;
+  if (!lv) return null;
+  const its = m.items.filter((i) => i.level === lv && i.final !== "ok").sort((a, b) => (a.final === "ko" ? 0 : 1) - (b.final === "ko" ? 0 : 1) || a.k - b.k);
+  return its.length ? { level: lv, items: its } : null;
 }
 
 // the teacher's decisions on items (app_settings, per learner)
@@ -481,7 +545,7 @@ export async function decisionsOf(env: Env, gid: string, uid: string): Promise<R
 export async function decideConcept(env: Env, g: GuildRow, uid: string, code: string, ok: boolean | null) {
   const s = await getConcepts(env, g.id);
   const item = normConcept(code), cap = item ? null : parseCode(code);
-  const codes = item && conceptOf(s, item) ? [item] : cap ? sprintConcepts(s, cap.sprint).filter((c) => c.caps.includes(cap.n)).map((c) => c.code) : [];
+  const codes = item && conceptOf(s, item) && conceptOf(s, item)!.level !== "critique" ? [item] : cap ? askedConcepts(s, cap.sprint).filter((c) => c.caps.includes(cap.n)).map((c) => c.code) : [];
   if (!codes.length) throw new ConceptError("Unknown item of the Fiche.");
   const d = await decisionsOf(env, g.id, uid);
   for (const c of codes) { if (ok == null) delete d[c]; else d[c] = !!ok; }

@@ -2973,3 +2973,5 @@ body.sl-open { overflow: hidden; }
 .set-subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; border-bottom: 1px solid var(--line, #ddd); padding-bottom: 8px; }
 .set-subtabs [role="tab"] { border: 1px solid var(--line, #ddd); background: transparent; color: inherit; border-radius: 999px; padding: 6px 14px; cursor: pointer; font: inherit; font-size: 14px; }
 .set-subtabs [role="tab"][aria-selected="true"] { background: var(--accent, #4f46e5); border-color: var(--accent, #4f46e5); color: #fff; }
+.cn-auto > summary { cursor: pointer; list-style: revert; }
+.cn-auto > summary .cn-chip { margin-left: 4px; }
