@@ -729,7 +729,9 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
         // students have it: the same questions (matched by their statement) get their capacities; nothing added
         qs = old.map((q) => { const n = r.quiz!.questions.find((x: any) => String(x.prompt).trim() === q.prompt.trim()); return n?.concepts ? { ...q, concepts: n.concepts } : q; });
       } else qs = qs.map((x: any) => { const same = old.find((q) => q.prompt.trim() === String(x.prompt).trim()); return same ? { ...x, id: same.id } : x; });
-      await saveAssessment(env, g, a.id, { title: a.title, questions: qs, settings: { ...st, concepts: scope } });
+      // the items it covers: the file's own list (Claude may have found better ones than the ones ticked), else the ones ticked
+      const fileScope = cleanConcepts(cstore, r.quiz!.settings?.concepts ?? []);
+      await saveAssessment(env, g, a.id, { title: a.title, questions: qs, settings: { ...st, concepts: fileScope.length ? fileScope : scope } });
       return ok(await assessView(env, g, a.id));
     }
   }

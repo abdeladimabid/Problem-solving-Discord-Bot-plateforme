@@ -335,10 +335,11 @@ export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: stri
   const items = scope.map((c) => conceptOf(s, c)).filter((c): c is Concept => !!c && !isOff(s, c.code));
   if (!items.length) return "";
   const per = o.per ?? "question";
+  const une = per === "question" ? "une" : "un", es = per === "question" ? "es" : "s";
   return [
-    `CONCEPTS OBLIGATOIRES (Fiche de validation du sprint, exigence administrative) : ce sont les éléments des niveaux (Critique → Excellent), chacun est le MINIMUM à savoir pour ce niveau. Chaque ${per} porte "concepts", la liste des codes des éléments qu'elle vérifie VRAIMENT (un ${per} peut en toucher un ou plusieurs).`,
-    `Chacun de ces éléments doit être vérifié par AU MOINS ${MIN_QUESTIONS} ${per}s différentes ; une ${per} peut en vérifier jusqu'à ${perQuestionFor(items.length)} à la fois quand ils vont ensemble (même notion, même code) ; un élément est considéré comme acquis quand plus de la moitié des ${per}s qui le touchent sont réussies (au moins 3 sur 5).`,
-    "Chaque question est au niveau d'exigence de SON élément : un élément « Bon » ou « Excellent » se vérifie par une question de ce niveau (choisir, justifier, corriger, organiser), pas par une question de niveau Critique.",
+    `CONCEPTS OBLIGATOIRES (Fiche de validation du sprint, exigence administrative) : ce sont les éléments des niveaux (Faible → Excellent ; Critique n'est jamais évalué), chacun est le MINIMUM à savoir pour ce niveau. Chaque ${per} porte "concepts", la liste des codes des éléments qu'elle vérifie VRAIMENT (${une} ${per} peut en toucher un ou plusieurs ; les QCM comptent aussi).`,
+    `Chacun de ces éléments doit être vérifié par AU MOINS ${MIN_QUESTIONS} ${per}s différent${es} ; ${une} ${per} peut en vérifier jusqu'à ${perQuestionFor(items.length)} à la fois quand ils vont ensemble (même notion, même code) ; un élément est considéré comme acquis quand plus de la moitié des ${per}s qui le touchent sont réussies (au moins 3 sur 5).`,
+    "Chaque question est au niveau d'exigence de SON élément : un élément « Bon » ou « Excellent » se vérifie par une question de ce niveau (choisir, justifier, corriger, organiser), pas par une simple question de connaissance.",
     "Les éléments, avec leur niveau et leur capacité :",
     ...items.map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »${c.capTitles.length ? ` (capacité : ${c.capTitles.join(" ; ")})` : ""}`),
     "Les éléments pratiques (Git, GitHub, Jira, maquette Figma, DevTools, organisation du projet) sont aussi vérifiés par des questions concrètes (commande à choisir, étapes à ordonner, problème à diagnostiquer, extrait à lire).",
