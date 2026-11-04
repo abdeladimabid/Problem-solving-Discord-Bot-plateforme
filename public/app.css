@@ -219,6 +219,8 @@ label .muted { font-weight: 400; }
 .tabs { display: flex; gap: 4px; margin-bottom: 14px; flex-wrap: wrap; background: var(--surface-2); padding: 4px; border-radius: 12px; border: 1px solid var(--line); width: fit-content; max-width: 100%; }
 .tabs button { border: 0; background: none; padding: 7px 14px; cursor: pointer; color: var(--ink-soft); border-radius: 9px; font-weight: 600; font-size: 14px; }
 .tabs button[aria-selected="true"] { color: var(--blue); background: var(--surface); box-shadow: var(--shadow-m); }
+.tabs a[role="tab"] { padding: 7px 14px; color: var(--ink-soft); border-radius: 9px; font-weight: 600; font-size: 14px; text-decoration: none; }
+.tabs a[role="tab"][aria-selected="true"] { color: var(--blue); background: var(--surface); box-shadow: var(--shadow-m); }
 .picklist { max-height: 260px; overflow: auto; border: 1px solid var(--line-strong); border-radius: var(--radius-s); padding: 6px 10px; background: var(--surface); }
 .picklist label { font-weight: 400; margin: 4px 0; }
 

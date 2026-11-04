@@ -25,7 +25,7 @@ import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComm
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { aiLines, makeProbes, memberInsights, scanLinks } from "../shared/review/insights.ts";
-import { AssessError, generateQuestions, gradeTaker, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, promptSet, sameAssessment, sameQuestions, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
@@ -614,7 +614,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
               (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'locked') AS locked,
               (SELECT ROUND(AVG(score)) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'graded') AS avg
          FROM assessments a WHERE a.guild_id = ? ORDER BY a.id DESC LIMIT 100`, g.id);
-    return ok({ items: rows.map(({ questions, ...a }) => ({ ...a, n: (() => { try { return JSON.parse(questions).length; } catch { return 0; } })(), settings: settingsOf(a as any) })) });
+    // a copy (the same questions as an older one, e.g. one per class in the shared library): marked, the library shows the first
+    const sets = rows.map((r) => { try { return promptSet(JSON.parse(r.questions || "[]")); } catch { return new Set<string>(); } });
+    const copyOf = (i: number) => { for (let j = rows.length - 1; j > i; j--) if (sameQuestions(sets[i], sets[j])) return rows[j].id; return null; };   // rows: newest first
+    return ok({ items: rows.map(({ questions, ...a }, i) => ({ ...a, n: (() => { try { return JSON.parse(questions).length; } catch { return 0; } })(), settings: settingsOf(a as any), copyOf: copyOf(i) })) });
   }
   if (path === "/assessments/generate" && method === "POST") {
     const g = await guild();
@@ -663,6 +666,8 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     try {
       const r: any = await importShared(env, g, String(body.url || ""), !!body.import);
       if (r.id) await libAssessment(env, g, r.id);
+      else if (r.questions) r.duplicate = await sameAssessment(env, g.id, r.questions);
+      delete r.questions;
       return ok(r);
     } catch (e) { if (e instanceof ShareError) bad(e.message); throw e; }
   }
@@ -697,7 +702,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const knownC = knownConcepts(cstore);
     const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: Array.isArray(body.concepts) || body.concepts === undefined ? { known: knownC, scope: Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts) : [] } : undefined });
     if (r.quiz?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", r.quiz.brief_id, g.id))) r.problems.push({ where: "quiz", msg: `"brief_id": brief #${r.quiz.brief_id} isn't in this class (or null).` });
-    if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
+    if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview, duplicate: r.problems.length ? null : await sameAssessment(env, g.id, r.quiz?.questions ?? []) });
     const id = await saveAssessment(env, g, null, r.quiz);
     await libAssessment(env, g, id);
     return ok({ id, problems: [] });

@@ -1914,8 +1914,8 @@ function importAssessmentDialog() {
     $("#im-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>${p.from ? ` <span class="small muted">· from ${esc(p.from)}</span>` : ""}
       <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points${p.minutes ? ` · ${p.minutes} min` : ""}</p>
       ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : ""}
-      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
-    $(".dlg-foot .btn.primary", dlg).textContent = "Import as a draft";
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>${r.duplicate ? `<div class="notice" style="margin-top:8px">📚 <b>Already in your Assessment library</b>: « ${esc(r.duplicate.title)} » has the same questions. To give it to your class, <a href="#/assessment/${r.duplicate.id}">open that one</a> and invite your learners: no copy needed (each class keeps its own papers). Import only if you want a separate version.</div>` : ""}`;
+    $(".dlg-foot .btn.primary", dlg).textContent = r.duplicate ? "Import a copy anyway" : "Import as a draft";
     return;
   } }]);
   $("#im-url", dlg).oninput = () => { previewed = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Preview"; };
@@ -1965,8 +1965,8 @@ async function importQuizJsonDialog() {
     $("#cj-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>
       <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points · ${p.minutes} min</p>
       ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : `<p class="small muted">No competency.</p>`}
-      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
-    btn.textContent = "Import as a draft";
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>${r.duplicate ? `<div class="notice" style="margin-top:8px">📚 <b>Already in your Assessment library</b>: « ${esc(r.duplicate.title)} » has the same questions. To give it to your class, <a href="#/assessment/${r.duplicate.id}">open that one</a> and invite your learners: no copy needed (each class keeps its own papers). Import only if you want a separate version.</div>` : ""}`;
+    btn.textContent = r.duplicate ? "Import a copy anyway" : "Import as a draft";
   } }]);
   dlg.classList.add("wide");
   wireJsonBox(dlg, "cj-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
@@ -2055,9 +2055,19 @@ async function shareAssessmentDialog(id) {
   $("#sh-copy", dlg).onclick = () => copyText($("#sh-url", dlg).textContent, "Link copied");
 }
 
-async function viewAssessments() {
+async function viewAssessments(tab) {
   const r = await api("/assessments");
   const locked = r.items.reduce((s, a) => s + (a.status === "open" ? a.locked : 0), 0);
+  // two tabs: the ones given to the class (invited at least one learner: the default), and the whole library
+  const lib = tab === "library";
+  const mine = r.items.filter((a) => a.takers > 0);
+  // the library shows each assessment once: a copy (the same questions, e.g. one per class) folds under the first one
+  let showCopies = false;
+  try { showCopies = localStorage.getItem("as-copies") === "1"; } catch { /* storage blocked */ }
+  const copies = {};
+  for (const a of r.items) if (a.copyOf) (copies[a.copyOf] ||= []).push(a);
+  const nCopies = r.items.filter((a) => a.copyOf).length;
+  const rows = lib ? r.items.filter((a) => showCopies || !a.copyOf) : mine;
   view.innerHTML = `
     <div class="page-head"><div><h1>Assessments</h1><p class="sub">Web tests in full screen: each student gets their own link, questions in their own order. Leaving full screen stops them until you let them back in. Results go to their competencies and skills.</p></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="as-imp">🔗 Import from a link</button><button class="btn" id="as-json" title="A quiz written by Claude, as JSON: the prompt to write it is inside">{ } Import a quiz (JSON)</button><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
@@ -2066,14 +2076,19 @@ async function viewAssessments() {
       <div class="figure ${locked ? "cs-attn" : ""}"><span class="ico">⛔</span><div><b>${locked}</b><span>student(s) stopped, waiting for you</span></div></div>
       <div class="figure"><span class="ico">✅</span><div><b>${r.items.reduce((s, a) => s + a.done, 0)}</b><span>papers handed in</span></div></div>
     </div>
+    <div class="tabs" role="tablist" style="margin:0 0 12px">
+      <a role="tab" href="#/assessments" aria-selected="${!lib}">📝 My class <span class="muted small">(${mine.length})</span></a>
+      <a role="tab" href="#/assessments/library" aria-selected="${lib}">📚 Assessment library <span class="muted small">(${r.items.length})</span></a></div>
+    <p class="small muted" style="margin:0 0 10px">${lib ? `Every assessment, once: yours, drafts, and the shared library's. To give one to your class, open it and invite your learners: no copy needed, each class keeps its own papers.${nCopies ? ` <label class="check" style="display:inline-flex"><input type="checkbox" id="as-copies" ${showCopies ? "checked" : ""}> show the ${nCopies} cop${nCopies > 1 ? "ies" : "y"} too</label>` : ""}` : "The assessments given to your class (at least one learner invited). The others are in the Assessment library."}</p>
     <section class="panel">${table([
-      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}${a.lib_key ? ` <span class="lib-tag" title="In the shared library: the other classes have it too">📚 shared</span>` : ""}` },
+      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}${a.lib_key ? ` <span class="lib-tag" title="In the shared library: the other classes have it too">📚 shared</span>` : ""}${lib && copies[a.id] ? ` <span class="tag" title="${esc(copies[a.id].map((c) => c.title).join(" · "))}">+${copies[a.id].length} cop${copies[a.id].length > 1 ? "ies" : "y"}</span>` : ""}${lib && a.copyOf ? ` <span class="tag">copy</span>` : ""}` },
       { label: "Status", sort: "status", html: (a) => status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status) },
       { label: "Questions", num: true, sort: "n", html: (a) => `${a.n}` },
       { label: "Done", num: true, html: (a) => `${a.done}/${a.takers}${a.locked ? ` <span class="pill-inline">${a.locked} stopped</span>` : ""}` },
       { label: "Average", num: true, sort: "avg", html: (a) => (a.avg == null ? "—" : `<b style="color:${masteryInk(a.avg)}">${a.avg}%</b>`) },
       { label: "Created", sort: "created_at", html: (a) => `<span class="small">${fmtDate(a.created_at)}</span>` },
-    ], r.items, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: "No assessment yet." })}</section>`;
+    ], rows, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: lib ? "No assessment yet." : "No assessment given to your class yet: pick one in the Assessment library (and invite your learners), or create one." })}</section>`;
+  if ($("#as-copies")) $("#as-copies").onchange = (e) => { try { localStorage.setItem("as-copies", e.target.checked ? "1" : ""); } catch { /* storage blocked */ } viewAssessments(tab); };
   $("#as-gen").onclick = () => generateQuestionsDialog(null);
   $("#as-imp").onclick = () => importAssessmentDialog();
   $("#as-json").onclick = (e) => busy(e.currentTarget, () => importQuizJsonDialog());

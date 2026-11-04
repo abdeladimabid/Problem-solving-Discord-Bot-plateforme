@@ -7935,6 +7935,13 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
   const okq = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(5)), concepts: ["S2.M2", "S2.M4"], import: true });
   const qa = (await api("GET", `/api/assessments/${okq.data.id}?g=${G}`)).data.assessment;
   check(okq.status === 200 && !okq.data.problems.length && qa.settings.concepts.join() === "S2.M2,S2.M4" && qa.questions.every((q: any) => q.concepts.includes("S2.M2")), "…5 each: imported, its items kept (the assessment's and each question's)");
+  // the same assessment again (a copy for another class): said at the preview; the library shows it once
+  const again = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), title: "DOM et événements (copie)" }), concepts: ["S2.M2", "S2.M4"] });
+  check(again.status === 200 && again.data.duplicate?.id === okq.data.id, "the same questions imported again: « already in your Assessment library » (which one)");
+  const cpy = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), title: "DOM et événements (copie)" }), concepts: ["S2.M2", "S2.M4"], import: true });
+  const lst = (await api("GET", `/api/assessments?g=${G}`)).data.items;
+  check(lst.find((x: any) => x.id === cpy.data.id)?.copyOf === okq.data.id && !lst.find((x: any) => x.id === okq.data.id)?.copyOf, "…imported anyway: marked as a copy of the first (the library folds it under it)");
+  await api("DELETE", `/api/assessments/${cpy.data.id}?g=${G}`);
   // an existing assessment brought up to the Fiche by Claude
   const old = await api("POST", "/api/assessments", { g: G, title: "Ancienne évaluation", questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2 }], settings: { minutes: 20 } });
   const ap = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.M4"] });

@@ -1135,3 +1135,28 @@ export async function saveOptions(env: Env, g: GuildRow, id: number, b: any) {
   return next;
 }
 const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));
+
+// ---------------------------------------------------------------- the same assessment twice (a copy for each class)
+const promptKey = (t: unknown) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 200);
+/** The questions of an assessment, as a set of their statements (for spotting copies). */
+export const promptSet = (qs: { prompt?: unknown }[]) => new Set(qs.map((q) => promptKey(q?.prompt)).filter(Boolean));
+/** Two assessments are the same one when at least 80% of their questions are the same (a copy, maybe a little changed). */
+export function sameQuestions(a: Set<string>, b: Set<string>): boolean {
+  if (a.size < 3 || b.size < 3) return false;
+  let both = 0;
+  for (const x of a) if (b.has(x)) both++;
+  return both / (a.size + b.size - both) >= 0.8;
+}
+/** An assessment of the class with the same questions already (the oldest), else null. */
+export async function sameAssessment(env: Env, gid: string, qs: { prompt?: unknown }[], exceptId: number | null = null): Promise<{ id: number; title: string } | null> {
+  const mine = promptSet(qs);
+  if (mine.size < 3) return null;
+  const rows = await all<{ id: number; title: string; questions: string }>(env, "SELECT id, title, questions FROM assessments WHERE guild_id = ? ORDER BY id", gid);
+  for (const r of rows) {
+    if (r.id === exceptId) continue;
+    let q: any[] = [];
+    try { q = JSON.parse(r.questions || "[]"); } catch { q = []; }
+    if (sameQuestions(mine, promptSet(q))) return { id: r.id, title: r.title };
+  }
+  return null;
+}
