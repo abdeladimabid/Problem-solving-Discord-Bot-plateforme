@@ -708,7 +708,7 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
     "Donne le niveau de l’apprenant pour ce brief : excellent, bon, moyen, faible ou critique.",
     "Base-toi sur l’évaluation faite en classe (la preuve la plus sûre de ce que l’apprenant maîtrise), les points du brief validés, les compétences, les questions orales, la mise en situation et le commentaire du formateur (le commentaire est son avis : il compte beaucoup).",
     "Le niveau ne peut jamais dépasser d’un cran celui de l’évaluation : évaluation critique → au mieux faible ; faible → au mieux moyen ; moyen → au mieux bon.",
-    "Quand la FICHE NIVEAUX donne un niveau, c’est la référence officielle (un niveau est atteint quand au moins la moitié de ses éléments sont compris, et tous les niveaux en dessous) : ne t’en écarte pas de plus d’un cran, et seulement avec une raison claire tirée des données.",
+    "Quand la FICHE NIVEAUX donne un niveau, c’est la référence officielle (chaque élément d'un niveau en est le minimum : un niveau n'est atteint que si TOUS ses éléments sont acquis ; Moyen atteint veut dire Faible et Critique acquis ; sous Moyen, c'est Faible ou Critique selon les éléments Faible) : ne t’en écarte pas de plus d’un cran, et seulement avec une raison claire tirée des données.",
     'Réponds UNIQUEMENT avec ce JSON : {"niveau":"excellent|bon|moyen|faible|critique","pourquoi":"une phrase courte"}',
   ].join("\n");
   const cstore = await getConcepts(env, g.id);

@@ -75,7 +75,7 @@ export interface Situation {
   id: string; title: string; context: string; difficulty: number; competencies: string[]; notions: string[]; skills: string[];
   runtime: Runtime; files: MiseFile[]; schema?: string; questions: string[]; expected: string;
   solution: { name: string; content: string }[]; checks: Check[]; errorHints: string[]; points: number;
-  concepts?: string[];   // the capacities of the Fiche niveaux it touches ("S2.3": concepts.ts)
+  concepts?: string[];   // the items of the Fiche niveaux it checks ("S2.M3": concepts.ts)
 }
 export interface Qcm { id: string; question: string; code?: string; choices: string[]; correct: number; competencies: string[]; notion: string; skills: string[]; points: number; concepts?: string[] }
 export interface MiseContent { format: string; title: string; week: number | null; metier: string; competencies: string[]; situations: Situation[]; qcm: Qcm[]; concepts?: string[] }

@@ -1983,7 +1983,7 @@ async function importQuizJsonDialog() {
   pickCn();
   $("#cj-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
     const sc = cjScope();
-    if (sc && !sc.length) throw new Error("Tick at least one capacity of the Fiche niveaux.");
+    if (sc && !sc.length) throw new Error("Tick at least one item of the Fiche niveaux.");
     cur = await load(sel.value, sc);
     copyText(cur.prompt, "Prompt copied: paste it in Claude");
   });
@@ -2106,11 +2106,11 @@ function claudeConceptsDialog(a, dirty) {
   if (dirty) throw new Error("Save your changes first.");
   let checked = "";
   openDialog("📋 Bring it up to the Fiche niveaux with Claude", `
-    <div class="cj-step"><b>1 · The prompt</b><p class="small muted" style="margin:4px 0 8px">Its questions and the capacities it covers (${esc((AS.cscope || []).join(", ") || "pick them first")}): Claude tags each question and adds questions where a capacity has fewer than 5.</p>
+    <div class="cj-step"><b>1 · The prompt</b><p class="small muted" style="margin:4px 0 8px">Its questions and the items it covers (${esc((AS.cscope || []).join(", ") || "pick them first")}): Claude tags each question and adds questions where a item has fewer than 5.</p>
       <button class="btn small" id="cc-cp">📋 Copy the prompt for Claude</button></div>
     <div class="cj-step"><b>2 · Paste Claude's JSON</b>${jsonBox("cc-q", '{ "format": "classbot-assessment@1", … }')}</div>
     <div id="cc-prev"></div>
-    ${a.status !== "draft" ? `<p class="small muted">Students already have it: only the capacities of its questions change (no question added).</p>` : ""}`,
+    ${a.status !== "draft" ? `<p class="small muted">Students already have it: only the items of its questions change (no question added). Claude may also use the other items of the sprint and the ones before.</p>` : ""}`,
   [{ label: "Check", primary: true, action: async () => {
     const json = $("#cc-q", dlg).value;
     if (!json.trim()) throw new Error("Paste Claude's JSON first.");
@@ -2123,8 +2123,8 @@ function claudeConceptsDialog(a, dirty) {
     const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { json, concepts: AS.cscope } });
     if (r.problems.length) { $("#cc-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
     checked = json;
-    $("#cc-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(r.preview.title)}</b><p class="small">${r.preview.n} questions · every capacity has its 5 questions ✅</p></div>`;
-    btn.textContent = a.status === "draft" ? "Replace its questions" : "Update the capacities";
+    $("#cc-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(r.preview.title)}</b><p class="small">${r.preview.n} questions · every item has its 5 questions ✅</p></div>`;
+    btn.textContent = a.status === "draft" ? "Replace its questions" : "Update the items";
   } }]);
   dlg.classList.add("wide");
   wireJsonBox(dlg, "cc-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
@@ -2521,7 +2521,7 @@ async function inviteDialog() {
   // 📐 the Fiche niveaux: said before inviting when a capacity of its scope has fewer than 5 questions (or none was chosen)
   const scope = a.settings.concepts || [];
   const low = scope.filter((c) => a.questions.filter((q) => (q.concepts || []).includes(c)).length < 5);
-  const cnWarn = !scope.length ? `<div class="notice" style="margin-bottom:10px">📐 No capacity of the Fiche niveaux chosen for this assessment: its results won't count in the students' levels. Pick them in Questions → Fiche niveaux.</div>`
+  const cnWarn = !scope.length ? `<div class="notice" style="margin-bottom:10px">📐 No item of the Fiche niveaux chosen for this assessment: its results won't count in the students' levels. Pick them in Questions → Fiche niveaux.</div>`
     : low.length ? `<div class="notice danger" style="margin-bottom:10px">📐 ${low.map((c) => `<b>${esc(c)}</b> ${a.questions.filter((q) => (q.concepts || []).includes(c)).length}/5`).join(", ")}: fewer than 5 questions. Add questions on ${low.length > 1 ? "them" : "it"} before inviting (Questions → ✨ Add with AI, or 📋 Bring it up to the Fiche with Claude).</div>` : "";
   openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `${cnWarn}
     <div class="iv-sum"><span class="iv-h">Options</span> ${optsChips(a.settings)} <button class="ap-link" id="iv-chg">Change</button></div>

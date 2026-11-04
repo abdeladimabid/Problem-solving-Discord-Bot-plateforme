@@ -27,7 +27,7 @@ export interface Question {
   expected?: string;                               // code / explain: a model answer or the key points (never shown)
   points: number; skills: string[]; comp?: string; level?: number;
   comps?: { code: string; level: number }[];      // every competency the question checks (comp/level = the first one)
-  concepts?: string[];                             // the capacities of the Fiche niveaux it touches ("S2.3"…: concepts.ts)
+  concepts?: string[];                             // the items of the Fiche niveaux it checks ("S2.M3"…: concepts.ts)
 }
 export interface Settings { minutes: number; lang: "fr" | "en"; codeLang: string; showResults: boolean; points: number; passAt: number; target: string[];
   noPaste: boolean;        // copy-paste blocked in the answers
@@ -72,7 +72,7 @@ export function cleanQuestion(q: any, i = 0): Question | null {
     if (pc && !comps.some((x) => x.code === pc.code)) comps.push({ code: pc.code, level: Math.max(1, Math.min(3, pc.level ?? 1)) });
   }
   if (comps.length) { out.comps = comps.slice(0, 6); out.comp = comps[0].code; out.level = comps[0].level; }
-  // the capacities of the Fiche niveaux ("S2.3", "S2-3"…: kept as « S2.3 »)
+  // the items of the Fiche niveaux ("S2.M3", "s2-m3"…: kept as « S2.M3 »)
   const concepts = [...new Set((Array.isArray(q?.concepts) ? q.concepts : String(q?.concepts ?? "").split(/[,;\s]+/)).map(normConcept).filter(Boolean))] as string[];
   if (concepts.length) out.concepts = concepts.slice(0, 6);
   if (q?.code) out.code = str(q.code, 4000);
@@ -930,7 +930,7 @@ export async function generateQuestions(env: Env, o: GenOpts, plan?: PlanItem[])
     compList.length ? `"comps" : UNIQUEMENT parmi ces compétences, choisies d’après ce que la question fait FAIRE à l’apprenant (le sens de la compétence, jamais l’ordre de la liste) :\n${compList.join("\n")}` : "",
     fr ? "VARIÉTÉ : chaque question suit SA ligne du plan (son type, sa notion, sa forme de tâche). Deux questions ne testent jamais la même chose : changer seulement les noms de variables ou les valeurs ne fait PAS une nouvelle question."
       : "VARIETY: each question follows ITS line of the plan (its type, notion, kind of task). No two questions test the same thing: only changing variable names or values does NOT make a new question.",
-    plan.some((x) => x.concepts?.length) && o.conceptStore ? conceptsPrompt(o.conceptStore, [...new Set(plan.flatMap((x) => x.concepts ?? []))]) + "\nChaque question travaille VRAIMENT les capacités de SA ligne du plan (elles sont données), et les garde dans \"concepts\"." : "",
+    plan.some((x) => x.concepts?.length) && o.conceptStore ? conceptsPrompt(o.conceptStore, [...new Set(plan.flatMap((x) => x.concepts ?? []))]) + "\nChaque question vérifie VRAIMENT les éléments de SA ligne du plan (ils sont donnés), à leur niveau d'exigence, et les garde dans \"concepts\"." : "",
     `Réponds UNIQUEMENT avec ce JSON : {"questions":[{"type":"code|explain|mcq","prompt":"…","code":"code à lire (facultatif)","lang":"javascript","starter":"code de départ (facultatif)","choices":["…"],"answer":[0],"expected":"…","points":2,"skills":["dom"],"comps":["C4N1"]${plan.some((x) => x.concepts?.length) ? ',"concepts":["S2.3"]' : ""}}]}`,
   ].filter(Boolean).join("\n");
   const user = [

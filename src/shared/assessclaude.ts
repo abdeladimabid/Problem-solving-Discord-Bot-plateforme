@@ -95,7 +95,7 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string>; concepts?: { k
     const notion = text(q.notion);
     if (notion.length > 80) bad(`"notion": 80 characters at most.`);
     const m: any = { type, prompt, points: pts, comps: codes, skills: skills.filter((s: string) => SKILL_KEYS.includes(s)).slice(0, 3) };
-    // the capacities of the Fiche niveaux it touches ("S2.3")
+    // the items of the Fiche niveaux it checks ("S2.M3")
     if (q.concepts != null || o.concepts) {
       const cs = (Array.isArray(q.concepts) ? q.concepts : []).map((c: unknown) => String(c).trim().toUpperCase());
       if (q.concepts != null && !Array.isArray(q.concepts)) bad(`"concepts" must be a list (e.g. ["S2.M3"]).`);
@@ -214,7 +214,8 @@ export function creationPrompt(o: { program: Pick<Program, "name" | "referential
  * An existing assessment, for Claude to bring up to the Fiche niveaux: the same questions as a classbot-assessment@1
  * file; Claude tags each one with the capacities it touches and adds questions until each capacity has 5.
  */
-export function conceptsAuditPrompt(a: Pick<AssessRow, "title" | "brief_id">, qs: Question[], st: { minutes: number; lang: string; codeLang: string; passAt: number; points: number }, block: string, scope: string[]): string {
+export function conceptsAuditPrompt(a: Pick<AssessRow, "title" | "brief_id">, qs: Question[], st: { minutes: number; lang: string; codeLang: string; passAt: number; points: number }, block: string, scope: string[],
+  o: { others?: string; locked?: boolean } = {}): string {
   const file = {
     format: QUIZ_FORMAT, title: a.title, minutes: st.minutes || 45, lang: st.lang, codeLang: st.codeLang, passAt: st.passAt, points: st.points, brief_id: a.brief_id ?? null, concepts: scope,
     questions: qs.map((q) => ({ type: q.type, prompt: q.prompt, ...(q.code ? { code: q.code } : {}), ...(q.type === "code" ? { lang: q.lang, ...(q.starter ? { starter: q.starter } : {}) } : {}),
@@ -225,10 +226,13 @@ export function conceptsAuditPrompt(a: Pick<AssessRow, "title" | "brief_id">, qs
     "Tu es formateur en développement web. Voici une évaluation existante (format classbot-assessment@1). Mets-la en conformité avec la Fiche niveaux du sprint :",
     "",
     block,
+    o.others ? `\nLES AUTRES ÉLÉMENTS DE LA FICHE (ce sprint et les précédents) : utilise-les aussi quand une question les vérifie mieux que ceux du dessus (une révision du sprint d'avant compte pour ce sprint-là) :\n${o.others}` : "",
     "",
     "CE QUE TU FAIS",
-    `- Pour CHAQUE question existante : mets dans "concepts" les codes des éléments de la Fiche qu'elle vérifie VRAIMENT (relis la question et la réponse attendue ; un tableau vide n'est pas permis). Ne change pas la question si elle est bonne.`,
-    `- Puis compte, pour chaque élément (${scope.join(", ")}), combien de questions le vérifient. Pour chaque élément en dessous de 5, AJOUTE des questions nouvelles (même style, même niveau, mêmes technologies, une seule bonne réponse pour un QCM) jusqu'à 5 au moins.`,
+    `- Pour CHAQUE question existante : mets dans "concepts" les codes des éléments de la Fiche qu'elle vérifie (1 à 3 ; relis la question et la réponse attendue ; les QCM et les Vrai/Faux comptent aussi). Uniquement des codes listés${o.others ? " (au-dessus ou dans les autres éléments)" : ""}. Ne change pas la question si elle est bonne.`,
+    o.locked
+      ? `- Les apprenants l'ont DÉJÀ passée : n'ajoute AUCUNE question et ne change aucun énoncé (seuls les "concepts" seront repris). En haut du fichier, "concepts" = la liste des éléments vérifiés par AU MOINS 5 questions après ton travail.`
+      : `- Puis compte, pour chaque élément (${scope.join(", ")}), combien de questions le vérifient. Pour chaque élément en dessous de 5, AJOUTE des questions nouvelles (même style, même niveau, mêmes technologies, une seule bonne réponse pour un QCM) jusqu'à 5 au moins.`,
     `- Garde "format", "title", "minutes" (augmente-le si tu ajoutes beaucoup de questions), "lang", "codeLang", "passAt", "points", "brief_id" et "concepts" (en haut) ; chaque question garde ses "competencies" et ses "skills".`,
     `- Les QCM : "correct" = l'index de la seule bonne réponse. Les questions "code" et "explain" : "expected" (et "grading" si utile).`,
     "- Réponds UNIQUEMENT avec le JSON complet, sans texte avant ni après.",

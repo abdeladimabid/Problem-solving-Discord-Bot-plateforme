@@ -1,7 +1,7 @@
 // Dashboard API for the learning part: programmes (planning + competencies), briefs (generator, editor, hand-ins,
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
-import { cleanConcepts, conceptsPrompt, coverage, getConcepts, knownConcepts, suggestScope } from "../shared/concepts.ts";
+import { LEVEL_LABEL, askedConcepts, cleanConcepts, conceptsPrompt, coverage, getConcepts, knownConcepts, suggestScope } from "../shared/concepts.ts";
 import { netFlags } from "../shared/identity.ts";
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
@@ -716,8 +716,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const cstore = await getConcepts(env, g.id);
     const st = settingsOf(a);
     const scope = Array.isArray(body?.concepts) ? cleanConcepts(cstore, body.concepts) : st.concepts.length ? cleanConcepts(cstore, st.concepts) : (await suggestScope(env, g, { brief_id: a.brief_id, text: a.title })).scope;
-    if (!scope.length) bad("Pick the capacities of the Fiche niveaux it covers first.");
-    if (method === "POST" && !body?.json) return ok({ prompt: conceptsAuditPrompt(a, questionsOf(a), st, conceptsPrompt(cstore, scope), scope), concepts: scope });
+    if (!scope.length) bad("Pick the items of the Fiche niveaux it covers first.");
+    if (method === "POST" && !body?.json) {
+      // every other item of the sprint and the ones before: an old assessment often checks others than the ones ticked
+      const sp = Number((scope[0] || "").match(/^S(\d+)\./)?.[1]) || 0;
+      const others = cstore.sprints.filter((x) => x.n <= sp).flatMap((x) => askedConcepts(cstore, x.n)).filter((c) => !scope.includes(c.code)).map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »`).join("\n");
+      return ok({ prompt: conceptsAuditPrompt(a, questionsOf(a), st, conceptsPrompt(cstore, scope, { only: !others }), scope, { others, locked: a.status !== "draft" }), concepts: scope });
+    }
     if (method === "POST") {
       const knownC = knownConcepts(cstore);
       const p = await programOf(env, g);

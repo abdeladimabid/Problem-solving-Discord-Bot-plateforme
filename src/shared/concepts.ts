@@ -331,7 +331,7 @@ export function scopeFromText(s: ConceptStore, sprintN: number | null | undefine
   }
   return out.sort(byLevel).map((c) => c.code);
 }
-export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: string; lang?: "fr" | "en" } = {}): string {
+export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: string; lang?: "fr" | "en"; only?: boolean } = {}): string {
   const items = scope.map((c) => conceptOf(s, c)).filter((c): c is Concept => !!c && !isOff(s, c.code));
   if (!items.length) return "";
   const per = o.per ?? "question";
@@ -343,8 +343,8 @@ export function conceptsPrompt(s: ConceptStore, scope: string[], o: { per?: stri
     "Les éléments, avec leur niveau et leur capacité :",
     ...items.map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »${c.capTitles.length ? ` (capacité : ${c.capTitles.join(" ; ")})` : ""}`),
     "Les éléments pratiques (Git, GitHub, Jira, maquette Figma, DevTools, organisation du projet) sont aussi vérifiés par des questions concrètes (commande à choisir, étapes à ordonner, problème à diagnostiquer, extrait à lire).",
-    `N'utilise QUE ces codes (exactement : ${items.map((c) => c.code).join(", ")}).`,
-  ].join("\n");
+    o.only === false ? "" : `N'utilise QUE ces codes (exactement : ${items.map((c) => c.code).join(", ")}).`,
+  ].filter(Boolean).join("\n");
 }
 /** How many questions touch each item of the scope, and the ones under the minimum. */
 export function coverage(items: { concepts?: string[] }[], scope: string[]) {
