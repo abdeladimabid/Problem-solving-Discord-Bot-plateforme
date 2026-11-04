@@ -1185,7 +1185,7 @@ function renderDebrief() {
       <p class="sub">${T.handin ? `Handed in <a href="https://github.com/${esc(T.handin.repo)}" target="_blank" rel="noopener">${esc(T.handin.repo)}</a> ${fmtAgo(T.handin.at)}` : "Not handed in: the analysis uses the repo they pushed to during the brief"}
         ${rec ? ` · analyzed ${fmtAgo(Math.floor(rec.at / 1000))}${rec.model ? ` <span class="muted small">(${esc(rec.model)})</span>` : ""}` : ""} ${R.status ? status(final ? "solved" : "pending", final ? "Finalized" : "Draft") : ""}</p></div>
       <div class="toolbar" style="margin:0">
-        ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next →</a>` : ""}
+        ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous learner</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next learner →</a>` : ""}
         ${final ? "" : `<button class="btn ${rec ? "" : "primary"}" id="db-an">${rec ? "↻ Analyze again" : "🔍 Analyze the work"}</button>`}</div></div>
     <div id="db-body"></div>`;
   if ($("#db-an")) $("#db-an").onclick = () => analyzeWork();
@@ -1223,7 +1223,7 @@ function renderDebrief() {
   body.innerHTML = `<div class="db-grid${sq ? " db-sq" : ""}">
     <div class="stack">
       ${sq ? "" : assessPanelHtml(rec.assess)}
-      <section class="panel"><div class="panel-head"><h2>3 · Project (GitHub)</h2><span id="db-pct"></span></div>
+      <section class="panel" id="db-proj"><div class="panel-head"><h2>Project (GitHub)</h2><span id="db-pct"></span></div>
         <div id="db-meter"></div>
         ${r.resume ? `<p>${esc(r.resume)}</p>` : ""}
         <div class="grid cols-2-even">
@@ -1232,12 +1232,12 @@ function renderDebrief() {
         </div>
         <p class="muted small">Repo${(rec.repos || []).length > 1 ? "s" : ""}: ${(rec.repos || []).map((x) => `<a href="https://github.com/${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>`).join(", ") || "—"} · ${rec.count ?? 0} commit(s) during the brief</p>
       </section>
-      ${otherChecks.length ? `<section class="panel"><details class="db-fold db-fold-top"><summary><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">· ${otherChecks.length}</span></h2></summary>
+      ${otherChecks.length ? `<section class="panel" id="db-checks"><details class="db-fold db-fold-top"><summary><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">· ${otherChecks.length}</span></h2></summary>
         <p class="muted small" style="margin:8px 0 0">Read in the code: sure${otherChecks.length < checks.length ? " · the others are in the requirements" : ""}. For your information only: they don't go in the comment.</p>
         <div class="db-rows">${otherChecks.map((c) => `<div class="db-row ${c.info ? "info" : ""}">
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
-      <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
+      <section class="panel" id="db-req"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
         ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
           const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${NOT_IN_PCT(type) ? " · not counted in the %" : ""}</span>`;
           // Criterion, Deliverable and Bonus: folded by default (open them to check or switch)
@@ -1247,7 +1247,7 @@ function renderDebrief() {
               <div><span>${esc(noVerifText(e.texte))}</span> <span class="lvl ${s[0]}">${esc(s[1])}</span>
               <div class="small muted">${bound ? `🔎 automatic check: ${esc(ckDetail[e.check] || ckLabel[e.check] || e.check)}` : esc(e.preuve || "")}</div></div></div>`; }).join("")}</div>${fold ? "</details>" : ""}`; }).join("") || `<p class="empty">No requirement found.</p>`}
       </section>
-      ${(r.commits || []).length ? `<section class="panel"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
+      ${(r.commits || []).length ? `<section class="panel" id="db-commits"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
         <div class="db-rows" style="margin-top:10px">${r.commits.map((c) => `<div class="db-row"><span class="db-i">${c.ok === true ? "✅" : c.ok === false ? "⚠️" : "·"}</span>
           <div><code>${esc(c.sha)}</code> ${esc(c.msg)}<div class="small muted">${esc(c.note || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
     </div>
@@ -1262,7 +1262,7 @@ function renderDebrief() {
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
-      ${sq ? "" : `<section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+      ${sq ? "" : `<section class="panel" id="db-comps"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
         ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
@@ -1308,6 +1308,145 @@ function renderDebrief() {
   wireDebrief();
   renderSteps(final);
   if (typeof wDebriefExtras === "function") wDebriefExtras();
+  if (!sq) debriefSteps(body, final);
+}
+
+// ================================================================= the debrief, step by step (one learner)
+// ① the project and its requirements · ② the mise en situation and the oral questions · ③ the summary: what went well,
+// what didn't, the Fiche niveaux and the level · ④ the comment, the competencies validated and Finalize. Always there:
+// the competencies and the one-to-one remarks (beside the steps), and the evidence (assessment, the class's mise en
+// situation, AI use, the brief's steps) as small chips that open in a window. The same panels as before, moved: what
+// they do and how they save doesn't change.
+const DBX_STEPS = [["Project", "the work and its requirements"], ["Live check", "mise en situation and oral questions"], ["Summary", "what went well, the Fiche, the level"], ["Comment", "the comment and Finalize"]];
+function debriefSteps(body, final) {
+  const grid = $(".db-grid", body);
+  if (!grid) return;
+  const key = `db-step:${DB.bid}:${DB.who}`;
+  if (DB.stepKey !== key) { DB.stepKey = key; let k = 0; try { k = Number(localStorage.getItem(key)) || 0; } catch { /* storage blocked */ } DB.step = final ? 3 : Math.min(3, k); }
+  const take = (id) => { const x = $(`#${id}`, body); return x; };
+  const shell = document.createElement("div");
+  shell.className = "dbx";
+  shell.innerHTML = `
+    <nav class="dbx-steps" aria-label="Debrief steps">${DBX_STEPS.map(([t, d], i) => `<button type="button" class="dbx-st" data-dbx="${i}"><span class="dbx-n">${i + 1}</span><span class="dbx-t"><b>${t}</b><small>${d}</small><em class="dbx-s" data-dbxs="${i}"></em></span></button>`).join("")}</nav>
+    <div class="dbx-ctx" aria-label="Evidence"></div>
+    <div class="dbx-grid">
+      <div class="dbx-main">${DBX_STEPS.map((_, i) => `<div class="dbx-step" data-dbxstep="${i}"></div>`).join("")}
+        <div class="dbx-foot"><button type="button" class="btn" data-dbxgo="-1">← Previous</button><span class="dbx-where small muted"></span><button type="button" class="btn primary" data-dbxgo="1">Next →</button></div></div>
+      <aside class="dbx-side"></aside>
+    </div>
+    <div class="dbx-store" hidden></div>
+    <div class="dbx-modal" hidden role="dialog" aria-modal="true"><div class="dbx-box"><div class="dbx-mh"><b class="dbx-mt"></b><button type="button" class="btn small" data-dbxclose aria-label="Close">✕</button></div><div class="dbx-mb"></div></div></div>`;
+  const step = (i) => $(`[data-dbxstep="${i}"]`, shell);
+  const put = (i, ...ids) => ids.forEach((id) => { const x = take(id); if (x) step(i).append(x); });
+  // ① the project
+  put(0, "db-proj", "db-req", "db-checks", "db-commits");
+  // ② live: the mise en situation done in front of you, then the oral questions
+  put(1, "db-mes", "db-oral");
+  // ③ the summary (written here, from the switches), the Fiche niveaux (wide), the level
+  const sum = document.createElement("section"); sum.className = "panel"; sum.id = "dbx-sum"; step(2).append(sum);
+  put(2, "db-fiche", "db-level");
+  // ④ the competencies validated, the comment, Finalize
+  const val = document.createElement("section"); val.className = "panel"; val.id = "dbx-val"; step(3).append(val);
+  put(3, "db-cpanel", "db-fpanel");
+  // beside: always
+  const side = $(".dbx-side", shell);
+  ["db-rem", "db-comps"].forEach((id) => { const x = take(id); if (x) side.append(x); });
+  // the evidence: in the store, opened in a window
+  const store = $(".dbx-store", shell);
+  const ev = [];
+  const assessSec = $$(".db-step1", body);
+  assessSec.forEach((x) => store.append(x));
+  const A = (DB.R.review?.assess || []);
+  const as = A.filter((x) => x.kind !== "mise"), ms = A.filter((x) => x.kind === "mise");
+  const scoreTxt = (list) => { const g = list.filter((x) => x.score != null); return g.length ? g.map((x) => `${x.score}%`).join(" · ") : list.length ? "not graded yet" : "none"; };
+  if (assessSec[0]) ev.push({ k: "as", ic: "📝", t: "Assessment", v: scoreTxt(as), node: assessSec[0], tone: as.some((x) => x.score != null) ? toneOf(Math.min(...as.filter((x) => x.score != null).map((x) => x.score))) : "" });
+  if (assessSec[1]) ev.push({ k: "ms", ic: "🧪", t: "Class mise en situation", v: scoreTxt(ms), node: assessSec[1], tone: ms.some((x) => x.score != null) ? toneOf(Math.min(...ms.filter((x) => x.score != null).map((x) => x.score))) : "" });
+  const ai = take("db-ai");
+  if (ai) { store.append(ai); const c = DB.R.review?.aiCheck; ev.push({ k: "ai", ic: "🤖", t: "AI use", v: c ? ({ low: "low", some: "some", high: "high" })[c.level] || c.level : "not checked", node: ai, tone: c ? ({ low: "good", some: "warn", high: "bad" })[c.level] || "" : "" }); }
+  const stp = take("db-steps");
+  if (stp) { store.append(stp); const sr = DB.R.stepRecs || {}, n = (DB.R.steps || []).length; const ok = Object.values(sr).filter((x) => x && /a_temps|valid/.test(String(x.result || x.status || ""))).length; ev.push({ k: "st", ic: "🗓️", t: "Steps of the brief", v: `${n} step${n > 1 ? "s" : ""}`, node: stp, tone: "" }); void ok; }
+  const ctx = $(".dbx-ctx", shell);
+  ctx.innerHTML = ev.map((e, i) => `<button type="button" class="dbx-chip ${e.tone}" data-dbxev="${i}"><span aria-hidden="true">${e.ic}</span><span><small>${e.t}</small><b>${esc(e.v)}</b></span></button>`).join("");
+  grid.replaceWith(shell);
+  // the window
+  const modal = $(".dbx-modal", shell), mb = $(".dbx-mb", shell);
+  const close = () => { while (mb.firstChild) store.append(mb.firstChild); modal.hidden = true; };
+  $$("[data-dbxev]", ctx).forEach((b) => b.onclick = () => { const e = ev[Number(b.dataset.dbxev)]; close(); $(".dbx-mt", shell).textContent = `${e.ic} ${e.t}`; mb.append(e.node); modal.hidden = false; });
+  $("[data-dbxclose]", shell).onclick = close;
+  modal.onclick = (e) => { if (e.target === modal) close(); };
+  if (!DB.dbxEsc) { DB.dbxEsc = true; document.addEventListener("keydown", (e) => { const m = $(".dbx-modal:not([hidden])"); if (e.key === "Escape" && m && !document.querySelector("dialog[open]")) $("[data-dbxclose]", m).click(); }); }
+  // the steps
+  const go = (i) => {
+    DB.step = Math.max(0, Math.min(3, i));
+    try { localStorage.setItem(key, String(DB.step)); } catch { /* storage blocked */ }
+    $$("[data-dbxstep]", shell).forEach((x) => (x.hidden = Number(x.dataset.dbxstep) !== DB.step));
+    $$("[data-dbx]", shell).forEach((x) => { const k = Number(x.dataset.dbx); x.classList.toggle("on", k === DB.step); x.classList.toggle("past", k < DB.step); x.setAttribute("aria-current", k === DB.step ? "step" : "false"); });
+    const prev = $('[data-dbxgo="-1"]', shell), next = $('[data-dbxgo="1"]', shell);
+    prev.style.visibility = DB.step ? "visible" : "hidden";
+    next.style.display = DB.step === 3 ? "none" : "";
+    next.textContent = DB.step < 3 ? `Next: ${DBX_STEPS[DB.step + 1][0]} →` : "";
+    $(".dbx-where", shell).textContent = `Step ${DB.step + 1} of 4`;
+    if (DB.step === 2 || DB.step === 3) dbxDraw();
+  };
+  $$("[data-dbx]", shell).forEach((b) => b.onclick = () => { go(Number(b.dataset.dbx)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $$("[data-dbxgo]", shell).forEach((b) => b.onclick = () => { go(DB.step + Number(b.dataset.dbxgo)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  // what each step says, and the summary, follow the switches
+  if (!body.dataset.dbx) { body.dataset.dbx = "1"; body.addEventListener("change", () => setTimeout(dbxDraw, 0)); body.addEventListener("click", (e) => { if (e.target.closest("[data-seg]")) setTimeout(dbxDraw, 0); }); }
+  go(DB.step);
+  dbxDraw();
+}
+const toneOf = (p) => (p >= 75 ? "good" : p >= 55 ? "warn" : "bad");
+/** The summary (step ③), the competencies validated (step ④) and each step's little status, from what's on the screen. */
+function dbxDraw() {
+  const rec = DB.R.review;
+  if (!rec || !$(".dbx")) return;
+  const st = currentStates();
+  const ex = rec.result?.exigences || [];
+  const req = ex.map((e, i) => [e, st.ex[i]]).filter(([e]) => e && !NOT_IN_PCT(e.type));
+  const okReq = req.filter(([, v]) => v), koReq = req.filter(([, v]) => !v);
+  const pct = req.length ? Math.round((okReq.length / req.length) * 100) : null;
+  const comps = rec.result?.competences || [];
+  const coOk = comps.filter((c) => st.co[c.code]), coKo = comps.filter((c) => !st.co[c.code]);
+  const oral = rec.oral || [], or = st.oral || [];
+  const orOk = oral.filter((_, i) => or[i]).length;
+  const mes = st.mes?.r || "";
+  const MESN = { valide: ["Validated", "good"], partiel: ["Partly", "warn"], non_valide: ["Not validated", "bad"] };
+  const A = rec.assess || [];
+  const as = A.filter((x) => x.kind !== "mise" && x.score != null), ms = A.filter((x) => x.kind === "mise" && x.score != null);
+  const ai = rec.aiCheck;
+  const lv = rec.level || {};
+  const LVN = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
+  const stat = (i, h) => { const x = $(`[data-dbxs="${i}"]`); if (x) x.innerHTML = h; };
+  stat(0, pct == null ? "" : `<i class="dbx-dot ${toneOf(pct)}"></i>${okReq.length}/${req.length} requirements`);
+  stat(1, `${rec.challenge ? `<i class="dbx-dot ${MESN[mes]?.[1] || ""}"></i>${mes ? MESN[mes][0] : "task to do"}` : "no task yet"} · ${oral.length ? `${orOk}/${oral.length} oral` : "no oral yet"}`);
+  stat(2, lv.lvl ? `<i class="dbx-dot pgc-${lv.lvl}"></i>Level ${LVN[lv.lvl]}` : "level to set");
+  stat(3, DB.R.status === "final" ? "✓ Finalized" : `${coOk.length}/${comps.length} competencies`);
+  const li = (list, f) => list.length ? `<ul class="dbx-list">${list.map(f).join("")}</ul>` : "";
+  const sum = $("#dbx-sum");
+  if (sum) {
+    const good = [...okReq.map(([e]) => noVerifText(e.texte)), ...(rec.result?.forts || [])];
+    const bad = [...koReq.map(([e]) => noVerifText(e.texte)), ...(rec.result?.ameliorer || [])];
+    const tile = (ic, t, v, tone, sub = "") => `<div class="dbx-tile ${tone}"><span aria-hidden="true">${ic}</span><div><small>${t}</small><b>${v}</b>${sub ? `<em>${sub}</em>` : ""}</div></div>`;
+    sum.innerHTML = `<div class="panel-head" style="margin:0"><h2>Summary of the debrief</h2><span class="small muted">follows your switches</span></div>
+      <div class="dbx-tiles">
+        ${tile("📁", "Project", pct == null ? "—" : `${pct}%`, pct == null ? "" : toneOf(pct), `${okReq.length}/${req.length} requirements`)}
+        ${tile("📝", "Assessment", as.length ? as.map((x) => `${x.score}%`).join(" · ") : "—", as.length ? toneOf(Math.min(...as.map((x) => x.score))) : "", as.length ? "" : "none graded")}
+        ${tile("🧪", "Class mise en situation", ms.length ? ms.map((x) => `${x.score}%`).join(" · ") : "—", ms.length ? toneOf(Math.min(...ms.map((x) => x.score))) : "", ms.length ? "" : "none")}
+        ${tile("🎯", "Live task", rec.challenge ? (mes ? MESN[mes][0] : "Not done yet") : "—", rec.challenge && mes ? MESN[mes][1] : "")}
+        ${tile("🗣️", "Oral questions", oral.length ? `${orOk}/${oral.length}` : "—", oral.length ? toneOf((orOk / oral.length) * 100) : "", oral.length ? "answered" : "")}
+        ${tile("🤖", "AI use", ai ? ({ low: "Low", some: "Some", high: "High" })[ai.level] || ai.level : "—", ai ? ({ low: "good", some: "warn", high: "bad" })[ai.level] || "" : "", ai ? "suspicion" : "not checked")}
+        ${tile("✅", "Competencies", `${coOk.length}/${comps.length}`, comps.length ? toneOf((coOk.length / comps.length) * 100) : "", "validated")}
+      </div>
+      <div class="dbx-two">
+        <div class="dbx-col good"><h3>👍 What went well</h3>${li(good.slice(0, 10), (x) => `<li>${esc(x)}</li>`) || `<p class="small muted">Nothing switched on yet.</p>`}</div>
+        <div class="dbx-col bad"><h3>🛠️ To work on</h3>${li(bad.slice(0, 10), (x) => `<li>${esc(x)}</li>`) || `<p class="small muted">Nothing left: every requirement is validated.</p>`}</div>
+      </div>
+      ${rec.remarks?.text ? `<p class="small" style="margin:10px 0 0"><span class="muted">🗣️ One-to-one:</span> ${esc(rec.remarks.text)}</p>` : ""}`;
+  }
+  const val = $("#dbx-val");
+  if (val) val.innerHTML = `<div class="panel-head" style="margin:0"><h2>Competencies of this debrief</h2><span class="small muted">change them on the right</span></div>
+    <div class="dbx-comps">${coOk.map((c) => `<span class="dbx-cc ok" title="${esc(compName(c.code))}">✓ ${esc(c.code)}</span>`).join("")}${coKo.map((c) => `<span class="dbx-cc ko" title="${esc(compName(c.code))}">✗ ${esc(c.code)}</span>`).join("")}${comps.length ? "" : `<span class="small muted">This brief has no competencies.</span>`}</div>
+    ${coOk.length ? `<p class="small muted" style="margin:8px 0 0">Validated: ${coOk.map((c) => esc(compName(c.code))).join(" · ")}</p>` : ""}`;
 }
 
 // Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
