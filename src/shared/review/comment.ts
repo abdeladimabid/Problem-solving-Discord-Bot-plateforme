@@ -184,9 +184,9 @@ export const SUBJECTS: Subject[] = [
   { name: "Les outils de développement du navigateur", rx: /devtools|dev tools|outils de d[ée]veloppement|inspecteur|console/i,
     essentials: [{ t: "l’inspecteur pour lire le HTML et le CSS appliqué" }, { t: "la console pour lire les erreurs et tester du code" }],
     practice: "À chaque bug, ouvre les DevTools pour en trouver la cause avant de modifier le code." },
-  { name: "HTML",
+  { name: "HTML", rx: /\bhtml\b|\bbalises?\b/i,
     practice: "Refais une page de zéro, sans modèle, en vérifiant le rôle de chaque balise." },
-  { name: "CSS",
+  { name: "CSS", rx: /\bcss\b|\bsass\b|\bscss\b/i,
     practice: "Reproduis une section de ta maquette sans framework, en vérifiant chaque règle dans l’inspecteur." },
   { name: "JavaScript", rx: /javascript|\bjs\b/i,
     essentials: [{ t: "les conditions et les boucles", m: /condition|boucle/i }, { t: "les fonctions", m: /fonction/i }, { t: "les tableaux et leurs méthodes", m: /tableau|array/i }, { t: "la manipulation du DOM", m: /DOM|querySelector/i }, { t: "les événements", m: /[ée]v[ée]nement|addEventListener/i }],
@@ -232,7 +232,7 @@ const LV_W: Record<string, number> = { faible: 4.6, moyen: 4.2, bon: 3, excellen
 const FILLER = /^(le|la|les|l['’]|du|de|des|d['’]|et|en|à|au|aux|sur|revoir|travail|projet|bien|son|sa|ses|utilisation|ma[iî]trise|notion|notions|bases?)$/i;
 /** The subject of a point: a named subject (Tailwind, the planning…), else its notion's, else none. */
 function subjectOf(text: string): { s: Subject; short?: string } | null {
-  const named = SUBJECTS.find((x) => x.rx && x.rx.test(text) && !["JavaScript", "Git", "SQL", "PHP"].includes(x.name));
+  const named = SUBJECTS.find((x) => x.rx && x.rx.test(text) && !["HTML", "CSS", "JavaScript", "Git", "SQL", "PHP"].includes(x.name));
   if (named) return { s: named };
   const c = conceptsOf(text).find((x: string) => CONCEPT_SUBJECT[x]);
   if (c) return { s: SUBJECTS.find((x) => x.name === CONCEPT_SUBJECT[c][0])!, short: CONCEPT_SUBJECT[c][1] };
@@ -253,19 +253,24 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
   const M = o.mastered || "";
   type G = { name: string; s: Subject | null; facts: string[]; vague: boolean; from: string[]; w: number; i: number };
   const gs: G[] = [];
-  const PROJECT: Subject = { name: "Les fonctionnalités du projet", practice: "Reprends-les une par une, seul, en expliquant ton code à chaque étape." };
+  const OTHER: Subject = { name: "Autres notions", practice: "Reprends chacune dans le cours, puis refais-la seul, sans aide, jusqu’à pouvoir l’expliquer." };
   const seen = new Map<string, Set<string>>();
   const add = (fact: string, ctx: string, from: string, w: number) => {
     let f = low(clean(fact, 120).replace(/\s*\([^)]*\)/g, ""));
     if (!f) return;
-    const sub = subjectOf(`${fact} ${ctx}`), S = sub ? sub.s : PROJECT;
+    // a point with no subject (a feature of the project: « la page grimoire ») isn't a notion to learn: the missing
+    // features are said with the brief's requirements, not here
+    const sub = subjectOf(`${fact} ${ctx}`);
+    if (!sub && (from === "remarque" || from === "tache")) return;
+    const S = sub ? sub.s : OTHER;
     let g = gs.find((x) => x.name === S.name);
     if (!g) { g = { name: S.name, s: S, facts: [], vague: false, from: [], w, i: gs.length }; gs.push(g); }
     else g.w = Math.max(g.w, w) + 0.5;
     if (!g.from.includes(from)) g.from.push(from);
-    if (sub && vague(f, sub.s)) { g.vague = true; return; }
+    if (sub && vague(f, S)) { g.vague = true; return; }
     // the subject's name isn't said again (« la sélection d’éléments en JavaScript » under JavaScript)
-    if (S.rx) f = f.replace(/\s+(?:en|avec|sur|dans|de|du)\s+(\S+)$/i, (m, x) => (S.rx!.test(x) ? "" : m)).replace(/\s+(\S+)$/, (m, x) => (S.rx!.test(x) ? "" : m));
+    if (S.rx) { const g2 = f.replace(/\s+(?:en|avec|sur|dans|de|du)\s+(\S+)$/i, (m, x) => (S.rx!.test(x) ? "" : m)).replace(/\s+(\S+)$/, (m, x) => (S.rx!.test(x) ? "" : m)); if (g2.split(/\s+/).length >= 2) f = g2; }
+    f = f.replace(/^([A-ZÀ-Ý])(?=['’])/, (c) => c.toLowerCase());
     // one notion once: the first way it was said (the teacher's, the Fiche's) wins; a notion only named in a word or two
     // (« création branche ») is said by its notion
     const cs = conceptsOf(`${fact} ${f.split(/\s+/).length <= 3 ? ctx : ""}`).filter((c: string) => CONCEPT_SUBJECT[c]);
@@ -273,7 +278,7 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
     seen.set(S.name, known);
     if (cs.length && cs.every((c: string) => known.has(c))) return;
     cs.forEach((c: string) => known.add(c));
-    const say = cs.length && (from === "evaluation" || (from === "oral" && f.split(/\s+/).length <= 3)) ? CONCEPT_SUBJECT[cs[0]][1] : f;
+    const say = cs.length && from === "evaluation" ? CONCEPT_SUBJECT[cs[0]][1] : f;
     if (!g.facts.some((x) => x.toLowerCase() === say.toLowerCase() || saidIn(say, x) || saidIn(x, say))) g.facts.push(say);
   };
   for (const n of o.fromRemarks) add(n, "", "remarque", 5);
@@ -505,7 +510,7 @@ export const AI_COMMENT_SYSTEM = [
   "- ÉQUIPE : dis aussi ce qui est à améliorer dans le projet (interface, planification, README, commits, répartition du travail) quand c’est donné.",
   "- Bonus : s’il y en a, dis simplement qu’il a réalisé des bonus et que c’est une bonne initiative, SANS les lister. S’il n’y en a pas, ne parle pas de bonus.",
   "- Points non validés : dis naturellement ce qui manque encore (« il manque encore… »), dans une phrase, sans recopier la grille et sans « Compléter le point du brief ».",
-  "- CE QU’IL DOIT ENCORE TRAVAILLER : c’est le cœur du commentaire quand il y en a. Écris « Les points à travailler en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner. Chaque point : le sujet, ce qu’il doit encore travailler dans ce sujet, puis comment s’entraîner, en UNE ou DEUX phrases courtes (40 mots au plus). Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options ou de valeurs de code entre parenthèses.",
+  "- CE QU’IL DOIT ENCORE TRAVAILLER : c’est le cœur du commentaire quand il y en a. Écris « Les points à travailler en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner, et sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet : elles sont dans ce qui manque au brief). Chaque point : le sujet, ce qu’il doit encore travailler dans ce sujet, puis comment s’entraîner, en UNE ou DEUX phrases courtes (40 mots au plus). Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options ou de valeurs de code entre parenthèses.",
   "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
   "- Le commentaire reste court et lisible : l’apprenant doit pouvoir le lire en une minute.",
   "- Si tout est validé et qu’il n’y a rien à revoir, n’invente rien : quelques phrases suffisent pour dire que c’est un excellent ou un bon travail.",

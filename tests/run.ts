@@ -4088,9 +4088,9 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
     const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Les points à travailler en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
-    check(/^1\. CSS : la différence entre margin et padding/.test(lines[0]) && lines.some((l: string) => /^\d\. HTML : [^\n]*structure de base[^\n]*texte alternatif/.test(l)) && lines.some((l: string) => /^\d\. JavaScript : [^\n]*sélectionner un élément du DOM[^\n]*les événements/.test(l))
-      && lines.some((l: string) => /^\d\. Git : les commits et les branches/.test(l)) && lines.some((l: string) => /^\d\. Les fonctionnalités du projet : ajouter le bouton supprimer du panier/.test(l)),
-      `by subject: the remarks, the Fiche, the oral, the assessment and the live task together (${lines.join(" | ")})`);
+    check(/^1\. CSS : la différence entre margin et padding/.test(lines[0]) && lines.some((l: string) => /^\d\. HTML : [^\n]*structure de base[^\n]*attribut alt/.test(l)) && lines.some((l: string) => /^\d\. JavaScript : [^\n]*sélectionner un élément du DOM[^\n]*les événements/.test(l))
+      && lines.some((l: string) => /^\d\. Git : création branche/.test(l)) && !/fonctionnalités du projet|bouton supprimer/i.test(list),
+      `by subject: the remarks, the Fiche, the oral, the assessment together; never the project's features (${lines.join(" | ")})`);
     check(lines.every((l: string) => C.wordCount(l) <= 45) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)|Voici ce que/i.test(list) && !/Flexbox/.test(list.split("\n").find((l: string) => /CSS/.test(l)) || "x") === false,
       "…short lines, never where it was seen, the level or the Fiche");
     check(C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…in the scope: the AI may talk about them");
