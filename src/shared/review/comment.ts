@@ -102,6 +102,7 @@ export function remarkNotions(text: unknown): string[] {
     .replace(/^(?:doit|dois|devez|devra|devras|faut|il faut|a besoin de|as besoin de)\s+(?:encore\s+|bien\s+|absolument\s+)?(?:revoir|retravailler|reprendre|approfondir|consolider|travailler(?: sur)?|réviser)\s+/i, "")
     .replace(/^(?:ne|n['’])\s*(?:sait|sais|savez|a|as|avez|ma[iî]trise|ma[iî]trises|ma[iî]trisez|comprend|comprends|comprenez|conna[iî]t|connais|connaissez|peut|peux|pouvez|est|es|êtes)\s+(?:pas|plus)\s+(?:bien\s+|encore\s+|vraiment\s+)?(?:expliquer|faire|utiliser|compris|capable d['e]\s*|à l['’]aise avec|clair sur)?\s*/i, "")
     .replace(/^(?:a|as|avez)\s+du mal (?:à|avec)\s+/i, "")
+    .replace(/^(?:pas\s+)?(?:su|pu|réussi à|réussi)\s+/i, "")
     .replace(/^confond(?:s|ez)?\s+(.+?)\s+et\s+(.+)$/i, "la différence entre $1 et $2")
     .replace(/^(?:à revoir|revoir)\s*:?\s*/i, "")
     // « Planification à revoir », « README incomplet »: the subject only
@@ -157,146 +158,135 @@ export function projectFacts(rec: any, st: any): ProjectFacts {
   return { good: good.slice(0, 6), bad: bad.slice(0, 6), team: team.slice(0, 8) };
 }
 
-// how to work each notion (the labels of engine.ts's CONCEPTS): what to understand, then what to practise. Each tip
-// only talks about its own notion (a test checks it), so the comment never brings in a notion that isn't the learner's.
-export const CONCEPT_TIPS: Record<string, string> = {
-  "la structure d’une page HTML (doctype, head, body)": "Le squelette d’une page est la base de tout le reste : réécris-le de mémoire (doctype, html, head avec le titre et l’encodage, body), puis explique à quoi sert chaque partie.",
-  "le lien entre une page HTML et sa feuille CSS (<link>)": "Sans ce lien, aucun style ne s’applique : relie une page à sa feuille avec <link rel=\"stylesheet\">, vérifie le chemin du fichier et teste avec un dossier rangé autrement.",
-  "les formulaires HTML (form, input, label, button)": "Construis un petit formulaire complet (form, label relié à chaque input par for et id, button de type submit) et explique le rôle de chaque attribut.",
-  "les images et le texte alternatif (img, alt)": "Ajoute des visuels avec img, src et alt, puis écris pour chacun un texte alternatif qui décrit ce qu’il montre, comme pour quelqu’un qui ne le voit pas.",
-  "les liens hypertextes (a, href, target)": "Crée des liens vers une autre page du site, vers un endroit précis de la même page (une ancre) et vers un site externe ouvert à part, et explique la différence entre les chemins relatifs et absolus.",
-  "les listes et les tableaux HTML": "Reproduis un menu avec ul et li, puis une grille de prix avec table, tr, th et td, en expliquant quand utiliser l’un ou l’autre.",
-  "les balises sémantiques": "Reprends une de tes pages et remplace les div par header, nav, main, section, article et footer là où c’est pertinent, en justifiant chaque choix : c’est ce qui rend une page lisible pour les moteurs de recherche et les lecteurs d’écran.",
-  "les sélecteurs CSS (balise, classe, id)": "Écris des règles qui ciblent une balise, une classe, un id puis un élément enfant, et explique laquelle l’emporte quand deux règles se contredisent (la spécificité).",
-  "le modèle de boîte et le centrage (margin, padding)": "Dessine une boîte avec son contenu, son padding, sa bordure et sa margin, puis observe-les dans l’inspecteur du navigateur ; entraîne-toi ensuite à centrer un bloc horizontalement.",
-  "la propriété display (block, inline)": "Compare un élément block et un élément inline (largeur, retour à la ligne, marges) dans l’inspecteur, puis passe-les de l’un à l’autre pour voir ce qui change.",
-  "Flexbox": "Refais une barre de navigation et une rangée de cartes avec Flexbox, en jouant sur justify-content, align-items, gap et flex-wrap ; un jeu comme Flexbox Froggy aide à fixer les réflexes.",
-  "CSS Grid": "Construis une galerie avec grid-template-columns et gap, puis une mise en page complète avec des zones nommées ; Grid Garden est un bon entraînement.",
-  "le responsive (media queries)": "Pars du mobile, puis ajoute des @media pour 768 px et 1024 px en changeant la disposition à chaque palier ; teste chaque étape avec le mode appareil du navigateur.",
-  "la mise en forme du texte et des couleurs en CSS": "Mets en forme un texte (taille, graisse, interligne, alignement, couleur du texte et de l’arrière-plan) en gardant un contraste lisible, et explique chaque propriété utilisée.",
-  "le positionnement en CSS": "Compare position: relative, absolute et fixed sur un petit exemple (un badge sur une carte, un en-tête qui reste en haut) et explique par rapport à quoi chaque élément se place.",
-  "les transitions et les animations CSS": "Ajoute une transition au survol d’un bouton, puis une petite animation avec @keyframes, en expliquant la durée, le délai et la courbe utilisés.",
-  "les événements JavaScript (addEventListener)": "Écris plusieurs écouteurs avec addEventListener (clic, saisie au clavier, survol) et explique ce que contient l’événement reçu et à quoi sert preventDefault.",
-  "la manipulation du DOM": "Entraîne-toi à sélectionner un élément avec querySelector, à changer son texte avec textContent, à ajouter ou retirer une classe avec classList, et à créer puis insérer un nouvel élément dans la page.",
-  "les appels d’API (fetch)": "Récupère des données d’une API publique avec fetch, convertis la réponse en JSON, affiche-les dans la page et gère le cas d’erreur ; explique chaque étape à voix haute.",
-  "l’asynchrone (promesses, async / await)": "Comprends pourquoi une opération longue ne bloque pas la suite du code : réécris un même exemple avec .then() puis avec async / await, et gère l’erreur avec try / catch.",
-  "les boucles": "Parcours une suite de valeurs avec for, puis avec for...of, en affichant chaque élément ; explique à chaque fois quand la boucle s’arrête.",
-  "les conditions": "Écris un petit programme qui réagit différemment selon une valeur (if, else if, else, puis switch) et teste-le avec plusieurs cas, y compris les cas limites.",
-  "les tableaux et leurs méthodes": "Manipule un tableau de valeurs : ajoute avec push, convertis chaque valeur avec map, garde une partie avec filter, cherche avec find, et explique ce que renvoie chaque méthode.",
-  "les fonctions": "Écris des fonctions avec des paramètres et un return, appelle-les avec différentes valeurs, puis réécris-en une en fonction fléchée ; explique la différence entre afficher une valeur et la renvoyer.",
-  "les variables": "Explique la différence entre let et const sur des exemples, et pourquoi on évite var ; nomme toujours tes données de façon claire.",
-  "le localStorage": "Enregistre une donnée avec localStorage.setItem, relis-la avec getItem au rechargement de la page, et utilise JSON.stringify et JSON.parse pour y garder des données structurées.",
-  "les requêtes SQL": "Écris toi-même les requêtes de base sur une petite base (SELECT avec WHERE et ORDER BY, INSERT, UPDATE, DELETE, puis une jointure) et vérifie chaque résultat.",
-  "la programmation orientée objet": "Modélise un objet simple de ton projet avec une classe, un constructeur et des méthodes, puis crée une classe qui en hérite ; explique ce qu’est une instance.",
-  "Git (commit, branches)": "Travaille chaque tâche sur sa propre branche, fais des commits petits et bien nommés, puis fusionne-la ; explique ce que fait chaque commande utilisée.",
-};
-const GENERIC_TIP = "Reprends cette notion dans le cours ou la documentation, puis refais seul un petit exercice qui l’utilise, sans aide, jusqu’à pouvoir l’expliquer avec tes mots.";
-const LV_NAME: Record<string, string> = { faible: "Faible", moyen: "Moyen", bon: "Bon", excellent: "Excellent" };
-const LV_W: Record<string, number> = { faible: 4.6, moyen: 4.2, bon: 3, excellent: 2 };
-// a broad subject the teacher names in a word (« planification à revoir », « elle doit revoir Tailwind »): its essential
-// points, in order; a point the learner already showed (`m`: tested on what they mastered) is left out
-type Topic = { rx: RegExp; intro: string; points: { t: string; m?: RegExp }[]; practice: string };
-export const TOPICS: Topic[] = [
-  { rx: /plann?if|planning|jira|trello|backlog|kanban|scrum|sprint|gestion de projet|organisation du (travail|projet)/i, intro: "Une bonne planification se prépare avant de coder et se suit jusqu’au rendu. Les points essentiels",
-    points: [{ t: "découper le brief en user stories claires (« En tant que…, je veux…, afin de… »), chacune avec ses critères d’acceptation" }, { t: "découper chaque user story en tâches techniques courtes (une demi-journée au plus)" },
-      { t: "estimer chaque tâche et les répartir sur les jours disponibles, en gardant une marge pour les imprévus" }, { t: "ordonner le backlog : d’abord ce qui est indispensable au fonctionnement, ensuite le reste, l’optionnel en dernier" },
-      { t: "faire vivre le tableau (À faire, En cours, Terminé) chaque jour, en déplaçant les cartes au fur et à mesure" }, { t: "relier les commits et les branches aux tâches, pour qu’on voie l’avancement réel" }],
-    practice: "Pour t’entraîner, reprends ce brief et refais sa planification complète sur Jira ou Trello, puis compare-la à ce que tu as réellement fait." },
-  { rx: /tailwind/i, intro: "Pour être à l’aise avec Tailwind, les points essentiels",
-    points: [{ t: "le principe des classes utilitaires : chaque classe applique une seule propriété (p-4, text-lg, bg-blue-500)" }, { t: "l’échelle des espacements et des tailles (p-2, m-4, w-1/2, max-w-screen-md) et sa correspondance en CSS" },
-      { t: "la mise en page avec flex et grid (flex, justify-between, items-center, grid-cols-3, gap-4)", m: /flex|grid/i }, { t: "le responsive mobile d’abord avec les préfixes sm:, md:, lg:", m: /responsive|media/i },
-      { t: "les états avec hover:, focus: et active:" }, { t: "la configuration (couleurs et polices du projet) et le regroupement des classes répétées dans des composants" }],
-    practice: "Pour t’entraîner, reproduis une section de ta maquette (un en-tête puis une grille de cartes) uniquement avec Tailwind, en vérifiant chaque classe dans la documentation." },
-  { rx: /bootstrap/i, intro: "Pour bien utiliser Bootstrap, les points essentiels",
-    points: [{ t: "la grille (container, row, col-md-6) et ses points de rupture", m: /responsive|grid/i }, { t: "les composants prêts à l’emploi (navbar, card, modal, form-control) et leur structure HTML attendue" },
-      { t: "les classes utilitaires d’espacement et d’alignement (mt-3, d-flex, justify-content-between)" }, { t: "la personnalisation sans casser le framework (ta feuille CSS chargée après celle de Bootstrap)" }],
-    practice: "Pour t’entraîner, refais une page de ton projet avec la grille et deux composants, puis personnalise ses couleurs." },
-  { rx: /readme|documentation/i, intro: "Un bon README permet à quelqu’un d’autre de comprendre et lancer ton projet seul. Les points essentiels",
-    points: [{ t: "une présentation courte du projet et de son objectif" }, { t: "les technologies utilisées" }, { t: "les étapes d’installation et de lancement, testées sur une copie propre" },
-      { t: "les fonctionnalités, avec des captures d’écran" }, { t: "le lien vers la planification et vers la version en ligne" }],
-    practice: "Pour t’entraîner, réécris ton README puis demande à un camarade de lancer ton projet en suivant uniquement ce fichier." },
-  { rx: /maquette|figma|wireframe|zoning|design/i, intro: "Pour une bonne maquette, les points essentiels",
-    points: [{ t: "commencer par un zoning puis un wireframe avant les couleurs" }, { t: "prévoir chaque page en version mobile et ordinateur", m: /responsive|media/i },
-      { t: "définir une charte : couleurs, polices, tailles de texte et espacements, réutilisés partout" }, { t: "utiliser des composants réutilisables (boutons, cartes) dans Figma" }, { t: "suivre ensuite la maquette fidèlement dans le code" }],
-    practice: "Pour t’entraîner, refais la maquette mobile et ordinateur d’une page du projet, puis compare-la à ton rendu." },
-  { rx: /accessib|aria|contraste|lecteur d['’]écran/i, intro: "Pour rendre un site accessible, les points essentiels",
-    points: [{ t: "des balises sémantiques et une hiérarchie de titres sans saut (h1, puis h2…)", m: /s[ée]mantique/i }, { t: "un texte alternatif utile sur chaque image", m: /\balt\b/i },
-      { t: "un contraste suffisant entre le texte et le fond" }, { t: "un label relié à chaque champ et une navigation possible au clavier" }],
-    practice: "Pour t’entraîner, passe ta page dans Lighthouse et WAVE, puis corrige chaque problème relevé." },
-  { rx: /\bgit(hub)?\b|commit|branche|versionn/i, intro: "Pour bien travailler avec Git, les points essentiels",
-    points: [{ t: "des commits petits et fréquents, avec un message qui dit ce qui change" }, { t: "une branche par tâche, créée depuis la branche principale à jour" },
-      { t: "la fusion par pull request, relue avant d’être acceptée" }, { t: "la résolution d’un conflit sans perdre le travail des autres" }],
-    practice: "Pour t’entraîner, fais ta prochaine tâche sur sa propre branche, en plusieurs commits clairs, puis ouvre une pull request." },
-  { rx: /javascript|\bjs\b/i, intro: "Pour progresser en JavaScript, les points essentiels, dans l’ordre",
-    points: [{ t: "les variables et les types de données", m: /variable/i }, { t: "les conditions et les boucles", m: /condition|boucle/i }, { t: "les fonctions avec paramètres et valeur de retour", m: /fonction/i },
-      { t: "les tableaux et leurs méthodes (map, filter, find)", m: /tableau|array/i }, { t: "la sélection et la modification des éléments de la page", m: /DOM|querySelector/i }, { t: "les écouteurs d’événements", m: /[ée]v[ée]nement|addEventListener/i }],
-    practice: "Pour t’entraîner, fais chaque jour un petit exercice sur le point en cours, sans copier de solution, avant de passer au suivant." },
-  { rx: /\bphp\b|\bpdo\b/i, intro: "Pour progresser en PHP, les points essentiels",
-    points: [{ t: "la syntaxe de base : variables, tableaux, conditions, boucles et fonctions" }, { t: "la récupération des données d’un formulaire ($_GET, $_POST) et leur validation" },
-      { t: "la connexion à la base avec PDO et les requêtes préparées", m: /pdo|requ[êe]te/i }, { t: "ce que renvoient execute() et fetch(), et comment les utiliser" }, { t: "la séparation du code : la logique d’un côté, l’affichage de l’autre" }],
-    practice: "Pour t’entraîner, refais seul un petit CRUD complet sur une table, en expliquant chaque ligne." },
-  { rx: /laravel|eloquent|blade/i, intro: "Pour être à l’aise avec Laravel, les points essentiels",
-    points: [{ t: "le chemin d’une requête : route, contrôleur, vue" }, { t: "les migrations et les modèles Eloquent, avec leurs relations" }, { t: "la validation des données reçues" },
-      { t: "les vues Blade avec layouts et composants" }, { t: "l’authentification et la protection des routes" }],
-    practice: "Pour t’entraîner, construis seul un petit CRUD avec une relation entre deux modèles." },
-  { rx: /merise|\bmcd\b|\bmld\b|uml|mod[ée]lis|base de donn/i, intro: "Pour bien concevoir une base de données, les points essentiels",
-    points: [{ t: "repérer les entités et leurs attributs à partir du besoin" }, { t: "définir les relations et leurs cardinalités" }, { t: "passer du modèle conceptuel au modèle logique (clés primaires et étrangères)" },
-      { t: "vérifier le modèle avec quelques requêtes sur des données réelles", m: /requ[êe]te|sql/i }],
-    practice: "Pour t’entraîner, refais le modèle de données de ce projet sur papier, puis compare-le à ta base." },
-  { rx: /d[ée]ploi|h[ée]berg|mise en ligne|netlify|vercel|github pages/i, intro: "Pour mettre un projet en ligne, les points essentiels",
-    points: [{ t: "préparer le projet : chemins relatifs, fichiers inutiles retirés" }, { t: "le publier (GitHub Pages, Netlify ou Vercel) depuis le dépôt" }, { t: "tester la version en ligne sur ordinateur et sur mobile" }, { t: "mettre le lien dans le README" }],
-    practice: "Pour t’entraîner, mets ce projet en ligne et vérifie chaque page depuis ton téléphone." },
-  { rx: /pr[ée]sentation|soutenance|expliquer son code|explication|oral/i, intro: "Pour bien présenter ton travail, les points essentiels",
-    points: [{ t: "expliquer le besoin et la solution en une minute" }, { t: "montrer le projet en marche, fonctionnalité par fonctionnalité" }, { t: "savoir expliquer chaque partie de ton code avec tes mots" }, { t: "dire honnêtement ce qui manque et ce que tu ferais ensuite" }],
-    practice: "Pour t’entraîner, présente ton projet à voix haute en cinq minutes, puis explique trois parties de ton code sans les lire." },
-  { rx: /nommage|lisibilit|propret[ée] du code|clean code|indent|structure du code|organisation du code/i, intro: "Pour écrire un code clair, les points essentiels",
-    points: [{ t: "des noms qui disent ce que contient une variable ou ce que fait une fonction" }, { t: "une indentation régulière et un formatage automatique" }, { t: "des fichiers rangés par rôle" }, { t: "pas de code mort ni de copier-coller : ce qui se répète devient réutilisable" }],
-    practice: "Pour t’entraîner, relis un de tes fichiers et renomme, range et simplifie tout ce qui n’est pas clair." },
+// What is still to learn is said by SUBJECT (HTML, CSS, JavaScript, Tailwind, Git, the planning…): one short line each,
+// what to work on in that subject (from every source: the remarks, the Fiche, the oral questions, the assessments and
+// the mises en situation, the live task), then one sentence on how to practise. Never where it was seen.
+type Subject = { name: string; rx?: RegExp; essentials?: { t: string; m?: RegExp }[]; practice: string };
+export const SUBJECTS: Subject[] = [
+  { name: "La planification", rx: /plann?if|planning|jira|trello|backlog|kanban|scrum|gestion de projet/i,
+    essentials: [{ t: "découper le brief en user stories puis en tâches courtes" }, { t: "estimer et répartir ces tâches sur les jours disponibles" }, { t: "tenir le tableau à jour chaque jour" }],
+    practice: "Refais la planification de ce brief sur Jira ou Trello et compare-la à ce que tu as réellement fait." },
+  { name: "Tailwind", rx: /tailwind/i,
+    essentials: [{ t: "les classes utilitaires et les espacements" }, { t: "Flexbox et Grid avec Tailwind", m: /flex|grid/i }, { t: "le responsive avec les préfixes", m: /responsive|media/i }, { t: "les états au survol et au focus" }],
+    practice: "Reproduis une section de ta maquette uniquement avec Tailwind." },
+  { name: "Bootstrap", rx: /bootstrap/i,
+    essentials: [{ t: "la grille et ses points de rupture", m: /responsive|grid/i }, { t: "les composants" }, { t: "la personnalisation sans casser le framework" }],
+    practice: "Refais une page de ton projet avec la grille et deux composants." },
+  { name: "Le README", rx: /readme|documentation/i,
+    essentials: [{ t: "présenter le projet" }, { t: "expliquer son installation et son lancement" }, { t: "décrire ses fonctionnalités avec des captures" }],
+    practice: "Demande à un camarade de lancer ton projet en suivant uniquement ton README." },
+  { name: "La maquette", rx: /maquette|figma|wireframe|zoning/i,
+    essentials: [{ t: "passer du zoning au wireframe" }, { t: "prévoir le mobile et l’ordinateur", m: /responsive|media/i }, { t: "définir une charte graphique et la suivre dans le code" }],
+    practice: "Refais la maquette d’une page en mobile et en ordinateur, puis compare-la à ton rendu." },
+  { name: "L’accessibilité", rx: /accessib|aria|contraste|lecteur d['’]écran/i,
+    essentials: [{ t: "une hiérarchie de titres correcte" }, { t: "des textes alternatifs utiles", m: /\balt\b/i }, { t: "un contraste suffisant et la navigation au clavier" }],
+    practice: "Passe ta page dans Lighthouse et corrige chaque problème relevé." },
+  { name: "Les outils de développement du navigateur", rx: /devtools|dev tools|outils de d[ée]veloppement|inspecteur|console/i,
+    essentials: [{ t: "l’inspecteur pour lire le HTML et le CSS appliqué" }, { t: "la console pour lire les erreurs et tester du code" }],
+    practice: "À chaque bug, ouvre les DevTools pour en trouver la cause avant de modifier le code." },
+  { name: "HTML",
+    practice: "Refais une page de zéro, sans modèle, en vérifiant le rôle de chaque balise." },
+  { name: "CSS",
+    practice: "Reproduis une section de ta maquette sans framework, en vérifiant chaque règle dans l’inspecteur." },
+  { name: "JavaScript", rx: /javascript|\bjs\b/i,
+    essentials: [{ t: "les conditions et les boucles", m: /condition|boucle/i }, { t: "les fonctions", m: /fonction/i }, { t: "les tableaux et leurs méthodes", m: /tableau|array/i }, { t: "la manipulation du DOM", m: /DOM|querySelector/i }, { t: "les événements", m: /[ée]v[ée]nement|addEventListener/i }],
+    practice: "Fais chaque jour un petit exercice sur ces points, sans copier de solution, jusqu’à pouvoir les expliquer." },
+  { name: "Git", rx: /\bgit(hub)?\b|commit|branche|versionn|pull request/i,
+    essentials: [{ t: "des commits petits et clairs" }, { t: "une branche par tâche" }, { t: "la fusion par pull request" }],
+    practice: "Fais ta prochaine tâche sur sa propre branche, en commits clairs, puis ouvre une pull request." },
+  { name: "PHP", rx: /\bphp\b|\bpdo\b/i,
+    essentials: [{ t: "la syntaxe de base" }, { t: "les données d’un formulaire et leur validation" }, { t: "PDO et les requêtes préparées", m: /pdo|requ[êe]te/i }],
+    practice: "Refais seul un petit CRUD complet en expliquant chaque ligne." },
+  { name: "Laravel", rx: /laravel|eloquent|blade/i,
+    essentials: [{ t: "le chemin route, contrôleur, vue" }, { t: "les migrations et les modèles Eloquent" }, { t: "la validation" }],
+    practice: "Construis seul un petit CRUD avec une relation entre deux modèles." },
+  { name: "SQL", rx: /\bsql\b|merise|\bmcd\b|\bmld\b|base de donn/i,
+    essentials: [{ t: "les entités et leurs relations" }, { t: "les clés primaires et étrangères" }, { t: "les requêtes de base et les jointures", m: /requ[êe]te|select/i }],
+    practice: "Écris toi-même les requêtes de ton projet et vérifie chaque résultat." },
+  { name: "La programmation orientée objet", practice: "Modélise un objet de ton projet avec une classe, puis explique ce qu’est une instance." },
+  { name: "La mise en ligne", rx: /d[ée]ploi|h[ée]berg|mise en ligne|netlify|vercel|github pages/i,
+    essentials: [{ t: "préparer et publier le projet" }, { t: "tester la version en ligne sur mobile" }],
+    practice: "Mets ce projet en ligne et vérifie chaque page depuis ton téléphone." },
+  { name: "La présentation de ton travail", rx: /pr[ée]sentation|soutenance|expliquer son code/i,
+    essentials: [{ t: "expliquer le besoin et la solution" }, { t: "expliquer chaque partie de ton code avec tes mots" }],
+    practice: "Présente ton projet à voix haute en cinq minutes, sans lire ton code." },
+  { name: "La qualité du code", rx: /nommage|lisibilit|propret[ée]|clean code|indent|organisation du code|structure du code/i,
+    essentials: [{ t: "des noms clairs" }, { t: "une indentation régulière" }, { t: "des fichiers rangés par rôle" }],
+    practice: "Relis un de tes fichiers et renomme, range et simplifie ce qui n’est pas clair." },
 ];
-/** How to work a notion: a broad subject's essential points (TOPICS, without what is mastered), else its notion's tip
- * (CONCEPTS), else a general one. */
-export function tipFor(text: string, mastered = ""): string {
-  const tp = TOPICS.find((x) => x.rx.test(text));
-  if (tp) {
-    const pts = tp.points.filter((p) => !p.m || !p.m.test(mastered)).map((p) => p.t);
-    if (pts.length) return `${tp.intro} : ${pts.map((p, i) => `${["a", "b", "c", "d", "e", "f", "g"][i]}) ${p}`).join(" ; ")}. ${tp.practice}`;
-  }
-  const c = conceptsOf(text).find((x: string) => CONCEPT_TIPS[x]);
-  return c ? CONCEPT_TIPS[c] : GENERIC_TIP;
+// the notions of engine.ts's CONCEPTS, by subject, said shortly (without their subject's name)
+const CONCEPT_SUBJECT: Record<string, [string, string]> = {
+  "la structure d’une page HTML (doctype, head, body)": ["HTML", "la structure d’une page"], "le lien entre une page HTML et sa feuille CSS (<link>)": ["HTML", "le lien vers la feuille de style"],
+  "les formulaires HTML (form, input, label, button)": ["HTML", "les formulaires"], "les images et le texte alternatif (img, alt)": ["HTML", "les images et leur texte alternatif"],
+  "les liens hypertextes (a, href, target)": ["HTML", "les liens"], "les listes et les tableaux HTML": ["HTML", "les listes et les tableaux"], "les balises sémantiques": ["HTML", "les balises sémantiques"],
+  "les sélecteurs CSS (balise, classe, id)": ["CSS", "les sélecteurs"], "le modèle de boîte et le centrage (margin, padding)": ["CSS", "le modèle de boîte et le centrage"],
+  "la propriété display (block, inline)": ["CSS", "la propriété display"], "Flexbox": ["CSS", "Flexbox"], "CSS Grid": ["CSS", "Grid"], "le responsive (media queries)": ["CSS", "le responsive"],
+  "la mise en forme du texte et des couleurs en CSS": ["CSS", "la mise en forme du texte"], "le positionnement en CSS": ["CSS", "le positionnement"], "les transitions et les animations CSS": ["CSS", "les transitions et les animations"],
+  "les événements JavaScript (addEventListener)": ["JavaScript", "les événements"], "la manipulation du DOM": ["JavaScript", "la manipulation du DOM"], "les appels d’API (fetch)": ["JavaScript", "les appels d’API"],
+  "l’asynchrone (promesses, async / await)": ["JavaScript", "l’asynchrone"], "les boucles": ["JavaScript", "les boucles"], "les conditions": ["JavaScript", "les conditions"],
+  "les tableaux et leurs méthodes": ["JavaScript", "les tableaux et leurs méthodes"], "les fonctions": ["JavaScript", "les fonctions"], "les variables": ["JavaScript", "les variables"],
+  "le localStorage": ["JavaScript", "le localStorage"], "les requêtes SQL": ["SQL", "les requêtes"], "la programmation orientée objet": ["La programmation orientée objet", "les classes et les objets"],
+  "Git (commit, branches)": ["Git", "les commits et les branches"],
+};
+const LV_W: Record<string, number> = { faible: 4.6, moyen: 4.2, bon: 3, excellent: 2 };
+const FILLER = /^(le|la|les|l['’]|du|de|des|d['’]|et|en|à|au|aux|sur|revoir|travail|projet|bien|son|sa|ses|utilisation|ma[iî]trise|notion|notions|bases?)$/i;
+/** The subject of a point: a named subject (Tailwind, the planning…), else its notion's, else none. */
+function subjectOf(text: string): { s: Subject; short?: string } | null {
+  const named = SUBJECTS.find((x) => x.rx && x.rx.test(text) && !["JavaScript", "Git", "SQL", "PHP"].includes(x.name));
+  if (named) return { s: named };
+  const c = conceptsOf(text).find((x: string) => CONCEPT_SUBJECT[x]);
+  if (c) return { s: SUBJECTS.find((x) => x.name === CONCEPT_SUBJECT[c][0])!, short: CONCEPT_SUBJECT[c][1] };
+  const lang = SUBJECTS.find((x) => x.rx && x.rx.test(text));
+  return lang ? { s: lang } : null;
 }
-const sentence = (t: string) => cap(clean(t, 400)).replace(/([^.!?])$/, "$1.");
+/** A point that only names its subject (« planification à revoir », « revoir Tailwind », « Git »). */
+function vague(fact: string, s: Subject): boolean {
+  return !fact.replace(/['’]/g, "’ ").split(/\s+/).filter((w) => w && !(s.rx && s.rx.test(w)) && !FILLER.test(w.replace(/’$/, "’")) && !FILLER.test(w)).length;
+}
 /**
- * What the learner still has to learn, from the most important: what the teacher saw face to face, the Fiche niveaux's
- * items not known (the lowest level first: it is the base), the oral questions not answered (with what was expected),
- * the assessment's notions missed (the most missed first). A notion seen in several of them goes up.
+ * What the learner still has to work on, by subject, from the most important: the teacher's remarks, the Fiche
+ * niveaux's items not known (the lowest level first), the oral questions not answered, the notions missed in the
+ * assessments and mises en situation, the live task. A subject seen in several of them goes up. A subject only named
+ * (« planification à revoir ») gets its essentials, without what the learner already showed (`mastered`).
  */
-export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; text: string; level: string }[]; oral: { q: string; a: string; notion: string }[]; ko: string[]; remarks: string; mastered?: string }): ToLearn[] {
+export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; text: string; level: string }[]; oral: { q: string; a: string; notion: string }[]; ko: string[]; remarks: string; mastered?: string; task?: string[] }): ToLearn[] {
   const M = o.mastered || "";
-  const out: ToLearn[] = [];
-  const add = (x: ToLearn, key: string) => {
-    const cs = conceptsOf(key);
-    const same = out.find((y) => y.notion.toLowerCase() === x.notion.toLowerCase() || saidIn(x.notion, y.notion) || saidIn(y.notion, x.notion) ||
-      (!y.from.includes(x.from[0]) && cs.length > 0 && conceptsOf(`${y.notion} ${y.why}`).some((c: string) => cs.includes(c))));
-    if (!same) { out.push(x); return; }
-    same.w = Math.max(same.w, x.w) + 1;
-    if (!same.from.includes(x.from[0])) { same.from.push(x.from[0]); same.why = `${same.why} ${x.why}`; }
+  type G = { name: string; s: Subject | null; facts: string[]; vague: boolean; from: string[]; w: number; i: number };
+  const gs: G[] = [];
+  const PROJECT: Subject = { name: "Les fonctionnalités du projet", practice: "Reprends-les une par une, seul, en expliquant ton code à chaque étape." };
+  const seen = new Map<string, Set<string>>();
+  const add = (fact: string, ctx: string, from: string, w: number) => {
+    let f = low(clean(fact, 120).replace(/\s*\([^)]*\)/g, ""));
+    if (!f) return;
+    const sub = subjectOf(`${fact} ${ctx}`), S = sub ? sub.s : PROJECT;
+    let g = gs.find((x) => x.name === S.name);
+    if (!g) { g = { name: S.name, s: S, facts: [], vague: false, from: [], w, i: gs.length }; gs.push(g); }
+    else g.w = Math.max(g.w, w) + 0.5;
+    if (!g.from.includes(from)) g.from.push(from);
+    if (sub && vague(f, sub.s)) { g.vague = true; return; }
+    // the subject's name isn't said again (« la sélection d’éléments en JavaScript » under JavaScript)
+    if (S.rx) f = f.replace(/\s+(?:en|avec|sur|dans|de|du)\s+(\S+)$/i, (m, x) => (S.rx!.test(x) ? "" : m)).replace(/\s+(\S+)$/, (m, x) => (S.rx!.test(x) ? "" : m));
+    // one notion once: the first way it was said (the teacher's, the Fiche's) wins; a notion only named in a word or two
+    // (« création branche ») is said by its notion
+    const cs = conceptsOf(`${fact} ${f.split(/\s+/).length <= 3 ? ctx : ""}`).filter((c: string) => CONCEPT_SUBJECT[c]);
+    const known = seen.get(S.name) || new Set<string>();
+    seen.set(S.name, known);
+    if (cs.length && cs.every((c: string) => known.has(c))) return;
+    cs.forEach((c: string) => known.add(c));
+    const say = cs.length && (from === "evaluation" || (from === "oral" && f.split(/\s+/).length <= 3)) ? CONCEPT_SUBJECT[cs[0]][1] : f;
+    if (!g.facts.some((x) => x.toLowerCase() === say.toLowerCase() || saidIn(say, x) || saidIn(x, say))) g.facts.push(say);
   };
-  for (const n of o.fromRemarks) add({ notion: n, why: "Relevé pendant notre échange en face à face.", how: tipFor(n, M), from: ["remarque"], w: 5 }, n);
-  for (const g of o.gaps) {
-    const t = clean(g.text, 200);
-    if (t) add({ notion: low(t), why: `C’est un attendu du niveau ${LV_NAME[g.level] || g.level} de la fiche des niveaux, pas encore démontré.`, how: tipFor(t, M), from: ["fiche"], w: LV_W[g.level] ?? 2 }, t);
-  }
-  for (const q of o.oral) {
-    const n = clean(q.notion || q.q, 140);
-    if (!n || saidIn(n, o.remarks)) continue;
-    const a = /[A-Za-zÀ-ÿ]{3}/.test(String(q.a || "")) ? clean(q.a, 300) : "";
-    add({ notion: low(n), why: `À l’oral, la question « ${clean(q.q, 200)} » n’a pas trouvé de bonne réponse.${a ? ` Ce qu’il fallait expliquer : ${sentence(a)}` : ""}`, how: tipFor(`${n} ${q.q}`, M), from: ["oral"], w: 3.8 }, `${n} ${q.q}`);
-  }
-  o.ko.forEach((k, i) => {
-    if (saidIn(k, o.remarks)) return;
-    add({ notion: low(clean(k, 140)), why: "À l’évaluation en classe, les questions sur cette notion n’ont pas été réussies.", how: tipFor(k, M), from: ["evaluation"], w: 3.4 - i * 0.1 }, k);
+  for (const n of o.fromRemarks) add(n, "", "remarque", 5);
+  for (const g of o.gaps) add(g.text, "", "fiche", LV_W[g.level] ?? 2);
+  for (const q of o.oral) { const n = q.notion || q.q; if (n && !saidIn(n, o.remarks)) add(n, `${q.q} ${q.a}`, "oral", 3.8); }
+  o.ko.forEach((k, i) => { if (!saidIn(k, o.remarks)) add(k, "", "evaluation", 3.4 - i * 0.1); });
+  for (const t of o.task || []) add(t, "", "tache", 3.6);
+  return gs.sort((a, b) => b.w - a.w || a.i - b.i).slice(0, 6).map((g) => {
+    const ess = g.s?.essentials ? g.s.essentials.filter((p) => !p.m || !p.m.test(M)).map((p) => p.t) : [];
+    const facts = g.facts.slice(0, 4);
+    const what = facts.length ? andList(facts) : g.vague && ess.length ? andList(ess) : "";
+    return { notion: g.name, why: what, how: g.s!.practice, from: g.from, w: g.w };
   });
-  return out.map((x, i) => ({ x, i })).sort((a, b) => b.x.w - a.x.w || a.i - b.i).map(({ x }) => x).slice(0, MAX.notions);
 }
 
 /**
@@ -333,12 +323,14 @@ export function commentData(o: { first?: string; group?: string; project: string
   // what they showed they master (the assessment, the oral questions answered, the remarks' good points): left out of the tips
   const mastered = [...(assess ? assess.ok : []), ...oral.filter((q, i) => st.oral[i]).map((q) => `${q.notion || ""} ${q.q || ""}`), String(R.positive || ""),
     ...remarks.split(/(?<=[.!?;])\s+|\n+|,?\s+(?:mais|par contre|cependant|en revanche|toutefois)\s+/i).filter((x) => x && !NEGATIVE.test(x))].join("\n");
-  const toLearn = toLearnOf({ fromRemarks, gaps, ko: assess ? assess.ko : [], remarks, mastered,
+  // the live task (mise en situation in the debrief) not done: the gaps the teacher wrote about it
+  const task = !st.skip.live && st.mes && ["non_valide", "partiel"].includes(st.mes.r) ? remarkNotions(st.mes.note) : [];
+  const toLearn = toLearnOf({ fromRemarks, gaps, ko: assess ? assess.ko : [], remarks, mastered, task,
     oral: oral.filter((q, i) => !st.oral[i]).map((q) => ({ q: String(q.q || ""), a: String(q.a || ""), notion: String(q.notion || "") })) });
   const notions = toLearn.map((x) => x.notion);
   // what the comment may talk about: the notions of the brief, of the assessment's questions, of the exchange
   const scope = uniq([
-    ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...oral.filter((q, i) => !st.oral[i]).map((q) => String(q.a || "")), ...fromRemarks, ...gaps.map((x) => x.text), ...toLearn.filter((x) => x.from.includes("remarque")).map((x) => x.how)].join("\n")),
+    ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...oral.filter((q, i) => !st.oral[i]).map((q) => String(q.a || "")), ...fromRemarks, ...gaps.map((x) => x.text), ...toLearn.map((x) => `${x.why} ${x.how}`)].join("\n")),
     ...((rec.assess || []) as any[]).flatMap((a) => (Array.isArray(a?.scope) ? a.scope : [])),
     ...(assess ? [...assess.ok, ...assess.ko] : []),
   ]);
@@ -415,8 +407,8 @@ function openingAssess(d: CommentData): string {
     faible: "Ton travail est encore fragile : plusieurs aspects importants restent à renforcer.", critique: "Ton travail est encore loin de ce qui est attendu dans ce brief." }[lv]);
   const ok = a.ok.slice(0, 3);
   // never which competencies are validated: what they showed they master, in plain words
-  if (ok.length) s.push(`Lors de l’évaluation, tu as montré que tu maîtrises ${andList(ok)}.`);
-  if (d.positive) s.push(`Lors de notre échange, ${low(d.positive)}`);
+  if (ok.length) s.push(`Tu maîtrises déjà ${andList(ok)}.`);
+  if (d.positive) s.push(cap(d.positive));
   if (d.bonus.length) s.push(`Tu as aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`);
   return s.join(" ");
 }
@@ -450,18 +442,10 @@ function missingPara(d: CommentData): string {
   return s.join(" ");
 }
 function notionsPara(d: CommentData): string {
-  const L = d.toLearn && d.toLearn.length ? d.toLearn : d.notions.map((n) => ({ notion: n, why: "", how: tipFor(n), from: [], w: 0 }));
+  const L = d.toLearn && d.toLearn.length ? d.toLearn : [];
   if (!L.length) return "";
-  const one = L.length === 1;
-  // one learner with a graded assessment: their notions come from it too, not only from the exchange
-  const seen = d.mode === "assess" ? (one ? "Une notion n’est pas encore maîtrisée." : "Certaines notions ne sont pas encore maîtrisées.")
-    : `${d.positive ? "Pendant l’échange, " : "Lors de notre échange, "}${one ? "une notion n’était pas encore claire." : "certaines notions n’étaient pas encore claires."}`;
-  const intro = one ? Y(d, "Voici ce que tu dois encore apprendre :", "Voici ce que vous devez encore apprendre :")
-    : Y(d, "Voici ce que tu dois encore apprendre, du plus important au moins important :", "Voici ce que vous devez encore apprendre, du plus important au moins important :");
-  const lines = L.map((x, i) => `${i + 1}. ${cap(x.notion)} : ${x.why ? `${x.why} ` : ""}${d.group ? toVous(x.how) : x.how}`);
-  const outro = Y(d, `Prends le temps de ${one ? "la" : "les"} revoir ${one ? "" : "dans cet ordre "}et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`,
-    `Prenez le temps de ${one ? "la" : "les"} revoir ${one ? "" : "dans cet ordre "}et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`);
-  return `${seen} ${intro}\n${lines.join("\n")}\n${outro}`;
+  const lines = L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` : ${x.why}.` : "."} ${d.group ? toVous(x.how) : x.how}`);
+  return `${L.length > 1 ? "Les points à travailler en priorité :" : "Le point à travailler en priorité :"}\n${lines.join("\n")}`;
 }
 // a tip is written with « tu »: a squad's comment says « vous »
 const VOUS_OF: Record<string, string> = { réécris: "réécrivez", relie: "reliez", construis: "construisez", ajoute: "ajoutez", crée: "créez", reproduis: "reproduisez", reprends: "reprenez", écris: "écrivez", dessine: "dessinez", compare: "comparez", refais: "refaites", pars: "partez", mets: "mettez", entraîne: "entraînez", récupère: "récupérez", comprends: "comprenez", parcours: "parcourez", manipule: "manipulez", explique: "expliquez", enregistre: "enregistrez", modélise: "modélisez", travaille: "travaillez", teste: "testez", fais: "faites", vérifie: "vérifiez", nomme: "nommez", passe: "passez", observe: "observez", appelle: "appelez", relis: "relisez", utilise: "utilisez", gère: "gérez", convertis: "convertissez", fusionne: "fusionnez", présente: "présentez", demande: "demandez", corrige: "corrigez", renomme: "renommez", range: "rangez", simplifie: "simplifiez", remplace: "remplacez", cherche: "cherchez", garde: "gardez", transforme: "transformez" };
@@ -475,7 +459,7 @@ function toVous(t: string): string {
 function closingOf(d: CommentData): string {
   const lv = levelOf(d), clean = !d.improve.length && !d.notions.length, who = !d.group && d.first ? `${d.first}, ` : "";
   if (lv === "excellent") return clean ? Y(d, "Continue comme ça.", "Continuez comme ça.") : Y(d, "Dans l’ensemble, c’est un excellent travail. Consolide ces quelques points et continue sur cette lancée.", "Dans l’ensemble, c’est un excellent travail. Consolidez ces quelques points et continuez sur cette lancée.");
-  if (lv === "bon") return clean ? Y(d, "C’est un bon travail, continue sur cette lancée.", "C’est un bon travail, continuez sur cette lancée.") : Y(d, "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques points, et tu atteindras rapidement un niveau encore plus solide.", "Dans l’ensemble, c’est un bon travail. Continuez sur cette lancée, consolidez ces quelques points, et vous atteindrez rapidement un niveau encore plus solide.");
+  if (lv === "bon") return clean ? Y(d, "C’est un bon travail, continue sur cette lancée.", "C’est un bon travail, continuez sur cette lancée.") : Y(d, "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques points, et tu vas encore gagner en solidité.", "Dans l’ensemble, c’est un bon travail. Continuez sur cette lancée, consolidez ces quelques points, et vous allez encore gagner en solidité.");
   if (lv === "moyen") return Y(d, "C’est un travail correct. En reprenant ces points, tu vas rapidement gagner en solidité.", "C’est un travail correct. En reprenant ces points, vous allez rapidement gagner en solidité.");
   if (lv === "faible") return cap(`${who}${Y(d, "il faut maintenant consolider ton socle. Avec un travail régulier et ciblé sur ces points, tu vas gagner en confiance et en qualité.", "il faut maintenant consolider votre socle. Avec un travail régulier et ciblé sur ces points, vous allez gagner en confiance et en qualité.")}`);
   return cap(`${who}${Y(d, "il faut reprendre les bases avant d’aller plus loin. Prends le temps de travailler ces points régulièrement : c’est comme ça que tu vas réellement progresser.", "il faut reprendre les bases avant d’aller plus loin. Prenez le temps de travailler ces points régulièrement : c’est comme ça que vous allez réellement progresser.")}`);
@@ -509,23 +493,24 @@ export const AI_COMMENT_SYSTEM = [
   "",
   "Tu montres une bonne maîtrise de ton projet, autant sur le plan fonctionnel que technique. Les seuls points à revoir concernent quelques notions spécifiques en PHP, notamment le type de $pdo ainsi que les types de retour de $stmt->execute() et $stmt->fetch(). Ce sont des détails importants à bien comprendre pour être totalement à l’aise avec PDO.",
   "",
-  "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques notions techniques, et tu atteindras rapidement un niveau encore plus professionnel.",
+  "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques notions techniques, et tu vas encore gagner en aisance.",
   ">>>",
   "Règles strictes :",
   "- Tutoiement (« tu », « ton », « tes »), sauf si le commentaire est pour toute une équipe : alors « vous ».",
-  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces (seule la liste numérotée de ce qu’il doit encore apprendre est permise), pas de mise en forme (**, #, `), pas d’emoji.",
+  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces (seule la liste numérotée des points à travailler est permise), pas de mise en forme (**, #, `), pas d’emoji.",
   "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → travail insuffisant. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
-  "- Ce qui va bien reste court (un paragraphe) : l’essentiel du commentaire est ce qu’il doit encore apprendre. Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions maîtrisées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
+  "- Ce qui va bien reste court (deux phrases au plus) : l’essentiel du commentaire est ce qu’il doit encore travailler. Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions maîtrisées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
   "- Regroupe ce qui va bien en quelques thèmes, sans énumérer un par un. Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel, ni « tu as validé la compétence… ») : parle de ce qu’il sait faire, concrètement.",
   "- INDIVIDUEL sans notion maîtrisée à l’évaluation : ce qui va bien vient du commentaire du correcteur ou de l’échange ; s’il n’y a rien, n’invente pas de réussite.",
   "- ÉQUIPE : dis aussi ce qui est à améliorer dans le projet (interface, planification, README, commits, répartition du travail) quand c’est donné.",
   "- Bonus : s’il y en a, dis simplement qu’il a réalisé des bonus et que c’est une bonne initiative, SANS les lister. S’il n’y en a pas, ne parle pas de bonus.",
   "- Points non validés : dis naturellement ce qui manque encore (« il manque encore… »), dans une phrase, sans recopier la grille et sans « Compléter le point du brief ».",
-  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le CŒUR du commentaire et sa plus grande partie quand il y en a. Une phrase d’introduction qui se termine par « : », puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide entre les points), dans l’ORDRE donné (du plus important au moins important), sans en oublier ni en fusionner. Chaque point commence par la notion, puis dit précisément ce qui n’est pas encore compris ou maîtrisé (d’après le constat donné), pourquoi c’est important pour la suite, et comment le travailler concrètement (l’exercice donné, reformulé). Deux à quatre phrases par point. Quand le formateur n’a nommé qu’un sujet large (« planification à revoir », « revoir Tailwind »), détaille les points essentiels donnés pour ce sujet (sans ceux qu’il maîtrise déjà) : c’est ce qui l’aide à avancer. N’ajoute aucune notion qui n’y est pas.",
-  "- Après la liste, une phrase qui l’encourage à les travailler dans cet ordre.",
+  "- CE QU’IL DOIT ENCORE TRAVAILLER : c’est le cœur du commentaire quand il y en a. Écris « Les points à travailler en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner. Chaque point : le sujet, ce qu’il doit encore travailler dans ce sujet, puis comment s’entraîner, en UNE ou DEUX phrases courtes (40 mots au plus). Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options ou de valeurs de code entre parenthèses.",
+  "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
+  "- Le commentaire reste court et lisible : l’apprenant doit pouvoir le lire en une minute.",
   "- Si tout est validé et qu’il n’y a rien à revoir, n’invente rien : quelques phrases suffisent pour dire que c’est un excellent ou un bon travail.",
   "- Dernier paragraphe : une conclusion encourageante qui correspond au niveau. Tu peux y écrire {prénom} pour t’adresser à lui par son prénom (il sera remplacé).",
-  "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun niveau chiffré, aucun code de compétence.",
+  "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun code de compétence. Ne parle JAMAIS du niveau de l’apprenant (ni « niveau », ni Faible, Moyen, Bon, Critique…), ni de la fiche des niveaux, ni d’aucun outil ou document interne de la formation : le commentaire parle de son travail et de ce qu’il doit apprendre.",
   'Réponds UNIQUEMENT avec ce JSON : {"commentaire":"le texte, paragraphes séparés par une ligne vide"}',
 ].join("\n");
 /** The decisions for the AI (no name: the greeting is ours, the AI may write {prénom}). */
@@ -583,8 +568,8 @@ export function aiCommentPrompt(d: CommentData): string {
 /** What is still to learn, for the AI: in its order, with what was seen and how to work it. */
 function learnList(d: CommentData): string {
   const L = d.toLearn || [];
-  return `CE QU’IL DOIT ENCORE APPRENDRE (déjà classé du plus important au moins important ; garde cet ordre et tous les points) :\n${L.length
-    ? L.map((x, i) => `${i + 1}. ${x.notion}\n   Constat : ${x.why || "à revoir"}\n   Pour le travailler : ${x.how}`).join("\n") : "(rien)"}`;
+  return `CE QU’IL DOIT ENCORE TRAVAILLER (déjà classé du plus important au moins important ; garde cet ordre et tous les points) :\n${L.length
+    ? L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` — à travailler : ${x.why}` : ""} — pour s’entraîner : ${x.how}`).join("\n") : "(rien)"}`;
 }
 /** The notions a comment talks about that are neither in the brief, nor in the assessment, nor in the exchange. */
 export function outsideNotions(d: Pick<CommentData, "scope">, body: string): string[] {
@@ -605,11 +590,13 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   // no section titles, no bullet lists: only the numbered list of what is still to learn, every point of it
   const lines = body.split("\n"), numbered = lines.filter((l) => /^\s*\d+[.)]\s/.test(l));
   if (lines.some((l) => /^\s*[–—•*-]\s/.test(l) || (l.trim() && !/^\s*\d+[.)]\s/.test(l) && l.trim().length < 45 && !/[.:?]$/.test(l.trim())))) return null;
-  if (numbered.some((l) => l.trim().length < 40)) return null;
+  if (numbered.some((l) => l.trim().length < 25 || wordCount(l) > 60 || /\b[a-g]\)\s|à l['’]oral|la question «|lors de l['’]évaluation|pendant (?:notre|l['’])échange|face à face|mise en situation/i.test(l))) return null;
   const nL = (d.toLearn || []).length;
   if (nL >= 2 && numbered.length < nL - 1) return null;
   const lv = levelOf(d);
   if (lv !== "excellent" && /excellent/i.test(body)) return null;
+  // never the learner's level, nor the Fiche niveaux or any internal tool
+  if (/\bniveaux?\b|\bfiche\b|\bcritique\b|\b(?:faible|moyen)\s*[,.]|classbot/i.test(body)) return null;
   if ((lv === "faible" || lv === "critique") && /\b(bon|très bon|beau) travail\b/i.test(body)) return null;
   if (!d.bonus.length && /bonus/i.test(body)) return null;
   // never which competencies were validated
@@ -617,6 +604,6 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   // never a notion that is neither in the brief nor in the assessment (nor in the teacher's remarks)
   if (outsideNotions(d, body).length) return null;
   const words = wordCount(body), nothing = !d.improve.length && !d.notions.length;
-  if (words < 15 || words > (nothing ? 140 : Math.min(1100, 320 + 90 * nL))) return null;
+  if (words < 15 || words > (nothing ? 140 : 220 + 45 * nL)) return null;
   return `${greetingOf(d)}\n\n${body}`;
 }

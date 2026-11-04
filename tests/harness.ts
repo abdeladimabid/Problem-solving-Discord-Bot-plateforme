@@ -622,13 +622,12 @@ function fakeAI() {
       }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
-        const learn = ((user.match(/CE QU’IL DOIT ENCORE APPRENDRE[^\n]*\n([\s\S]*?)$/) || [])[1] || "").split("\n");
-        const notions = learn.filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/^\d+\. /, ""));
-        const hows = learn.filter((l) => /^\s+Pour le travailler : /.test(l)).map((l) => l.replace(/^\s+Pour le travailler : /, ""));
+        const learn = ((user.match(/CE QU’IL DOIT ENCORE TRAVAILLER[^\n]*\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => /^\d+\. /.test(l))
+          .map((l) => l.replace(/^\d+\. /, "").split(" — ")).map(([n, ...r]) => `${n} : ${(r.find((x) => x.startsWith("à travailler : ")) || "").replace("à travailler : ", "") || "à revoir"}. ${(r.find((x) => x.startsWith("pour s’entraîner : ")) || "").replace("pour s’entraîner : ", "")}`);
         const p = ["Ton projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site."];
         if (/BONUS RÉALISÉS : oui/.test(user)) p[0] += " Tu as aussi réalisé des bonus, ce qui est une très bonne initiative.";
         if (missing.length) p.push(`Il manque encore ${missing.join(", ")} : c’est à terminer pour que ton rendu soit complet.`);
-        if (notions.length) p.push(`Voici ce que tu dois encore apprendre, du plus important au moins important :\n${notions.map((n, i) => `${i + 1}. ${n} : ce n’est pas encore clair pour toi, et c’est important pour la suite. ${hows[i] || ""}`).join("\n")}`);
+        if (learn.length) p.push(`Les points à travailler en priorité :\n${learn.map((x, i) => `${i + 1}. ${x}`).join("\n")}`);
         p.push("Continue sur cette lancée, {prénom}, et consolide ces points pour progresser encore.");
         return { response: JSON.stringify({ commentaire: p.join("\n\n") }) };
       }
