@@ -2353,7 +2353,8 @@ function assessQuestionsTab(root) {
     AS.clabels = Object.fromEntries($$("[data-cncap]", pick).map((c) => [c.value, c.closest("label").textContent.trim()]));
     if (was !== AS.cscope.join()) { if (was) mark(); Q = $$(".qe", root).length ? readQuestions() : Q; draw(); }
   });
-  conceptsPicker(pick, { brief_id: a.brief_id, text: a.title }, s.concepts);
+  // its subject: the title and what its questions ask (an old one's title alone says little: « Evaluation 2 »)
+  conceptsPicker(pick, { brief_id: a.brief_id, text: [a.title, ...(a.questions || []).map((q) => q.prompt)].join(" ").replace(/\s+/g, " ").slice(0, 1500) }, s.concepts);
   $("#aq-claude-cn", root).onclick = () => { try { claudeConceptsDialog(a, AS.dirty); } catch (e) { toast(e.message, true); } };
   $("#aq-link-cn", root).onclick = () => { if (AS.dirty) return toast("Save your changes first.", true); ficheLinkDialog("assessment", a.id, a.title, () => route()); };
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });

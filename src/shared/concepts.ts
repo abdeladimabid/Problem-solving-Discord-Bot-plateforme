@@ -50,7 +50,7 @@ export function parseCode(c: unknown): { sprint: number; n: number } | null {
 // ------------------------------------------------------------------ reading the Fiche
 const norm = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const clean = (s: string) => String(s || "").replace(/[ \t]+/g, " ").replace(/^[\s|+*•●○▪◦·–—-]+/, "").replace(/[\s|]+$/, "").replace(/\s+/g, " ").trim();
-const STOP = new Set("les des une un la le de du et en au aux pour avec sur dans par selon son sa ses leur leurs qui que est sont etre faire avoir lorsque cela plus moins tres bien une ou ne pas sans entre afin dont ces cette ce cet l d a".split(" "));
+const STOP = new Set("les des une un la le de du et en au aux pour avec sur dans par selon son sa ses leur leurs qui que est sont etre faire avoir lorsque cela plus moins tres bien une ou ne pas sans entre afin dont ces cette ce cet l d a sprint evaluation evaluations assessment initiation quiz test examen".split(" "));
 const words = (s: string) => new Set(norm(s).replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length > 2 && !STOP.has(w)).map((w) => w.replace(/(s|x)$/, "")));
 
 /**

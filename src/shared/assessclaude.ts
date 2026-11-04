@@ -101,7 +101,8 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string>; concepts?: { k
       if (q.concepts != null && !Array.isArray(q.concepts)) bad(`"concepts" must be a list (e.g. ["S2.M3"]).`);
       const badC = o.concepts ? cs.filter((c: string) => !o.concepts!.known.has(c)) : cs.filter((c: string) => !/^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c));
       if (badC.length) bad(`concept(s) ${badC.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.M3).`);
-      else if (o.concepts?.scope.length && !cs.length) bad(`"concepts": the items of the Fiche niveaux this question checks (at least one of ${o.concepts.scope.join(", ")}).`);
+      // [] written on purpose: the question checks no item of the Fiche (JavaScript basics…); left out: said
+      else if (o.concepts?.scope.length && q.concepts == null) bad(`"concepts": the items of the Fiche niveaux this question checks (at least one of ${o.concepts.scope.join(", ")}).`);
       if (cs.length && !badC.length) m.concepts = [...new Set(cs)];
     }
     if (text(q.code)) { if (text(q.code).length > 4000) bad(`"code": 4000 characters at most.`); m.code = text(q.code); }
