@@ -2,6 +2,8 @@
 // {n} = un nombre, {s} = un texte (un nom, une date…), remplis dans le même ordre.
 window.CB_FR = {
 "#arena (automatic)": "#arena (automatique)",
+"Larger display": "Affichage plus grand",
+"Smaller display": "Affichage plus petit",
 "#{n} and #{n} of the season leaderboard": "#{n} et #{n} du classement de la saison",
 "#{n} of the season leaderboard": "#{n} du classement de la saison",
 "#{n} of {n}": "#{n} sur {n}",
@@ -3128,8 +3130,6 @@ window.CB_FR = {
 "← My proposal": "← Ma proposition",
 "↺ Reopen": "↺ Rouvrir",
 "↻ Regenerate all": "↻ Tout régénérer",
-"Larger display": "Affichage plus grand",
-"Smaller display": "Affichage plus petit",
 "⏳ Nobody has joined yet.": "⏳ Personne n'a encore rejoint.",
 "⏳ Nobody has joined yet: open the TV screen, the 🎮 Join button goes to #arena.": "⏳ Personne n'a encore rejoint : ouvre l'écran TV, le bouton 🎮 Rejoindre part dans #arena.",
 "■ Stop": "■ Arrêter",
