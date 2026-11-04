@@ -2316,6 +2316,7 @@ async function viewPoints() {
   try {
     S.me = await fetch("/api/me").then((r) => r.json());
     $("#who").innerHTML = S.me.mode === "password" ? `<a href="/logout" style="color:inherit">Sign out</a>` : S.me.email ? `Signed in as ${esc(S.me.email)}` : "";
+    if (S.me.email) $("#who").title = `Signed in as ${S.me.email}`;
     S.guilds = await api("/guilds");
     const sel = $("#guild");
     let saved = null;
