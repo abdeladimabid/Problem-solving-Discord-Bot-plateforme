@@ -1270,7 +1270,11 @@ function renderDebrief() {
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
           return `<div class="db-row">${sw(`data-co="${esc(c.code)}"`, st.co[c.code], final)}
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span>
-            <div style="margin-top:4px">${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
+            <div style="margin-top:4px">${ax.map(([x, v]) => {
+              // the assessment or the class mise en situation (each its own result); two of a kind: their titles say which
+              const mise = x.kind === "mise", same = ax.filter(([y]) => (y.kind === "mise") === mise).length > 1;
+              const what = `${mise ? "🧪 mise en situation" : "📝 assessment"}${same ? ` « ${esc(String(x.title || "").replace(/^Mise en situation · /, "").slice(0, 30))} »` : ""}`;
+              return `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">${what}: ${v.ok ? "validated" : "not validated"}</span>`; }).join(" ")}
               <span class="lvl ${a[0]}">📁 project: ${esc(a[1])}</span>${(rec.assess || []).some((x) => x.score != null) && !ax.length ? ` <span class="small muted">not in the assessment</span>` : ""}</div>
             ${/^C?T5/.test(c.code) ? `<div class="db-ilinks" data-ilinks></div>` : ""}
             ${compAdvice(c.avis, aV[base])}
