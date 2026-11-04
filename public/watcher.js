@@ -880,6 +880,9 @@ function wPropLevel() {
   if (!parts.length) return "";
   let lv = toLv(parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0));
   if (asAvg != null) { const cap = LV[Math.max(0, LV.indexOf(toLv(asAvg)) - 1)]; if (LV.indexOf(lv) < LV.indexOf(cap)) lv = cap; }
+  // the Fiche niveaux (official): never above the level it gives
+  const f = DB.ficheLv !== undefined ? DB.ficheLv : DB.R.review?.level?.fiche;
+  if (f && LV.includes(f) && LV.indexOf(lv) < LV.indexOf(f)) lv = f;
   return lv;
 }
 
@@ -919,7 +922,7 @@ function wDebriefExtras() {
       <div><b>${i + 1}. ${esc(q.q)}</b> ${q.src === "evaluation" && q.unlinked ? `<span class="tag" title="Written from an assessment that is no longer linked to this brief: keep it, or remove it">📝 assessment no longer linked</span>` : q.src === "evaluation" ? `<span class="tag" title="A lacune of the assessment">📝 assessment</span>` : q.src === "projet" ? `<span class="tag" title="A point of the project not reached">📁 project</span>` : ""}<div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}${(q.concepts || []).map((c) => ` <span class="cn-code" title="Fiche niveaux: its ✓ / ✗ counts for this item">📐 ${esc(c)}</span>`).join("")}</div>` : (q.concepts || []).length ? `<div class="small">${q.concepts.map((c) => `<span class="cn-code">📐 ${esc(c)}</span>`).join(" ")}</div>` : ""}</div>
       ${final ? "<span></span>" : `<button class="btn small" data-ordel="${i}" title="Remove" aria-label="Remove question ${i + 1}">✕</button>`}</div>`).join("")}</div>` : ""}`;
   $("#db-orh", box).innerHTML = head();
-  $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); clearTimeout(DB.ficheT); DB.ficheT = setTimeout(() => DB.ficheLoad?.(), 1500); });
+  $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); DB.ficheStale = true; if (DB.step === 2) { clearTimeout(DB.ficheT); DB.ficheT = setTimeout(() => { DB.ficheStale = false; DB.ficheLoad?.(); }, 2500); } });
   if ($("#db-ornew", box)) $("#db-ornew", box).onclick = (e) => {
     const btn = e.currentTarget;
     const go = () => busy(btn, async () => {

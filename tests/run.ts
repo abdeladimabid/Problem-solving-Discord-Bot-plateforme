@@ -3072,7 +3072,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/n’étai(?:t|ent) pas encore claires? : [^\n]*la différence entre margin et padding/.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/n’étai(?:t|ent) pas encore claires?[\s\S]*\n\d\. la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -4027,7 +4027,8 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     checks: [{ id: "nav", label: "Menu", ok: true }, { id: "commits", label: "Commits réguliers", ok: false, n: 2, days: 1 }, { id: "branches", label: "Branches", ok: false }, { id: "active", label: "Page en cours", ok: false }],
     result: { exigences: ex, competences: [{ code: "C3", avis: "validable" }, { code: "C4", avis: "non_visible" }] },
     oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "…" }, { q: "Que fait <main> ?", notion: "Le rôle de la balise <main>", a: "…" }],
-    final: { oral: [true, false] },
+    // a bonus starts unchecked: the teacher switched the dark mode on
+    final: { oral: [true, false], ex: ex.map((e: any) => (e.type === "bonus" ? e.statut === "fait" : undefined)) },
     remarks: { text: "Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox." },
   };
   const d = C.commentData({ first: "Sara", project: rec.brief, rec });
@@ -4041,7 +4042,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
   const not = paras.find((x) => /pas encore claires?/.test(x)) || "";
-  check(not.includes("la différence entre margin et padding") && not.includes("le rôle de la balise <main>") && !/flexbox|attribut alt/i.test(not) && /Prends le temps de les revoir/.test(not),
+  check(not.toLowerCase().includes("la différence entre margin et padding") && not.toLowerCase().includes("le rôle de la balise <main>") && !/flexbox|attribut alt/i.test(not) && /Prends le temps de les revoir/.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
   check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
   const flipped = { ...rec, checks: rec.checks.map((c: any) => (c.id === "nav" ? c : { ...c, ok: !c.ok })), final: { ...rec.final, ck: { commits: true, branches: true, active: true } } };
@@ -4061,11 +4062,11 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const sqc = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
   check(/^Les Pixels,\n\n/.test(sqc) && /\bvous\b/i.test(sqc) && !/\btu\b/.test(sqc), "a squad's comment: to everyone, « vous »");
   const mc = C.memberComment({ name: "omar_benali" }, rec, { co: { C3: false, C4: true }, note: "Confond flex et grid." });
-  check(mc.startsWith("Omar,") && mc.includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
+  check(mc.startsWith("Omar,") && mc.toLowerCase().includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
   check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("BONUS RÉALISÉS : oui (1)") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée. Tu as aussi réalisé un bonus, ce qui est une bonne initiative.\n\nIl manque encore la page contact avec son formulaire, l’adaptation aux écrans de 768 px et 1024 px et la planification dans le README.\n\nPendant l’échange, la différence entre margin et padding n’était pas claire pour toi, tout comme le rôle de la balise <main>. Ce sont des bases importantes pour structurer une page.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée. Tu as aussi réalisé un bonus, ce qui est une bonne initiative.\n\nIl manque encore la page contact avec son formulaire, l’adaptation aux écrans de 768 px et 1024 px et la planification dans le README.\n\nPendant l’échange, certaines notions n’étaient pas encore claires. Voici ce que tu dois encore apprendre, du plus important au moins important :\n1. La différence entre margin et padding : tu ne sais pas encore l’expliquer, alors que c’est la base de tout espacement. Dessine une boîte et observe-la dans l’inspecteur.\n2. Le rôle de la balise <main> : la question à l’oral n’a pas trouvé de réponse. Reprends une de tes pages et explique le rôle de chaque zone.\nPrends le temps de les revoir dans cet ordre.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
@@ -4079,6 +4080,34 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       `a comment about a notion outside the brief and the assessment is refused (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
     const withApi = { ...lvD, scope: [...lvD.scope, ...C.outsideNotions(lvD, extra)] };
     check(C.aiCommentText(withApi, { commentaire: extra }) !== null, "…and accepted when the brief or the assessment is about it");
+  }
+  {
+    // what is still to learn: a numbered list, explained, from the most important (the teacher's remarks, the Fiche's
+    // lowest items, the oral questions with what was expected, the assessment's notions)
+    const { conceptsOf } = await import("../src/shared/review/engine.ts");
+    check(Object.entries(C.CONCEPT_TIPS).every(([k, t]) => conceptsOf(t).every((c: string) => c === k)), "each tip only talks about its own notion");
+    const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Que fait <main> ?", notion: "Le rôle de la balise <main>", a: "…" }], final: { ...rec.final, oral: [false, false] },
+      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
+    const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2 });
+    const t2 = C.commentText(d2), lines = t2.split("\n").filter((l: string) => /^\d\. /.test(l));
+    check(lines.length === 5 && /^1\. La différence entre margin et padding : Relevé pendant notre échange/.test(lines[0]) && /^2\. Écrire la structure de base/.test(lines[1]) && /niveau Faible/.test(lines[1]) && /^3\. Sélectionner un élément du DOM/.test(lines[2]) && /niveau Moyen/.test(lines[2]),
+      `the list: the teacher's remarks first, then the Fiche's items (Faible before Moyen) (${lines.join(" | ")})`);
+    check(/L'attribut alt : À l’oral, la question « À quoi sert alt \? » n’a pas trouvé de bonne réponse\. Ce qu’il fallait expliquer : Décrire l’image/.test(t2) && !/expliquer : …/.test(t2) && lines.every((l: string) => l.length > 120),
+      "…each point explained: what was seen, what was expected, how to work it");
+    check(d2.scope.includes("la manipulation du DOM") && C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…the Fiche's items are in the scope: the AI may talk about them");
+    const sq2 = C.buildComment("", { ...r2, squad: { name: "Les Pixels" } }, r2.final);
+    check(!/Sélectionner un élément du DOM/.test(sq2) && /Voici ce que vous devez encore apprendre/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous » in the tips too, and no learner's Fiche items");
+    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires : margin, padding, alt, main et le DOM. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
+    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment without the numbered list of what is still to learn is refused");
+    // a remark that only names a subject: its essential points, without what they showed they master
+    check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
+    const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
+    const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
+    const pl = t3.split("\n").find((l: string) => /^1\. Plannification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. Tailwind/.test(l)) || "";
+    check(/user stories/.test(pl) && /tâches/.test(pl) && /backlog/.test(pl) && /Jira ou Trello/.test(pl), `a vague « planification à revoir »: how to plan well, point by point (${pl.slice(0, 120)})`);
+    check(/classes utilitaires/.test(tw) && /sm:, md:, lg:/.test(tw) && !/flex et grid/.test(tw), "« revoir Tailwind »: its essential points, without the one they showed (Flexbox answered at the oral)");
+    const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
+    check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
@@ -4097,6 +4126,9 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
+  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
+  check(/\n\d\. Écrire la structure de base d’une page[^\n]*niveau Faible/.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
   const one = await api("POST", `/api/briefs/${bid}/review/remarks`, { g: G, who, text: "il sont reponder sur tous les questions", ai: true });

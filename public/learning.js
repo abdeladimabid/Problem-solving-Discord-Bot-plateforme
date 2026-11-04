@@ -1311,10 +1311,10 @@ function renderDebrief() {
       if (text === last) return;
       last = text;
       $("#db-rmst").textContent = "Saving…";
-      try { const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text, ai: false } }); if (DB.R.review && R.review) { DB.R.review.remarks = R.review.remarks; if (!DB.commentEdited && R.review.result?.feedback && $("#db-c")) { DB.R.review.result.feedback = R.review.result.feedback; $("#db-c").value = R.review.result.feedback; } } dbxDraw(); $("#db-rmst").textContent = "Saved · in the level and the comment"; }
-      catch (err) { $("#db-rmst").textContent = ""; toast(err.message, true); }
+      try { const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text, quick: true } }); if (DB.R.review) { DB.R.review.remarks = R.remarks; if (!DB.commentEdited && !R.edited && R.feedback && $("#db-c")) { DB.R.review.result.feedback = R.feedback; $("#db-c").value = R.feedback; } } dbxDraw(); $("#db-rmst").textContent = "Saved · in the level and the comment"; }
+      catch (err) { last = null; $("#db-rmst").textContent = "Not saved yet: tried again in a moment"; clearTimeout(t); t = setTimeout(save, 8000); void err; }
     };
-    $("#db-rm").addEventListener("input", () => { $("#db-rmst").textContent = "…"; clearTimeout(t); t = setTimeout(save, 1500); });
+    $("#db-rm").addEventListener("input", () => { $("#db-rmst").textContent = "…"; clearTimeout(t); t = setTimeout(save, 4000); });
     $("#db-rm").addEventListener("blur", save);
   }
   if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
@@ -1406,6 +1406,7 @@ function debriefSteps(body, final) {
     next.textContent = DB.step < 3 ? `Next: ${DBX_STEPS[DB.step + 1][0]} →` : "";
     $(".dbx-where", shell).textContent = `Step ${DB.step + 1} of 4`;
     if (DB.step === 2 || DB.step === 3) dbxDraw();
+    if (DB.step === 2 && DB.ficheStale) { DB.ficheStale = false; DB.ficheLoad?.(); }
   };
   $$("[data-dbx]", shell).forEach((b) => b.onclick = () => { go(Number(b.dataset.dbx)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
   $$("[data-dbxgo]", shell).forEach((b) => b.onclick = () => { go(DB.step + Number(b.dataset.dbxgo)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
@@ -1419,7 +1420,7 @@ function debriefSteps(body, final) {
       box.innerHTML = on ? `<span>⏭️ <b>Step skipped</b> · ${what} count for nothing: not in the level, the comment or the Fiche niveaux (not « not done »).</span>${final ? "" : `<button type="button" class="btn small primary" data-skip="${k}">Include it again</button>`}`
         : `<span class="small muted">${what}: ${k === "live" ? "not done with this learner?" : "not relevant for this learner?"}</span>${final ? "" : `<button type="button" class="btn small" data-skip="${k}">⏭️ Skip this step</button>`}`;
       const b = $("[data-skip]", box);
-      if (b) b.onclick = () => { DB.skip[k] = !DB.skip[k]; drawSkip(); saveStatesSoon(); setTimeout(() => { DB.lvDraw?.(); dbxDraw(); }, 0); clearTimeout(DB.ficheT); DB.ficheT = setTimeout(() => DB.ficheLoad?.(), 1500); };
+      if (b) b.onclick = () => { DB.skip[k] = !DB.skip[k]; drawSkip(); saveStatesSoon(); setTimeout(() => { DB.lvDraw?.(); dbxDraw(); }, 0); DB.ficheStale = true; };
     }
   };
   drawSkip();
@@ -1498,7 +1499,7 @@ function dbxDraw() {
   const val = $("#dbx-val");
   if (val) val.innerHTML = `<div class="panel-head" style="margin:0"><h2>Competencies of this debrief</h2><span class="small muted">change them on the right</span></div>
     <div class="dbx-comps">${coOk.map((c) => `<span class="dbx-cc ok" title="${esc(compName(c.code))}">✓ ${esc(c.code)}</span>`).join("")}${coKo.map((c) => `<span class="dbx-cc ko" title="${esc(compName(c.code))}">✗ ${esc(c.code)}</span>`).join("")}${comps.length ? "" : `<span class="small muted">This brief has no competencies.</span>`}</div>
-    ${coOk.length ? `<p class="small muted" style="margin:8px 0 0">Validated: ${coOk.map((c) => esc(compName(c.code))).join(" · ")}</p>` : ""}`;
+    ${coOk.length ? `<ul class="dbx-list small" style="margin-top:8px">${coOk.map((c) => `<li><b>${esc(c.code)}</b> ${esc(compName(String(c.code).replace(/N\d$/, "")) || compName(c.code) || "")}</li>`).join("")}</ul>` : ""}`;
 }
 
 // Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
@@ -1868,6 +1869,15 @@ async function aiLinesDialog(gid) {
         <pre class="ail-code ${esc(f.label)}">${f.lines.map((l) => esc(l)).join("\n")}${f.more ? `\n… ${f.more} more line(s)` : ""}</pre></details>`; }).join("")}</div>`).join("") || (r.note ? "" : `<p class="empty">No commit to show.</p>`)}`;
 }
 
+// the Fiche niveaux's items still to learn (for the comment): the ones not known up to the level to reach, the base first
+const FG_ORDER = ["faible", "moyen", "bon", "excellent"];
+function ficheGaps(m) {
+  const lv = m?.level || {}, items = Array.isArray(m?.items) ? m.items : [];
+  const target = lv.next?.level || lv.probe || lv.reached || "moyen", top = FG_ORDER.indexOf(target === "critique" ? "faible" : target);
+  return items.filter((c) => FG_ORDER.indexOf(c.level) >= 0 && FG_ORDER.indexOf(c.level) <= top && (c.final === "ko" || (c.level === target && c.final !== "ok")))
+    .sort((a, b) => FG_ORDER.indexOf(a.level) - FG_ORDER.indexOf(b.level) || (a.final === "ko" ? -1 : 1) - (b.final === "ko" ? -1 : 1))
+    .slice(0, 8).map((c) => ({ code: c.code, text: c.text, level: c.level }));
+}
 function currentStates() {
   const ck = {}, ex = [], co = {};
   $$("[data-ck]").forEach((c) => (ck[c.dataset.ck] = c.checked));
@@ -1875,7 +1885,7 @@ function currentStates() {
   $$("[data-exck]").forEach((c) => (ck[c.dataset.exck] = (ck[c.dataset.exck] ?? true) && c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
   const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
-  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral, skip: { ...(DB?.skip || DB?.R?.states?.skip || {}) } };
+  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral, skip: { ...(DB?.skip || DB?.R?.states?.skip || {}) }, ...(DB?.ficheLv !== undefined ? { ficheLevel: DB.ficheLv } : {}), ...(DB?.ficheM ? { ficheGaps: ficheGaps(DB.ficheM) } : {}) };
 }
 /** The requirements that never count in the project's % (the same rule as the server's level). */
 const NOT_IN_PCT = (t) => /^(bonus|crit|oral)/i.test(String(t || ""));
@@ -1969,7 +1979,7 @@ function wireDebrief() {
       if (DB.R?.review) DB.R.review.fiche = r.fiche;
       DB.ficheLoad();
     }));
-    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }, { focus: () => DB.R.review?.level?.lvl || (typeof wPropLevel === "function" ? wPropLevel() : "") || "", onLoad: (m) => { DB.ficheM = m; dbxDraw(); } });
+    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }, { focus: () => DB.R.review?.level?.lvl || (typeof wPropLevel === "function" ? wPropLevel() : "") || "", onLoad: (m) => { DB.ficheM = m; const lv = m?.level?.toCheck ? "faible" : m?.level?.reached || ""; const was = DB.ficheLv; DB.ficheLv = lv; if (DB.R.review) DB.R.review.level = { ...(DB.R.review.level || {}), fiche: lv || undefined }; dbxDraw(); DB.lvDraw?.(); if (was !== undefined && was !== lv && DB.R.status !== "final") saveStatesSoon(); else if (was === undefined && (DB.R.review?.level?.fiche || "") !== lv && DB.R.status !== "final") saveStatesSoon(); } });
   };
   DB.ficheLoad();
   $$("[data-mfiche]").forEach((b) => b.onclick = () => masteryDialog(b.dataset.mfiche, b.dataset.name, { brief: DB.bid }));

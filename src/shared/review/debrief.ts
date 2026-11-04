@@ -569,10 +569,15 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
   rec.final = final;
   const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
   rec.suivi = steps.length ? await suiviFor(env, briefId, who, steps, rec.rhythm ?? null) : null;
+  // the Fiche niveaux's items not known yet (from the page): what the comment says is still to learn
+  if (Array.isArray(raw?.ficheGaps)) rec.level = { ...(rec.level || {}), gaps: raw.ficheGaps.slice(0, 10).map((x: any) => ({ code: String(x?.code || "").slice(0, 20), text: String(x?.text || "").replace(/\s+/g, " ").trim().slice(0, 240), level: String(x?.level || "") }))
+    .filter((x: any) => x.text && ["faible", "moyen", "bon", "excellent"].includes(x.level)) };
   rec.result.feedback = buildComment(rec.first || "", rec, final);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
   // written again from the switches (↻ Rebuild): the next changes rewrite it too
   else if (!raw?.keepComment) { delete rec.edited; delete rec.commentBy; }
+  // the Fiche niveaux's level (computed on the page): the proposal never goes above it
+  if (typeof raw?.ficheLevel === "string") rec.level = { ...(rec.level || {}), fiche: ["excellent", "bon", "moyen", "faible", "critique"].includes(raw.ficheLevel) ? raw.ficheLevel : undefined };
   rec.level = { ...(rec.level || {}), prop: debriefLevel(rec, reviewStates(rec)) };
   await putReview(env, g, briefId, who, rec);
   await levelCols(env, briefId, who, rec);
@@ -876,6 +881,16 @@ export async function delOral(env: Env, g: GuildRow, briefId: number, who: strin
  * One-to-one remarks: what the teacher noticed face to face with the learner (lacunes, what they explained well). They
  * count in the level, the comment (Simplonline) and, asked, the AI says which competencies they confirm or question.
  */
+export async function saveRemarksText(env: Env, g: GuildRow, briefId: number, who: string, text: string) {
+  const r = await getReview(env, briefId, who);
+  if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");
+  const rec = r.rec;
+  const t = String(text || "").trim().slice(0, 3000);
+  rec.remarks = t ? { ...(rec.remarks || {}), text: t, at: Date.now() } : null;
+  if (!rec.edited) rec.result.feedback = buildComment(rec.first || "", rec, rec.final || reviewStates(rec));
+  await putReview(env, g, briefId, who, rec);
+  return { remarks: rec.remarks, feedback: rec.result.feedback, edited: !!rec.edited };
+}
 export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: string, text: string, ai: boolean) {
   const r = await getReview(env, b.id, who);
   if (!r || !r.rec.result) throw new DebriefError("Analyze the work first.");

@@ -12,7 +12,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, decideFicheCode, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, decideFicheCode, saveRemarksText, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
@@ -299,9 +299,18 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
     if (!/^(u:\d+|s:[a-f0-9]{6})$/.test(who)) bad("Unknown student or squad.");
+    const act = m[2];
+    // the frequent ones (open the page, a switch, the comment, the remarks as they're typed) don't need the brief's
+    // programme and text: lighter, under Cloudflare's CPU limit
+    if ((!act && method === "GET") || act === "states" || act === "comment" || (act === "remarks" && method === "POST" && body.quick)) {
+      if (!(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", id, g.id))) throw new ApiError(404, "This brief doesn't exist anymore.");
+      if (!act) return ok(await reviewView(env, g, id, who));
+      if (act === "states") { await saveStates(env, g, id, who, body.states ?? {}); return ok(await reviewView(env, g, id, who)); }
+      if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
+      return ok(await saveRemarksText(env, g, id, who, String(body.text ?? "")));
+    }
     const b = await loadBriefCtx(env, g, id);
     if (!b) throw new ApiError(404, "This brief doesn't exist anymore.");
-    const act = m[2];
     if (!act && method === "GET") return ok(await reviewView(env, g, id, who));
     if (!act && method === "DELETE") { await reopenReview(env, g, id, who, true); await run(env, "DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who); return ok({ ok: true }); }
     if (act === "repos" && method === "GET") {
