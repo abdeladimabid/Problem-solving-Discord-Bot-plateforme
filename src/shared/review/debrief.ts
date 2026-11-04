@@ -916,6 +916,7 @@ export async function saveRemarks(env: Env, g: GuildRow, b: BriefCtx, who: strin
     const ask = await askReview(env, system, user, 1);
     if (!ask.ok) throw new DebriefError(ask.msg);
     const codes = new Set((rec.result.competences || []).map((c: any) => String(c.code)));
+    rec.remarks.checkedText = t;
     rec.remarks.advice = (Array.isArray(ask.data?.competences) ? ask.data.competences : [])
       .map((c: any) => ({ code: String(c?.code || ""), avis: c?.avis === "ok" || c?.avis === "ko" ? c.avis : "", why: oneLine(c?.raison, 200) }))
       .filter((c: any) => codes.has(c.code) && c.avis);

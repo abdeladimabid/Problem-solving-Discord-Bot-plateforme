@@ -3129,7 +3129,7 @@ window.CB_FR = {
 "↺ Reopen": "↺ Rouvrir",
 "↻ Regenerate all": "↻ Tout régénérer",
 "↻ Recalculate": "↻ Recalculer",
-"Set each competency again from what the debrief shows now: the one-to-one first, then the assessment, then the project (unless skipped)": "Recalcule chaque compétence depuis le débrief tel qu’il est maintenant : d’abord le one-to-one, puis l’évaluation, puis le projet (sauf s’il est passé)",
+"Set each competency again from what the debrief shows now: the one-to-one first (read again if you changed it), then the assessment, then the project as switched (at least half of the requirements validated, unless skipped); a live task not done takes a technical competency down": "Recalcule chaque compétence depuis le débrief tel qu’il est maintenant : d’abord le one-to-one (relu si tu l’as changé), puis l’évaluation, puis le projet selon tes interrupteurs (au moins la moitié des exigences validées, sauf s’il est passé) ; une tâche en direct non faite fait baisser une compétence technique",
 "Already up to date: nothing changed": "Déjà à jour : rien n’a changé",
 "⏳ Nobody has joined yet.": "⏳ Personne n'a encore rejoint.",
 "⏳ Nobody has joined yet: open the TV screen, the 🎮 Join button goes to #arena.": "⏳ Personne n'a encore rejoint : ouvre l'écran TV, le bouton 🎮 Rejoindre part dans #arena.",
