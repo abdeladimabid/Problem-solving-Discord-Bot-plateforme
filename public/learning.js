@@ -1324,28 +1324,8 @@ function renderDebrief() {
     // remarks changed since the AI last read them: read again first, so the one-to-one counts as written now
     const text = ($("#db-rm")?.value || "").trim(), rm = DB.R?.review?.remarks;
     if (text && (!rm?.advice || (rm.checkedText !== undefined && rm.checkedText !== text))) { await saveStatesNow(); await saveRm(true)(); }
-    const rec = DB.R?.review || {}, comps = rec.result?.competences || [];
-    const sk = DB?.skip || DB?.R?.states?.skip || {};
-    const aV = assessVerdicts(rec.assess);
-    // the project as switched now: the share of the brief's requirements validated (bonus, criteria, oral not counted)
-    const ex = rec.result?.exigences || [];
-    const req = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([x]) => x && !NOT_IN_PCT(x.type));
-    const reqOk = !req.length || req.filter(([, v]) => v).length / req.length >= 0.5;
-    const live = sk.live ? "" : segVal(document, "mes");
-    const changed = [], kept = [];
-    for (const c of comps) {
-      const box = $(`[data-co="${CSS.escape(c.code)}"]`);
-      if (!box) continue;
-      const base = (parseC(c.code) || {}).code;
-      const technical = /^C\d/.test(base || "");
-      const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code);
-      // the most recent evidence first: the one-to-one, the assessment done in class, then the project as switched;
-      // a live task not done takes a technical competency back down
-      let want = ad ? ad.avis === "ok" : typeof aV[base] === "boolean" ? aV[base] : sk.project ? null : c.avis === "validable" && reqOk;
-      if (!ad && want !== false && technical && live === "non_valide") want = false;
-      if (want === null) { kept.push(c.code); continue; }
-      if (box.checked !== want) { box.checked = want; box.dispatchEvent(new Event("change")); changed.push(`${c.code} ${want ? "✓" : "✗"}`); }
-    }
+    DB.coManual = new Set();
+    const changed = applyComps(), kept = compTargets().filter((t) => t.want === null).map((t) => t.code);
     toast(changed.length ? `${changed.length} competenc${changed.length > 1 ? "ies" : "y"} changed: ${changed.join(", ")}` : "Already up to date: nothing changed"
       + (kept.length ? ` · kept as they are (project skipped, nothing else to go on): ${kept.join(", ")}` : ""));
   });
@@ -1927,6 +1907,43 @@ function updateMeter() {
   if ($("#db-meter")) $("#db-meter").innerHTML = meter(pct, "Requirements validated");
   if ($("#db-pct")) $("#db-pct").innerHTML = pct == null ? "" : `<b style="color:${masteryInk(pct)}">${pct}%</b> <span class="muted small">of the requirements · ${$$("[data-co]:checked").length}/${$$("[data-co]").length} competencies</span>`;
 }
+/**
+ * What each competency should be from the debrief as it is now: the most recent evidence first (the one-to-one, then
+ * the assessment done in class, then the project as switched: "can be validated" and at least half of the brief's
+ * requirements validated); a live task not done takes a technical competency down. want: null = nothing to go on
+ * (the project skipped). fromProject: only the project decides it (what the requirements' switches change).
+ */
+function compTargets() {
+  const rec = DB.R?.review || {}, comps = rec.result?.competences || [];
+  const sk = DB?.skip || DB?.R?.states?.skip || {};
+  const aV = assessVerdicts(rec.assess);
+  const ex = rec.result?.exigences || [];
+  const req = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([x]) => x && !NOT_IN_PCT(x.type));
+  const reqOk = !req.length || req.filter(([, v]) => v).length / req.length >= 0.5;
+  const live = sk.live ? "" : segVal(document, "mes");
+  return comps.map((c) => {
+    const base = (parseC(c.code) || {}).code;
+    const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code);
+    const tested = typeof aV[base] === "boolean";
+    let want = ad ? ad.avis === "ok" : tested ? aV[base] : sk.project ? null : c.avis === "validable" && reqOk;
+    if (!ad && want !== false && /^C\d/.test(base || "") && live === "non_valide") want = false;
+    return { code: c.code, want, fromProject: !ad && !tested && !sk.project };
+  });
+}
+/** The competency switches set to what the debrief shows (only those given, if any); returns what changed ("C3 ✗"). */
+function applyComps(only = null) {
+  const changed = [];
+  for (const t of compTargets()) {
+    if (t.want === null || (only && !only(t))) continue;
+    const box = $(`[data-co="${CSS.escape(t.code)}"]`);
+    if (!box || box.checked === t.want) continue;
+    box.checked = t.want;
+    box.dispatchEvent(new Event("change"));
+    changed.push(`${t.code} ${t.want ? "✓" : "✗"}`);
+  }
+  return changed;
+}
+
 function saveStatesSoon() {
   updateMeter();
   clearTimeout(DB.timer);
@@ -1950,6 +1967,14 @@ async function saveStatesNow() {
 function wireDebrief() {
   const { bid, who } = DB;
   $$("[data-ck], [data-ex], [data-co]").forEach((c) => c.onchange = saveStatesSoon);
+  // a competency switched by hand is the teacher's: the requirements don't move it any more (↻ Recalculate does)
+  DB.coManual ||= new Set();
+  $$("[data-co]").forEach((c) => c.addEventListener("change", (e) => { if (e.isTrusted) DB.coManual.add(c.dataset.co); }));
+  // the brief's requirements switched: the competencies only the project decides follow at once
+  $$("[data-ex]").forEach((c) => c.addEventListener("change", () => {
+    const changed = applyComps((t) => t.fromProject && !DB.coManual.has(t.code));
+    if (changed.length) toast(`Competencies follow the project: ${changed.join(", ")}`);
+  }));
   $$("[data-ck]").forEach((c) => c.addEventListener("change", () => {
     $$(`[data-exck="${CSS.escape(c.dataset.ck)}"]`).forEach((x) => { x.checked = c.checked; });
     updateMeter();
