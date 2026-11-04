@@ -182,7 +182,10 @@ export function reviewStates(rec) {
   const mes = { r: (saved.mes && CH_RESULTS.includes(saved.mes.r) ? saved.mes.r : ch && ch.result) || '', note: String((saved.mes && typeof saved.mes.note === 'string' ? saved.mes.note : ch && ch.note) || '') };
   // oral questions: each one starts Not valid, the teacher switches it after the answer
   const oral = ((rec && rec.oral) || []).map((q, i) => typeof (saved.oral || [])[i] === 'boolean' ? saved.oral[i] : false);
-  return { ck, ex, co, mes, oral };
+  // a step the teacher skipped (the project's requirements, or the live check: mise en situation and oral questions)
+  // counts for nothing: not in the level, the comment or the Fiche
+  const skip = { project: !!(saved.skip && saved.skip.project), live: !!(saved.skip && saved.skip.live) };
+  return { ck, ex, co, mes, oral, skip };
 }
 export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
 // C3N2 / CT5 / T5 → C3 / T5: how the assessments' competency results are keyed
@@ -206,15 +209,16 @@ export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'
 // and the brief's requirements (20 %), only the parts that were evaluated. Never more than one level above the
 // assessment. The teacher chooses the level, and can change it.
 export function debriefLevel(rec, st) {
-  const ex = ((rec && rec.result) || {}).exigences || [];
+  const sk = (st && st.skip) || reviewStates(rec).skip;
+  const ex = sk.project ? [] : ((rec && rec.result) || {}).exigences || [];
   const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'critere' && ex[i].type !== 'oral');
   const parts = [];
   const as = ((rec && rec.assess) || []).filter((a) => a.score != null);
   if (as.length) parts.push([0.5, as.reduce((t, a) => t + a.score, 0) / as.length / 100]);
   const talk = [];
-  const or = st.oral || [];
+  const or = sk.live ? [] : st.oral || [];
   if (or.length) talk.push(or.filter(Boolean).length / or.length);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
+  const m = sk.live ? undefined : { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
   if (m !== undefined) talk.push(m);
   if (talk.length) parts.push([0.3, talk.reduce((t, x) => t + x, 0) / talk.length]);
   if (main.length) parts.push([0.2, main.filter((i) => st.ex[i]).length / main.length]);

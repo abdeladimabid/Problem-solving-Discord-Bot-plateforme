@@ -862,7 +862,7 @@ function wPropLevel() {
   const ex = DB.R.review?.result?.exigences || [];
   const s = currentStates();
   const exOn = (i) => (typeof s.ex[i] === "boolean" ? s.ex[i] : !!(DB.R.states?.ex || [])[i]);
-  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
+  const main = (s.skip || {}).project ? [] : ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const LV = ["excellent", "bon", "moyen", "faible", "critique"];
   const toLv = (sc) => (sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique");
   const parts = [];
@@ -870,9 +870,10 @@ function wPropLevel() {
   const asAvg = as.length ? as.reduce((x, a) => x + a.score, 0) / as.length / 100 : null;
   if (asAvg != null) parts.push([0.5, asAvg]);
   const talk = [];
-  const or = s.oral || DB.R.states?.oral || [];
+  const sk = s.skip || {};
+  const or = sk.live ? [] : s.oral || DB.R.states?.oral || [];
   if (or.length) talk.push(or.filter(Boolean).length / or.length);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
+  const m = sk.live ? undefined : { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
   if (m !== undefined) talk.push(m);
   if (talk.length) parts.push([0.3, talk.reduce((x, v) => x + v, 0) / talk.length]);
   if (main.length) parts.push([0.2, main.filter(exOn).length / main.length]);
@@ -931,7 +932,7 @@ function wDebriefExtras() {
     go();   // more questions are added after the ones there (their switches stay)
   };
   // the first 5 questions are written by themselves when the debrief is opened
-  if (!final && !qs.length && !DB.oralAuto) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
+  if (!final && !qs.length && !DB.oralAuto && !(DB.skip || DB.R.states?.skip || {}).live) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
   $$("[data-ordel]", box).forEach((b) => b.onclick = () => busy(b, async () => {
     const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who, del: Number(b.dataset.ordel), states: { oral: currentStates().oral } } });
     DB.R = { ...DB.R, ...R };

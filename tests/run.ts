@@ -7841,6 +7841,19 @@ section("papers: Sign in with Discord, one device per paper, network alerts");
   await api("DELETE", `/api/assessments/${aid}?g=${G}`);
 }
 
+section("debrief steps skipped: they count for nothing");
+{
+  const E = await import("../src/shared/review/engine.ts");
+  const rec: any = { result: { exigences: [{ type: "story", texte: "A", statut: "fait" }, { type: "story", texte: "B", statut: "fait" }], competences: [] }, oral: [{ q: "q1" }, { q: "q2" }], assess: [{ score: 80 }] };
+  const st = (skip: any) => ({ ...E.reviewStates({ ...rec, final: { ex: [true, true], oral: [false, false], mes: { r: "non_valide" }, skip } }) });
+  const withLive = E.debriefLevel(rec, st({})), noLive = E.debriefLevel(rec, st({ live: true }));
+  check(st({ live: true }).skip.live === true && st({}).skip.live === false, "the skipped steps are kept with the switches");
+  check(["faible", "moyen"].includes(withLive) && ["bon", "excellent"].includes(noLive), `the live check skipped: its oral questions not answered and its task don't lower the level (${withLive} → ${noLive})`);
+  const C = await import("../src/shared/review/comment.ts");
+  const d1 = C.commentData({ project: "P", rec: { ...rec, final: { ex: [true, false], oral: [false, false], skip: { live: true, project: true } } } });
+  check(!d1.oralMissed.length && !d1.improve.length, "…and the comment says nothing of a skipped step (no oral question « missed », no requirement « to finish »)");
+}
+
 section("📐 Fiche niveaux: each level's items in every evaluation, what each learner knows, the levels (100% of a level)");
 {
   const C = await import("../src/shared/concepts.ts");

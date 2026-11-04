@@ -560,6 +560,7 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
     ex: st.ex.map((v: boolean, i: number) => bool(Array.isArray(raw?.ex) ? raw.ex[i] : undefined, v)),
     co: Object.fromEntries(Object.keys(st.co).map((code) => [code, bool(raw?.co?.[code], st.co[code])])),
     oral: st.oral.map((v: boolean, i: number) => bool(Array.isArray(raw?.oral) ? raw.oral[i] : undefined, v)),
+    skip: raw?.skip && typeof raw.skip === "object" ? { project: !!raw.skip.project, live: !!raw.skip.live } : st.skip,
   };
   if (rec.challenge && raw?.mes && typeof raw.mes === "object") {
     rec.challenge.result = CH_RESULTS.includes(raw.mes.r) ? raw.mes.r : "";
@@ -690,13 +691,16 @@ export async function makeReviewLevel(env: Env, g: GuildRow, briefId: number, wh
     ex: saved.ex.map((v: boolean, i: number) => bool(Array.isArray(raw?.ex) ? raw.ex[i] : undefined, v)),
     oral: saved.oral.map((v: boolean, i: number) => bool(Array.isArray(raw?.oral) ? raw.oral[i] : undefined, v)),
     mes: raw?.mes && CH_RESULTS.includes(raw.mes.r) ? { r: raw.mes.r, note: String(raw.mes.note || "") } : saved.mes,
+    skip: raw?.skip && typeof raw.skip === "object" ? { project: !!raw.skip.project, live: !!raw.skip.live } : saved.skip,
   };
   const calc = debriefLevel(rec, st);
-  const ex = rec.result.exigences || [];
+  // a skipped step says nothing to the AI either
+  const ex = st.skip.project ? [] : rec.result.exigences || [];
   const main = ex.map((e: any, i: number) => i).filter((i: number) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const missing = main.filter((i: number) => !st.ex[i]).map((i: number) => ex[i].texte).slice(0, 8);
   const co = Object.keys(st.co);
-  const oral = rec.oral || [];
+  const oral = st.skip.live ? [] : rec.oral || [];
+  if (st.skip.live) st.mes = { r: "", note: "" };
   const MES: Record<string, string> = { valide: "réussie", partiel: "partiellement réussie", non_valide: "non validée" };
   // the comment without its greeting (« Bonjour Sara, » or « Sara, ») and without the first name anywhere (no name to the AI)
   const first = String(rec.first || "").trim();

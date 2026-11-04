@@ -3047,3 +3047,7 @@ body.sl-open { overflow: hidden; }
 .dbx-side #db-rm { min-height: 90px; }
 .dbx-side #db-rem > p.muted { font-size: 12px; }
 .dbx-side #db-rem > p.muted + p.muted { display: none; }
+.dbx-skip { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 12px; border: 1px dashed var(--line); background: var(--surface); }
+.dbx-skip.on { border-style: solid; border-color: #d97706; background: color-mix(in srgb, #d97706 8%, var(--surface)); }
+.dbx-skipped > .panel { opacity: .45; }
+.dbx-list li b { font-weight: 600; }

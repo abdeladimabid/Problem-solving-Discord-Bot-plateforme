@@ -159,7 +159,8 @@ export function projectFacts(rec: any, st: any): ProjectFacts {
 export function commentData(o: { first?: string; group?: string; project: string; rec: any; states?: any; uid?: string | null; member?: { uid?: string; co?: Record<string, boolean>; note?: string; level?: string } | null }): CommentData {
   const rec = o.rec || {};
   const st = reviewStates({ ...rec, final: o.states ?? rec.final });
-  const ex: any[] = (rec.result && rec.result.exigences) || [];
+  // a skipped step (the requirements, or the live check) isn't in the comment
+  const ex: any[] = st.skip.project ? [] : (rec.result && rec.result.exigences) || [];
   const items = ex.map((e, i) => ({ type: String(e.type || ""), texte: String(e.texte || ""), ok: !!st.ex[i] }));
   const stories = items.filter((x) => x.type === "story");
   const okStories = stories.filter((x) => x.ok).length;
@@ -173,7 +174,7 @@ export function commentData(o: { first?: string; group?: string; project: string
   const own = String(o.member?.note || "").trim();
   const R = (!own && rec.remarks) || {};
   const remarks = String(own || R.text || "").trim();
-  const oral: any[] = rec.oral || [];
+  const oral: any[] = st.skip.live ? [] : rec.oral || [];
   const oralMissed = uniq(oral.filter((q, i) => !st.oral[i]).map((q) => clean(q.notion || q.q, 140)));
   const fromRemarks = Array.isArray(R.toReview) && R.positive !== undefined ? R.toReview.map((x: unknown) => low(clean(x, 140))).filter(Boolean) : remarkNotions(remarks);
   // one learner (a squad member, or alone): their assessment says what they mastered; a squad: the project only

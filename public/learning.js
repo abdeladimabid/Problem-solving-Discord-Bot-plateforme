@@ -1238,7 +1238,7 @@ function renderDebrief() {
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
       <section class="panel" id="db-req"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
-        ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
+        ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|bonus)$/i.test(type);
           const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${NOT_IN_PCT(type) ? " · not counted in the %" : ""}</span>`;
           // Criterion, Deliverable and Bonus: folded by default (open them to check or switch)
           return `${fold ? `<details class="db-fold"><summary><h3>${head}</h3></summary>` : `<h3>${head}</h3>`}
@@ -1260,7 +1260,7 @@ function renderDebrief() {
         <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
         <p class="muted small" style="margin:-4px 0 8px">With ✨, what went well goes in the comment's strengths, what to review in its notions, and the oral questions your remarks say were answered are switched on.</p>
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
-        ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
+        ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" id="db-rmai">✨ Check the competencies</button><span class="small muted" id="db-rmst">Saved by itself as you type</span></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
       ${sq ? "" : `<section class="panel" id="db-comps"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
         ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
@@ -1302,7 +1302,21 @@ function renderDebrief() {
     toast(!ai ? "Remarks saved (in the comment and the level)" : n ? `Remarks saved: ${n} oral question${n > 1 ? "s" : ""} switched on as answered; see the competencies and the comment` : "Remarks saved: see the competencies and the comment");
     renderDebrief();
   };
-  if ($("#db-rms")) $("#db-rms").onclick = (e) => busy(e.currentTarget, saveRm(false));
+  // the remarks save by themselves (a moment after typing, and when leaving the field): no button, no page redrawn
+  if ($("#db-rm") && !final) {
+    let t = null, last = $("#db-rm").value;
+    const save = async () => {
+      clearTimeout(t);
+      const text = $("#db-rm").value;
+      if (text === last) return;
+      last = text;
+      $("#db-rmst").textContent = "Saving…";
+      try { const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text, ai: false } }); if (DB.R.review && R.review) { DB.R.review.remarks = R.review.remarks; if (!DB.commentEdited && R.review.result?.feedback && $("#db-c")) { DB.R.review.result.feedback = R.review.result.feedback; $("#db-c").value = R.review.result.feedback; } } dbxDraw(); $("#db-rmst").textContent = "Saved · in the level and the comment"; }
+      catch (err) { $("#db-rmst").textContent = ""; toast(err.message, true); }
+    };
+    $("#db-rm").addEventListener("input", () => { $("#db-rmst").textContent = "…"; clearTimeout(t); t = setTimeout(save, 1500); });
+    $("#db-rm").addEventListener("blur", save);
+  }
   if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
   updateMeter();
   wireDebrief();
@@ -1338,6 +1352,11 @@ function debriefSteps(body, final) {
     <div class="dbx-modal" hidden role="dialog" aria-modal="true"><div class="dbx-box"><div class="dbx-mh"><b class="dbx-mt"></b><button type="button" class="btn small" data-dbxclose aria-label="Close">✕</button></div><div class="dbx-mb"></div></div></div>`;
   const step = (i) => $(`[data-dbxstep="${i}"]`, shell);
   const put = (i, ...ids) => ids.forEach((id) => { const x = take(id); if (x) step(i).append(x); });
+  // ① and ② can be skipped: a skipped step counts for nothing (not « not done »: not in the level, the comment, the Fiche)
+  DB.skip = { project: false, live: false, ...(DB.skip && DB.skipKey === key ? DB.skip : DB.R.states?.skip || {}) };
+  DB.skipKey = key;
+  const SKIP = { 0: ["project", "The project's requirements"], 1: ["live", "The mise en situation and the oral questions"] };
+  for (const [i, [k, what]] of Object.entries(SKIP)) step(Number(i)).insertAdjacentHTML("afterbegin", `<div class="dbx-skip" data-skipbox="${k}"></div>`);
   // ① the project
   put(0, "db-proj", "db-req", "db-checks", "db-commits");
   // ② live: the mise en situation done in front of you, then the oral questions
@@ -1391,7 +1410,19 @@ function debriefSteps(body, final) {
   $$("[data-dbx]", shell).forEach((b) => b.onclick = () => { go(Number(b.dataset.dbx)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
   $$("[data-dbxgo]", shell).forEach((b) => b.onclick = () => { go(DB.step + Number(b.dataset.dbxgo)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
   // what each step says, and the summary, follow the switches
-  if (!body.dataset.dbx) { body.dataset.dbx = "1"; body.addEventListener("change", () => setTimeout(dbxDraw, 0)); body.addEventListener("click", (e) => { if (e.target.closest("[data-seg]")) setTimeout(dbxDraw, 0); }); }
+  if (!body.dataset.dbxw) { body.dataset.dbxw = "1"; body.addEventListener("change", () => setTimeout(dbxDraw, 0)); body.addEventListener("click", (e) => { if (e.target.closest("[data-seg]")) setTimeout(dbxDraw, 0); }); }
+  const drawSkip = () => {
+    for (const [k, what] of Object.values(SKIP)) {
+      const box = $(`[data-skipbox="${k}"]`, shell), on = !!DB.skip[k];
+      box.classList.toggle("on", on);
+      box.closest(".dbx-step").classList.toggle("dbx-skipped", on);
+      box.innerHTML = on ? `<span>⏭️ <b>Step skipped</b> · ${what} count for nothing: not in the level, the comment or the Fiche niveaux (not « not done »).</span>${final ? "" : `<button type="button" class="btn small primary" data-skip="${k}">Include it again</button>`}`
+        : `<span class="small muted">${what}: ${k === "live" ? "not done with this learner?" : "not relevant for this learner?"}</span>${final ? "" : `<button type="button" class="btn small" data-skip="${k}">⏭️ Skip this step</button>`}`;
+      const b = $("[data-skip]", box);
+      if (b) b.onclick = () => { DB.skip[k] = !DB.skip[k]; drawSkip(); saveStatesSoon(); setTimeout(() => { DB.lvDraw?.(); dbxDraw(); }, 0); clearTimeout(DB.ficheT); DB.ficheT = setTimeout(() => DB.ficheLoad?.(), 1500); };
+    }
+  };
+  drawSkip();
   go(DB.step);
   dbxDraw();
 }
@@ -1417,29 +1448,50 @@ function dbxDraw() {
   const lv = rec.level || {};
   const LVN = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
   const stat = (i, h) => { const x = $(`[data-dbxs="${i}"]`); if (x) x.innerHTML = h; };
-  stat(0, pct == null ? "" : `<i class="dbx-dot ${toneOf(pct)}"></i>${okReq.length}/${req.length} requirements`);
-  stat(1, `${rec.challenge ? `<i class="dbx-dot ${MESN[mes]?.[1] || ""}"></i>${mes ? MESN[mes][0] : "task to do"}` : "no task yet"} · ${oral.length ? `${orOk}/${oral.length} oral` : "no oral yet"}`);
+  const sk = st.skip || {};
+  stat(0, sk.project ? "⏭️ skipped" : pct == null ? "" : `<i class="dbx-dot ${toneOf(pct)}"></i>${okReq.length}/${req.length} requirements`);
+  stat(1, sk.live ? "⏭️ skipped" : `${rec.challenge ? `<i class="dbx-dot ${MESN[mes]?.[1] || ""}"></i>${mes ? MESN[mes][0] : "task to do"}` : "no task yet"} · ${oral.length ? `${orOk}/${oral.length} oral` : "no oral yet"}`);
   stat(2, lv.lvl ? `<i class="dbx-dot pgc-${lv.lvl}"></i>Level ${LVN[lv.lvl]}` : "level to set");
   stat(3, DB.R.status === "final" ? "✓ Finalized" : `${coOk.length}/${comps.length} competencies`);
   const li = (list, f) => list.length ? `<ul class="dbx-list">${list.map(f).join("")}</ul>` : "";
   const sum = $("#dbx-sum");
   if (sum) {
-    const good = [...okReq.map(([e]) => noVerifText(e.texte)), ...(rec.result?.forts || [])];
-    const bad = [...koReq.map(([e]) => noVerifText(e.texte)), ...(rec.result?.ameliorer || [])];
+    // what they master and what they don't: from the assessment and the class's mise en situation (each notion of the
+    // questions they got right or missed), the live check (unless skipped) and the Fiche; never the brief's list
+    const uid = DB.who.startsWith("u:") ? DB.who.slice(2) : "";
+    const mine = (list) => list.map((x) => x.members?.[uid]).filter(Boolean);
+    const am = mine(A.filter((x) => x.kind !== "mise")), mm = mine(A.filter((x) => x.kind === "mise"));
+    const uniq = (a) => [...new Set(a.map((x) => String(x).trim()).filter(Boolean))];
+    const asKo = uniq(am.flatMap((m) => m.ko || [])), msKo = uniq(mm.flatMap((m) => m.ko || []));
+    const asOk = uniq(am.flatMap((m) => m.ok || [])).filter((x) => !asKo.includes(x)), msOk = uniq(mm.flatMap((m) => m.ok || [])).filter((x) => !msKo.includes(x));
+    const oralKo = sk.live ? [] : uniq(oral.filter((_, i) => !or[i]).map((q) => q.notion || q.q)), oralOk = sk.live ? [] : uniq(oral.filter((_, i) => or[i]).map((q) => q.notion || q.q));
+    const fi = DB.ficheM?.items || [];
+    const fiOk = fi.filter((i) => i.final === "ok"), fiKo = fi.filter((i) => i.final === "ko");
+    const line = (ic, t, list, n = 6) => list.length ? `<li><b>${ic} ${t}</b> ${list.slice(0, n).map(esc).join(", ")}${list.length > n ? `, +${list.length - n}` : ""}</li>` : "";
+    const good = [
+      line("📝", "Assessment:", asOk), line("🧪", "Mise en situation:", msOk),
+      !sk.live && mes === "valide" ? `<li><b>🎯 Live task</b> done in front of you</li>` : "",
+      line("🗣️", "Oral:", oralOk), fiOk.length ? `<li><b>📐 Fiche:</b> ${fiOk.length} item${fiOk.length > 1 ? "s" : ""} known (${uniq(fiOk.map((i) => i.code)).slice(0, 8).join(", ")})</li>` : "",
+    ].filter(Boolean);
+    const bad = [
+      line("📝", "Assessment:", asKo), line("🧪", "Mise en situation:", msKo),
+      !sk.live && (mes === "non_valide" || mes === "partiel") ? `<li><b>🎯 Live task</b> ${mes === "partiel" ? "partly done" : "not done"}${st.mes?.note ? `: ${esc(st.mes.note)}` : ""}</li>` : "",
+      line("🗣️", "Oral, not answered:", oralKo), fiKo.length ? `<li><b>📐 Fiche, not known yet:</b> ${fiKo.slice(0, 6).map((i) => `${esc(i.code)} ${esc(i.text.replace(/\.$/, ""))}`).join(" · ")}${fiKo.length > 6 ? `, +${fiKo.length - 6}` : ""}</li>` : "",
+    ].filter(Boolean);
     const tile = (ic, t, v, tone, sub = "") => `<div class="dbx-tile ${tone}"><span aria-hidden="true">${ic}</span><div><small>${t}</small><b>${v}</b>${sub ? `<em>${sub}</em>` : ""}</div></div>`;
     sum.innerHTML = `<div class="panel-head" style="margin:0"><h2>Summary of the debrief</h2><span class="small muted">follows your switches</span></div>
       <div class="dbx-tiles">
-        ${tile("📁", "Project", pct == null ? "—" : `${pct}%`, pct == null ? "" : toneOf(pct), `${okReq.length}/${req.length} requirements`)}
+        ${tile("📁", "Project", sk.project ? "skipped" : pct == null ? "—" : `${pct}%`, sk.project || pct == null ? "" : toneOf(pct), sk.project ? "not counted" : `${okReq.length}/${req.length} requirements`)}
         ${tile("📝", "Assessment", as.length ? as.map((x) => `${x.score}%`).join(" · ") : "—", as.length ? toneOf(Math.min(...as.map((x) => x.score))) : "", as.length ? "" : "none graded")}
         ${tile("🧪", "Class mise en situation", ms.length ? ms.map((x) => `${x.score}%`).join(" · ") : "—", ms.length ? toneOf(Math.min(...ms.map((x) => x.score))) : "", ms.length ? "" : "none")}
-        ${tile("🎯", "Live task", rec.challenge ? (mes ? MESN[mes][0] : "Not done yet") : "—", rec.challenge && mes ? MESN[mes][1] : "")}
-        ${tile("🗣️", "Oral questions", oral.length ? `${orOk}/${oral.length}` : "—", oral.length ? toneOf((orOk / oral.length) * 100) : "", oral.length ? "answered" : "")}
+        ${tile("🎯", "Live task", sk.live ? "skipped" : rec.challenge ? (mes ? MESN[mes][0] : "Not done yet") : "—", !sk.live && rec.challenge && mes ? MESN[mes][1] : "", sk.live ? "not counted" : "")}
+        ${tile("🗣️", "Oral questions", sk.live ? "skipped" : oral.length ? `${orOk}/${oral.length}` : "—", !sk.live && oral.length ? toneOf((orOk / oral.length) * 100) : "", sk.live ? "not counted" : oral.length ? "answered" : "")}
         ${tile("🤖", "AI use", ai ? ({ low: "Low", some: "Some", high: "High" })[ai.level] || ai.level : "—", ai ? ({ low: "good", some: "warn", high: "bad" })[ai.level] || "" : "", ai ? "suspicion" : "not checked")}
         ${tile("✅", "Competencies", `${coOk.length}/${comps.length}`, comps.length ? toneOf((coOk.length / comps.length) * 100) : "", "validated")}
       </div>
       <div class="dbx-two">
-        <div class="dbx-col good"><h3>👍 What went well</h3>${li(good.slice(0, 10), (x) => `<li>${esc(x)}</li>`) || `<p class="small muted">Nothing switched on yet.</p>`}</div>
-        <div class="dbx-col bad"><h3>🛠️ To work on</h3>${li(bad.slice(0, 10), (x) => `<li>${esc(x)}</li>`) || `<p class="small muted">Nothing left: every requirement is validated.</p>`}</div>
+        <div class="dbx-col good"><h3>👍 What they master</h3>${good.length ? `<ul class="dbx-list">${good.join("")}</ul>` : `<p class="small muted">Nothing graded yet (assessment, mise en situation, oral).</p>`}</div>
+        <div class="dbx-col bad"><h3>🛠️ To work on again</h3>${bad.length ? `<ul class="dbx-list">${bad.join("")}</ul>` : `<p class="small muted">Nothing missed in what was graded.</p>`}</div>
       </div>
       ${rec.remarks?.text ? `<p class="small" style="margin:10px 0 0"><span class="muted">🗣️ One-to-one:</span> ${esc(rec.remarks.text)}</p>` : ""}`;
   }
@@ -1823,7 +1875,7 @@ function currentStates() {
   $$("[data-exck]").forEach((c) => (ck[c.dataset.exck] = (ck[c.dataset.exck] ?? true) && c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
   const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
-  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
+  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral, skip: { ...(DB?.skip || DB?.R?.states?.skip || {}) } };
 }
 /** The requirements that never count in the project's % (the same rule as the server's level). */
 const NOT_IN_PCT = (t) => /^(bonus|crit|oral)/i.test(String(t || ""));
@@ -1917,7 +1969,7 @@ function wireDebrief() {
       if (DB.R?.review) DB.R.review.fiche = r.fiche;
       DB.ficheLoad();
     }));
-    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid });
+    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }, { focus: () => DB.R.review?.level?.lvl || (typeof wPropLevel === "function" ? wPropLevel() : "") || "", onLoad: (m) => { DB.ficheM = m; dbxDraw(); } });
   };
   DB.ficheLoad();
   $$("[data-mfiche]").forEach((b) => b.onclick = () => masteryDialog(b.dataset.mfiche, b.dataset.name, { brief: DB.bid }));

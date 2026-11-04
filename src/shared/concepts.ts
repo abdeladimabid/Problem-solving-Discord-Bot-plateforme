@@ -442,6 +442,7 @@ export async function evidenceOf(env: Env, gid: string, uid: string, s: ConceptS
         ev.push({ code: c, got: v ? 1 : 0, from: "code", ref: `b${r.brief_id}:c${c}`, at: r.updated_at ?? 0, label: `Code${squad ? " (squad)" : ""} · ${rec.brief || "brief"}${it?.proof ? ` : ${String(it.proof).slice(0, 80)}` : ""}` });
       }
       if (r.status !== "final" && !(o.live && o.live.briefId === r.brief_id)) continue;
+      if (rec.final?.skip?.live) continue;   // the live check skipped: its task and oral questions don't count
       const ch = squad ? rec.members?.[uid]?.ch : rec.challenge;
       if (ch && ch.result in TASK) for (const c of cleanConcepts(s, ch.concepts)) if (c.startsWith(pre)) ev.push({ code: c, got: TASK[ch.result], from: "task", ref: `b${r.brief_id}:t`, at: r.updated_at ?? 0, label: `Mise en situation du débrief : ${String(ch.titre || "").slice(0, 80)}` });
       if (squad) continue;

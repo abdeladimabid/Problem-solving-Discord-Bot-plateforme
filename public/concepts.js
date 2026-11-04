@@ -171,7 +171,7 @@ const CN_STATE = { ok: ["✓ known", "good"], ko: ["✗ not known", "bad"], few:
 const CN_FROM = { assessment: "📝", mise: "🧪", oral: "🗣️", code: "💻", task: "🎯" };
 const cnDecBtns = (code, teacher, what) => `<span class="cn-dec">${[[true, "✓"], [false, "✗"]].map(([v, l]) => `<button type="button" class="btn small ${teacher === v ? "primary" : ""}" data-cndec="${esc(code)}" data-v="${v}" title="${v ? `Known (you decide${what}: a project, an oral…)` : `Not known (you decide${what})`}">${l}</button>`).join("")}${teacher != null || what ? `<button type="button" class="btn small" data-cndec="${esc(code)}" data-v="auto" title="Let the questions decide again">↺</button>` : ""}</span>`;
 /** Each item of the sprint, by level: questions asked, right, known or not, your decision; the level the Fiche gives. */
-function masteryHtml(r, uid) {
+function masteryHtml(r, uid, o = {}) {
   if (!r.sprint) return `<p class="small muted">The Fiche niveaux has no items for this sprint yet: add it in Settings → Fiche niveaux.</p>`;
   const lv = r.level;
   const nx = lv.next;
@@ -181,7 +181,9 @@ function masteryHtml(r, uid) {
     ${nx ? `<p class="small" style="margin:0 0 8px">${lv.probe === "faible" ? "To check in the debrief," : lv.probe === "excellent" ? "To check in the debrief," : "For"} <b>${esc(cnLvName(nx.level))}</b>: ${nx.missing} item${nx.missing > 1 ? "s" : ""} missing${nx.ko ? ` · ${nx.ko} not known` : ""}${nx.few ? ` · ${nx.few} not checked enough yet` : ""}.${lv.probe ? " The debrief's oral questions and live task go to them first." : ""}</p>` : lv.reached ? `<p class="small" style="margin:0 0 8px">Every item of the sprint known.</p>` : ""}
     <div class="cn-lvls">${lv.per.filter((p) => p.items).map((p) => `<span class="cn-lvp ${p.full ? "ok" : ""}" title="${p.ko} not known · ${p.few} not checked enough"><b>${esc(cnLvName(p.level))}</b> ${p.known}/${p.items}${p.full ? " ✓" : ""}</span>`).join("")}</div>
     ${CN_LV.map(([k, l]) => { const its = r.items.filter((c) => c.level === k); if (!its.length) return ""; const p = lv.per.find((x) => x.level === k) || { known: 0, items: its.length, ko: 0, few: 0, full: false };
-      const open = k === lv.probe || k === nx?.level || (!nx && !lv.reached && (k === "moyen" || k === "bon"));
+      // open: the level proposed for this learner (a debrief's), else the Fiche's; Critique has no items: its nearest, Faible
+      const want = o.focus ? (o.focus === "critique" ? "faible" : o.focus) : lv.toCheck ? "faible" : lv.reached === "critique" ? "faible" : lv.reached || nx?.level || "moyen";
+      const open = k === want;
       return `<details class="cn-lvd" ${open ? "open" : ""}><summary><b>${l}</b> <span class="cn-lvc ${p.full ? "ok" : p.ko ? "ko" : ""}">${p.known}/${p.items} known${p.full ? " ✓" : ""}</span>${p.ko ? ` <span class="small" style="color:var(--down)">${p.ko} not known</span>` : ""}${p.few ? ` <span class="small muted">${p.few} not checked enough</span>` : ""}</summary>
       <table class="grid-table cn-mtab"><thead><tr><th>Item</th><th class="num">Proofs</th><th class="num">Right</th><th>State</th><th>Your decision</th></tr></thead><tbody>
     ${its.map((c) => `<tr><td><b class="cn-code">${esc(c.code)}</b> ${esc(c.text)}${c.evidence.length ? `<details class="small"><summary class="muted">${c.evidence.length} question(s)</summary>${c.evidence.map((e) => `<div>${CN_FROM[e.from] || ""} ${esc(e.label)} — <b>${e.got === 1 ? "✓" : e.got === 0 ? "✗" : `${Math.round(e.got * 100)}%`}</b></div>`).join("")}</details>` : ""}</td>
@@ -193,14 +195,15 @@ function masteryHtml(r, uid) {
       <table class="grid-table cn-mtab"><tbody>${r.caps.map((c) => `<tr><td><b class="cn-code">${esc(c.code)}</b> ${esc(c.title)}</td><td class="num">${c.known}/${c.items} known</td><td>${cnDecBtns(c.code, null, " for all its items")}</td></tr>`).join("")}</tbody></table></details>` : ""}
     <p class="small muted">📝 assessments · 🧪 mises en situation · 🗣️ debrief oral questions and 🎯 live task (counted once the debrief is finalized) · 💻 the project's code (each proof you confirmed). Each answer counts its score: 100% = 1, 60% = 0.6, 0% = 0; an item is known when its proofs add up to more than half.</p></div>`;
 }
-async function loadMastery(box, uid, q = {}) {
+async function loadMastery(box, uid, q = {}, o = {}) {
   const qs = new URLSearchParams(Object.entries({ uid, ...q }).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]));
   let r;
   try { r = await api(`/concepts/mastery?${qs}`); } catch (e) { box.innerHTML = `<p class="small" style="color:var(--down)">${esc(e.message)}</p>`; return; }
-  box.innerHTML = masteryHtml(r, uid);
+  box.innerHTML = masteryHtml(r, uid, { focus: typeof o.focus === "function" ? o.focus() : o.focus });
+  if (o.onLoad) o.onLoad(r);
   $$("[data-cndec]", box).forEach((b) => b.onclick = () => busy(b, async () => {
     await api("/concepts/decide", { method: "POST", body: { uid, code: b.dataset.cndec, ok: b.dataset.v === "auto" ? null : b.dataset.v === "true" } });
-    toast("Saved"); loadMastery(box, uid, q);
+    toast("Saved"); loadMastery(box, uid, q, o);
   }));
 }
 function masteryDialog(uid, name, q = {}) {
