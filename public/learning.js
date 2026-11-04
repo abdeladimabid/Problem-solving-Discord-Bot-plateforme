@@ -1262,7 +1262,8 @@ function renderDebrief() {
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
         ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" id="db-rmai">✨ Check the competencies</button><span class="small muted" id="db-rmst">Saved by itself as you type</span></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
-      ${sq ? "" : `<section class="panel" id="db-comps"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+      ${sq ? "" : `<section class="panel" id="db-comps"><div class="panel-head" style="align-items:flex-start"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+        ${final ? "" : `<button class="btn small" id="db-coreset" title="Set each competency again from what the debrief shows now: the one-to-one first (read again if you changed it), then the assessment, then the project as switched (at least half of the requirements validated, unless skipped); a live task not done takes a technical competency down">↻ Recalculate</button>`}</div>
         ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
@@ -1318,6 +1319,16 @@ function renderDebrief() {
     $("#db-rm").addEventListener("blur", save);
   }
   if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
+  // the competencies set again from the debrief as it is now (once switched, a competency kept its first value)
+  if ($("#db-coreset")) $("#db-coreset").onclick = (e) => busy(e.currentTarget, async () => {
+    // remarks changed since the AI last read them: read again first, so the one-to-one counts as written now
+    const text = ($("#db-rm")?.value || "").trim(), rm = DB.R?.review?.remarks;
+    if (text && (!rm?.advice || (rm.checkedText !== undefined && rm.checkedText !== text))) { await saveStatesNow(); await saveRm(true)(); }
+    DB.coManual = new Set();
+    const changed = applyComps(), kept = compTargets().filter((t) => t.want === null).map((t) => t.code);
+    toast(changed.length ? `${changed.length} competenc${changed.length > 1 ? "ies" : "y"} changed: ${changed.join(", ")}` : "Already up to date: nothing changed"
+      + (kept.length ? ` · kept as they are (project skipped, nothing else to go on): ${kept.join(", ")}` : ""));
+  });
   updateMeter();
   wireDebrief();
   renderSteps(final);
@@ -1896,11 +1907,53 @@ function updateMeter() {
   if ($("#db-meter")) $("#db-meter").innerHTML = meter(pct, "Requirements validated");
   if ($("#db-pct")) $("#db-pct").innerHTML = pct == null ? "" : `<b style="color:${masteryInk(pct)}">${pct}%</b> <span class="muted small">of the requirements · ${$$("[data-co]:checked").length}/${$$("[data-co]").length} competencies</span>`;
 }
+/**
+ * What each competency should be from the debrief as it is now: the most recent evidence first (the one-to-one, then
+ * the assessment done in class, then the project as switched: "can be validated" and at least half of the brief's
+ * requirements validated); a live task not done takes a technical competency down. want: null = nothing to go on
+ * (the project skipped). fromProject: only the project decides it (what the requirements' switches change).
+ */
+function compTargets() {
+  const rec = DB.R?.review || {}, comps = rec.result?.competences || [];
+  const sk = DB?.skip || DB?.R?.states?.skip || {};
+  const aV = assessVerdicts(rec.assess);
+  const ex = rec.result?.exigences || [];
+  const req = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([x]) => x && !NOT_IN_PCT(x.type));
+  const reqOk = !req.length || req.filter(([, v]) => v).length / req.length >= 0.5;
+  const live = sk.live ? "" : segVal(document, "mes");
+  return comps.map((c) => {
+    const base = (parseC(c.code) || {}).code;
+    const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code);
+    const tested = typeof aV[base] === "boolean";
+    let want = ad ? ad.avis === "ok" : tested ? aV[base] : sk.project ? null : c.avis === "validable" && reqOk;
+    if (!ad && want !== false && /^C\d/.test(base || "") && live === "non_valide") want = false;
+    return { code: c.code, want, fromProject: !ad && !tested && !sk.project };
+  });
+}
+/** The competency switches set to what the debrief shows (only those given, if any); returns what changed ("C3 ✗"). */
+function applyComps(only = null) {
+  const changed = [];
+  for (const t of compTargets()) {
+    if (t.want === null || (only && !only(t))) continue;
+    const box = $(`[data-co="${CSS.escape(t.code)}"]`);
+    if (!box || box.checked === t.want) continue;
+    box.checked = t.want;
+    box.dispatchEvent(new Event("change"));
+    changed.push(`${t.code} ${t.want ? "✓" : "✗"}`);
+  }
+  return changed;
+}
+
 function saveStatesSoon() {
   updateMeter();
   clearTimeout(DB.timer);
   $("#db-cst").textContent = "Saving…";
-  DB.timer = setTimeout(async () => {
+  DB.timer = setTimeout(saveStatesNow, 700);
+}
+/** The switches saved now (a save still waiting is done at once): what reads the debrief from the server next sees them. */
+async function saveStatesNow() {
+  clearTimeout(DB.timer);
+  {
     try {
       const keep = DB.commentEdited;
       const R = await api(`/briefs/${DB.bid}/review/states`, { method: "POST", body: { who: DB.who, states: { ...currentStates(), keepComment: keep, comment: keep ? $("#db-c").value : undefined } } });
@@ -1908,12 +1961,20 @@ function saveStatesSoon() {
       if (!keep) $("#db-c").value = R.review?.result?.feedback ?? $("#db-c").value;
       $("#db-cst").textContent = keep ? "Saved · your edited comment is kept (↻ Rebuild to write it from the switches)" : "Saved · comment updated";
     } catch (e) { $("#db-cst").textContent = ""; toast(e.message, true); }
-  }, 700);
+  }
 }
 
 function wireDebrief() {
   const { bid, who } = DB;
   $$("[data-ck], [data-ex], [data-co]").forEach((c) => c.onchange = saveStatesSoon);
+  // a competency switched by hand is the teacher's: the requirements don't move it any more (↻ Recalculate does)
+  DB.coManual ||= new Set();
+  $$("[data-co]").forEach((c) => c.addEventListener("change", (e) => { if (e.isTrusted) DB.coManual.add(c.dataset.co); }));
+  // the brief's requirements switched: the competencies only the project decides follow at once
+  $$("[data-ex]").forEach((c) => c.addEventListener("change", () => {
+    const changed = applyComps((t) => t.fromProject && !DB.coManual.has(t.code));
+    if (changed.length) toast(`Competencies follow the project: ${changed.join(", ")}`);
+  }));
   $$("[data-ck]").forEach((c) => c.addEventListener("change", () => {
     $$(`[data-exck="${CSS.escape(c.dataset.ck)}"]`).forEach((x) => { x.checked = c.checked; });
     updateMeter();
