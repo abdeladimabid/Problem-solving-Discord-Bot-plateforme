@@ -210,13 +210,15 @@ function ficheLinkDialog(kind, id, title, after, sprint = null) {
   const box = $("#fl-box", dlg);
   api("/concepts/link", { method: "POST", body: { kind, id, sprint } }).then((r) => {
     const covered = r.items.filter((c) => c.n);
-    box.innerHTML = `<p class="small">Sprint ${r.sprint} · <b>${r.units.filter((u) => u.after.length).length}/${r.units.length}</b> question(s) linked. Only the items: nothing else changes, and the past answers count at once.</p>
-      <table class="grid-table"><thead><tr><th>Question</th><th>Before</th><th>Items (AI)</th></tr></thead><tbody>
-      ${r.units.map((u) => `<tr><td class="small">${esc(u.text)}</td><td class="small muted">${esc(u.before.join(", ") || "—")}</td><td>${u.after.map((c) => `<span class="cn-code" title="${esc(r.items.find((x) => x.code === c)?.text || "")}">${esc(c)}</span>`).join(" ") || `<span class="muted small">none</span>`}</td></tr>`).join("")}</tbody></table>
+    box.innerHTML = `<p class="small">Sprint ${r.sprint} (and the sprints before it: a review counts for them too) · <b>${r.units.filter((u) => u.after.length).length}/${r.units.length}</b> question(s) linked. Only the items change, and the past answers count at once. <b>Change any line</b> (codes separated by commas, up to 3), or empty it.</p>
+      <datalist id="fl-codes">${r.items.map((c) => `<option value="${esc(c.code)}">${esc(c.text)}</option>`).join("")}</datalist>
+      <table class="grid-table"><thead><tr><th>Question</th><th>Before</th><th>Items</th></tr></thead><tbody>
+      ${r.units.map((u) => `<tr><td class="small">${esc(u.text)}</td><td class="small muted">${esc(u.before.join(", ") || "—")}</td><td><input type="text" data-fl="${u.n}" list="fl-codes" value="${esc(u.after.join(", "))}" placeholder="none" style="width:150px;font-family:var(--mono, monospace)" title="${esc(u.after.map((c) => `${c}: ${r.items.find((x) => x.code === c)?.text || ""}`).join("\n"))}"></td></tr>`).join("")}</tbody></table>
       <p class="small" style="margin-top:8px"><b>Items checked:</b> ${covered.map((c) => `<span class="cn-covc ${c.n >= 5 ? "ok" : "ko"}" title="${esc(c.text)}"><b>${esc(c.code)}</b> ${c.n}</span>`).join(" ") || "none"}</p>
       <p class="toolbar"><button class="btn primary" id="fl-save">Save these links</button><button class="btn" id="fl-again">Ask again</button></p>`;
     $("#fl-save", dlg).onclick = (e) => busy(e.currentTarget, async () => {
-      await api("/concepts/link", { method: "POST", body: { kind, id, sprint: r.sprint, apply: true, links: Object.fromEntries(r.units.map((u) => [u.n, u.after])) } });
+      const links = Object.fromEntries($$("[data-fl]", dlg).map((x) => [x.dataset.fl, x.value.split(/[,;\s]+/).map((c) => c.trim().toUpperCase()).filter(Boolean)]));
+      await api("/concepts/link", { method: "POST", body: { kind, id, sprint: r.sprint, apply: true, links } });
       dlg.close(); toast("Linked: their answers count in each learner's Fiche"); after && after();
     });
     $("#fl-again", dlg).onclick = () => ficheLinkDialog(kind, id, title, after, r.sprint);

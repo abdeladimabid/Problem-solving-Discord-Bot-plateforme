@@ -78,25 +78,32 @@ async function unitsOf(env: Env, g: GuildRow, s: ConceptStore, kind: Kind, id: n
   return { title: b.title, sprint, units, save };
 }
 
-/** The AI reads the units and the sprint's items (Faible to Excellent; never Critique), and says which items each one checks. */
+/** The sprints an evaluation can give proofs for: its own, and the ones before it (a review of Sprint 1 in Sprint 2). */
+const sprintsUpTo = (s: ConceptStore, sprint: number) => s.sprints.map((x) => x.n).filter((n) => n <= sprint).sort((a, b) => a - b);
+/** The AI reads the units and the items (Faible to Excellent; never Critique) of the sprint and the ones before, and says which items each one checks. */
 async function askLinks(env: Env, s: ConceptStore, sprint: number, units: Unit[]): Promise<Record<number, string[]>> {
-  const items = askedConcepts(s, sprint);
+  const sps = sprintsUpTo(s, sprint);
+  const items = sps.flatMap((n) => askedConcepts(s, n));
+  const ok = (c: string) => sps.some((n) => c.startsWith(`S${n}.`));
   const out: Record<number, string[]> = {};
   for (let i = 0; i < units.length; i += 15) {
     const part = units.slice(i, i + 15);
     const data = await chatJson(env, [
-      { role: "system", content: ["Tu es formateur en développement web. RELIER À LA FICHE NIVEAUX : pour chaque question numérotée d'une évaluation déjà passée, dis quels éléments de la Fiche niveaux elle vérifie VRAIMENT.",
+      { role: "system", content: ["Tu es formateur en développement web. RELIER À LA FICHE NIVEAUX : pour chaque question numérotée d'une évaluation déjà passée, dis quels éléments de la Fiche niveaux elle vérifie.",
         "Règles :",
-        "- Chaque élément est le MINIMUM de son niveau (Faible, Moyen, Bon, Excellent). Relie une question à un élément seulement si y répondre juste montre cet élément, au niveau d'exigence de cet élément (une question simple ne prouve pas un élément Bon ou Excellent).",
-        "- 0 à 3 éléments par question ; [] si aucun ne correspond vraiment (ex. une question hors du sprint).",
+        "- Une question est UNE preuve parmi d'autres (il en faut 5 par élément) : elle n'a pas à prouver tout l'élément à elle seule. Relie-la à chaque élément dont elle vérifie une partie de la notion, de la connaissance ou du savoir-faire.",
+        "- Les QCM et les « Vrai ou Faux » comptent comme les autres questions : un QCM sur la propagation d'un événement vérifie l'élément sur la propagation ; un QCM sur une commande Git vérifie l'élément sur Git ; un QCM sur une classe Tailwind vérifie l'élément sur Tailwind.",
+        "- Les éléments viennent de plusieurs sprints (S1 = Sprint 1, S2 = Sprint 2…) : prends l'élément du sprint qui correspond à la notion de la question (Tailwind, CSS, HTML, accessibilité → souvent Sprint 1 ; DOM, événements, formulaires en JavaScript → souvent Sprint 2).",
+        "- Le niveau : une question de connaissance ou de compréhension (QCM, Vrai/Faux, « que renvoie… ») va avec un élément Faible ou Moyen de sa notion ; une question où il faut choisir, justifier, corriger ou organiser va aussi avec l'élément Bon ou Excellent de la notion.",
+        "- 1 à 3 éléments par question ; [] seulement si la question ne touche AUCUN élément listé.",
         "- N'utilise QUE les codes listés.",
         'Réponds UNIQUEMENT avec ce JSON : {"links":[{"n":1,"concepts":["S2.M3"]}]} avec une entrée par question.'].join("\n") },
-      { role: "user", content: `ÉLÉMENTS DE LA FICHE NIVEAUX (sprint ${sprint}) :\n${items.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] ${c.text}`).join("\n")}\n\nQUESTIONS :\n${part.map((u) => `${u.n}. ${u.text}`).join("\n")}` },
+      { role: "user", content: `ÉLÉMENTS DE LA FICHE NIVEAUX (${sps.map((n) => `sprint ${n}`).join(", ")}) :\n${items.map((c) => `${c.code} [${LEVEL_LABEL[c.level]}] ${c.text}`).join("\n")}\n\nQUESTIONS :\n${part.map((u) => `${u.n}. ${u.text}`).join("\n")}` },
     ], { maxTokens: 3000, temperature: 0.1, timeoutMs: 90000 }).catch((e) => { throw new FicheLinkError(`The AI couldn't answer right now (${String((e as Error)?.message || e).slice(0, 100)}). Try again in a minute.`); });
     for (const l of Array.isArray(data?.links) ? data.links : []) {
       const n = Number(l?.n);
       if (!part.some((u) => u.n === n)) continue;
-      out[n] = cleanConcepts(s, l?.concepts).filter((c) => c.startsWith(`S${sprint}.`)).slice(0, 3);
+      out[n] = cleanConcepts(s, l?.concepts).filter(ok).slice(0, 3);
     }
   }
   return out;
@@ -116,7 +123,8 @@ export async function linkFiche(env: Env, g: GuildRow, b: { kind?: unknown; id?:
   if (!sprint) throw new FicheLinkError("Which sprint of the Fiche is it for? Pick it (its week isn't in the Fiche).");
   if (!u.units.length) throw new FicheLinkError(kind === "oral" ? "No oral question in this brief's debriefs." : "No question in it.");
   let links: Record<number, string[]>;
-  if (b.apply && b.links && typeof b.links === "object") links = Object.fromEntries(Object.entries(b.links as Record<string, unknown>).map(([n, v]) => [Number(n), cleanConcepts(s, v).filter((c) => c.startsWith(`S${sprint}.`)).slice(0, 3)]));
+  const sps = sprintsUpTo(s, sprint);
+  if (b.apply && b.links && typeof b.links === "object") links = Object.fromEntries(Object.entries(b.links as Record<string, unknown>).map(([n, v]) => [Number(n), cleanConcepts(s, v).filter((c) => sps.some((k) => c.startsWith(`S${k}.`))).slice(0, 3)]));
   else {
     if (!(await aiBudgetOk(env, 1))) throw new FicheLinkError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI, or try again tomorrow.");
     await aiBudgetUse(env, 1);
@@ -127,7 +135,7 @@ export async function linkFiche(env: Env, g: GuildRow, b: { kind?: unknown; id?:
   for (const v of Object.values(links)) for (const c of v) count[c] = (count[c] || 0) + 1;
   return { kind, id: Number(b.id), title: u.title, sprint, applied: !!b.apply,
     units: u.units.map((x) => ({ n: x.n, label: x.label, text: x.text.slice(0, 200), before: x.before, after: links[x.n] ?? [] })),
-    items: askedConcepts(s, sprint).map((c) => ({ code: c.code, level: c.level, text: c.text, n: count[c.code] || 0 })) };
+    items: sps.flatMap((n) => askedConcepts(s, n)).map((c) => ({ code: c.code, level: c.level, text: c.text, n: count[c.code] || 0 })) };
 }
 
 /** The old evaluations of the class not linked to the Fiche's items yet (each kind, newest first). */

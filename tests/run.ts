@@ -8007,8 +8007,8 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
   const oid = oldA.data.assessment.id;
   check((await api("GET", `/api/concepts/old?g=${G}`)).data.items.some((x: any) => x.kind === "assessment" && x.id === oid), "Settings: the old evaluations not linked to the Fiche yet, listed");
   const lk = await api("POST", "/api/concepts/link", { g: G, kind: "assessment", id: oid, sprint: 2 });
-  check(lk.status === 200 && lk.data.units.length === 3 && lk.data.units[0].after.join() === "S2.M1" && lk.data.units[2].after.length === 0 && !lk.data.applied
-    && !JSON.stringify(q1("SELECT questions FROM assessments WHERE id = ?", oid).questions).includes("S2.M"), "the AI's links shown first (an unknown code dropped, a question off the Fiche: none); nothing saved yet");
+  check(lk.status === 200 && lk.data.units.length === 3 && lk.data.units[0].after.join() === "S1.M1" && lk.data.items.some((c: any) => c.code.startsWith("S1.")) && !lk.data.items.some((c: any) => c.code.startsWith("S3.")) && lk.data.units[2].after.length === 0 && !lk.data.applied
+    && !JSON.stringify(q1("SELECT questions FROM assessments WHERE id = ?", oid).questions).includes("S2.M"), "the AI's links shown first, the sprint's items and the ones before (a review counts for Sprint 1 too); an unknown code dropped, a question off the Fiche: none; nothing saved yet");
   const lk2 = await api("POST", "/api/concepts/link", { g: G, kind: "assessment", id: oid, sprint: 2, apply: true, links: { 1: ["S2.M1"], 2: ["S2.M4", "S2.C1"], 3: [] } });
   const qsA = JSON.parse(q1("SELECT questions, settings FROM assessments WHERE id = ?", oid).questions);
   check(lk2.status === 200 && qsA[0].concepts.join() === "S2.M1" && qsA[1].concepts.join() === "S2.M4" && !qsA[2].concepts?.length && JSON.parse(q1("SELECT settings FROM assessments WHERE id = ?", oid).settings).concepts.join() === "S2.M1,S2.M4"
