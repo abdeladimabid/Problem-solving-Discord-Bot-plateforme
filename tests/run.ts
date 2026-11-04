@@ -4036,9 +4036,11 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const paras = fb.split("\n\n");
   check(paras[0] === "Sara," && !/Bonjour|Cordialement|Points forts|Axes d|Notions à revoir|Bonus\n/.test(fb), "the teacher's way: the first name, then paragraphs (no titles, no « Bonjour », no « Cordialement »)");
   check(!/\b(vous|votre|vos)\b/i.test(fb) && /\btu\b/.test(fb) && !/\*\*|#|!|(^|\n)\s*[–-] /.test(fb), "« tu », plain text, no markdown, no bullet list, no exclamation mark");
-  check(/Tu as aussi réalisé un bonus, ce qui est une très bonne initiative\./.test(fb) && !/mode sombre|animation/.test(fb), "the bonus: said, not listed");
-  const miss = paras.find((x) => /il manque encore|Il te reste/.test(x)) || "";
-  check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il te reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(fb),
+  check(!/bonus|il manque encore|Il te reste|mode sombre|page contact|fonctionnalités demandées/i.test(fb), "one learner: what they can and can't do technically, never the brief's deliverables nor the bonus");
+  const sqm = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
+  check(/Vous avez aussi réalisé un bonus, ce qui est une très bonne initiative\./.test(sqm) && !/mode sombre|animation/.test(sqm), "a squad: the bonus said, not listed");
+  const miss = sqm.split("\n\n").find((x) => /il manque encore|Il vous reste/.test(x)) || "";
+  check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il vous reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(sqm),
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
   const not = paras.find((x) => /points? à travailler/.test(x)) || "";
@@ -4051,12 +4053,12 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     && !C.themesOf(["Site en ligne sur GitHub Pages"]).some((t: string) => /Git$/.test(t)), "a grid line, a thing, something to do; GitHub Pages is the deployment, not Git");
   // the verdict follows the teacher's level
   const lvl = (l: string) => C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: { ...rec, level: { lvl: l } } }));
-  check(/^Sara,\n\nExcellent travail\./.test(lvl("excellent")) && /globalement bien réalisé/.test(lvl("bon")) && /correct dans l’ensemble/.test(lvl("moyen")) && /encore fragile/.test(lvl("faible")) && /loin de ce qui est attendu/.test(lvl("critique"))
-    && !/bon travail|excellent/i.test(lvl("faible")) && !/excellent/i.test(lvl("moyen")) && /Sara, il faut/.test(lvl("faible")), "the verdict and the closing follow the teacher's level (never « bon travail » for a weak one)");
+  check(/^Sara,\n\nExcellent travail[ .:]/.test(lvl("excellent")) && /globalement bien réalisé/.test(lvl("bon")) && /correct dans l’ensemble/.test(lvl("moyen")) && /encore fragile/.test(lvl("faible")) && /loin de ce qui est attendu/.test(lvl("critique"))
+    && !/bon travail|excellent/i.test(lvl("faible")) && !/excellent/i.test(lvl("moyen")) && /Sara, (il faut|en reprenant)/.test(lvl("faible")), "the verdict and the closing follow the teacher's level (never « bon travail » for a weak one)");
   // everything validated, nothing said in the one-to-one: a short comment, nothing made up
   const good: any = { ...rec, result: { exigences: ex.filter((e) => e.statut === "fait" && e.type !== "bonus"), competences: [{ code: "C3", avis: "validable" }] }, oral: [], remarks: null, final: {}, level: { lvl: "excellent" } };
   const fg = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: good }));
-  check(/^Sara,\n\nExcellent travail\. Tu as réalisé l’ensemble des fonctionnalités demandées/.test(fg) && !/bonus|manque|revoir|claire/i.test(fg) && /Continue comme ça\.$/.test(fg) && C.wordCount(fg) < 60,
+  check(/^Sara,\n\nExcellent travail : tu as une très bonne compréhension des notions de ce brief/.test(fg) && !/bonus|manque|revoir|claire/i.test(fg) && /Continue comme ça\.$/.test(fg) && C.wordCount(fg) < 60,
     `everything validated: short, nothing made up (${C.wordCount(fg)} words)`);
   // a squad: everyone, « vous »; a member's own note
   const sqc = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
@@ -4065,17 +4067,17 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(mc.startsWith("Omar,") && mc.toLowerCase().includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
-  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("BONUS RÉALISÉS : oui (1)") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée. Tu as aussi réalisé un bonus, ce qui est une bonne initiative.\n\nIl manque encore la page contact avec son formulaire, l’adaptation aux écrans de 768 px et 1024 px et la planification dans le README.\n\nLes points à travailler en priorité :\n1. CSS : la différence entre margin et padding, la base de tout espacement. Dessine une boîte et observe-la dans l’inspecteur.\n2. HTML : le rôle de la balise <main>. Reprends une de tes pages et explique le rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && !pr.includes("BONUS") && pr.includes("INDIVIDUEL, TECHNIQUE") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nLes points à travailler en priorité :\n1. CSS : la différence entre margin et padding, la base de tout espacement. Dessine une boîte et observe-la dans l’inspecteur.\n2. HTML : le rôle de la balise <main>. Reprends une de tes pages et explique le rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
   check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: "Points forts\n\n" + body }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
-    && C.aiCommentText({ ...lvD, bonus: [] }, { commentaire: body }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
+    && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Tu as aussi réalisé un bonus.") }) === null && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Il manque encore la page contact.") }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
     "an AI comment that says « vous », has titles or bullets, invents a bonus, praises above the level, uses markdown or greets is refused (the template is used)");
   {
     // a notion that is neither in the brief nor in the assessment (« fetch et async/await » for an HTML/CSS brief) is refused
-    const extra = body.replace("Tu as aussi réalisé un bonus", "Tu maîtrises aussi les appels d’API avec fetch et async/await. Tu as aussi réalisé un bonus");
+    const extra = body.replace("maîtrisée.", "maîtrisée. Tu maîtrises aussi les appels d’API avec fetch et async/await.");
     check(C.outsideNotions(lvD, extra).length > 0 && C.aiCommentText(lvD, { commentaire: extra }) === null && C.outsideNotions(lvD, body).length === 0,
       `a comment about a notion outside the brief and the assessment is refused (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
     const withApi = { ...lvD, scope: [...lvD.scope, ...C.outsideNotions(lvD, extra)] };
@@ -4111,13 +4113,24 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
     check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
   }
+  {
+    // one learner, a Laravel brief: technical only (what they master, what blocks them), the general notions said in PHP
+    const rl: any = { first: "Salmane", brief: "Blog Laravel", checks: [], result: { exigences: [{ type: "story", texte: "En tant que visiteur, je vais voir les articles", statut: "absent" }, { type: "bonus", texte: "Mode sombre", statut: "fait" }], competences: [] },
+      oral: [{ q: "Comment passer une variable du contrôleur à la vue ?", notion: "passage de données à la vue", a: "return view('page', compact('x'))" }, { q: "Composer ou Artisan ?", notion: "Composer et Artisan", a: "Composer gère les dépendances, Artisan est la CLI." }],
+      final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
+      assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
+    const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Laravel : les relations Eloquent, écrire une migration, passage de données à la vue et composer et Artisan\./.test(tl) && /\n\d\. PHP : les fonctions\./.test(tl)
+      && !/JavaScript|bonus|il manque|articles|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
+      `one learner: what they master, then what blocks them by subject (Laravel, PHP), never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
+  }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
   const bid = mk.data.brief.id, who = `u:${U.carol.id}`;
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify({ ...rec, at: Date.now(), result: { ...rec.result, feedback: "" } }), clock.now());
   const w = await api("POST", `/api/briefs/${bid}/review/commentai`, { g: G, who, states: {} });
   const wf = w.data.review?.result?.feedback || "";
-  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Carol,\n\nTon projet est bien structuré") && wf.includes("des bonus") && wf.includes("Continue sur cette lancée, Carol,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
+  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Carol,\n\nTon projet est bien structuré") && !wf.includes("bonus") && wf.includes("Continue sur cette lancée, Carol,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
   check(!ai.users[ai.users.length - 1].includes("Sara") && !/commits|branches/i.test(ai.users[ai.users.length - 1]), "…without the name, nor the automatic checks");
   // the comment greets the student by the name the teacher gave them (Students page), not the one from the analysis
   run1("UPDATE players SET name = 'Karima Benali', name_lock = 1 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
@@ -4137,7 +4150,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const of = one.data.review?.result?.feedback || "";
   check(one.status === 200 && JSON.stringify(one.data.states.oral) === "[true,true]" && one.data.review.remarks.oralSet === 1 && ai.users[ai.users.length - 1].includes("QUESTIONS ORALES :\n1. À quoi sert alt ?") && ai.prompts[ai.prompts.length - 1].includes("au tutoiement"),
     "one-to-one: the oral questions it says were answered are switched on");
-  check(of.includes("Lors de notre échange, tu as répondu correctement à toutes les questions de l’échange.") && !/pas encore claires?/.test(of) && !/\b(vous|votre)\b/i.test(of),
+  check(of.includes("Tu as répondu correctement à toutes les questions de l’échange.") && !/pas encore claires?/.test(of) && !/\b(vous|votre)\b/i.test(of),
     "…what went well goes in the comment (« tu »), nothing left to review");
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
   run1("DELETE FROM briefs WHERE id = ?", bid);
@@ -6335,8 +6348,8 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     const R = (await getReview(env, id, who))!.rec;
     const mA = R.contrib.find((x: any) => x.gid === A), dA = memberCommentData(mA, R, R.members[A]);
     const pA = aiCommentPrompt(dA);
-    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n- /.test(pA)
-      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Tu maîtrises déjà/.test(commentText(dA)),
+    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL MAÎTRISE :\n- /.test(pA)
+      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Tu maîtrises (déjà|notamment)/.test(commentText(dA)),
       `a member's comment: what goes well comes from their assessment (what they mastered, the grader's comment), never the project's features (${dA.mode} ${JSON.stringify(dA.assess)})`);
     const dS = commentData({ first: R.squad.name, group: R.squad.name, project: R.brief, rec: R }), pS = aiCommentPrompt(dS);
     check(dS.mode === "group" && !dS.assess && /TYPE DE COMMENTAIRE : ÉQUIPE/.test(pS) && /CE QUI EST RÉUSSI DANS LE PROJET|CE QUI EST À AMÉLIORER DANS LE PROJET/.test(pS) && /CONTRIBUTION DE CHAQUE MEMBRE :?[\s\S]*commits/.test(pS) && !/MAÎTRISÉ À L’ÉVALUATION/.test(pS),
