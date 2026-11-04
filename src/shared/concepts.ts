@@ -301,7 +301,8 @@ export async function suggestScope(env: Env, g: GuildRow, b: { brief_id?: unknow
     sprint: fiche, programmeSprint: sprint, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: MIN_QUESTIONS, classLevels: CLASS_LEVELS,
     items: items.map((c) => ({ code: c.code, level: c.level, text: c.text, caps: c.caps, capTitles: c.capTitles })),
     caps: sp ? sp.caps.map((c) => ({ code: codeOf(sp.n, c.n), n: c.n, title: c.title })) : [],
-    scope: fiche ? scopeFromText(s, fiche, text, Math.max(1, Math.min(60, Number(b.limit) || 12))) : [],
+    // an assessment checks EVERY item of Moyen and Bon; a mise en situation (10 situations / QCM: `limit`) the ones its subject points to
+    scope: !fiche ? [] : Number(b.limit) ? scopeFromText(s, fiche, text, Math.max(1, Math.min(60, Number(b.limit)))) : items.filter((c) => CLASS_LEVELS.includes(c.level)).map((c) => c.code),
   };
 }
 /**

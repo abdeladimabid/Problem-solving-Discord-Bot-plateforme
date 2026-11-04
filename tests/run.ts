@@ -7913,8 +7913,8 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
   V = await api("PUT", "/api/settings/concepts", { g: G, link: { key: "S3.critique.2", caps: [1, 2] } });
   check(V.data.sprints.find((x: any) => x.n === 3).levels.critique[1].caps.join() === "1,2", "a level item linked by hand");
   const sug = await api("GET", `/api/concepts/suggest?g=${G}&week=3&text=${encodeURIComponent("événements, délégation, formulaires et regex")}`);
-  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.items.length === 37 && !sug.data.items.some((c: any) => c.level === "critique") && !sug.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => /^S2\.[CFMBE]\d+$/.test(c)) && sug.data.scope.includes("S2.B4") && sug.data.scope.some((c: string) => c.startsWith("S2.M")),
-    `an evaluation's items: its week's sprint, the ones its words point to, by level (${sug.data.scope.join(", ")})`);
+  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.items.length === 37 && !sug.data.items.some((c: any) => c.level === "critique") && !sug.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => /^S2\.[CFMBE]\d+$/.test(c)) && sug.data.scope.length === sug.data.items.filter((c: any) => c.level === "moyen" || c.level === "bon").length && sug.data.scope.every((c: string) => /^S2\.[MB]\d+$/.test(c)) && (await api("GET", `/api/concepts/suggest?g=${G}&week=3&limit=6`)).data.scope.length <= 6,
+    `an assessment's items: its week's sprint, EVERY Moyen and Bon item ticked (a mise: the 6 its subject points to) (${sug.data.scope.length})`);
 
   // ---- assessments: 5 questions per capacity, the prompts for Claude, the import
   ai.gen = "plan";

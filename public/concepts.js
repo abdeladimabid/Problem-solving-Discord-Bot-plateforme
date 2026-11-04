@@ -121,7 +121,11 @@ async function conceptsPicker(box, q = {}, picked = null, o = {}) {
   const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)]));
   let r;
   try { r = await api(`/concepts/suggest?${qs}`); } catch (e) { box.innerHTML = `<p class="small muted">${esc(e.message)}</p>`; return; }
-  const on = new Set(picked && picked.length ? picked : r.scope);
+  // the class is checked on Moyen and Bon only: a Faible or Excellent item saved before isn't ticked (it's for a debrief)
+  const CL0 = r.classLevels || ["moyen", "bon"];
+  const lvOf = (c) => ({ C: "critique", F: "faible", M: "moyen", B: "bon", E: "excellent" })[(String(c).match(/^S\d+\.([CFMBE])/) || [])[1]];
+  const kept = (picked || []).filter((c) => CL0.includes(lvOf(c)));
+  const on = new Set(kept.length ? kept : r.scope);
   if (!r.sprint) {
     box.innerHTML = `<div class="cn-pickbox"><b>📐 Fiche niveaux</b> <span class="small muted">· ${r.programmeSprint ? `Sprint ${r.programmeSprint} isn't in the Fiche yet` : "no sprint found"}: add it in Settings → Fiche niveaux (its items can't be checked before).</span>
       ${r.sprints.length ? `<label class="small">Or use the sprint <select data-cnsp><option value="">—</option>${r.sprints.map((s) => `<option value="${s.n}">Sprint ${s.n} · ${esc(s.title)}</option>`).join("")}</select></label>` : ""}</div>`;
