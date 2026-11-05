@@ -247,6 +247,17 @@ export const COMMANDS: any[] = [
         ],
       },
       { type: SUB, name: "mine", description: "Your activities and their subject", description_localizations: fr("Tes activités et leur sujet") },
+      {
+        type: SUB, name: "propose", description: "Propose a veille or a live coding (the teachers decide)", description_localizations: fr("Proposer une veille ou un live coding (les formateurs décident)"),
+        options: [
+          {
+            type: STRING, name: "kind", description: "A veille or a live coding", description_localizations: fr("Une veille ou un live coding"), required: true,
+            choices: [{ name: "Veille", value: "veille" }, { name: "Live coding", value: "live" }],
+          },
+          { type: STRING, name: "subject", description: "The subject, e.g. CSS container queries", description_localizations: fr("Le sujet, ex. les container queries en CSS"), required: true, min_length: 4, max_length: 120 },
+          { type: STRING, name: "details", description: "What you want to present, and why", description_localizations: fr("Ce que tu veux présenter, et pourquoi"), max_length: 1000 },
+        ],
+      },
     ],
   },
   { name: "play", description: "Join the class game on the TV (your own link)", description_localizations: fr("Rejoindre le jeu de classe sur la TV (ton lien personnel)") },

@@ -5926,6 +5926,45 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(pg.status === 200, "student page still fine");
 }
 
+section("💡 Proposals: students propose a veille or a live coding, every teacher sees them, one plans it on a free day (open to all) or turns it down");
+{
+  const alice = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name as string;
+  run1("DELETE FROM activity_proposals");
+  await slash(U.alice, "activity", { kind: "veille", subject: "ab" }, "propose");
+  check(/4 characters/.test(JSON.stringify(lastPatch())) && !q1("SELECT 1 AS x FROM activity_proposals"), "a subject too short: refused, nothing saved");
+  await slash(U.alice, "activity", { kind: "veille", subject: "Les container queries en CSS", details: "Montrer comment une carte s'adapte à son conteneur, pas à l'écran." }, "propose");
+  const p1 = q1("SELECT * FROM activity_proposals WHERE by = ? ORDER BY id DESC", U.alice.id);
+  check(/Proposal sent|Proposition envoyée/.test(JSON.stringify(lastPatch())) && p1?.kind === "veille" && p1.status === "pending" && p1.guild_id === G, "/activity propose: saved as waiting, the student told what happens next");
+  await slash(U.alice, "activity", { kind: "live", subject: "Un mini jeu du pendu en JS" }, "propose");
+  const p2 = q1("SELECT * FROM activity_proposals WHERE by = ? AND kind = 'live'", U.alice.id);
+  check(/My proposals|Mes propositions/.test(JSON.stringify(await slash(U.alice, "activity", {}, "mine")) + JSON.stringify(lastPatch())), "/activity mine: the student's proposals and where they are");
+  const pills = await api("GET", `/api/pills?g=${G}`);
+  check(pills.data.props === 2, `the menu counts the proposals waiting (${pills.data.props})`);
+  const view = await api("GET", `/api/activities/proposals?g=${G}`);
+  const it = view.data.items?.find((x: any) => x.id === p1.id);
+  check(view.status === 200 && it?.name === alice && it.mine && it.details?.includes("conteneur"), "every teacher sees the proposals, with who proposed and from which class");
+  const free = view.data.free?.veille || [];
+  check(Array.isArray(free) && free.length > 0 && free.every((d: string) => d > new Date().toISOString().slice(0, 10)), `…and the free veille days of the next weeks (${free.slice(0, 3).join(", ")})`);
+  check((await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: "2020-01-06", ai: false })).status === 400, "planning on a day that isn't free: refused");
+  const dm0 = discordCalls.length;
+  const plan = await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: free[0], ai: false });
+  const act = q1("SELECT * FROM activities WHERE id = ?", plan.data.activity);
+  const after = q1("SELECT status, plans FROM activity_proposals WHERE id = ?", p1.id);
+  check(plan.status === 200 && act?.day === free[0] && act.kind === "veille" && act.title === "Les container queries en CSS" && act.md.includes("conteneur") && after.status === "planned" && JSON.parse(after.plans)[0].guild === G,
+    `planned: the activity created on that day from the proposal (${plan.data.error ?? act?.day})`);
+  check(plan.data.shared === true && discordCalls.slice(dm0).some((c) => c.path === "/channels/555000111/messages" && JSON.stringify(c.body).includes("container queries")), "…shared in the activities channel: open to every student");
+  check(discordCalls.slice(dm0).some((c) => c.path === `/channels/dm-${U.alice.id}/messages` && /planned|planifiée/.test(JSON.stringify(c.body))), "…the student told by DM");
+  check(text(await slash(U.bob, "activity", {}, "list")).includes("container queries"), "…another student sees it in /activity list (open to all)");
+  check((await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: free[1] ?? free[0], ai: false })).status === 400, "…planned twice in the same class: refused");
+  check((await api("POST", `/api/activities/proposals/${p1.id}/deny?g=${G}`, { note: "x" })).status === 400, "…a planned proposal can't be turned down any more");
+  const dm1 = discordCalls.length;
+  const deny = await api("POST", `/api/activities/proposals/${p2.id}/deny?g=${G}`, { note: "Déjà vu ce mois-ci, repropose-le au prochain sprint." });
+  check(deny.status === 200 && q1("SELECT status, note FROM activity_proposals WHERE id = ?", p2.id).status === "denied"
+    && discordCalls.slice(dm1).some((c) => c.path === `/channels/dm-${U.alice.id}/messages` && JSON.stringify(c.body).includes("prochain sprint")), "turned down with a word: the student gets it by DM");
+  check((await api("GET", `/api/pills?g=${G}`)).data.props === 0, "…nothing waiting any more");
+  run1("DELETE FROM activities WHERE id = ?", plan.data.activity);
+}
+
 section("assessments with Claude: a quiz imported from JSON, the papers exported anonymous for grading, Claude's grading imported as the teacher's");
 {
   const CJ = await import("../src/shared/assessclaude.ts");

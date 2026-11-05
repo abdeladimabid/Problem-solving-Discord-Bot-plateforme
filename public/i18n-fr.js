@@ -2,6 +2,15 @@
 // {n} = un nombre, {s} = un texte (un nom, une date…), remplis dans le même ordre.
 window.CB_FR = {
 "#arena (automatic)": "#arena (automatique)",
+"Propositions": "Propositions",
+"Proposals from students waiting for a teacher": "Propositions d’apprenants en attente d’un formateur",
+"Decided": "Traitées",
+"📅 Plan in my class": "📅 Planifier dans ma classe",
+"Turn down": "Refuser",
+"Plan it": "Planifier",
+"your class": "ta classe",
+"this class": "cette classe",
+"Turned down: the student is told": "Refusée : l’apprenant est prévenu",
 "Larger display": "Affichage plus grand",
 "Smaller display": "Affichage plus petit",
 "#{n} and #{n} of the season leaderboard": "#{n} et #{n} du classement de la saison",

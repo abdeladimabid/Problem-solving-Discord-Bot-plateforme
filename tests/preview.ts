@@ -460,6 +460,13 @@ env.ASSETS = {
     JSON.stringify([sq("Unicode", [0, 1, 2, 3]), sq("SegFault", [4, 5, 6]), sq("Leaders", [7, 8, 9, 10]), sq("PixelForce", [11, 12, 13])]), now - 30 * DAY, now - 30 * DAY);
 }
 
+// ---------------------------------------------------------- proposals: two students propose a veille and a live coding
+{
+  const ins = db.prepare("INSERT INTO activity_proposals (guild_id, kind, title, details, by, created_at) VALUES (?, ?, ?, ?, ?, ?)");
+  ins.run(G, "veille", "Les container queries en CSS", "Montrer comment une carte s'adapte à la taille de son conteneur, pas à celle de l'écran, avec 2 exemples.", "100", now - 2 * 3600);
+  ins.run(G, "live", "Un mini jeu du pendu en JavaScript", "Coder le pendu en 45 min : le tableau des lettres, les événements du clavier, l'affichage du mot.", "101", now - 26 * 3600);
+}
+
 // ---------------------------------------------------------- VS Code tracking: two weeks of coding time
 // computed by the real code from generated heartbeats; a squad brief; keys printed for `npm run vscode:simulate`
 const vscKeys: string[] = [];
