@@ -8173,7 +8173,7 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
 section("🔌 the Claude connector (MCP): reads the classes live, writes drafts only");
 {
   const mk = await api("POST", "/api/mcp-keys", { g: G, label: "Mon laptop" });
-  check(mk.status === 200 && /^https:\/\/[^/]+\/mcp\/cbk_[\w-]{40,}$/.test(mk.data.url) && mk.data.keys.length === 1 && !JSON.stringify(mk.data.keys).includes("cbk_"), "a key: its URL shown once, only its hash kept");
+  check(mk.status === 200 && /^https:\/\/dash\.example\.workers\.dev\/mcp\/cbk_[\w-]{40,}$/.test(mk.data.url) && mk.data.keys.length === 1 && !JSON.stringify(mk.data.keys).includes("cbk_"), "a key: its URL shown once, only its hash kept");
   const path = new URL(mk.data.url).pathname;
   const mcp = async (body: any, p = path) => {
     const ctx = makeCtx();

@@ -38,7 +38,8 @@ export async function createMcpKey(env: Env, origin: string, label: unknown, sco
   const key = newKey();
   const name = String(label ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || "Claude";
   await run(env, "INSERT INTO mcp_keys (label, hash, created_at, uses, scope) VALUES (?, ?, ?, 0, ?)", name, await sha(key), now(), scope === "full" ? "full" : "drafts");
-  const base = (env.PUBLIC_URL?.replace(/\/$/, "") || origin).replace(/^http:/, "https:");
+  // the dashboard's own address (where /mcp/ answers), never PUBLIC_URL: that one is the bot's (the learners' links)
+  const base = origin.replace(/^http:/, "https:");
   return { url: `${base}/mcp/${key}`, ...(await mcpKeys(env)) };
 }
 export async function revokeMcpKey(env: Env, id: number) {
