@@ -29,7 +29,8 @@ export class MiseError extends Error { status: number; constructor(msg: string, 
 
 export interface MiseRow { id: number; guild_id: string; title: string; week: number | null; sprint: number | null; comps: string | null; target: string | null; settings: string | null; content: string; status: string; starts_at: number | null; ends_at: number | null; created_at: number; opened_at: number | null; closed_at: number | null }
 export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; discord_id: string; status: string; answers: string | null; spent: string | null; checks: string | null; ai: string | null; logs: string | null; events: string | null;
-  cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null }
+  cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null;
+  minutes?: number | null; ends_at?: number | null }
 // testers: staff who take it to try it (never "the class") · lockScreen: in full screen, leaving it stops the session until
 // the teacher lets them back (like an assessment) · brief: the brief it was written for
 // oneDevice: the browser that signed in with Discord is the paper's device (another one stops it) · netAlerts: the
@@ -431,16 +432,28 @@ export async function readTakerToken(env: Env, token: string): Promise<number | 
   return (await signText(env, `mes:${m[1]}.${m[2]}`)) === m[3] ? Number(m[1]) : null;
 }
 const linkExp = (m: Pick<MiseRow, "ends_at">) => (m.ends_at ? m.ends_at + 2 * 86400 : now() + 60 * 86400);
+/**
+ * A learner given it later (absent when it was launched): their own time, counted from when they open it, and their own
+ * end; the session stays closed for the others. Their paper follows that window instead of the session's.
+ */
+const isLate = (t: Pick<MiseTakerRow, "minutes">) => !!t.minutes;
+function forTaker(m: MiseRow, t: Pick<MiseTakerRow, "minutes" | "ends_at">): MiseRow {
+  if (!isLate(t)) return m;
+  return { ...m, status: "live", starts_at: null, ends_at: t.ends_at ?? null };
+}
+const LATE_DAYS = 14;   // a late learner's link: valid two weeks (they open it when they're back)
 export const miseUrl = (env: Env, token: string) => `${(env.PUBLIC_URL || "").replace(/\/$/, "")}/mes/${token}`;
 
-async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: string }) {
-  const url = miseUrl(env, await takerToken(env, tk.id, linkExp(m)));
+async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: string; minutes?: number | null }) {
+  const late = !!tk.minutes;
+  const url = miseUrl(env, await takerToken(env, tk.id, late ? now() + LATE_DAYS * 86400 : linkExp(m)));
   const c = contentOf(m), st = settingsOf(m);
-  const when = m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
+  const when = late ? `Ton temps (${tk.minutes} minutes) commence quand tu l’ouvres : ouvre-la quand ton formateur te le dit.`
+    : m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
   return dm(env, tk.discord_id, {
     embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
       description: [`${c.situations.length} mises en situation avec du code et ${c.qcm.length} QCM, dans ton navigateur.`, when,
-        m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
+        late ? "" : m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
     components: [row(linkBtn("Ouvrir ma mise en situation", url, "🧪"))],
   });
 }
@@ -483,18 +496,43 @@ export async function addTakers(env: Env, g: GuildRow, id: number, students: str
   if (sendDm && m.status !== "draft") for (const tk of takers.slice(0, 60)) if (tk.status !== "submitted" && (await sendLink(env, m, tk))) sent++;
   return { invited: takers.length, sent };
 }
+/**
+ * Learners who were absent: they get it now, with their own time (counted from when they open it), the session staying
+ * closed for the others. Only learners who don't have it yet (a paper already there: reset it first).
+ */
+export async function addLate(env: Env, g: GuildRow, id: number, students: string[], minutes: unknown, sendDm = true) {
+  const m = await getMise(env, g, id);
+  if (m.status === "draft") throw new MiseError("Launch it first.");
+  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  const st = settingsOf(m);
+  // their time: asked, else the session's (its minutes, or how long it was open), else an hour
+  const was = m.ends_at && (m.starts_at ?? m.opened_at) ? Math.round((m.ends_at - (m.starts_at ?? m.opened_at)!) / 60) : 0;
+  const min = Math.max(5, Math.min(600, Math.round(Number(minutes)) || st.minutes || was || 60));
+  const who = ids(students);
+  if (!who.length) throw new MiseError("Choose at least one learner.");
+  const valid = new Set([...(await classIds(env, g)), ...(await staffPlayers(env, g)).map((x) => x.discord_id)]);
+  const has = new Set((await all<{ discord_id: string }>(env, "SELECT discord_id FROM mise_takers WHERE mise_id = ?", id)).map((x) => x.discord_id));
+  const keep = who.filter((x) => valid.has(x) && !has.has(x));
+  if (!keep.length) throw new MiseError("These learners already have it (or aren't in the class).");
+  await env.DB.batch(keep.map((uid) => env.DB.prepare("INSERT OR IGNORE INTO mise_takers (mise_id, guild_id, discord_id, invited_at, minutes) VALUES (?, ?, ?, ?, ?)").bind(id, g.id, uid, now(), min)));
+  const takers = await all<{ id: number; discord_id: string; minutes: number }>(env, `SELECT id, discord_id, minutes FROM mise_takers WHERE mise_id = ? AND discord_id IN (${keep.map(() => "?").join(",")})`, id, ...keep);
+  let sent = 0;
+  if (sendDm) for (const tk of takers.slice(0, 60)) if (await sendLink(env, m, tk)) sent++;
+  return { invited: takers.length, sent, minutes: min };
+}
 export async function resend(env: Env, g: GuildRow, id: number, takerId: number) {
   const m = await getMise(env, g, id);
-  const tk = await one<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  const tk = await one<{ id: number; discord_id: string; minutes: number | null; ends_at: number | null }>(env, "SELECT id, discord_id, minutes, ends_at FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
   if (!tk) throw new MiseError("Unknown learner.", 404);
-  if (statusOf(m) === "closed") throw new MiseError("This mise en situation is closed.");
+  if (statusOf(forTaker(m, tk)) === "closed") throw new MiseError("This mise en situation is closed.");
   return { sent: (await sendLink(env, m, tk)) ? 1 : 0 };
 }
 /** The links, to copy when a DM didn't arrive. */
 export async function links(env: Env, g: GuildRow, id: number) {
   const m = await getMise(env, g, id);
   const takers = await all<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE mise_id = ?", id);
-  return Object.fromEntries(await Promise.all(takers.map(async (t) => [t.discord_id, miseUrl(env, await takerToken(env, t.id, linkExp(m)))] as [string, string])));
+  const late = new Set((await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND minutes IS NOT NULL", id)).map((x) => x.id));
+  return Object.fromEntries(await Promise.all(takers.map(async (t) => [t.discord_id, miseUrl(env, await takerToken(env, t.id, late.has(t.id) ? now() + LATE_DAYS * 86400 : linkExp(m)))] as [string, string])));
 }
 /** More time for everyone (a session without an end gets one only when asked). */
 export async function extend(env: Env, g: GuildRow, id: number, minutes: number, cont: unknown = null) {
@@ -556,7 +594,7 @@ export async function resetTaker(env: Env, g: GuildRow, id: number, takerId: num
 export async function closeMise(env: Env, g: GuildRow, id: number) {
   await getMise(env, g, id);
   await run(env, "UPDATE mises SET status = 'closed', closed_at = ?, ends_at = COALESCE(MIN(ends_at, ?), ?) WHERE id = ?", now(), now(), now(), id);
-  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", id);
+  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume') AND minutes IS NULL", id);
   for (const t of open) await submitTaker(env, t.id, null, true);
 }
 export async function removeTaker(env: Env, g: GuildRow, id: number, takerId: number) {
@@ -586,8 +624,9 @@ export async function learnerInfo(env: Env, takerId: number) {
   if (!x) return null;
   const { t, m } = x, c = contentOf(m), st = settingsOf(m);
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", t.guild_id, t.discord_id);
-  return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(m), taker: t.status, name: p?.name ?? null,
-    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: m.starts_at, endsAt: m.ends_at, now: now(), noPaste: st.noPaste,
+  const mt = forTaker(m, t);
+  return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(mt), taker: t.status, name: p?.name ?? null,
+    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: mt.starts_at, endsAt: mt.ends_at, minutes: t.minutes ?? null, now: now(), noPaste: st.noPaste,
     lockScreen: st.lockScreen, lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null };
 }
 /** Why their session stopped (the last "lock" event): fullscreen, hidden, blur, reload. */
@@ -596,6 +635,8 @@ const lockWhy = (t: Pick<MiseTakerRow, "events">) => String(parse<MiseEvent[]>(t
 async function writable(env: Env, takerId: number) {
   const x = await loadTaker(env, takerId);
   if (!x) throw new MiseError("unknown", 404);
+  // a late learner: their own window
+  x.m = forTaker(x.m, x.t);
   const s = statusOf(x.m);
   if (x.t.status === "submitted") throw new MiseError("submitted", 409);
   if (x.t.status === "locked" || x.t.status === "resume") throw new MiseError("locked", 409);
@@ -611,8 +652,11 @@ export async function startTaker(env: Env, takerId: number) {
   const back = await run(env, "UPDATE mise_takers SET status = 'active', last_seen = ? WHERE id = ? AND status = 'resume'", now(), takerId);
   const { t, m } = await writable(env, takerId);
   const c = contentOf(m), t0 = now();
+  let ends = m.ends_at;
   if (t.status === "invited") {
     await run(env, "UPDATE mise_takers SET status = 'active', started_at = ?, last_seen = ?, cur_item = ?, item_since = ? WHERE id = ? AND status = 'invited'", t0, t0, c.situations[0]?.id ?? "q1", t0, t.id);
+    // a late learner: their time starts now
+    if (isLate(t)) { ends = t0 + (t.minutes as number) * 60; await run(env, "UPDATE mise_takers SET ends_at = ? WHERE id = ?", ends, t.id); }
     await pushEvent(env, t.id, [t0, "start", "", 0]);
   } else if (settingsOf(m).lockScreen && !back.meta.changes) {
     // full screen rule: opening the page again (a reload, another tab or device) while working stops the session too
@@ -626,7 +670,7 @@ export async function startTaker(env: Env, takerId: number) {
     // the last automatic checks and AI categories of each situation (labels only)
     checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, (v.results ?? []).map((r) => ({ id: r.id, ok: r.ok }))])),
     ai: Object.fromEntries(Object.entries(ai).map(([k, v]) => [k, { left: Math.max(0, AI_CHECKS_PER_ITEM - v.filter((x: any) => !x.submit).length), last: (v.filter((x: any) => !x.submit).at(-1)?.categories ?? []).map((id) => ({ id, label: categoryLabel(id) })) }])),
-    endsAt: m.ends_at, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
+    endsAt: ends, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
   };
 }
 
@@ -890,6 +934,7 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
       timeSec: t.started_at ? Math.max(0, (t.submitted_at ?? t0) - t.started_at) : 0, workSec: Math.round(Object.values(spent).reduce((a, b) => a + (Number(b) || 0), 0) / 1000),
       runs: st.runs, checks: st.checks, leaves: st.leaves, awaySec: st.awaySec, away: st.away, pastes: st.pastes, pasteChars: st.pasteChars, blockedPastes: st.blockedPastes,
       lastAt: Math.max(t.last_seen ?? 0, st.lastAt ?? 0) || null, started_at: t.started_at, submitted_at: t.submitted_at,
+      late: t.minutes ? { minutes: t.minutes, endsAt: t.ends_at ?? null } : null,
       score: t.status === "submitted" ? sc.total : null, toGrade: t.status === "submitted" ? sc.toGrade : 0, items: sc.items, sent_at: t.sent_at, comment: t.comment,
     };
   });
@@ -1108,7 +1153,10 @@ export async function miseCron(env: Env) {
   const late = await all<{ id: number }>(env, "SELECT id FROM mises WHERE status = 'live' AND ends_at IS NOT NULL AND ends_at < ? LIMIT 3", now() - 60).catch(() => []);
   for (const m of late) {
     await run(env, "UPDATE mises SET status = 'closed', closed_at = ? WHERE id = ?", now(), m.id);
-    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", m.id);
+    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume') AND minutes IS NULL", m.id);
     for (const t of open) await submitTaker(env, t.id, null, true).catch((e) => console.error("mise auto submit", e));
   }
+  // learners given it later: their own time is up
+  const lateOpen = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE ends_at IS NOT NULL AND ends_at < ? AND status IN ('active', 'locked', 'resume') LIMIT 20", now() - 60).catch(() => []);
+  for (const t of lateOpen) await submitTaker(env, t.id, null, true).catch((e) => console.error("mise late auto submit", e));
 }

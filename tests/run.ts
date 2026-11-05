@@ -7552,6 +7552,26 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   check(String(rcsv.data).includes("Score %") && String(rcsv.data).includes("Bob"), "results as CSV");
   const list = await api("GET", `/api/mises?g=${G}`);
   check(list.data.items.some((m: any) => m.id === mid && m.status === "closed" && m.done === 2), "the list: status and papers handed in");
+  // a learner absent at the launch: given it later with their own time (from when they open it); closed for the others
+  const dmL = discordCalls.length;
+  const lt = await api("POST", `/api/mises/${mid}/late`, { g: G, students: [U.carol.id, U.alice.id], minutes: 20 });
+  check(lt.status === 200 && lt.data.invited === 1 && lt.data.minutes === 20 && lt.data.mise.status === "closed" && lt.data.takers.find((t: any) => t.discord_id === U.carol.id)?.late?.minutes === 20
+    && discordCalls.slice(dmL).some((x) => JSON.stringify(x.body ?? {}).includes("20 minutes")), `an absent learner gets it later: their own 20 minutes, by DM; the others keep theirs (${lt.status} ${lt.data.error ?? ""})`);
+  check((await api("POST", `/api/mises/${mid}/late`, { g: G, students: [U.carol.id] })).status === 400, "…not twice");
+  const lk = (await api("GET", `/api/mises/${mid}/links?g=${G}`)).data.links;
+  const late = async (action = "", body?: any) => {
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${lk[U.carol.id].split("/mes/")[1]}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, makeCtx());
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const li = await late("info");
+  check(li.data.status === "live" && li.data.minutes === 20 && !li.data.endsAt, "…their link is open (the session is closed): their time hasn't started");
+  const ls = await late("start", {});
+  check(ls.status === 200 && Math.abs(ls.data.endsAt - (clock.now() + 1200)) <= 2 && (await late("save", { item: "q1", answer: { choice: 0 }, cur: "q1" })).status === 200, "…it starts when they open it: 20 minutes from now, and they can work");
+  check((await mes(U.bob.id, "start", {})).status === 409, "…the others' papers stay closed");
+  clock.advance(22 * 60);
+  await runCron(env);
+  check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.carol.id).status === "submitted" && q1("SELECT status FROM mises WHERE id = ?", mid).status === "closed" && (await late("save", { item: "q2", answer: { choice: 1 } })).status === 409,
+    "…their own time up: handed in by the cron, the session still closed");
   // the teacher tests it as a learner (staff: never in « the whole class »), then time is up: the cron closes it
   check(setup.data.staff.some((x: any) => x.discord_id === U.prof.id), "setup: the teacher is offered to test it themselves");
   const imp2 = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id], testers: [U.prof.id] });

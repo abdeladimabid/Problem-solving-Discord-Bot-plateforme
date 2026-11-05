@@ -4,11 +4,12 @@
 //   POST /mises/generate            the AI writes it (for a brief, or the sprint and week): the JSON, its preview and checklist (not saved)
 //   GET  /mises/:id                 the session, the live table and the class statistics (refreshed every few seconds)
 //   PUT  /mises/:id                 title, learners, options, the JSON of a draft          DELETE /mises/:id
-//   POST /mises/:id/launch|add|resend|extend|close|remove|results|unlock     GET /mises/:id/links
+//   POST /mises/:id/launch|add|late|resend|extend|close|remove|results|unlock     GET /mises/:id/links
+//   (late: learners absent at the launch get it now, with their own time counted from when they open it)
 //   GET  /mises/:id/taker/:t        one learner        PUT /mises/:id/grade|comment        GET /mises/:id/live.csv|results.csv
 import type { Ctx, Env, GuildRow } from "../shared/types.ts";
 import {
-  MiseError, addTakers, answersExport, importGrades, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
+  MiseError, addLate, addTakers, answersExport, importGrades, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
   reopenTaker, resetTaker, saveMise, sendResults, setComment, setGrade, setupView, takerDetail, unlockTakers,
 } from "../shared/misesdb.ts";
 
@@ -45,7 +46,7 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
     return csv(m[2] === "live" ? await liveCsv(env, g, id) : await resultsCsv(env, g, id), `mise-${id}-${m[2] === "live" ? "live" : "resultats"}.csv`);
   }
   if ((m = path.match(/^\/mises\/(\d+)\/taker\/(\d+)$/)) && method === "GET") return ok(await takerDetail(env, await guild(), Number(m[1]), Number(m[2])));
-  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock))?$/))) return null;
+  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|late|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock))?$/))) return null;
   const g = await guild(), id = Number(m[1]), act = m[2];
   if (!act && method === "GET") return ok(await miseView(env, g, id));
   if (!act && method === "PUT") { const r = await saveMise(env, g, id, body); return ok(r.problems.length ? r : { ...r, ...(await miseView(env, g, id)) }); }
@@ -54,6 +55,7 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
   if (method !== "POST" && method !== "PUT") return null;
   if (act === "launch") { const r = await launch(env, g, id, body); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "add") { const r = await addTakers(env, g, id, Array.isArray(body.students) ? body.students : [], body.send !== false); return ok({ ...r, ...(await miseView(env, g, id)) }); }
+  if (act === "late") { const r = await addLate(env, g, id, Array.isArray(body.students) ? body.students : [], body.minutes, body.send !== false); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "resend") return ok(await resend(env, g, id, Number(body.taker)));
   if (act === "extend") { const r = await extend(env, g, id, Number(body.minutes), body.continue ?? null); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   // delete a learner's paper (work and results), and invite them again if asked

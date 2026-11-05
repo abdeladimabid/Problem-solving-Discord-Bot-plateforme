@@ -4467,4 +4467,11 @@ window.CB_FR = {
   "Next: Summary →": "Suivant : bilan →",
   "Next: Comment →": "Suivant : commentaire →",
   "Project (GitHub)": "Projet (GitHub)",
+  "＋ Give it to absent learners": "＋ La donner aux absents",
+  "Give it to them": "La leur donner",
+  "Their time (minutes)": "Leur temps (minutes)",
+  "Send them their link by Discord DM now": "Leur envoyer leur lien en MP Discord maintenant",
+  "⏱ own time": "⏱ temps perso",
+  "Every learner of the class already has it. To give someone a new paper, reset theirs in the Live tab.": "Tous les apprenants de la classe l’ont déjà. Pour donner une nouvelle copie à quelqu’un, réinitialise la sienne dans l’onglet Live.",
+  "Learners who were absent: they get it now with their own time, the session stays closed for the others": "Les apprenants absents : ils la reçoivent maintenant avec leur propre temps, la session reste fermée pour les autres",
 };

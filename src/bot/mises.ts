@@ -279,7 +279,7 @@ function intro(info) {
     info.lockScreen ? "🖥️ <span>Elle se passe <b>en plein écran</b>.</span>" : "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",
     info.lockScreen ? "🔒 <span>Si tu quittes le plein écran, changes d’onglet ou de fenêtre, <b>ta session s’arrête</b> : seul ton formateur peut te laisser revenir. Ton travail reste enregistré.</span>" : "",
     info.noPaste ? "✋ <span>Le copier-coller est désactivé dans l’éditeur pour cette mise en situation.</span>" : ""].filter(Boolean);
-  var when = info.status === "scheduled" ? '<p class="notice">Elle commence ' + esc(fmtDate(info.startsAt)) + ' · <b id="cd"></b></p>' : info.endsAt ? '<p class="muted">À rendre avant ' + esc(fmtDate(info.endsAt)) + ".</p>" : "";
+  var when = info.status === "scheduled" ? '<p class="notice">Elle commence ' + esc(fmtDate(info.startsAt)) + ' · <b id="cd"></b></p>' : info.endsAt ? '<p class="muted">À rendre avant ' + esc(fmtDate(info.endsAt)) + ".</p>" : info.minutes ? '<p class="notice">Tu as <b>' + info.minutes + " minutes</b> : ton temps commence quand tu cliques sur Commencer.</p>" : "";
   screen('<div class="big">🧪</div><h1>' + esc(info.title) + '</h1><p class="muted">' + (info.name ? "Bonjour " + esc(info.name) + " · " : "") + esc(info.metier || "") + "</p>" + when
     + '<ul class="rules">' + rules.map(function (r) { return "<li>" + r + "</li>"; }).join("") + "</ul>"
     + (info.lockScreen && !FS_OK ? '<p class="notice">Ce navigateur ne permet pas le plein écran : ouvre ce lien sur un ordinateur, avec Chrome, Edge ou Firefox.</p>'
