@@ -6,6 +6,7 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { checkAccess } from "./access.ts";
 import { handleApi } from "./api.ts";
+import { handleMcp } from "./mcp.ts";
 import { handleAuthRoutes, hasSession } from "./password.ts";
 import { applyAppSettings } from "../shared/appsettings.ts";
 
@@ -41,6 +42,8 @@ async function versionedPage(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, ctx: Ctx): Promise<Response> {
     const url = new URL(request.url);
+    // 🤖 Claude's connector: its own key in the URL (Settings → Claude connector), not the dashboard's sign-in
+    if (url.pathname.startsWith("/mcp/")) return handleMcp(request, env, ctx);
     let auth: { email: string; mode?: string };
     const useAccess = !!(env.TEAM_DOMAIN && env.POLICY_AUD) || env.DEV_NO_AUTH === "true";
     if (!useAccess && env.ADMIN_PASSWORD) {

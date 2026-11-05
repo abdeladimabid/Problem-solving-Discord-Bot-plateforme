@@ -1471,6 +1471,27 @@ async function viewTeams() {
 // ========================================================== settings
 /** Settings → AI: the Groq key of this ClassBot (for all its classes). The key is never shown again. */
 /** Settings → AI: this class's AIs, in order. ClassBot asks the first; if it fails, the next one, and so on. */
+// 🔌 the Claude connector (src/admin/mcp.ts): a key makes the URL to add in Claude; shown once; revocable
+async function claudeSettings(box) {
+  const draw = (d, fresh) => {
+    box.innerHTML = `${d.needsMigration ? `<div class="notice warn">Update the database first (<code>npm run db:migrate</code>), then come back.</div>` : ""}
+      ${fresh ? `<div class="panel set-card" style="border-color:var(--ok, #16a34a)"><h3>✅ Your connector link</h3>
+        <p class="small">Copy it now: it is shown <b>only once</b>. Anyone with this link can read your classes, so keep it private.</p>
+        <div style="display:flex;gap:8px;align-items:center"><input id="mcp-url" readonly value="${esc(fresh)}" style="flex:1;font-family:monospace;font-size:12px"><button class="btn primary" id="mcp-copy">Copy</button></div>
+        <ol class="small" style="margin:12px 0 0;padding-left:20px;line-height:1.7"><li>In Claude (claude.ai or the Claude app): <b>Settings → Connectors → Add custom connector</b>.</li><li>Name it <b>ClassBot</b> and paste this link as its URL. Leave the OAuth fields empty.</li><li>In a new conversation, turn ClassBot on in the tools menu and ask, for example: « Fais un assessment pour DevStorm sur ce que la classe rate le plus ce sprint ».</li></ol></div>` : ""}
+      <div class="panel set-card"><h3>Links</h3>
+        ${d.keys.length ? `<table class="tbl"><thead><tr><th>Name</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody>${d.keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td><td class="small">${fmtDateTime(k.created_at)}</td><td class="small">${k.last_used ? `${fmtDateTime(k.last_used)} · ${k.uses} call${k.uses > 1 ? "s" : ""}` : "never"}</td><td style="text-align:right"><button class="btn danger small" data-mcprev="${k.id}">Revoke</button></td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted small">No link yet.</p>`}
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap"><input id="mcp-label" placeholder="Name (e.g. my laptop)" maxlength="60" style="max-width:240px"><button class="btn primary" id="mcp-new">＋ Make a connector link</button></div>
+        <p class="muted small" style="margin-bottom:0">Revoke a link and Claude can't read your classes with it anymore (at once). What Claude reads goes to Anthropic, like any conversation with Claude: learners' names and results, never e-mails or keys.</p></div>`;
+    if ($("#mcp-copy")) $("#mcp-copy").onclick = () => { navigator.clipboard.writeText($("#mcp-url").value).then(() => toast("Copied")); };
+    $("#mcp-new").onclick = (e) => busy(e.currentTarget, async () => { const r = await api("/mcp-keys", { method: "POST", body: { label: $("#mcp-label").value } }); draw(r, r.url); });
+    box.querySelectorAll("[data-mcprev]").forEach((b) => b.onclick = (e) => busy(e.currentTarget, async () => {
+      draw(await api(`/mcp-keys/${b.dataset.mcprev}`, { method: "DELETE", confirmTitle: "Revoke this link?", confirmText: "Claude stops reading your classes with it, at once.", confirmLabel: "Revoke" }));
+    }));
+  };
+  try { draw(await api("/mcp-keys")); } catch (e) { box.innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; }
+}
 async function aiSettings(root, flash = null) {
   const d = await api("/settings/ai");
   const P = d.presets;
@@ -1723,6 +1744,7 @@ async function viewSettings(arg) {
     ["programme", "🎓", "Programme & suivi", "Planning, Fiche niveaux, Suivi Formateur"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
+    ["claude", "🔌", "Claude connector", "Your classes in Claude"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
     ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
@@ -1885,6 +1907,11 @@ async function viewSettings(arg) {
       <div id="set-ai"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="claude" hidden>
+      ${head("Claude connector", "Use your classes in Claude (claude.ai): it reads them live — learners, Fiche niveaux, lacunes, briefs, debriefs, assessments, mises en situation, activities — and writes drafts for you (assessments, mises en situation, activities, plans d'action). Nothing is ever launched, assigned or sent from Claude: you review and do it here. For all your classes.")}
+      <div id="set-claude"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="library" hidden>
       ${head("Shared library", "Share the Activités (veilles, live codings, week overviews), the assessments, the live quizzes and the class games with the other teachers of your programme (for example every A1 class), even on their own ClassBot. One shared copy: when one of you generates, edits or deletes something, everyone gets it. Only your content is shared: never a student's name, answer or grade.")}
       <div id="set-library"><p class="muted">Loading…</p></div>
@@ -1927,6 +1954,7 @@ async function viewSettings(arg) {
       if (k === "programme" && typeof programmeSettings === "function") programmeSettings($("#set-programme"));
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
       if (k === "ai") aiSettings($("#set-ai"));
+      if (k === "claude") claudeSettings($("#set-claude"));
       if (k === "library") librarySettings($("#set-library"));
       if (k === "intranet") intranetSettings($("#set-intranet"));
       if (k === "gsheet" && typeof gsheetSettings === "function") gsheetSettings($("#set-gsheet"));

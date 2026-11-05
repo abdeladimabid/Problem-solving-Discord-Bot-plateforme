@@ -8170,6 +8170,52 @@ section("📐 Fiche niveaux: each level's items in every evaluation, what each l
   run1("DELETE FROM app_settings WHERE k LIKE 'concept%'");
 }
 
+section("🔌 the Claude connector (MCP): reads the classes live, writes drafts only");
+{
+  const mk = await api("POST", "/api/mcp-keys", { g: G, label: "Mon laptop" });
+  check(mk.status === 200 && /^https:\/\/[^/]+\/mcp\/cbk_[\w-]{40,}$/.test(mk.data.url) && mk.data.keys.length === 1 && !JSON.stringify(mk.data.keys).includes("cbk_"), "a key: its URL shown once, only its hash kept");
+  const path = new URL(mk.data.url).pathname;
+  const mcp = async (body: any, p = path) => {
+    const ctx = makeCtx();
+    const r = await admin.fetch(new Request("https://dash.example.workers.dev" + p, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) }), env, ctx);
+    await ctx.flush();
+    return { status: r.status, data: r.status === 202 ? null : await r.json().catch(() => null) } as any;
+  };
+  const call = async (name: string, args: any = {}) => {
+    const r = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
+    const t = r.data?.result?.content?.[0]?.text ?? "";
+    let j: any = null; try { j = JSON.parse(t); } catch { /* an error's text */ }
+    return { error: !!r.data?.result?.isError, text: t, json: j };
+  };
+  const init = await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude", version: "1" } } });
+  check(init.status === 200 && init.data.result.protocolVersion === "2025-06-18" && init.data.result.capabilities.tools && /draft/i.test(init.data.result.instructions), "initialize: the protocol, the tools, how to use them");
+  check((await mcp({ jsonrpc: "2.0", method: "notifications/initialized" })).status === 202, "…a notification: 202, nothing to answer");
+  const tl = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  const names = tl.data.result.tools.map((t: any) => t.name);
+  check(["list_classes", "class_overview", "class_diagnosis", "learner_profile", "fiche_niveaux", "debrief", "assessment_results", "mise_results", "assessment_instructions", "create_assessment", "mise_instructions", "create_mise", "create_activity", "create_action_plan"].every((n) => names.includes(n))
+    && !names.some((n: string) => /launch|send|delete|assign/.test(n)) && tl.data.result.tools.find((t: any) => t.name === "create_mise").annotations.readOnlyHint === false,
+    "tools: reading, and writing drafts (nothing that launches, sends, assigns or deletes)");
+  const lc = await call("list_classes");
+  check(!lc.error && lc.json.some((g: any) => g.id === G), "list_classes");
+  const ov = await call("class_overview", { class: G });
+  check(!ov.error && ov.json.learners.some((x: any) => x.name === "Alice") && !/token|"email"|avatar/i.test(ov.text), "class_overview: the learners, never tokens, e-mails or avatars");
+  const lp = await call("learner_profile", { class: G, learner: "alic" });
+  check(!lp.error && lp.json.learner.id === U.alice.id && "insight" in lp.json, "learner_profile: found by a part of the name");
+  check((await call("learner_profile", { class: G, learner: "personne" })).error, "…an unknown learner: said");
+  const ai = await call("assessment_instructions", { class: G });
+  check(!ai.error && typeof ai.json.prompt === "string" && ai.json.prompt.length > 500, "assessment_instructions: ClassBot's own prompt and format");
+  const n0 = (q1("SELECT COUNT(*) AS n FROM assessments WHERE guild_id = ?", G) as any).n;
+  const ca = await call("create_assessment", { class: G, json: "{\"pas\":\"un quiz\"}" });
+  check(!ca.error && ca.json.problems?.length > 0 && (q1("SELECT COUNT(*) AS n FROM assessments WHERE guild_id = ?", G) as any).n === n0, "create_assessment: a wrong JSON is refused with its problems (nothing saved)");
+  const cp = await call("create_action_plan", { class: G, learner: "Alice", title: "Revoir le DOM", message: "Courage !", steps: [{ kind: "answer", title: "Le DOM", notion: "DOM", why: "Base", prompt: "Explique querySelector." }] });
+  check(!cp.error && cp.json.saved && cp.json.steps === 1, "create_action_plan: a draft for the learner");
+  check((await call("nope")).error === false && (await mcp({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "nope" } })).data.error.code === -32602, "an unknown tool: a JSON-RPC error");
+  check((await mcp({ jsonrpc: "2.0", id: 4, method: "ping" })).data.result !== undefined, "ping");
+  check((await mcp({ jsonrpc: "2.0", id: 5, method: "tools/list" }, "/mcp/cbk_" + "x".repeat(43))).status === 401, "a wrong key: refused");
+  await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
+  check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
+}
+
 section("the assistant knows the app: its pages and how to set up");
 {
   const { APP_GUIDE } = await import("../src/shared/classchat.ts");
