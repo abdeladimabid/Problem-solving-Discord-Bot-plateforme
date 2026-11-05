@@ -6,6 +6,7 @@ import type { Env, GuildRow } from "../shared/types.ts";
 import { aiStatus } from "../shared/aikeys.ts";
 import { libCfg, syncLibrary } from "../shared/library.ts";
 import { SignupError, presentationsView, assignActivity, cancelClaim, decideClaim, dropSignups, gradeClaim, randomAssign, saveSignupCfg, setMembers, setSlot, shareActivities, signupStats, signupView } from "../shared/actsignup.ts";
+import { ProposalError, denyProposal, planProposal, proposalsView } from "../shared/actpropose.ts";
 import { ActivityError, activitiesView, deleteItem, editItem, generateItem, generateWeek, keepItem, setDay, setLiveDays } from "../shared/activities.ts";
 
 const ok = (data: unknown) => Response.json(data);
@@ -16,18 +17,24 @@ export async function activitiesApi(env: Env, path: string, method: string, body
     // the shared library: what the other classes changed comes in before the page is shown; what changes here goes out
     if (method === "GET" && (path === "/activities" || path === "/activities/presentations")) await syncLibrary(env, await guild()).catch(() => null);
     const res = await route(env, path, method, body, url, guild);
-    if (method !== "GET" && res && res.ok && !/^\/activities\/(signups|share|random|claims|stats|presentations|\d+\/(slot|assign))/.test(path)) await syncLibrary(env, await guild(), { force: false, pushOnly: true }).catch(() => null);
+    if (method !== "GET" && res && res.ok && !/^\/activities\/(proposals|signups|share|random|claims|stats|presentations|\d+\/(slot|assign))/.test(path)) await syncLibrary(env, await guild(), { force: false, pushOnly: true }).catch(() => null);
     return res;
   } catch (e) {
     // the AI's per-minute limit: the page waits that long and asks again by itself
     if (e instanceof ActivityError && e.wait) return Response.json({ error: e.message, retryIn: e.wait });
-    if (e instanceof ActivityError || e instanceof SignupError || e instanceof IntranetError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof ActivityError || e instanceof SignupError || e instanceof IntranetError || e instanceof ProposalError) return Response.json({ error: e.message }, { status: 400 });
     throw e;
   }
 }
 
 async function route(env: Env, path: string, method: string, body: any, url: URL, guild: () => Promise<GuildRow>): Promise<Response | null> {
   let m: RegExpMatchArray | null;
+  // the students' proposals (all the classes): planned on a free day of this class, or turned down
+  if (path === "/activities/proposals" && method === "GET") return ok(await proposalsView(env, await guild()));
+  if ((m = path.match(/^\/activities\/proposals\/(\d+)\/(plan|deny)$/)) && method === "POST") {
+    const g = await guild(), id = Number(m[1]);
+    return ok(m[2] === "plan" ? await planProposal(env, g, id, body) : await denyProposal(env, g, id, body.note));
+  }
   if (path === "/activities" && method === "GET") {
     const g = await guild();
     return ok({ ...(await activitiesView(env, g, String(url.searchParams.get("from") || ""), String(url.searchParams.get("to") || ""))), ai: !!(await aiStatus(env)), library: (await libCfg(env, g.id))?.name ?? null });

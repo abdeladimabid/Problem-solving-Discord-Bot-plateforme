@@ -6,7 +6,7 @@
 const NAV_GROUPS = [
   { key: "learners", icon: "👥", label: "Learners", hint: "Who's in the class: the students and their teams", items: ["#/students", "#/teams"] },
   { key: "support", icon: "🤝", label: "Support", hint: "Help the students: their requests, their questions, the ones who need a plan, interviews", items: ["#/assignments", "#/hands", "#/questions", "#/interviews"] },
-  { key: "projects", icon: "📁", label: "Projects", hint: "The work in class: briefs, sprints, daily activities, presentations", items: ["#/briefs", "#/sprints", "#/activities", "#/presentations"] },
+  { key: "projects", icon: "📁", label: "Projects", hint: "The work in class: briefs, sprints, daily activities, presentations", items: ["#/briefs", "#/sprints", "#/activities", "#/proposals", "#/presentations"] },
   { key: "eval", icon: "🎓", label: "Evaluation", hint: "How they're assessed: assessments, mises en situation, debriefs and levels, competencies, the programme", items: ["#/assessments", "#/mises-en-situation", "#/progress", "#/competencies", "#/planning"] },
   { key: "monitor", icon: "👀", label: "Monitoring", hint: "What they really do: GitHub, VS Code, integrity checks", items: ["#/github", "#/vscode", "#/integrity"] },
   { key: "practice", icon: "🧩", label: "Practice", hint: "Coding practice: challenges, practice blocks, daily challenge, path, sessions, skills", items: ["#/challenges", "#/blocks", "#/daily", "#/path", "#/sessions", "#/skills"] },

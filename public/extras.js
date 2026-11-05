@@ -17,6 +17,7 @@ async function refreshPills() {
     set("#pill-assess", p.assess);
     set("#pill-briefs", p.debriefs);
     set("#pill-pres", p.pres);
+    set("#pill-props", p.props);
     document.title = (p.hands ? `(${p.hands}) ` : "") + "ClassBot · Teacher dashboard";
   } catch { /* offline or signed out: ignore */ }
 }

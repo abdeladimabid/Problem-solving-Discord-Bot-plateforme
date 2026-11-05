@@ -1,4 +1,5 @@
 // JSON API behind the teacher dashboard.
+import { pendingProposals } from "../shared/actpropose.ts";
 import { ConceptError, briefSprint, conceptsView, decideConcept, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
@@ -1051,7 +1052,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM activity_claims c JOIN activities a ON a.id = c.activity_id
           WHERE c.guild_id = ? AND (c.status = 'pending' OR (c.status = 'approved' AND a.day <= ?))`, g.id, new Date().toISOString().slice(0, 10)).catch(() => null),
       ]);
-      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0 });
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0, props: await pendingProposals(env) });
     }
     // -------------------------------------------------- ✨ AI generation
     if (path === "/path/lesson-ai" && method === "POST") {

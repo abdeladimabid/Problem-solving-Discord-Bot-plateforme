@@ -102,6 +102,13 @@ main { padding: 26px 32px 64px; max-width: 1320px; width: 100%; min-width: 0; }
 /* a wide screen: the pages use its width (no big empty band on the right) */
 @media (min-width: 1500px) { main { max-width: 1800px; } }
 main:focus { outline: none; }
+/* Propositions: the students' proposed veilles and live codings */
+.pp-list { display: grid; gap: 12px; }
+.pp-card { margin: 0; } .pp-card.denied { opacity: .7; }
+.pp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pp-title { font-size: 15px; }
+.pp-details { margin: 8px 0 0; white-space: pre-wrap; }
+.pp-plans { margin: 8px 0 0; color: var(--ink-soft); }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
 h1 { font-size: 28px; line-height: 1.15; margin: 0; letter-spacing: -0.02em; font-weight: 750; }
 h2 { font-size: 16px; margin: 0 0 14px; font-weight: 650; letter-spacing: -0.005em; display: flex; align-items: center; gap: 8px; }

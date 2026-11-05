@@ -3,6 +3,7 @@
 import { t } from "../shared/i18n.ts";
 import { COLORS, truncate } from "../shared/discord.ts";
 import { myActivities, openActivities, requestActivity, signupCfg, subjectChunks } from "../shared/actsignup.ts";
+import { ProposalError, myProposals, proposeActivity } from "../shared/actpropose.ts";
 import { type Ix, deferReply, later, reply, say } from "./ix.ts";
 
 const dayLabel = (L: string, iso: string) => new Date(iso + "T12:00:00Z").toLocaleDateString(L === "fr" ? "fr-FR" : "en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
@@ -35,10 +36,22 @@ export async function cmdActivity(ix: Ix, sub: string, o: Record<string, any>) {
     });
     return deferReply(true);
   }
-  // mine: what I asked for, what's mine (with the subject), what I presented
+  // propose: a veille or a live coding of my own; every teacher sees it, one plans it (then it's open to everyone)
+  if (sub === "propose") {
+    later(ix, async () => {
+      try {
+        const r = await proposeActivity(ix.env, g, ix.userId, { kind: o.kind, title: o.subject, details: o.details });
+        return { content: t(L, "prop.sent", { kind: kindLabel(L, r.kind), title: r.title }) };
+      } catch (e) { if (e instanceof ProposalError) return { content: e.message }; throw e; }
+    });
+    return deferReply(true);
+  }
+  // mine: what I asked for, what's mine (with the subject), what I presented; and my proposals
   later(ix, async () => {
-    const rows = await myActivities(ix.env, g.id, ix.userId);
-    if (!rows.length) return { content: t(L, "act.mine_none") };
+    const [rows, props] = await Promise.all([myActivities(ix.env, g.id, ix.userId), myProposals(ix.env, g.id, ix.userId)]);
+    const propLines = props.map((p) => `💡 ${kindLabel(L, p.kind)} · **${p.title}** · ${t(L, `prop.st_${p.status}`)}${p.status === "denied" && p.note ? ` · ${truncate(p.note, 200)}` : ""}`);
+    if (!rows.length && !propLines.length) return { content: t(L, "act.mine_none") };
+    if (!rows.length) return { embeds: [{ title: t(L, "prop.mine_title"), description: truncate(propLines.join("\n"), 4000), color: COLORS.purple }] };
     const st = (s: string) => t(L, `act.st_${s}`);
     const lines = rows.map((r) => {
       const grade = r.status === "done" && r.grades ? ` · ${JSON.parse(r.grades)[ix.userId] ?? 0}%` : "";
@@ -47,6 +60,7 @@ export async function cmdActivity(ix: Ix, sub: string, o: Record<string, any>) {
     // the subject of the next approved one, in full (a few embeds if it's long)
     const next = rows.filter((r) => r.status === "approved").sort((a, b) => a.day.localeCompare(b.day))[0];
     const embeds: any[] = [{ title: t(L, "act.mine_title"), description: truncate(lines.join("\n\n"), 4000), color: COLORS.purple }];
+    if (propLines.length) embeds.push({ title: t(L, "prop.mine_title"), description: truncate(propLines.join("\n"), 4000), color: COLORS.gray });
     if (next) {
       const parts = subjectChunks(next.md, 3900).slice(0, 2);
       parts.forEach((p, i) => embeds.push({ title: i ? undefined : `${kindLabel(L, next.kind)} · ${next.title ?? ""}`.slice(0, 250), description: p, color: COLORS.green }));
