@@ -2,7 +2,7 @@
 import type { Ctx, Env, GuildRow, Lang } from "../shared/types.ts";
 import { t } from "../shared/i18n.ts";
 import { all, one } from "../shared/db.ts";
-import { EPHEMERAL, NO_PINGS, editOriginal } from "../shared/discord.ts";
+import { EPHEMERAL, NO_PINGS, editOriginal, followup } from "../shared/discord.ts";
 
 // ------------------------------------------------------------ responses
 export const json = (o: unknown) => new Response(JSON.stringify(o), { headers: { "content-type": "application/json" } });
@@ -39,11 +39,39 @@ export function memberName(raw: any, id: string): string {
   return m?.nick ?? u?.global_name ?? u?.username ?? "?";
 }
 
+// Discord refuses a message whose embeds have more than 6000 characters in all, or more than 10 embeds
+const EMBED_TOTAL = 5800, EMBEDS_MAX = 10;
+const embedLen = (e: any) => String(e?.title ?? "").length + String(e?.description ?? "").length + String(e?.footer?.text ?? "").length
+  + (Array.isArray(e?.fields) ? e.fields.reduce((n: number, f: any) => n + String(f?.name ?? "").length + String(f?.value ?? "").length, 0) : 0);
+/**
+ * A payload too big for one message (long embeds: a subject, a list): the first message holds what fits, the rest follows
+ * in more messages (private, like the answer). Each embed is kept within Discord's own limits.
+ */
+export function splitPayload(payload: Record<string, unknown>): Record<string, unknown>[] {
+  const embeds = Array.isArray(payload.embeds) ? (payload.embeds as any[]) : null;
+  if (!embeds || !embeds.length) return [payload];
+  const fixed = embeds.map((e) => ({ ...e, ...(e.title ? { title: String(e.title).slice(0, 256) } : {}), ...(e.description ? { description: String(e.description).slice(0, 4096) } : {}) }));
+  const groups: any[][] = [[]];
+  let size = String(payload.content ?? "").length;
+  for (const e of fixed) {
+    const n = embedLen(e), cur = groups[groups.length - 1];
+    if (cur.length && (size + n > EMBED_TOTAL || cur.length >= EMBEDS_MAX)) { groups.push([e]); size = n; }
+    else { cur.push(e); size += n; }
+  }
+  // the buttons stay with the first message
+  return groups.map((g, i) => (i ? { embeds: g } : { ...payload, embeds: g }));
+}
 /** Run slow work after answering Discord (deferred), reporting errors to the user. */
 export function later(ix: Ix, work: () => Promise<Record<string, unknown> | null>) {
   ix.ctx.waitUntil(
     work()
-      .then((payload) => (payload ? editOriginal(ix.env, ix.raw.token, payload) : null))
+      .then(async (payload) => {
+        if (!payload) return null;
+        const [first, ...rest] = splitPayload(payload);
+        await editOriginal(ix.env, ix.raw.token, first);
+        for (const p of rest) await followup(ix.env, ix.raw.token, { ...p, flags: EPHEMERAL });
+        return null;
+      })
       .catch(async (e) => {
         console.error(e);
         await editOriginal(ix.env, ix.raw.token, { content: errorText(ix.L, e), embeds: [], components: [] }).catch(() => {});
@@ -55,7 +83,8 @@ export function later(ix: Ix, work: () => Promise<Record<string, unknown> | null
 export function errorText(L: string, e: unknown): string {
   const msg = String((e as Error)?.message ?? e ?? "");
   if (/no such (table|column)|has no column named/i.test(msg)) return t(L, "err.db_update");
-  const reason = msg.replace(/D1_ERROR:\s*/g, "").replace(/\s+/g, " ").trim().slice(0, 150);
+  // never the interaction's webhook path (its token) in what the student sees
+  const reason = msg.replace(/D1_ERROR:\s*/g, "").replace(/\/webhooks\/\S+/g, "").replace(/\b(PATCH|POST|GET|PUT|DELETE)\s*$/i, "").replace(/\s+/g, " ").trim().slice(0, 150);
   return t(L, "err.generic") + (reason ? `\n-# ${reason}` : "");
 }
 

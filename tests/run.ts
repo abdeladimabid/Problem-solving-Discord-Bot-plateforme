@@ -5863,6 +5863,16 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(JSON.stringify(lastPatch()).includes("already taken"), "nobody else can take it");
   await slash(U.bob, "activity", {}, "mine");
   check(JSON.stringify(lastPatch()).includes("Présenter Sélecteurs DOM modernes"), "/activity mine: the subject once it's approved");
+  {
+    // a long subject: never more than Discord takes in one message (6000 characters of embeds): the rest follows
+    const { splitPayload, errorText } = await import("../src/bot/ix.ts");
+    const big = { embeds: [{ title: "Mes activités", description: "a".repeat(3000) }, { title: "Mes propositions", description: "b".repeat(1500) }, { title: "Sujet", description: "c".repeat(3900) }, { description: "d".repeat(3900) }], components: [{ type: 1 }] };
+    const parts = splitPayload(big);
+    const len = (p: any) => p.embeds.reduce((n: number, e: any) => n + (e.title ?? "").length + (e.description ?? "").length, 0);
+    check(parts.length === 3 && parts.every((p: any) => len(p) <= 6000) && parts.flatMap((p: any) => p.embeds).length === 4 && (parts[0] as any).components && !(parts[1] as any).components,
+      `/activity mine with a long subject: split in messages of at most 6000 characters, nothing lost (${parts.map(len).join(", ")})`);
+    check(!errorText("fr", new Error("DiscordError: PATCH /webhooks/123/aW50ZXJhY3Rpb24 → 400")).includes("webhooks"), "…and an error never shows the interaction's token");
+  }
   // the teacher adds a third person, then grades
   const claim = ok1.data && q1("SELECT id FROM activity_claims WHERE activity_id = ? AND status = 'approved'", v1).id;
   check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id] })).status === 200, "a third person added to the binôme");
