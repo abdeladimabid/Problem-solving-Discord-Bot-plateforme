@@ -8193,8 +8193,8 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   const tl = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
   const names = tl.data.result.tools.map((t: any) => t.name);
   check(["list_classes", "class_overview", "class_diagnosis", "learner_profile", "fiche_niveaux", "debrief", "assessment_results", "mise_results", "assessment_instructions", "create_assessment", "mise_instructions", "create_mise", "create_activity", "create_action_plan"].every((n) => names.includes(n))
-    && !names.some((n: string) => /launch|send|delete|assign/.test(n)) && tl.data.result.tools.find((t: any) => t.name === "create_mise").annotations.readOnlyHint === false,
-    "tools: reading, and writing drafts (nothing that launches, sends, assigns or deletes)");
+    && names.includes("api_get") && names.includes("api_routes") && !names.includes("api_write") && tl.data.result.tools.find((t: any) => t.name === "create_mise").annotations.readOnlyHint === false,
+    "a « read + drafts » link: reading everything, writing drafts (no api_write)");
   const lc = await call("list_classes");
   check(!lc.error && lc.json.some((g: any) => g.id === G), "list_classes");
   const ov = await call("class_overview", { class: G });
@@ -8212,6 +8212,26 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   check((await call("nope")).error === false && (await mcp({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "nope" } })).data.error.code === -32602, "an unknown tool: a JSON-RPC error");
   check((await mcp({ jsonrpc: "2.0", id: 4, method: "ping" })).data.result !== undefined, "ping");
   check((await mcp({ jsonrpc: "2.0", id: 5, method: "tools/list" }, "/mcp/cbk_" + "x".repeat(43))).status === 401, "a wrong key: refused");
+  { const fs = await import("node:fs"); const gen: any = await import("../scripts/mcp-routes.mjs");
+    check(fs.readFileSync("src/admin/mcproutes.ts", "utf8").replace(/\r/g, "") === gen.body, "the routes list is up to date (node scripts/mcp-routes.mjs)"); }
+  // reading anything: the routes, then any GET
+  const rt = await call("api_routes", { filter: "sprints" });
+  check(!rt.error && rt.json.routes.some((r: any) => r.path.includes("/sprints")) && !JSON.stringify(rt.json).includes("mcp-keys"), "api_routes: the dashboard's routes, by a word");
+  const ag = await call("api_get", { class: G, path: `/students/${U.alice.id}/insight` });
+  check(!ag.error && ag.json && !/avatar/.test(ag.text), "api_get: any page, read");
+  check((await call("api_get", { class: G, path: "/mcp-keys" })).error, "…never the connector's own keys");
+  check((await mcp({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "PUT", path: `/students/${U.alice.id}`, body: { name: "Alice B" } } } })).data.error?.code === -32602, "…api_write refused with a « read + drafts » link");
+  // full access: anything the dashboard does, every change logged
+  const fk = await api("POST", "/api/mcp-keys", { g: G, label: "Tout", scope: "full" });
+  const fpath = new URL(fk.data.url).pathname;
+  check(fk.data.keys.find((k: any) => k.label === "Tout").scope === "full" && (await mcp({ jsonrpc: "2.0", id: 8, method: "tools/list" }, fpath)).data.result.tools.some((t: any) => t.name === "api_write" && t.annotations.destructiveHint), "a « full access » link: api_write too (marked as acting for real)");
+  const aw = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "PUT", path: `/students/${U.alice.id}`, body: { name: "Alice B" } } } }, fpath);
+  check(!aw.data.result.isError && q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name === "Alice B", "api_write: the change made (here the learner's name)");
+  await api("PUT", `/api/students/${U.alice.id}`, { g: G, name: "" });
+  const lg = (await api("GET", `/api/mcp-keys?g=${G}`)).data.log;
+  check(lg.some((l: any) => l.tool === "api_write" && l.method === "PUT" && l.path === `/students/${U.alice.id}` && l.status === 200 && l.label === "Tout") && lg.some((l: any) => l.tool === "create_action_plan"), "…every change is logged (what, by which link), the drafts too");
+  check((await mcp({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "POST", path: "/mcp-keys", body: { scope: "full" } } } }, fpath)).data.result.isError, "…never a new key through the connector");
+  await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
   await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
 }

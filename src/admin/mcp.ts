@@ -2,13 +2,15 @@
 //   POST /mcp/<key>     JSON-RPC: initialize, tools/list, tools/call, ping
 // The key is the teacher's (Settings → Claude connector): made there, shown once, kept only as its SHA-256, revocable.
 // Claude reads every class live (learners, Fiche niveaux, lacunes, briefs, debriefs, assessments, mises en situation,
-// activities, plans d'action) and writes DRAFTS only (an assessment, a mise en situation, an activity, a plan d'action):
-// nothing is ever launched, assigned, sent or deleted from here: the teacher does that in the dashboard.
+// activities, plans d'action, and any page through api_get) and writes drafts (an assessment, a mise en situation, an
+// activity, a plan d'action). A key with « full access » also writes everything (api_write: any action of the dashboard,
+// launching, sending, deleting included): each change is kept in a log the teacher sees in Settings.
 // Every tool goes through the dashboard's own API (the same checks as the page), as the teacher.
 import type { Ctx, Env } from "../shared/types.ts";
 import { all, one, run } from "../shared/db.ts";
 import { handleApi } from "./api.ts";
 import { applyAppSettings } from "../shared/appsettings.ts";
+import { ROUTES } from "./mcproutes.ts";
 
 const now = () => Math.floor(Date.now() / 1000);
 const VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -23,16 +25,19 @@ function newKey() {
   return "cbk_" + btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 export async function mcpKeys(env: Env) {
-  const rows = await all<{ id: number; label: string; created_at: number; last_used: number | null; uses: number }>(env,
-    "SELECT id, label, created_at, last_used, uses FROM mcp_keys WHERE revoked_at IS NULL ORDER BY id DESC").catch(() => null);
-  if (!rows) return { keys: [], needsMigration: true };
-  return { keys: rows };
+  const rows = await all<{ id: number; label: string; created_at: number; last_used: number | null; uses: number; scope: string }>(env,
+    "SELECT id, label, created_at, last_used, uses, scope FROM mcp_keys WHERE revoked_at IS NULL ORDER BY id DESC").catch(() => null);
+  if (!rows) return { keys: [], log: [], needsMigration: true };
+  // what Claude changed (the last ones), for the teacher to see
+  const log = await all<{ at: number; tool: string; method: string | null; path: string | null; guild_id: string | null; status: number | null; key_id: number; label: string | null }>(env,
+    "SELECT l.at, l.tool, l.method, l.path, l.guild_id, l.status, l.key_id, k.label FROM mcp_log l LEFT JOIN mcp_keys k ON k.id = l.key_id ORDER BY l.id DESC LIMIT 40").catch(() => []);
+  return { keys: rows, log };
 }
 /** A new key: its connector URL is shown once (only its hash is kept). */
-export async function createMcpKey(env: Env, origin: string, label: unknown) {
+export async function createMcpKey(env: Env, origin: string, label: unknown, scope?: unknown) {
   const key = newKey();
   const name = String(label ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || "Claude";
-  await run(env, "INSERT INTO mcp_keys (label, hash, created_at, uses) VALUES (?, ?, ?, 0)", name, await sha(key), now());
+  await run(env, "INSERT INTO mcp_keys (label, hash, created_at, uses, scope) VALUES (?, ?, ?, 0, ?)", name, await sha(key), now(), scope === "full" ? "full" : "drafts");
   const base = (env.PUBLIC_URL?.replace(/\/$/, "") || origin).replace(/^http:/, "https:");
   return { url: `${base}/mcp/${key}`, ...(await mcpKeys(env)) };
 }
@@ -40,9 +45,10 @@ export async function revokeMcpKey(env: Env, id: number) {
   await run(env, "UPDATE mcp_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", now(), id);
   return mcpKeys(env);
 }
-async function keyOk(env: Env, key: string) {
+type Key = { id: number; scope: string };
+async function keyOk(env: Env, key: string): Promise<Key | null> {
   if (!/^cbk_[\w-]{40,60}$/.test(key)) return null;
-  const k = await one<{ id: number }>(env, "SELECT id FROM mcp_keys WHERE hash = ? AND revoked_at IS NULL", await sha(key)).catch(() => null);
+  const k = await one<Key>(env, "SELECT id, scope FROM mcp_keys WHERE hash = ? AND revoked_at IS NULL", await sha(key)).catch(() => null);
   if (k) await run(env, "UPDATE mcp_keys SET last_used = ?, uses = uses + 1 WHERE id = ?", now(), k.id).catch(() => null);
   return k;
 }
@@ -50,12 +56,18 @@ async function keyOk(env: Env, key: string) {
 // ------------------------------------------------------------------ the dashboard's API, as the teacher
 class ToolError extends Error {}
 type Call = (method: string, path: string, q?: Record<string, unknown>, body?: unknown) => Promise<any>;
-function caller(env: Env, ctx: Ctx, origin: string): Call {
+// never through the connector: its own keys and log (a key can't make itself a new one, nor hide what it did)
+const BLOCKED = /^\/(mcp-keys|mcp-log)(\/|$)/;
+function caller(env: Env, ctx: Ctx, origin: string, key: Key, tool: string): Call {
   return async (method, path, q = {}, body) => {
+    if (BLOCKED.test(path)) throw new ToolError("Not through the connector.");
     const u = new URL(`${origin}/api${path}`);
     for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null && v !== "") u.searchParams.set(k, String(v));
     const req = new Request(u.toString(), { method, headers: { "content-type": "application/json" }, body: method === "GET" ? undefined : JSON.stringify({ ...(body as object || {}), ...(q.g ? { g: q.g } : {}) }) });
     const res = await handleApi(req, env, ctx, { email: "claude-connector", mode: "mcp" });
+    // every change Claude makes is kept (the teacher sees them in Settings → Claude connector)
+    if (method !== "GET") await run(env, "INSERT INTO mcp_log (key_id, at, tool, method, path, guild_id, status, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      key.id, now(), tool, method, path, q.g ? String(q.g) : null, res.status, JSON.stringify(body ?? {}).slice(0, 2000)).catch(() => null);
     const ct = res.headers.get("content-type") ?? "";
     const data: any = ct.includes("json") ? await res.json().catch(() => ({})) : await res.text();
     if (res.status >= 400) throw new ToolError(typeof data === "object" && data?.error ? String(data.error) : `ClassBot answered ${res.status}.`);
@@ -100,7 +112,7 @@ const out = (data: unknown) => {
 };
 
 // ------------------------------------------------------------------ the tools
-type Tool = { name: string; description: string; inputSchema: any; write?: boolean; run: (a: any, api: Call) => Promise<unknown> };
+type Tool = { name: string; description: string; inputSchema: any; write?: boolean; full?: boolean; run: (a: any, api: Call) => Promise<unknown> };
 const CLASS = { type: "string", description: "The class: its name (e.g. DevStorm) or its id. Optional when there is only one." };
 const LEARNER = { type: "string", description: "The learner: their name (or part of it) or their Discord id." };
 const obj = (props: Record<string, any>, required: string[] = []) => ({ type: "object", properties: props, required, additionalProperties: false });
@@ -142,7 +154,18 @@ export const TOOLS: Tool[] = [
   { name: "list_activities", description: "The Activités (veilles and live codings) of a date range, with their sign-ups.", inputSchema: obj({ class: CLASS, from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" } }),
     run: async (a, api) => { const g = await classOf(api, a.class); return { class: g, activities: await api("GET", "/activities", { g: g.id, from: a.from, to: a.to }) }; } },
 
-  // ---------------------------------------------------------------- writing (drafts only)
+  // ---------------------------------------------------------------- any page of the dashboard
+  { name: "api_routes", description: "The dashboard API's routes (method, path, what it does), to read or do anything the named tools don't cover: filter them by a word (e.g. \"assessments\", \"students\", \"sprints\", \"wplans\", \"mises\", \"activities\", \"briefs\").", inputSchema: obj({ filter: { type: "string" } }),
+    run: async (a) => { const f = String(a.filter ?? "").toLowerCase(); const r = f ? ROUTES.filter((x) => (x.path + " " + x.note).toLowerCase().includes(f)) : ROUTES; return { routes: r.filter((x) => !BLOCKED.test(x.path)), note: "Call them with api_get (GET) or api_write (the others). :id is a number. The class goes in `class`." }; } },
+  { name: "api_get", description: "Read anything of the dashboard: GET one of the API's routes (see api_routes), e.g. path \"/students/123/insight\" or \"/sprints/2/diag\". Query parameters in `query`.", inputSchema: obj({ class: CLASS, path: { type: "string", description: "The route, starting with / (without /api)." }, query: { type: "object" } }, ["path"]),
+    run: async (a, api) => { const p = String(a.path ?? ""); if (!p.startsWith("/")) throw new ToolError("The path starts with /.");
+      const g = p === "/guilds" ? null : await classOf(api, a.class); return api("GET", p.split("?")[0], { ...(a.query && typeof a.query === "object" ? a.query : {}), ...Object.fromEntries(new URLSearchParams(p.split("?")[1] ?? "")), ...(g ? { g: g.id } : {}) }); } },
+  { name: "api_write", write: true, full: true, description: "Do anything the teacher can do in the dashboard: POST / PUT / DELETE one of the API's routes (see api_routes), launching, assigning, sending messages and deleting included. It acts for real on the class and the learners: ALWAYS tell the teacher exactly what you are about to do and get their yes first, and prefer the draft tools when they fit. Every change is logged.", inputSchema: obj({ class: CLASS, method: { type: "string", enum: ["POST", "PUT", "DELETE"] }, path: { type: "string" }, body: { type: "object" }, query: { type: "object" } }, ["method", "path"]),
+    run: async (a, api) => { const p = String(a.path ?? ""); if (!p.startsWith("/")) throw new ToolError("The path starts with /.");
+      const m = String(a.method ?? "").toUpperCase(); if (!["POST", "PUT", "DELETE"].includes(m)) throw new ToolError("method: POST, PUT or DELETE.");
+      const g = await classOf(api, a.class); return api(m, p, { ...(a.query && typeof a.query === "object" ? a.query : {}), g: g.id }, a.body && typeof a.body === "object" ? a.body : {}); } },
+
+  // ---------------------------------------------------------------- writing drafts
   { name: "assessment_instructions", description: "BEFORE writing an assessment: ClassBot's exact instructions and JSON format for a programme week (its competencies, technologies seen so far, the Fiche niveaux items to cover, 5 questions per item at least, the class's level). Follow them, then call create_assessment with the JSON.", inputSchema: obj({ class: CLASS, week: { type: "number", description: "The programme week (default: the current one)." }, concepts: { type: "array", items: { type: "string" }, description: "The Fiche items to cover (codes like S2.M3); default: the sprint's Moyen and Bon items." } }),
     run: async (a, api) => { const g = await classOf(api, a.class); return { class: g, ...(await api("GET", "/assessments/claude-prompt", { g: g.id, week: a.week, concepts: Array.isArray(a.concepts) ? a.concepts.join(",") : undefined })) }; } },
   { name: "create_assessment", write: true, description: "Save an assessment as a DRAFT in ClassBot (never assigned: the teacher reviews it and assigns it in the dashboard). `json`: the JSON written from assessment_instructions. With check_only, only checks it (problems, preview, duplicates).", inputSchema: obj({ class: CLASS, json: { type: "string", description: "The assessment's JSON, as a string." }, concepts: { type: "array", items: { type: "string" }, description: "The Fiche items it covers (the ones of the instructions)." }, check_only: { type: "boolean" } }, ["json"]),
@@ -166,11 +189,11 @@ export const TOOLS: Tool[] = [
 ];
 
 // ------------------------------------------------------------------ JSON-RPC
-const INSTRUCTIONS = "ClassBot is the teacher's class platform (web development training, Simplon/YouCode programme). Read the classes live with the tools (learners, their Fiche niveaux and lacunes, briefs, debriefs, assessments, mises en situation, activities). To make an assessment or a mise en situation, ALWAYS call assessment_instructions / mise_instructions first and follow them exactly, then save it with create_assessment / create_mise (check_only first if unsure). Everything written is a draft: the teacher reviews it, then launches or sends it in the dashboard. Write in French for the learners. Never invent a learner's result: read it.";
+const INSTRUCTIONS = "ClassBot is the teacher's class platform (web development training, Simplon/YouCode programme). Read the classes live with the tools (learners, their Fiche niveaux and lacunes, briefs, debriefs, assessments, mises en situation, activities); anything else through api_routes + api_get. To make an assessment or a mise en situation, ALWAYS call assessment_instructions / mise_instructions first and follow them exactly, then save it with create_assessment / create_mise (check_only first if unsure): they are drafts the teacher reviews. With a full-access link, api_write does any action of the dashboard (launch, assign, send, delete…): it acts for real on the learners, so say exactly what you will do and wait for the teacher's yes before each one. Write in French for the learners. Never invent a learner's result: read it.";
 const rpc = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcErr = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
-async function answer(msg: any, env: Env, ctx: Ctx, origin: string): Promise<any | null> {
+async function answer(msg: any, env: Env, ctx: Ctx, origin: string, key: Key): Promise<any | null> {
   const id = msg?.id, method = String(msg?.method ?? "");
   if (msg?.jsonrpc !== "2.0" || !method) return rpcErr(id, -32600, "Invalid request");
   if (id === undefined || id === null) return null;   // a notification (initialized, cancelled…): nothing to answer
@@ -179,12 +202,12 @@ async function answer(msg: any, env: Env, ctx: Ctx, origin: string): Promise<any
     return rpc(id, { protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: "classbot", title: "ClassBot", version: "1.0.0" }, instructions: INSTRUCTIONS });
   }
   if (method === "ping") return rpc(id, {});
-  if (method === "tools/list") return rpc(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: !t.write, destructiveHint: false, idempotentHint: !t.write, openWorldHint: false } })) });
+  if (method === "tools/list") return rpc(id, { tools: TOOLS.filter((t) => !t.full || key.scope === "full").map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: !t.write, destructiveHint: !!t.full, idempotentHint: !t.write, openWorldHint: !!t.full } })) });
   if (method === "tools/call") {
     const t = TOOLS.find((x) => x.name === msg.params?.name);
-    if (!t) return rpcErr(id, -32602, `Unknown tool: ${msg.params?.name}`);
+    if (!t || (t.full && key.scope !== "full")) return rpcErr(id, -32602, t ? "This connector link reads and writes drafts only: make a « full access » link in ClassBot → Settings → Claude connector." : `Unknown tool: ${msg.params?.name}`);
     try {
-      const r = await t.run(msg.params?.arguments ?? {}, caller(env, ctx, origin));
+      const r = await t.run(msg.params?.arguments ?? {}, caller(env, ctx, origin, key, t.name));
       return rpc(id, { content: [{ type: "text", text: out(r) }], isError: false });
     } catch (e) {
       const m = e instanceof ToolError ? e.message : (e as Error)?.message || "ClassBot failed: try again.";
@@ -203,7 +226,8 @@ export async function handleMcp(request: Request, env: Env, ctx: Ctx): Promise<R
   const key = decodeURIComponent(url.pathname.split("/")[2] ?? "");
   const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type, mcp-session-id, mcp-protocol-version, authorization", "access-control-allow-methods": "POST, GET, OPTIONS, DELETE" };
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (!(await keyOk(env, key))) return Response.json({ error: "This connector link isn't valid (or was revoked): make a new one in ClassBot → Settings → Claude connector." }, { status: 401, headers: cors });
+  const k = await keyOk(env, key);
+  if (!k) return Response.json({ error: "This connector link isn't valid (or was revoked): make a new one in ClassBot → Settings → Claude connector." }, { status: 401, headers: cors });
   // no server-to-client stream: answers come in each POST's response
   if (request.method === "GET") return new Response(null, { status: 405, headers: { ...cors, allow: "POST" } });
   if (request.method === "DELETE") return new Response(null, { status: 204, headers: cors });
@@ -212,7 +236,7 @@ export async function handleMcp(request: Request, env: Env, ctx: Ctx): Promise<R
   try { body = await request.json(); } catch { return Response.json(rpcErr(null, -32700, "Parse error"), { status: 400, headers: cors }); }
   await applyAppSettings(env);
   const origin = url.origin;
-  const res = Array.isArray(body) ? (await Promise.all(body.map((m) => answer(m, env, ctx, origin)))).filter(Boolean) : await answer(body, env, ctx, origin);
+  const res = Array.isArray(body) ? (await Promise.all(body.map((m) => answer(m, env, ctx, origin, k)))).filter(Boolean) : await answer(body, env, ctx, origin, k);
   if (res === null || (Array.isArray(res) && !res.length)) return new Response(null, { status: 202, headers: cors });
   return Response.json(res, { headers: { ...cors, "cache-control": "no-store" } });
 }

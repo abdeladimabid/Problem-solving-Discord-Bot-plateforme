@@ -122,7 +122,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/guilds") return ok(await guilds(env));
     // 🤖 the Claude connector's keys (for all the classes): made (its URL shown once), listed, revoked
     if (path === "/mcp-keys" && method === "GET") return ok(await mcpKeys(env));
-    if (path === "/mcp-keys" && method === "POST") return ok(await createMcpKey(env, url.origin, body.label));
+    if (path === "/mcp-keys" && method === "POST") return ok(await createMcpKey(env, url.origin, body.label, body.scope));
     if (path.startsWith("/mcp-keys/") && method === "DELETE") return ok(await revokeMcpKey(env, Number(path.split("/")[2])));
     if (path === "/overview") return ok(await overview(env, await guild()));
     if (path === "/discord") return ok(await discordInfo(env, await guild()));
