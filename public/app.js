@@ -1251,7 +1251,7 @@ async function viewAssignments() {
   const COLORS = { done: "var(--up)", late: "var(--warn)", failed: "var(--down)", missed: "var(--down)", open: "var(--line)" };
   view.innerHTML = `
     <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students whose last debrief is Faible or Critique (its level: the assessment, the repo analysis and your level), and the ones you add yourself. Their weak points, whether they improve, whether they do the work you give them, and your comment.</p></div>
-      <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
+      <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn" id="ap-class" title="One plan d'action for every student of the class">👥 Plan for the whole class</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
     <div class="ap-stats" role="group" aria-label="Show">${FILTERS.map(([v, l, n, c]) => `<button class="ap-stat ${c} ${n ? "" : "zero"}" data-apf="${v}" aria-pressed="${AP.filter === v}"><b>${n}</b><span>${l}</span></button>`).join("")}</div>
     <section class="panel ap-panel"><div class="panel-head"><h2>${AP.filter === "all" ? "Students who need help" : `${esc(FILTERS.find((f) => f[0] === AP.filter)[1])} <span class="muted">· ${shown.length}</span> <button class="ap-link" data-apf="all">show all</button>`}</h2></div>
       ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map((r) => apCard(r, wplans.filter((w) => w.sid === r.discord_id))).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
@@ -1275,6 +1275,7 @@ async function viewAssignments() {
   $$("[data-apf]").forEach((b) => b.onclick = () => { AP.filter = b.dataset.apf; viewAssignments(); });
   const giveRows = [...P.plan, ...P.others].map((r) => ({ discord_id: r.discord_id, name: r.name }));
   $("#ap-new").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog(P.plan.map((r) => r.discord_id), giveRows));
+  $("#ap-class").onclick = (e) => busy(e.currentTarget, () => classPlanDialog());
   $$("[data-ap-give]").forEach((b) => b.onclick = () => busy(b, () => giveWorkDialog([b.dataset.apGive], giveRows)));
   $$("[data-ap-gaps]").forEach((b) => b.onclick = () => busy(b, () => gapsDialog(byId.get(b.dataset.apGaps))));
   $$("[data-ap-more]").forEach((b) => b.onclick = () => {
