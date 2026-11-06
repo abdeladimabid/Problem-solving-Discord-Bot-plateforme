@@ -23,7 +23,9 @@ import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { N_QCM, N_SITUATIONS, QCM_RULES, SIT_RULES, miseCounts, readJson } from "./mises.ts";
+import { N_QCM, N_SITUATIONS, QCM_RULES, QCM_SHARE, SIT_RULES, miseCounts, readJson } from "./mises.ts";
+/** The barème asked: automatic (by difficulty, the QCM a share of the score; the default) or the file's own points. */
+const scoringOf = (b: any) => (b?.scoring === "file" ? undefined : { qcmShare: Number.isFinite(Number(b?.qcmShare)) && b?.qcmShare !== "" && b?.qcmShare != null ? Math.max(0, Math.min(50, Math.round(Number(b.qcmShare)))) : QCM_SHARE });
 
 export class MiseError extends Error { status: number; constructor(msg: string, status = 400) { super(msg); this.status = status; } }
 
@@ -169,7 +171,7 @@ async function aiContext(env: Env, g: GuildRow, b: any) {
     { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
     { role: "user", content: prompt + extra },
   ], { maxTokens: Math.min(32000, Math.max(16000, 2800 * count.situations + 400 * count.qcm)), temperature: 0.5, timeoutMs: 170000, json: true });
-  return { p, w, br, comps, techs, ask, count, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope }, count } };
+  return { p, w, br, comps, techs, ask, count, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope }, count, scoring: scoringOf(b) } };
 }
 const readAi = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
 
@@ -358,8 +360,8 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   const { br, w, comps } = await scopeOf(env, g, p, b, det);
   // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
   const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
-  const count = miseCounts(b);
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count });
+  const count = miseCounts(b), scoring = scoringOf(b);
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count, scoring });
   const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
   const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count }) : [];
@@ -367,7 +369,7 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
     g.id, str(b.title, 120) || c.title, w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps.length ? comps : c.competencies), JSON.stringify(ids(b.target)),
-    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief, concepts: c.concepts ?? cn.scope }), JSON.stringify(c), now());
+    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief, concepts: c.concepts ?? cn.scope, scoring: scoring ? { auto: true, qcmShare: scoring.qcmShare } : { auto: false } }), JSON.stringify(c), now());
   return { id: Number(res.meta.last_row_id), problems: [], checks, detected, brief };
 }
 

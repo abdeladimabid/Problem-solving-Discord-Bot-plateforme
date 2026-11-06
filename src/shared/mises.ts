@@ -15,6 +15,20 @@ import { SKILL_KEYS } from "./skills.ts";
 export const MISE_FORMAT = "classbot-mise-en-situation@1";
 // how many situations and QCM: the teacher's choice (the defaults: 5 and 5); at least one situation, QCM may be none
 export const N_SITUATIONS = 5, N_QCM = 5, AI_CHECKS_PER_ITEM = 3, MAX_SITUATIONS = 15, MAX_QCM = 30;
+/**
+ * The automatic barème: each situation by its difficulty (1 → 2 points, 2 → 3, 3 → 4, 4 → 6, 5 → 8), and the QCM
+ * together a fixed share of the score (20 % by default), whatever their number. Points may have decimals (0.05).
+ */
+export const AUTO_POINTS: Record<number, number> = { 1: 2, 2: 3, 3: 4, 4: 6, 5: 8 };
+export const QCM_SHARE = 20;
+export function autoScore(c: Pick<MiseContent, "situations" | "qcm">, qcmShare = QCM_SHARE) {
+  const share = Math.max(0, Math.min(50, Math.round(qcmShare)));
+  for (const x of c.situations) x.points = AUTO_POINTS[x.difficulty] ?? 3;
+  const sit = c.situations.reduce((t, x) => t + x.points, 0);
+  const each = c.qcm.length && share ? Math.round((20 * (sit * share)) / (100 - share) / c.qcm.length) / 20 : 0;
+  for (const q of c.qcm) q.points = Math.max(0.05, each);
+  return c;
+}
 /** The counts asked (the teacher's), within the limits; undefined = not asked (any count within the limits is fine). */
 export function miseCounts(b: any): { situations: number; qcm: number } | undefined {
   const sn = Number(b?.nSituations), qn = Number(b?.nQcm);
@@ -131,6 +145,8 @@ export interface CheckOpts {
   concepts?: { known: Set<string>; scope: string[] };
   /** the counts the teacher asked for (else any count within the limits) */
   count?: { situations: number; qcm: number };
+  /** the automatic barème (by difficulty, the QCM a fixed share): the file's points are replaced */
+  scoring?: { qcmShare: number };
 }
 /** An item's capacities of the Fiche niveaux: checked against the codes known (and required when there's a scope). */
 function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): string[] {
@@ -260,8 +276,9 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     if (wrongHints.length) bad(`"errorHints": unknown ${wrongHints.join(", ")} (allowed: ${[...CAT_IDS].join(", ")}).`);
     const notions = (Array.isArray(s.notions) ? s.notions : []).map(text).filter(Boolean);
     if (!notions.length || notions.length > 5 || notions.some((x: string) => x.length > 60)) bad(`"notions": 1 to 5 notions, 60 characters each at most.`);
-    const pts = s.points == null ? 3 : Number(s.points);
-    if (!Number.isInteger(pts) || pts < 1 || pts > 10) bad(`"points": a whole number from 1 to 10 (3 if left out).`);
+    // (an automatic barème has decimals: 0.05 at least)
+    const pts = s.points == null ? 3 : Math.round(Number(s.points) * 100) / 100;
+    if (!Number.isFinite(pts) || pts < 0.05 || pts > 10) bad(`"points": a number from 1 to 10 (3 if left out).`);
     // nothing out of scope: no technology the class hasn't seen (Tailwind, React, fetch… before their week)
     if (techs.length) {
       const all = [t, ctx, ...qs, expected, ...files.map((f) => f.starter), ...sol.map((f: { content: string }) => f.content)].join("\n");
@@ -305,8 +322,8 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     else if (!Number.isInteger(k) || k < 0 || k >= Math.max(1, choices.length)) bad(`"correct": the index of the right choice, 0 to ${Math.max(0, choices.length - 1)}.`);
     const notion = text(q.notion);
     if (!notion || notion.length > 60) bad(`"notion": the notion tested, 1 to 60 characters.`);
-    const pts = q.points == null ? 1 : Number(q.points);
-    if (!Number.isInteger(pts) || pts < 1 || pts > 5) bad(`"points": a whole number from 1 to 5 (1 if left out).`);
+    const pts = q.points == null ? 1 : Math.round(Number(q.points) * 100) / 100;
+    if (!Number.isFinite(pts) || pts < 0.05 || pts > 10) bad(`"points": a number from 1 to 5 (1 if left out).`);
     if (techs.length) {
       const out = outOfScope([question, c, choices[k] ?? ""].join("\n"), techs);
       if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
@@ -323,6 +340,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
   }
   if (p.length) return { problems: p };
   const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
+  if (o.scoring) autoScore(content, o.scoring.qcmShare);
   return { problems: [], content, preview: previewOf(content) };
 }
 /** What's out of scope, with the words that gave it away (the AI needs them to fix it). JSON.parse / JSON.stringify
@@ -409,7 +427,7 @@ export function previewOf(c: MiseContent): MisePreview {
     points: totalPoints(c),
   };
 }
-export const totalPoints = (c: MiseContent) => c.situations.reduce((s, x) => s + x.points, 0) + c.qcm.reduce((s, x) => s + x.points, 0);
+export const totalPoints = (c: MiseContent) => Math.round(100 * (c.situations.reduce((s, x) => s + x.points, 0) + c.qcm.reduce((s, x) => s + x.points, 0))) / 100;
 export const itemIds = (c: MiseContent) => [...c.situations.map((s) => s.id), ...c.qcm.map((q) => q.id)];
 
 // ------------------------------------------------------------------ what the learner page gets
@@ -732,7 +750,7 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     "  - \"checks\" : 1 à 6 vérifications AUTOMATIQUES quand c'est possible. \"label\" = ce que voit l'apprenant, NEUTRE, sans donner la réponse (« Le total s'affiche », pas « Le total vaut 150 DH »). Types possibles :",
     ...usable.map((k) => `    · ${checksDoc[k]}`),
     `  - "errorHints" : les erreurs probables, parmi ces identifiants : ${ERROR_CATEGORIES.map((c) => `${c.id} (${c.label})`).join(", ")} ;`,
-    "  - \"points\" (facultatif) : 1 à 10, 3 par défaut.",
+    "  - \"points\" (facultatif) : 1 à 10, 3 par défaut (ClassBot les recalcule d'après la difficulté si le formateur a choisi le barème automatique).",
     ...(nQ ? [`- EXACTEMENT ${nQ} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
       ...QCM_RULES.map((r) => `  ${r}`)] : ["- AUCUN QCM : \"qcm\": [] (le formateur ne veut que des situations de code)."]),
     ...(o.concepts?.scope.length ? ["", o.concepts.block,

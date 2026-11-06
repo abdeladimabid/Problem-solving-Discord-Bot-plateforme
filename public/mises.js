@@ -97,6 +97,10 @@ async function mesWizard(opts = {}) {
         <div class="field-row" id="mw-cnt-f">
           <div><label for="mw-ns">Coding situations</label><input type="number" id="mw-ns" min="1" max="15" value="5" style="width:110px"></div>
           <div><label for="mw-nq">QCM <span class="muted">(0 = none)</span></label><input type="number" id="mw-nq" min="0" max="30" value="5" style="width:110px"></div></div>
+        <div class="field-row" id="mw-sc-f">
+          <div><label for="mw-sc">Barème</label><select id="mw-sc"><option value="auto">Automatic: by difficulty, QCM a fixed share</option><option value="file">The points written in the file</option></select></div>
+          <div id="mw-qs-f"><label for="mw-qs">The QCM's share of the score (%)</label><input type="number" id="mw-qs" min="0" max="50" value="20" style="width:110px"></div></div>
+        <p class="small muted" style="margin:4px 0 0" id="mw-sc-i">Situations by difficulty: 1 → 2 points, 2 → 3, 3 → 4, 4 → 6, 5 → 8; the QCM share the rest. You can still change any item's points afterwards (Edit).</p>
         <p class="small muted" id="mw-cnt-i" style="margin:4px 0 0"></p>
         <div class="toolbar" style="margin:8px 0 0"><button class="btn primary" id="mw-gen" type="button">✨ Generate</button><button class="btn" id="mw-cp" type="button" hidden>📋 Copy</button><span class="small muted" id="mw-st"></span></div>
         <textarea id="mw-prompt" class="cj-json" readonly hidden aria-label="The prompt for Claude"></textarea>
@@ -205,10 +209,11 @@ async function mesWizard(opts = {}) {
   loadCn();
   cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });
   // how many situations and QCM (an uploaded file: as many as it has)
-  const counts = () => (W.src === "json" ? {} : { nSituations: Math.max(1, Math.min(15, Number($("#mw-ns").value) || 5)), nQcm: Math.max(0, Math.min(30, Math.round(Number($("#mw-nq").value) || 0))) });
-  const cntInfo = () => { const c = counts(); if (!c.nSituations) return; const min = c.nSituations * 15 + c.nQcm * 2;
+  const counts = () => ({ ...(W.src === "json" ? {} : { nSituations: Math.max(1, Math.min(15, Number($("#mw-ns").value) || 5)), nQcm: Math.max(0, Math.min(30, Math.round(Number($("#mw-nq").value) || 0))) }),
+    scoring: $("#mw-sc").value, qcmShare: Math.max(0, Math.min(50, Math.round(Number($("#mw-qs").value) || 0))) });
+  const cntInfo = () => { const c = counts(); $("#mw-qs-f").hidden = c.scoring === "file" || c.nQcm === 0; $("#mw-sc-i").hidden = c.scoring === "file"; if (!c.nSituations) return; const min = c.nSituations * 15 + c.nQcm * 2;
     $("#mw-cnt-i").textContent = `${c.nSituations} coding situation${c.nSituations > 1 ? "s" : ""} (difficulty going up)${c.nQcm ? ` + ${c.nQcm} QCM on their code` : ", no QCM"} · about ${min} minutes for the learners${c.nSituations > 8 && W.src !== "claude" ? " · the AI may take several rounds for that many" : ""}`; };
-  ["#mw-ns", "#mw-nq"].forEach((x) => $(x).oninput = () => { cntInfo(); stale(); });
+  ["#mw-ns", "#mw-nq", "#mw-sc", "#mw-qs"].forEach((x) => $(x).oninput = $(x).onchange = () => { cntInfo(); stale(); });
   setTimeout(cntInfo);
   const scope = () => ({ ...counts(), week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
     ...($("[data-cncap]", cnBox) ? { concepts: pickedConcepts(cnBox) } : {}) });
@@ -395,7 +400,7 @@ async function mesEditor(root) {
     <label>Context <span class="muted">(the job, the character, the need)</span></label>${ta(`s.${i}.context`, x.context, 80)}
     <div class="field-row">
       <div><label>Difficulty</label><select data-e="s.${i}.difficulty">${[1, 2, 3, 4, 5].map((d) => `<option ${d === x.difficulty ? "selected" : ""}>${d}</option>`).join("")}</select></div>
-      <div><label>Points</label><input type="number" min="1" max="10" data-e="s.${i}.points" value="${x.points}"></div>
+      <div><label>Points</label><input type="number" min="0.05" max="10" step="0.05" data-e="s.${i}.points" value="${x.points}"></div>
       <div style="flex:2"><label>Notions <span class="muted">(comma separated)</span></label>${inp(`s.${i}.notions`, x.notions.join(", "))}</div>
       <div><label>Competencies</label>${inp(`s.${i}.competencies`, x.competencies.join(", "), "C4N1")}</div></div>
     <label>Sub-questions <span class="muted">(one per line)</span></label>${ta(`s.${i}.questions`, x.questions.join("\n"), 110)}
@@ -408,7 +413,7 @@ async function mesEditor(root) {
     <label>Code <span class="muted">(optional)</span></label><textarea data-e="q.${i}.code" class="code-ta" spellcheck="false" style="min-height:50px">${esc(q.code || "")}</textarea>
     <label>Choices <span class="muted">(tick the right one)</span></label>
     ${[0, 1, 2, 3].map((k) => `<div class="mes-ed-ch"><input type="radio" name="qc${i}" value="${k}" data-e="q.${i}.correct" ${q.correct === k ? "checked" : ""} aria-label="Right answer ${"ABCD"[k]}"><b>${"ABCD"[k]}</b>${inp(`q.${i}.c.${k}`, q.choices[k] || "", k >= 3 ? "(optional 4th choice)" : "")}</div>`).join("")}
-    <div class="field-row"><div style="flex:2"><label>Notion</label>${inp(`q.${i}.notion`, q.notion)}</div><div><label>Points</label><input type="number" min="1" max="5" data-e="q.${i}.points" value="${q.points}"></div><div><label>Competencies</label>${inp(`q.${i}.competencies`, q.competencies.join(", "))}</div></div></div>`;
+    <div class="field-row"><div style="flex:2"><label>Notion</label>${inp(`q.${i}.notion`, q.notion)}</div><div><label>Points</label><input type="number" min="0.05" max="10" step="0.05" data-e="q.${i}.points" value="${q.points}"></div><div><label>Competencies</label>${inp(`q.${i}.competencies`, q.competencies.join(", "))}</div></div></div>`;
   const weeks = st.weeks;
   root.innerHTML = `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="me-save">Save</button><button class="btn" id="me-cancel">Cancel</button><span class="small muted">Saved, it's checked again like an import. The automatic checks: <b>Edit the JSON</b>.</span></div>
     <div id="me-prob"></div>

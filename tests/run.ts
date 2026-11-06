@@ -7389,6 +7389,18 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
     check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
     check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
   const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
+  // the automatic barème: situations by difficulty, the QCM a fixed share of the score, whatever their number
+  { const r = M.checkMise(good(), { ...opts, scoring: { qcmShare: 20 } }); const c = r.content!;
+    const tot = M.totalPoints(c), qsh = c.qcm.reduce((t: number, q: any) => t + q.points, 0) / tot;
+    check(c.situations.map((x: any) => x.points).join() === c.situations.map((x: any) => ({ 1: 2, 2: 3, 3: 4, 4: 6, 5: 8 } as any)[x.difficulty]).join() && Math.abs(qsh - 0.2) < 0.01,
+      `automatic barème: each situation by its difficulty, the 5 QCM 20 % together (${c.situations.map((x: any) => x.points).join("-")} · QCM ${c.qcm[0].points} each)`);
+    const d20 = good(); d20.qcm = Array.from({ length: 20 }, (_, i) => ({ ...good().qcm[i % 5], question: `Question ${i + 1} : que renvoie document.querySelector(".prix") ?` }));
+    const c20 = M.checkMise(d20, { ...opts, scoring: { qcmShare: 20 } }).content!;
+    check(Math.abs(c20.qcm.reduce((t: number, q: any) => t + q.points, 0) / M.totalPoints(c20) - 0.2) < 0.02, "…20 QCM: still 20 % together (never more than the code)");
+    const d0 = good(); d0.qcm = [];
+    const c0 = M.checkMise(d0, { ...opts, scoring: { qcmShare: 20 } }).content!;
+    check(c0.qcm.length === 0 && M.totalPoints(c0) === c0.situations.reduce((t: number, x: any) => t + x.points, 0), "…no QCM: the code is 100 %");
+    check(M.checkMise(good(), opts).content!.situations[0].points === 3, "…« the file's points »: kept as written"); }
   check(/EXACTEMENT 8 mises en situation/.test(prN) && /AUCUN QCM/.test(prN) && !/EXACTEMENT \d+ QCM/.test(prN), "the prompt asks for the counts chosen (8 situations, no QCM)");
   check(has(probs((d) => { d.qcm[3].choices = ["a", "b"]; }), "QCM 4", /3 or 4 plausible choices/), "a QCM with 2 choices: QCM number + field");
   check(has(probs((d) => { d.qcm[1].correct = [0, 1]; }), "QCM 2", /ONE right choice/), "a QCM with two right answers refused");
@@ -7484,6 +7496,9 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
   const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
   check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  { const auto = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
+    const fileP = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], scoring: "file", json: JSON.stringify(file) });
+    check(auto.status === 200 && Math.abs(auto.data.preview.points - fileP.data.preview.points) > 0.01 && fileP.data.preview.points === file.situations.length * 3 + file.qcm.length, "import: the automatic barème by default, the file's points when asked"); }
   const prev = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
   check(prev.status === 200 && !prev.data.problems.length && prev.data.preview.situations.length === 5 && !prev.data.id, "…a good one: a preview first, nothing saved " + JSON.stringify(prev.data.problems?.slice(0, 2)));
   const imp = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id, U.bob.id] });
