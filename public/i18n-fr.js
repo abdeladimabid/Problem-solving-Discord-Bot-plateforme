@@ -4484,6 +4484,8 @@ window.CB_FR = {
   "From a plan already made": "À partir d’un plan déjà fait",
   "A new plan": "Un nouveau plan",
   "A new plan on a sprint": "Un nouveau plan sur un sprint",
+  "👥 Give work to the whole class": "👥 Donner du travail à toute la classe",
+  "＋ Create it on this sprint →": "＋ La créer sur ce sprint →",
   "🧪 A mise en situation on it": "🧪 Une mise en situation dessus",
   "Build it →": "Le construire →",
   "Barème": "Barème",

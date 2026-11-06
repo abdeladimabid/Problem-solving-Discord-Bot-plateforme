@@ -807,11 +807,11 @@ function mesResetDialog(t) {
 
 // « Give work » (the students' page, a plan d'action): one of the mises en situation, for the students chosen.
 // Saved and not launched → its launch window with them already ticked; already live → they're added (link by DM).
-async function mesGiveDialog(pre = [], students = []) {
+async function mesGiveDialog(pre = [], students = [], o = {}) {
   const items = (await api("/mises")).items.filter((m) => m.status !== "closed");
   const names = new Map(students.map((s) => [s.discord_id, s.name]));
   openDialog("🧪 Give a mise en situation", `
-    ${items.length ? `<p class="small muted" style="margin-top:0">For ${pre.length ? pre.map((id) => `<b>${esc(names.get(id) || id)}</b>`).join(", ") : "the students you'll pick"}.</p>
+    ${items.length ? `<p class="small muted" style="margin-top:0">For ${o.everyone ? `<b>the whole class</b> (${pre.length} students)` : pre.length ? pre.map((id) => `<b>${esc(names.get(id) || id)}</b>`).join(", ") : "the students you'll pick"}.</p>
       <div class="mes-give">${items.map((m, i) => `<label class="check mes-give-it"><input type="radio" name="mg" value="${m.id}" ${i ? "" : "checked"}> <span><b>${esc(m.title)}</b> ${mesStatus(m.status)}${m.week ? ` <span class="small muted">· week ${m.week}</span>` : ""}<br>${m.comps.map((c) => compChip(c)).join(" ")} <span class="small muted">${m.takers ? `· ${m.done}/${m.takers} handed in` : ""}</span></span></label>`).join("")}</div>`
       : `<p class="muted">No mise en situation yet.</p>`}
     <p class="small"><a href="#/mises-en-situation" id="mg-new">＋ Create a new one</a> <span class="muted">(upload a JSON, or the AI writes it for a brief or the sprint)</span></p>`,
@@ -820,8 +820,12 @@ async function mesGiveDialog(pre = [], students = []) {
     const m = items.find((x) => x.id === id);
     if (!m) throw new Error("Choose a mise en situation.");
     if (m.status === "draft" || !pre.length) { dlg.close(); MSIT.pendingLaunch = pre; location.hash = `#/mise/${id}`; return; }
-    const r = await api(`/mises/${id}/add`, { method: "POST", body: { students: pre } });
-    dlg.close(); toast(`${pre.length} added · ${r.sent} DM sent`); location.hash = `#/mise/${id}`;
+    // live already: the ones who don't have it yet are added (the whole class: everyone missing)
+    const has = new Set((await api(`/mises/${id}`)).takers.map((t) => t.discord_id));
+    const add = pre.filter((x) => !has.has(x));
+    if (!add.length) { dlg.close(); toast("They all have it already"); location.hash = `#/mise/${id}`; return; }
+    const r = await api(`/mises/${id}/add`, { method: "POST", body: { students: add } });
+    dlg.close(); toast(`${add.length} added · ${r.sent} DM sent`); location.hash = `#/mise/${id}`;
   } }] : []);
   $("#mg-new", dlg).onclick = () => { dlg.close(); MSIT.openNew = true; };
 }

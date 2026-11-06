@@ -24,7 +24,7 @@ async function giveWorkDialog(preStudents = [], rows = []) {
   const draft = one ? plans.find((p) => p.status === "draft") : null;
   const pickList = one ? "" : `<label for="gw-s" class="small">For</label><select id="gw-s" style="width:100%">${students.map((s) => `<option value="${esc(s.discord_id)}" ${preStudents[0] === s.discord_id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>`;
   openDialog("Give work", `<div class="gw">
-      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation (5 situations with code + 5 QCM), for ${one ? esc(one.name) : "one or more students"}. Taken in their browser, followed live.</span><span class="btn">Choose a mise en situation →</span></button>
+      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation (situations with code, and QCM if you want), for ${one ? esc(one.name) : "one or more students"}. Taken in their browser, followed live.</span><span class="btn">Choose a mise en situation →</span></button>
       <div class="gw-opt gw-plan" role="group"><span class="gw-ico">🧭</span><b>A plan d'action</b><span class="muted small">A series of actions built for ${one ? esc(one.name) : "one student"}: the AI first explains their lacunes and proposes challenges, code to write, questions, a QCM or a mini brief. You choose, edit, then send.</span>
         ${pickList}<button class="btn primary" id="gw-pl">${draft ? "Continue the draft" : "Build the plan"} →</button></div>
     </div>`);
@@ -46,18 +46,26 @@ async function giveWorkDialog(preStudents = [], rows = []) {
 // A plan is built on one student's page (their diagnosis helps choose the actions), then « 👥 Send to the whole class »
 // gives each student their own copy. Start from a plan already made, or a new draft.
 async function classPlanDialog() {
-  const [plans, sp] = await Promise.all([api("/wplans").catch(() => []), api("/sprints").catch(() => ({ sprints: [], current: null }))]);
+  const [plans, sp, studs] = await Promise.all([api("/wplans").catch(() => []), api("/sprints").catch(() => ({ sprints: [], current: null })), loadStudents()]);
+  const all = studs.map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id }));
   const withSteps = plans.filter((p) => p.steps > 0).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, 30);
-  openDialog("👥 A plan d'action for the whole class", `<p class="muted small" style="margin-top:0">Build the actions once, then send them to every student: each one gets their own plan (their answers, progress and guide), by DM.</p>
-    <div class="gw">
-      ${withSteps.length ? `<div class="gw-opt" role="group"><span class="gw-ico">📋</span><b>From a plan already made</b><span class="muted small">Its actions, title, message and due date.</span>
-        <select id="cp-from" style="width:100%">${withSteps.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.sid === "class" ? "👥 class" : esc(p.name)} · ${p.steps} action${p.steps > 1 ? "s" : ""}${p.status === "draft" && p.sid !== "class" ? " · draft" : ""}</option>`).join("")}</select>
-        <button class="btn primary" id="cp-open">Open it → 👥 Send to the whole class</button></div>` : ""}
-      <div class="gw-opt" role="group"><span class="gw-ico">✨</span><b>A new plan on a sprint</b><span class="muted small">The AI reads what the class didn't reach in the sprint (competencies, objectives, shared lacunes) and proposes actions: a mini brief, code, questions, a QCM, challenges — or a mise en situation. You choose, then « 👥 Send to the whole class ».</span>
-        <select id="cp-sp" style="width:100%">${(sp.sprints || []).map((x) => `<option value="${x.n}" ${x.n === sp.current ? "selected" : ""}>Sprint ${x.n}${x.title ? ` · ${esc(x.title)}` : ""}${x.n === sp.current ? " (now)" : ""}</option>`).join("")}</select>
-        <button class="btn primary" id="cp-new">Build it →</button></div>
+  const spOpts = (sp.sprints || []).map((x) => `<option value="${x.n}" ${x.n === sp.current ? "selected" : ""}>Sprint ${x.n}${x.title ? ` · ${esc(x.title)}` : ""}${x.n === sp.current ? " (now)" : ""}</option>`).join("");
+  openDialog("👥 Give work to the whole class", `<div class="gw">
+      <div class="gw-opt" role="group"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation for all ${all.length} students (code in their browser, followed live), or a new one: written by the AI from a sprint (on what the class didn't reach) or a brief.</span>
+        <button class="btn primary" id="cp-mes">Choose a mise en situation →</button>
+        <label class="small" for="cp-msp" style="margin-top:6px">or a new one on</label><select id="cp-msp" style="width:100%">${spOpts}</select>
+        <button class="btn" id="cp-mnew">＋ Create it on this sprint →</button></div>
+      <div class="gw-opt" role="group"><span class="gw-ico">🧭</span><b>A plan d'action</b><span class="muted small">Actions for everyone (mini brief, code, questions, QCM, challenges): each student gets their own copy by DM.</span>
+        <label class="small" for="cp-sp">A new plan on</label><select id="cp-sp" style="width:100%">${spOpts}</select>
+        <button class="btn primary" id="cp-new">Build it → <span class="muted small">(the AI reads what the class didn't reach)</span></button>
+        ${withSteps.length ? `<label class="small" for="cp-from" style="margin-top:6px">or one already made</label><select id="cp-from" style="width:100%">${withSteps.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.sid === "class" ? "👥 class" : esc(p.name)} · ${p.steps} action${p.steps > 1 ? "s" : ""}</option>`).join("")}</select>
+        <button class="btn" id="cp-open">Open it → 👥 Send to the whole class</button>` : ""}</div>
     </div>`);
   dlg.classList.add("wide");
+  // a mise en situation: one already made (for everyone), or the wizard on the sprint
+  $("#cp-mes", dlg).onclick = (e) => busy(e.currentTarget, () => mesGiveDialog(all.map((s) => s.discord_id), all, { everyone: true }));
+  $("#cp-mnew", dlg).onclick = () => { const n = Number($("#cp-msp", dlg).value) || null; dlg.close();
+    MSIT.openNew = n ? { sprint: n, wishes: `Pour toute la classe, sur ce qu'elle n'a pas atteint au sprint ${n}` } : true; location.hash = "#/mises-en-situation"; };
   if ($("#cp-open", dlg)) $("#cp-open", dlg).onclick = (e) => busy(e.currentTarget, async () => {
     const id = $("#cp-from", dlg).value; dlg.close();
     location.hash = `#/wplan/${id}`;
