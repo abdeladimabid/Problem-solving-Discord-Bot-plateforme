@@ -619,7 +619,7 @@ export async function finish(
     }
     if (points) {
       await addPoints(env, guild, { discordId: a.discord_id, amount: points, reason: a.origin, ref: a.id });
-      await challengeCoins(env, guild, a.discord_id, points);
+      await challengeCoins(env, guild, a.discord_id, points, c.difficulty);
       await run(env, "UPDATE attempts SET points = ? WHERE id = ?", points, a.id);
     }
     // 🎯 challenge contract (bought in /shop): every new code/SQL solve at the goal level counts
@@ -863,7 +863,7 @@ export async function regrade(env: Env, guild: GuildRow, c: ChallengeRow): Promi
     const pts = pointsFor(scoringOf(guild), { kind: c.kind, difficulty: c.difficulty, origin: a.origin === "duel" ? "practice" : a.origin, usedHint: a.used_hint, tries: a.tries, seconds: 999 });
     await run(env, "UPDATE attempts SET status = 'solved', points = ? WHERE id = ?", pts, a.id);
     await addPoints(env, guild, { discordId: a.discord_id, amount: pts, reason: "regrade", ref: a.id });
-    await challengeCoins(env, guild, a.discord_id, pts);
+    await challengeCoins(env, guild, a.discord_id, pts, c.difficulty);
     n++;
   }
   return n;
@@ -987,7 +987,8 @@ async function releaseHeld(env: Env, guild: GuildRow, a: AttemptRow, score: numb
   const pts = Math.round((a.held ?? 0) * Math.max(0, Math.min(1, score)));
   if (pts) {
     await addPoints(env, guild, { discordId: a.discord_id, amount: pts, reason: a.origin, ref: a.id, note });
-    await challengeCoins(env, guild, a.discord_id, pts);
+    const ch = await one<{ difficulty: string }>(env, "SELECT difficulty FROM challenges WHERE id = ?", a.challenge_id);
+    await challengeCoins(env, guild, a.discord_id, pts, ch?.difficulty);
     await run(env, "UPDATE attempts SET points = points + ? WHERE id = ?", pts, a.id);
   }
   return pts;

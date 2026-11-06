@@ -1246,6 +1246,24 @@ section("anti-farming: quick challenges shrink after a few a day, write code nev
   await api("PUT", "/api/settings", { g: G, scoring: { ...sc, quick: { full: 20, reduced: 0, pct: 0 } } });
   const more = await solveMcq(mcqs[12]);
   check(more.pts > 1, "teacher raised the allowance: points again");
+  // coins per level: the teacher sets them apart from the points
+  {
+    const lv = mcqs[13].difficulty as "easy" | "medium" | "hard";
+    const coins = { ...sc.base, [lv]: sc.base[lv] * 3 };
+    const sx = await api("PUT", "/api/settings", { g: G, scoring: { ...sc, quick: { full: 20, reduced: 0, pct: 0 }, coins } });
+    check(sx.data.scoring.coins[lv] === sc.base[lv] * 3, "coins per level saved with the scoring");
+    const c0 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    const r = await solveMcq(mcqs[13]);
+    const c1 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    check(r.pts > 0 && c1 - c0 === r.pts * 3, `coins follow the level setting: ${r.pts} points → ${c1 - c0} coins`);
+    const { coinsFor, scoringOf } = await import("../src/shared/game.ts");
+    const dsc = scoringOf(null);
+    check(coinsFor(dsc, "hard", 37) === 37 && coinsFor(dsc, null, 5) === 5, "default: as many coins as points");
+    const zs = scoringOf({ scoring: JSON.stringify({ base: { easy: 4 }, coins: { easy: 0 } }) });
+    check(zs.coins.easy === 0 && coinsFor(zs, "easy", 8) === 0 && zs.coins.medium === 6, "0 coins for a level; unset levels keep coins = points");
+    check(scoringOf({ scoring: JSON.stringify({ base: { easy: 5 } }) }).coins.easy === 5, "old saved scoring without coins: coins = its points");
+    check(coinsFor(scoringOf({ scoring: JSON.stringify({ base: { hard: 10 }, coins: { hard: 5 } }) }), "hard", -20) === -10, "points taken back take the same share of coins back");
+  }
   check((await slash(D as any, "help", {})) && true, "help still renders");
   await api("PUT", "/api/settings", { g: G, scoring: null });
 }

@@ -37,6 +37,7 @@ export const RULES = {
 // number from the dashboard (Settings → Scoring); this is the default.
 export interface Scoring {
   base: Record<Difficulty, number>;
+  coins: Record<Difficulty, number>;    // coins for a challenge of that level (same type multiplier and bonuses as the points)
   mult: Record<string, number>;
   cap: number;                          // max points per student per day from QUICK challenges (practice + duels)
   quick: { full: number; reduced: number; pct: number; lock: boolean };  // per day: `full` quick solves at 100%, the next `reduced` at pct%, then 0; lock = can't pick more until tomorrow
@@ -45,6 +46,7 @@ export interface Scoring {
 }
 export const DEFAULT_SCORING: Scoring = {
   base: { easy: 3, medium: 6, hard: 12 },
+  coins: { easy: 3, medium: 6, hard: 12 },
   mult: { mcq: 1, complexity: 2, output: 3, bug: 5, regex: 3, sql: 6, write: 10, code: 8 },
   cap: 150,
   quick: { full: 3, reduced: 2, pct: 50, lock: true },
@@ -63,6 +65,8 @@ export function scoringOf(g: { scoring?: string | null } | null | undefined): Sc
   const d = DEFAULT_SCORING;
   return {
     base: { easy: num(o.base?.easy, d.base.easy), medium: num(o.base?.medium, d.base.medium), hard: num(o.base?.hard, d.base.hard) },
+    // no coins set yet: as many coins as points, like before
+    coins: Object.fromEntries((["easy", "medium", "hard"] as Difficulty[]).map((k) => [k, num(o.coins?.[k], num(o.base?.[k], d.base[k]))])) as Record<Difficulty, number>,
     mult: Object.fromEntries(SCORE_KINDS.map((k) => [k, num(o.mult?.[k], d.mult[k], 1000)])),
     cap: num(o.cap, d.cap),
     quick: { full: Math.round(num(o.quick?.full, d.quick.full, 1000)), reduced: Math.round(num(o.quick?.reduced, d.quick.reduced, 1000)), pct: Math.round(num(o.quick?.pct, d.quick.pct, 100)), lock: o.quick?.lock === undefined ? d.quick.lock : o.quick.lock !== false },
@@ -90,6 +94,17 @@ export function quickFactor(sc: Scoring, solvedToday: number): number {
 
 export const basePoints = (sc: Scoring, kind: string, difficulty: Difficulty) =>
   Math.round((sc.base[difficulty] ?? 0) * (sc.mult[kind] ?? 1));
+
+/** Coins for points won (or taken back) on a challenge: the points scaled by coins/base of its level, so the type
+ *  multiplier, hints, tries and bonuses count the same way. Coins = base gives as many coins as points. */
+export function coinsFor(sc: Scoring, difficulty: Difficulty | string | null | undefined, points: number): number {
+  const d = (["easy", "medium", "hard"].includes(String(difficulty)) ? difficulty : null) as Difficulty | null;
+  if (!d || !points) return Math.round(points);
+  const base = sc.base[d], coins = sc.coins[d];
+  if (coins === base) return Math.round(points);
+  if (base > 0) return Math.round(points * coins / base);
+  return Math.sign(points) * Math.round(coins);
+}
 
 // ------------------------------------------------------------- levels ----
 export function levelInfo(total: number) {

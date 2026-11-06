@@ -1836,6 +1836,9 @@ async function viewSettings(arg) {
         <div class="stack">
           <div class="panel set-card"><h3>Base points per level</h3>
             <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sb-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sb-${d}" value="${sc.base[d]}"></div>`).join("")}</div>
+            <h3>🪙 Coins per level</h3>
+            <p class="muted small" style="margin-top:0">Coins a student wins with a challenge of that level. The type multiplier, hints, tries and bonuses change them like the points. Same number as the points = as many coins as points.</p>
+            <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sk-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sk-${d}" value="${sc.coins?.[d] ?? sc.base[d]}"></div>`).join("")}</div>
             <h3>Multiplier per type</h3>
             <div class="field-row" style="flex-wrap:wrap">${kinds.map((k) => `<div><label for="sm-${k}">${esc(KIND[k] || k)}</label><input type="number" min="0" max="100" step="0.5" id="sm-${k}" value="${sc.mult[k]}"></div>`).join("")}</div>
           </div>
@@ -1978,6 +1981,7 @@ async function viewSettings(arg) {
   if (typeof loadIdle === "function") loadIdle();
   const readScoring = () => ({
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
+    coins: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sk-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),
     cap: Number($("#s-cap").value), award: Number($("#s-award").value),
     quick: { full: Number($("#sq-full").value), reduced: Number($("#sq-red").value), pct: Number($("#sq-pct").value), lock: $("#sq-lock").checked },
@@ -1986,9 +1990,10 @@ async function viewSettings(arg) {
   const preview = () => {
     const x = readScoring();
     $("#s-preview").innerHTML = `<div class="table-wrap"><table><thead><tr><th></th>${["easy", "medium", "hard"].map((d) => `<th class="num">${DIFF[d]}</th>`).join("")}</tr></thead><tbody>
-      ${kinds.map((k) => `<tr><td>${esc(KIND[k] || k)}</td>${["easy", "medium", "hard"].map((d) => `<td class="num">${Math.round(x.base[d] * x.mult[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      ${kinds.map((k) => `<tr><td>${esc(KIND[k] || k)}</td>${["easy", "medium", "hard"].map((d) => `<td class="num">${Math.round(x.base[d] * x.mult[k])} <span class="muted small">· 🪙 ${Math.round(x.coins[d] * x.mult[k])}</span></td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="muted small">Points · 🪙 coins for a first try without hints.</p>`;
   };
-  $$("[id^=sb-],[id^=sm-]").forEach((i) => (i.oninput = preview));
+  $$("[id^=sb-],[id^=sm-],[id^=sk-]").forEach((i) => (i.oninput = preview));
   preview();
   const qsum = () => {
     const f = Number($("#sq-full").value), r = Number($("#sq-red").value), p = Number($("#sq-pct").value);
