@@ -4485,6 +4485,7 @@ window.CB_FR = {
   "A new plan": "Un nouveau plan",
   "A new plan on a sprint": "Un nouveau plan sur un sprint",
   "👥 Give work to the whole class": "👥 Donner du travail à toute la classe",
+  "♻️ Use it again": "♻️ La réutiliser",
   "＋ Create it on this sprint →": "＋ La créer sur ce sprint →",
   "🧪 A mise en situation on it": "🧪 Une mise en situation dessus",
   "Build it →": "Le construire →",

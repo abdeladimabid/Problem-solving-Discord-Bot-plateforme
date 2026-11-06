@@ -9,7 +9,7 @@
 //   GET  /mises/:id/taker/:t        one learner        PUT /mises/:id/grade|comment        GET /mises/:id/live.csv|results.csv
 import type { Ctx, Env, GuildRow } from "../shared/types.ts";
 import {
-  MiseError, addLate, addTakers, answersExport, importGrades, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
+  MiseError, addLate, addTakers, reuseMise, answersExport, importGrades, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
   reopenTaker, resetTaker, saveMise, sendResults, setComment, setGrade, setupView, takerDetail, unlockTakers,
 } from "../shared/misesdb.ts";
 
@@ -46,7 +46,7 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
     return csv(m[2] === "live" ? await liveCsv(env, g, id) : await resultsCsv(env, g, id), `mise-${id}-${m[2] === "live" ? "live" : "resultats"}.csv`);
   }
   if ((m = path.match(/^\/mises\/(\d+)\/taker\/(\d+)$/)) && method === "GET") return ok(await takerDetail(env, await guild(), Number(m[1]), Number(m[2])));
-  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|late|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock))?$/))) return null;
+  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|late|reuse|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock))?$/))) return null;
   const g = await guild(), id = Number(m[1]), act = m[2];
   if (!act && method === "GET") return ok(await miseView(env, g, id));
   if (!act && method === "PUT") { const r = await saveMise(env, g, id, body); return ok(r.problems.length ? r : { ...r, ...(await miseView(env, g, id)) }); }
@@ -55,6 +55,8 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
   if (method !== "POST" && method !== "PUT") return null;
   if (act === "launch") { const r = await launch(env, g, id, body); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "add") { const r = await addTakers(env, g, id, Array.isArray(body.students) ? body.students : [], body.send !== false); return ok({ ...r, ...(await miseView(env, g, id)) }); }
+  // ♻️ use it again: back to a draft if nobody took it, else a new session (a draft) from the same content
+  if (act === "reuse") return ok(await reuseMise(env, g, id));
   if (act === "late") { const r = await addLate(env, g, id, Array.isArray(body.students) ? body.students : [], body.minutes, body.send !== false); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "resend") return ok(await resend(env, g, id, Number(body.taker)));
   if (act === "extend") { const r = await extend(env, g, id, Number(body.minutes), body.continue ?? null); return ok({ ...r, ...(await miseView(env, g, id)) }); }

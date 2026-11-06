@@ -327,6 +327,7 @@ function mesRender() {
         ${m.status === "draft" ? `<button class="btn primary" id="me-launch">Launch · choose who takes it</button>` : ""}
         ${m.status === "live" && takers.some((t) => t.status === "locked") ? `<button class="btn primary" id="me-unall">Let everyone stopped back in (${takers.filter((t) => t.status === "locked").length})</button>` : ""}
         ${m.status === "live" || m.status === "scheduled" ? `<button class="btn" id="me-add">＋ Add learners</button><button class="btn" id="me-ext">⏱ More time</button><button class="btn danger" id="me-close">Close for everyone</button>` : ""}
+        ${m.status !== "draft" ? `<button class="btn" id="me-reuse" title="The same content again: a new session (a draft to launch) — or back to a draft if nobody took it">♻️ Use it again</button>` : ""}
         ${m.status === "closed" ? `<button class="btn primary" id="me-late" title="Learners who were absent: they get it now with their own time, the session stays closed for the others">＋ Give it to absent learners</button><button class="btn" id="me-ext">⏱ Reopen with more time</button>` : ""}
         <button class="btn danger" id="me-del">Delete</button></div></div>
     <div class="tabs" role="tablist">
@@ -348,6 +349,7 @@ function mesRender() {
   if ($("#me-unall")) $("#me-unall").onclick = (e) => busy(e.currentTarget, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: {} }); toast("They can come back: their page asks for full screen again"); mesRender(); });
   if ($("#me-add")) $("#me-add").onclick = (e) => busy(e.currentTarget, () => mesAddDialog());
   if ($("#me-ext")) $("#me-ext").onclick = () => mesExtendDialog();
+  if ($("#me-reuse")) $("#me-reuse").onclick = (e) => busy(e.currentTarget, () => mesReuse(m.id));
   if ($("#me-late")) $("#me-late").onclick = (e) => busy(e.currentTarget, () => mesLateDialog());
   if ($("#me-close")) $("#me-close").onclick = () => confirmDialog("Close it for everyone?", "Every paper still open is handed in as it is now (the work saved so far). Their links stop working.", "Close", async () => { MSIT.d = await api(`/mises/${m.id}/close`, { method: "POST", body: {} }); mesRender(); });
   $("#me-del").onclick = () => confirmDialog("Delete this mise en situation?", "Its papers and the results it put in the learners' records are deleted. This can't be undone.", "Delete", async () => { await api(`/mises/${m.id}`, { method: "DELETE", confirmed: true }); location.hash = "#/mises-en-situation"; }, true);
@@ -805,20 +807,29 @@ function mesResetDialog(t) {
     toast(invite ? (r.sent ? "Deleted · invited again, new link sent by DM" : closed ? "Deleted · invited again: reopen it so they can take it" : "Deleted · invited again (the DM didn't go through: copy their link)") : "Their paper is deleted"); mesRender(); } }]);
 }
 
+/** ♻️ Use a mise en situation again: a new session from its content (or back to a draft if nobody took it), then its page. */
+async function mesReuse(id, pre = null) {
+  const r = await api(`/mises/${id}/reuse`, { method: "POST", body: {} });
+  toast(r.fresh ? "A new session from the same content: launch it for whom you want" : "Back to a draft: launch it again");
+  if (pre) MSIT.pendingLaunch = pre;
+  if (location.hash === `#/mise/${r.id}`) viewMise(r.id); else location.hash = `#/mise/${r.id}`;
+}
 // « Give work » (the students' page, a plan d'action): one of the mises en situation, for the students chosen.
 // Saved and not launched → its launch window with them already ticked; already live → they're added (link by DM).
 async function mesGiveDialog(pre = [], students = [], o = {}) {
-  const items = (await api("/mises")).items.filter((m) => m.status !== "closed");
+  // every one of them: a closed one is used again (a new session from its content)
+  const items = (await api("/mises")).items;
   const names = new Map(students.map((s) => [s.discord_id, s.name]));
   openDialog("🧪 Give a mise en situation", `
     ${items.length ? `<p class="small muted" style="margin-top:0">For ${o.everyone ? `<b>the whole class</b> (${pre.length} students)` : pre.length ? pre.map((id) => `<b>${esc(names.get(id) || id)}</b>`).join(", ") : "the students you'll pick"}.</p>
-      <div class="mes-give">${items.map((m, i) => `<label class="check mes-give-it"><input type="radio" name="mg" value="${m.id}" ${i ? "" : "checked"}> <span><b>${esc(m.title)}</b> ${mesStatus(m.status)}${m.week ? ` <span class="small muted">· week ${m.week}</span>` : ""}<br>${m.comps.map((c) => compChip(c)).join(" ")} <span class="small muted">${m.takers ? `· ${m.done}/${m.takers} handed in` : ""}</span></span></label>`).join("")}</div>`
+      <div class="mes-give">${items.map((m, i) => `<label class="check mes-give-it"><input type="radio" name="mg" value="${m.id}" ${i ? "" : "checked"}> <span><b>${esc(m.title)}</b> ${mesStatus(m.status)}${m.status === "closed" ? ` <span class="small muted">· ♻️ given again as a new session</span>` : ""}${m.week ? ` <span class="small muted">· week ${m.week}</span>` : ""}<br>${m.comps.map((c) => compChip(c)).join(" ")} <span class="small muted">${m.takers ? `· ${m.done}/${m.takers} handed in` : ""}</span></span></label>`).join("")}</div>`
       : `<p class="muted">No mise en situation yet.</p>`}
     <p class="small"><a href="#/mises-en-situation" id="mg-new">＋ Create a new one</a> <span class="muted">(upload a JSON, or the AI writes it for a brief or the sprint)</span></p>`,
   items.length ? [{ label: "Give it", primary: true, action: async () => {
     const id = Number($('input[name="mg"]:checked', dlg)?.value);
     const m = items.find((x) => x.id === id);
     if (!m) throw new Error("Choose a mise en situation.");
+    if (m.status === "closed") { dlg.close(); return mesReuse(id, pre); }
     if (m.status === "draft" || !pre.length) { dlg.close(); MSIT.pendingLaunch = pre; location.hash = `#/mise/${id}`; return; }
     // live already: the ones who don't have it yet are added (the whole class: everyone missing)
     const has = new Set((await api(`/mises/${id}`)).takers.map((t) => t.discord_id));

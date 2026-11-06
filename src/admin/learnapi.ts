@@ -765,7 +765,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, papers: undefined, ...(await assessView(env, g, a.id)) });
     }
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|unlock|grade|close|reopen|results|links|remove|share|link|options))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|unlock|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -784,6 +784,14 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       await libAssessment(env, g, id, true);   // shared: removed for the other classes too (their papers stay with them)
       await env.DB.batch([env.DB.prepare("DELETE FROM assessment_takers WHERE assessment_id = ?").bind(id), env.DB.prepare("DELETE FROM assessments WHERE id = ?").bind(id)]);
       return ok({ ok: true });
+    }
+    // ♻️ use it again: a new assessment from the same questions, a fresh paper for everyone (a draft to assign); the
+    // results of the first one stay. Nobody took it: back to a draft, as it was.
+    if (act === "reuse" && method === "POST") {
+      const n = (await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ?", id))?.n ?? 0;
+      if (!n) { await run(env, "UPDATE assessments SET status = 'draft', opened_at = NULL, closes_at = NULL WHERE id = ?", id); return ok({ id, fresh: false }); }
+      const r = await run(env, "INSERT INTO assessments (guild_id, title, brief_id, status, settings, questions, created_at) VALUES (?, ?, ?, 'draft', ?, ?, ?)", g.id, a.title, a.brief_id ?? null, a.settings, a.questions, now());
+      return ok({ id: Number(r.meta.last_row_id), fresh: true });
     }
     if (act === "invite") {
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });

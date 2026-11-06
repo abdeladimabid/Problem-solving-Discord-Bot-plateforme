@@ -502,6 +502,21 @@ export async function addTakers(env: Env, g: GuildRow, id: number, students: str
   return { invited: takers.length, sent };
 }
 /**
+ * ♻️ Use it again: never a one-use. Nobody took it (launched by mistake, everyone removed): back to a draft, as it was.
+ * Papers in it: a new session from the same content (a draft, the results of the first one stay where they are).
+ */
+export async function reuseMise(env: Env, g: GuildRow, id: number): Promise<{ id: number; fresh: boolean }> {
+  const m = await getMise(env, g, id);
+  if (m.status === "draft") return { id, fresh: false };
+  const n = (await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM mise_takers WHERE mise_id = ?", id))?.n ?? 0;
+  if (!n) {
+    await run(env, "UPDATE mises SET status = 'draft', starts_at = NULL, ends_at = NULL, opened_at = NULL, closed_at = NULL WHERE id = ?", id);
+    return { id, fresh: false };
+  }
+  const r = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) SELECT guild_id, title, week, sprint, comps, '[]', settings, content, 'draft', ? FROM mises WHERE id = ?", now(), id);
+  return { id: Number(r.meta.last_row_id), fresh: true };
+}
+/**
  * Learners who were absent: they get it now, with their own time (counted from when they open it), the session staying
  * closed for the others. Only learners who don't have it yet (a paper already there: reset it first).
  */

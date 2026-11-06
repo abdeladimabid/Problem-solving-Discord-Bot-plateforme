@@ -3196,6 +3196,15 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
   clock.advance(120);
   await runCron(env);
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id).status !== "active", "closing hands in the papers still open");
+  { // ♻️ an assessment used again: a new draft from the same questions, a fresh paper for everyone; the first one's stay
+    const ru = await api("POST", `/api/assessments/${aid}/reuse`, { g: G });
+    const na = ru.status === 200 ? q1("SELECT status, questions, title FROM assessments WHERE id = ?", ru.data.id) : null;
+    check(ru.status === 200 && ru.data.fresh && na.status === "draft" && na.questions === q1("SELECT questions FROM assessments WHERE id = ?", aid).questions
+      && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ?", ru.data.id).n === 0 && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", aid).n > 0,
+      "an assessment used again: a new draft, the same questions, nobody in it; the first one's papers stay");
+    const inv = await api("POST", `/api/assessments/${ru.data.id}/invite`, { g: G, students: [U.alice.id], send: false });
+    check(inv.status === 200 && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", ru.data.id, U.alice.id).n === 1, "…and Alice, who already took the first one, gets a new paper");
+    run1("DELETE FROM assessment_takers WHERE assessment_id = ?", ru.data.id); run1("DELETE FROM assessments WHERE id = ?", ru.data.id); }
 
   // a retake for the ones who missed it: Bob handed in an empty paper when it closed, Carol was never invited
   const paperOf = (u: string) => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, u);
@@ -7625,6 +7634,15 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   await runCron(env);
   check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.carol.id).status === "submitted" && q1("SELECT status FROM mises WHERE id = ?", mid).status === "closed" && (await late("save", { item: "q2", answer: { choice: 1 } })).status === 409,
     "…their own time up: handed in by the cron, the session still closed");
+  // ♻️ never a one-use: a new session from the same content (its results stay), or back to a draft if nobody took it
+  { const ru = await api("POST", `/api/mises/${mid}/reuse`, { g: G });
+    const nm = ru.status === 200 ? q1("SELECT status, content, target FROM mises WHERE id = ?", ru.data.id) : null;
+    check(ru.status === 200 && ru.data.fresh && ru.data.id !== mid && nm.status === "draft" && nm.content === q1("SELECT content FROM mises WHERE id = ?", mid).content && nm.target === "[]"
+      && q1("SELECT COUNT(*) AS n FROM mise_takers WHERE mise_id = ?", ru.data.id).n === 0 && q1("SELECT COUNT(*) AS n FROM mise_takers WHERE mise_id = ?", mid).n > 0, "a closed mise en situation used again: a new session (a draft, nobody in it), the first one's papers stay");
+    run1("UPDATE mises SET status = 'closed' WHERE id = ?", ru.data.id);
+    const back = await api("POST", `/api/mises/${ru.data.id}/reuse`, { g: G });
+    check(back.data.id === ru.data.id && !back.data.fresh && q1("SELECT status FROM mises WHERE id = ?", ru.data.id).status === "draft", "…launched by mistake and nobody in it: back to a draft, the same one");
+    run1("DELETE FROM mises WHERE id = ?", ru.data.id); }
   // the teacher tests it as a learner (staff: never in « the whole class »), then time is up: the cron closes it
   check(setup.data.staff.some((x: any) => x.discord_id === U.prof.id), "setup: the teacher is offered to test it themselves");
   const imp2 = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id], testers: [U.prof.id] });

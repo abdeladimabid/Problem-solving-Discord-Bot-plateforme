@@ -2518,6 +2518,7 @@ function renderAssessment() {
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status !== "draft" && A.takers.length ? `<button class="btn" id="aa-retake" title="Students who missed it (absent, never started, handed in empty): their own link, even when it's closed">🔁 Retake</button>` : ""}
         ${a.status === "open" ? `<button class="btn" id="aa-close">Close</button>` : a.status === "closed" ? `<button class="btn" id="aa-open">Reopen</button>` : ""}
+        ${a.status !== "draft" ? `<button class="btn" id="aa-reuse" title="The same questions again, a fresh paper for everyone (a new draft to assign); the results of this one stay">♻️ Use it again</button>` : ""}
         <button class="btn" id="aa-share">🔗 Share</button>
         <button class="btn danger" id="aa-del">Delete</button></div></div>
     <div class="tabs" role="tablist">
@@ -2542,6 +2543,12 @@ function renderAssessment() {
   $("#aa-opts").onclick = () => assessOptionsDialog();
   $("#aa-share").onclick = () => shareAssessmentDialog(a.id);
   if ($("#aa-close")) $("#aa-close").onclick = () => confirmDialog("Close this assessment?", "Students still working are handed in automatically within a minute.", "Close", async () => { AS.A = await api(`/assessments/${a.id}/close`, { method: "POST", body: {} }); renderAssessment(); });
+  // ♻️ never a one-use: a new draft from the same questions (back to a draft if nobody took it)
+  if ($("#aa-reuse")) $("#aa-reuse").onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api(`/assessments/${a.id}/reuse`, { method: "POST", body: {} });
+    toast(r.fresh ? "A new draft from the same questions: assign it to whom you want" : "Back to a draft: nobody had taken it");
+    location.hash = `#/assessment/${r.id}`; if (!r.fresh) { AS.A = await api(`/assessments/${r.id}`); renderAssessment(); }
+  });
   if ($("#aa-open")) $("#aa-open").onclick = (e) => busy(e.currentTarget, async () => { AS.A = await api(`/assessments/${a.id}/reopen`, { method: "POST", body: {} }); toast("Open again for 24 h"); renderAssessment(); });
   $("#aa-del").onclick = () => confirmDialog("Delete this assessment?", "The papers are deleted too. Results already sent to the record stay.", "Delete", async () => { await api(`/assessments/${a.id}`, { method: "DELETE" }); location.hash = "#/assessments"; }, true);
 }
