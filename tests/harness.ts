@@ -572,7 +572,7 @@ function fakeAI() {
         const tag = sys.includes("DARIJA") ? "[ary] " : "[en] ";
         return { response: JSON.stringify({ intro: tag + src.intro, fiches: src.fiches.map((f: any) => ({ ...f, explication: tag + f.explication, points: f.points.map((x: string) => tag + x), notes: f.notes.map((x: string) => tag + x) })) }) };
       }
-      if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("Écris UNE action de type")) {
+      if (sys.includes("Fais le DIAGNOSTIC de l'apprenant") || sys.includes("fais le DIAGNOSTIC de la classe") || sys.includes("Écris UNE action de type")) {
         const ch = Number((user.match(/^(\d+) · /m) || [])[1] || 0);
         const acts = [
           { type: "code", notion: "Flexbox : axe principal", titre: "Centrer une barre de navigation", why: "Tu sauras aligner les liens sans marges bricolées.", prompt: "Écris le CSS qui fait de `nav ul` une barre flex dont les liens sont espacés uniformément.", starter: "nav ul {\n  /* à compléter */\n}", expected: "nav ul { display: flex; justify-content: space-evenly; }", lang: "css" },

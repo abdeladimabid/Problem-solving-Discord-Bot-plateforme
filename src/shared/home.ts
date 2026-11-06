@@ -158,5 +158,5 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
     .sort((a, b) => (a.level === "excellent" ? 0 : 1) - (b.level === "excellent" ? 0 : 1) || b.score - a.score);
   return { todo, decline: decline.slice(0, 8), noPlan: noPlan.slice(0, 6), quiet: quiet.slice(0, 6), improving: improving.slice(0, 6), strong: strong.slice(0, 6), levels, total: people.length, sprint,
     trends: { up: people.filter((p) => p.trend === "up").length, flat: people.filter((p) => p.trend === "flat").length, down: people.filter((p) => p.trend === "down").length },
-    plans: { live: live.length, drafts: plans.filter((p) => p.status === "draft").length }, stats, alerts, weeks, byBrief };
+    plans: { live: live.length, drafts: plans.filter((p) => p.status === "draft" && p.sid !== "class").length }, stats, alerts, weeks, byBrief };
 }

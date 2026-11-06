@@ -283,6 +283,13 @@ async function mesWizard(opts = {}) {
   $("#mw-x").onclick = () => { box.innerHTML = ""; };
   showSrc("json");
   // from a brief's page (« Make one for this brief »): the AI writes it for that brief, linked to it when saved
+  // from a plan d'action for the class: the AI writes it from the sprint, on the class's lacunes
+  if (opts.wishes || opts.sprint) {
+    $('[data-seg="mw-src"] [data-v="sprint"]', box)?.click();
+    const wk = opts.sprint ? st.weeks.filter((w) => w.sprint === opts.sprint).pop() : null;
+    if (wk) { setWeek(wk.n, `sprint ${opts.sprint}`); W.manual = true; }
+    if (opts.wishes) $("#mw-wish").value = String(opts.wishes).slice(0, 1500);
+  }
   if (opts.brief) {
     $('[data-seg="mw-src"] [data-v="brief"]', box)?.click();
     await loadBriefs();

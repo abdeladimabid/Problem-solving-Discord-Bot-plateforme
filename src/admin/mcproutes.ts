@@ -64,7 +64,7 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"POST","path":"/reports/resolve","note":""},
   {"method":"GET","path":"/plan","note":"plan d'action (the students who need help)"},
   {"method":"GET","path":"/wplans","note":"a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)"},
-  {"method":"POST","path":"/wplans","note":""},
+  {"method":"POST","path":"/wplans","note":"👥 a plan for the whole class: on a sprint's objectives not reached (then copied to each student)"},
   {"method":"ANY","path":"/wplans/:id(?:/(diagnose|ai|send|review|check|guide|copy))?","note":""},
   {"method":"ANY","path":"/plan/:id","note":""},
   {"method":"ANY","path":"/plan/:id/gaps","note":""},

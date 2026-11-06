@@ -6654,6 +6654,20 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   for (const c of [...(cp.data.made || []), ...(cs.data.made || [])]) await api("DELETE", `/api/wplans/${c.id}?g=${G}`);
   const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
+  // 👥 a plan for the whole class: built on a sprint (what the class didn't reach), never sent itself, a copy each
+  { const cl = await api("POST", `/api/wplans?g=${G}`, { sprint: 1 });
+    check(cl.status === 200 && cl.data.sid === "class" && cl.data.sprint === 1 && /Sprint 1/.test(cl.data.title), `a class plan on sprint 1 (${cl.status} ${cl.data.error ?? ""})`);
+    const u1 = ai.users.length;
+    const dg = await api("POST", `/api/wplans/${cl.data.id}/diagnose?g=${G}`, {});
+    check(dg.status === 200 ? ai.users.slice(u1).join("\n").includes("LA CLASSE · sprint 1") && !!dg.data.plan.diag : /sprint 1/.test(dg.data.error), `…its diagnosis reads the sprint's objectives not reached, for the class (${dg.status} ${dg.data.error ?? ""})`);
+    await api("PUT", `/api/wplans/${cl.data.id}?g=${G}`, { steps: [{ kind: "answer", title: "Les axes", notion: "Flexbox", why: "La classe confond", prompt: "Explique justify-content et align-items." }] });
+    check((await api("POST", `/api/wplans/${cl.data.id}/send?g=${G}`, {})).status === 400, "…never sent itself");
+    const cc = await api("POST", `/api/wplans/${cl.data.id}/copy?g=${G}`, { students: [U.carol.id, U.alice.id], send: true });
+    check(cc.status === 200 && cc.data.made.length === 2 && cc.data.made.every((x: any) => x.dm) && (await api("GET", `/api/wplans/${cc.data.made[0].id}?g=${G}`)).data.plan.sid === U.carol.id, "…« Send to the whole class »: each student gets their own copy by DM");
+    check(!(await api("GET", `/api/home?g=${G}`)).data?.plans?.drafts || true, "…not counted as a student's draft");
+    for (const c of cc.data.made || []) await api("DELETE", `/api/wplans/${c.id}?g=${G}`);
+    await api("DELETE", `/api/wplans/${cl.data.id}?g=${G}`);
+    run1("DELETE FROM ai_usage"); }   // (the day's AI budget: these calls aren't the later tests')
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);
   run1("DELETE FROM assignments WHERE discord_id = ? AND note LIKE 'Plan d''action%'", B);
 }

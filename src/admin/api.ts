@@ -37,7 +37,7 @@ import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/crea
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import { ChatError, chatCheck, chatFeedback, chatSuggestions, classChat, runChatAction, undoChatAction } from "../shared/classchat.ts";
-import { WorkPlanError, copyPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
+import { WorkPlanError, copyPlan, createClassPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
 import { staffIds, withoutStaff } from "../shared/staff.ts";
@@ -497,7 +497,8 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/plan" && method === "GET") { const g = await guild(); return ok(await planView(env, g, await students(env, g))); }
     // a student's plan d'action: a diagnosis, then actions built for them (challenge, code, question, QCM, mini brief)
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
-    if (path === "/wplans" && method === "POST") return ok(await createPlan(env, await guild(), String(body.student ?? "")));
+    // 👥 a plan for the whole class: on a sprint's objectives not reached (then copied to each student)
+    if (path === "/wplans" && method === "POST") return ok(body.sprint != null ? await createClassPlan(env, await guild(), Number(body.sprint)) : await createPlan(env, await guild(), String(body.student ?? "")));
     m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);

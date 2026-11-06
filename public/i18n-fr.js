@@ -4483,6 +4483,8 @@ window.CB_FR = {
   "👥 A plan d'action for the whole class": "👥 Un plan d'action pour toute la classe",
   "From a plan already made": "À partir d’un plan déjà fait",
   "A new plan": "Un nouveau plan",
+  "A new plan on a sprint": "Un nouveau plan sur un sprint",
+  "🧪 A mise en situation on it": "🧪 Une mise en situation dessus",
   "Build it →": "Le construire →",
   "Barème": "Barème",
   "Automatic: by difficulty, QCM a fixed share": "Automatique : selon la difficulté, les QCM une part fixe",
