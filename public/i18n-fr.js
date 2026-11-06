@@ -4475,6 +4475,8 @@ window.CB_FR = {
   "Every learner of the class already has it. To give someone a new paper, reset theirs in the Live tab.": "Tous les apprenants de la classe l’ont déjà. Pour donner une nouvelle copie à quelqu’un, réinitialise la sienne dans l’onglet Live.",
   "Learners who were absent: they get it now with their own time, the session stays closed for the others": "Les apprenants absents : ils la reçoivent maintenant avec leur propre temps, la session reste fermée pour les autres",
   "Claude connector": "Connecteur Claude",
+  "Coding situations": "Situations de code",
+  "(0 = none)": "(0 = aucun)",
   "What Claude changed": "Ce que Claude a modifié",
   "Nothing yet.": "Rien pour l’instant.",
   "Read everything + write drafts": "Tout lire + écrire des brouillons",

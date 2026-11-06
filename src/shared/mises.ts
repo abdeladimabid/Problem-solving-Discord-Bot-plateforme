@@ -13,7 +13,14 @@ import { TECHS, compLabel, parseComp, techOfWeek, techOutside } from "./program.
 import { SKILL_KEYS } from "./skills.ts";
 
 export const MISE_FORMAT = "classbot-mise-en-situation@1";
-export const N_SITUATIONS = 5, N_QCM = 5, AI_CHECKS_PER_ITEM = 3;
+// how many situations and QCM: the teacher's choice (the defaults: 5 and 5); at least one situation, QCM may be none
+export const N_SITUATIONS = 5, N_QCM = 5, AI_CHECKS_PER_ITEM = 3, MAX_SITUATIONS = 15, MAX_QCM = 30;
+/** The counts asked (the teacher's), within the limits; undefined = not asked (any count within the limits is fine). */
+export function miseCounts(b: any): { situations: number; qcm: number } | undefined {
+  const sn = Number(b?.nSituations), qn = Number(b?.nQcm);
+  if (!Number.isFinite(sn) && !Number.isFinite(qn)) return undefined;
+  return { situations: Number.isFinite(sn) ? Math.max(1, Math.min(MAX_SITUATIONS, Math.round(sn))) : N_SITUATIONS, qcm: Number.isFinite(qn) ? Math.max(0, Math.min(MAX_QCM, Math.round(qn))) : N_QCM };
+}
 const MAX_BYTES = 400_000;
 
 // ------------------------------------------------------------------ the fixed list of problem categories
@@ -122,6 +129,8 @@ export interface CheckOpts {
   week?: number | null;    // the week chosen
   /** the Fiche niveaux: the codes it knows, and the capacities to cover (each by 5 items at least) */
   concepts?: { known: Set<string>; scope: string[] };
+  /** the counts the teacher asked for (else any count within the limits) */
+  count?: { situations: number; qcm: number };
 }
 /** An item's capacities of the Fiche niveaux: checked against the codes known (and required when there's a scope). */
 function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): string[] {
@@ -180,12 +189,14 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
   const topComps = Array.isArray(data.competencies) ? comps(data.competencies, top) : [];
   if (!Array.isArray(data.competencies)) top(`"competencies": the list of the competencies tested, like ["C3N1"].`);
 
-  // ---- the 5 situations
+  // ---- the situations (as many as the teacher asked: 1 to MAX_SITUATIONS)
   const sits: Situation[] = [];
   const rawSits: any[] = Array.isArray(data.situations) ? data.situations : [];
-  if (!Array.isArray(data.situations)) top(`"situations" must be a list of ${N_SITUATIONS} mises en situation.`);
-  else if (rawSits.length !== N_SITUATIONS) top(`"situations": exactly ${N_SITUATIONS} mises en situation (found ${rawSits.length}).`);
-  rawSits.slice(0, N_SITUATIONS).forEach((s, i) => {
+  const nS = o.count?.situations;
+  if (!Array.isArray(data.situations)) top(`"situations" must be a list of ${nS ?? "1 to " + MAX_SITUATIONS} mises en situation.`);
+  else if (nS != null && rawSits.length !== nS) top(`"situations": exactly ${nS} mises en situation (found ${rawSits.length}).`);
+  else if (!rawSits.length || rawSits.length > MAX_SITUATIONS) top(`"situations": 1 to ${MAX_SITUATIONS} mises en situation (found ${rawSits.length}).`);
+  rawSits.slice(0, MAX_SITUATIONS).forEach((s, i) => {
     const where = `situation ${i + 1}`;
     const bad = (msg: string) => p.push({ where, msg });
     if (!s || typeof s !== "object" || Array.isArray(s)) { bad("must be an object."); return; }
@@ -261,19 +272,23 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     sits.push({ id: `m${i + 1}`, title: t, context: ctx, difficulty: diff, competencies: comps(s.competencies, bad), notions: notions.slice(0, 5), skills: skills(s.skills, bad),
       runtime, files, ...(schema ? { schema } : {}), questions: qs, expected, solution: sol, checks, errorHints: [...new Set(hints.filter((h: string) => CAT_IDS.has(h)))] as string[], points: pts, ...(sc.length ? { concepts: sc } : {}) });
   });
-  // increasing difficulty: 1 → 5 (each once), or at least never going down
-  if (sits.length === N_SITUATIONS && sits.every((s) => s.difficulty >= 1 && s.difficulty <= 5)) {
+  // increasing difficulty: never going down; from 3 situations on, it starts very easy and ends harder
+  if (sits.length === rawSits.length && sits.length > 1 && sits.every((s) => s.difficulty >= 1 && s.difficulty <= 5)) {
     const d = sits.map((s) => s.difficulty);
-    if (d.some((x, i) => i && x < d[i - 1])) top(`"difficulty" must go up from situation 1 to 5 (found ${d.join(", ")}).`);
-    else if (d[0] > 2 || d[4] < 4) top(`"difficulty": start very easy (1 or 2) and end harder (4 or 5) (found ${d.join(", ")}).`);
+    if (d.some((x, i) => i && x < d[i - 1])) top(`"difficulty" must go up from the first situation to the last (found ${d.join(", ")}).`);
+    else if (d.length >= 3 && (d[0] > 2 || d[d.length - 1] < 4)) top(`"difficulty": start very easy (1 or 2) and end harder (4 or 5) (found ${d.join(", ")}).`);
   }
 
-  // ---- the 5 QCM
+  // ---- the QCM (as many as the teacher asked: none to MAX_QCM)
   const qcm: Qcm[] = [];
+  const nQ = o.count?.qcm;
+  // no QCM asked: the list may be left out
   const rawQ: any[] = Array.isArray(data.qcm) ? data.qcm : [];
-  if (!Array.isArray(data.qcm)) top(`"qcm" must be a list of ${N_QCM} questions.`);
-  else if (rawQ.length !== N_QCM) top(`"qcm": exactly ${N_QCM} questions (found ${rawQ.length}).`);
-  rawQ.slice(0, N_QCM).forEach((q, i) => {
+  if (data.qcm != null && !Array.isArray(data.qcm)) top(`"qcm" must be a list of questions.`);
+  else if (data.qcm == null && nQ) top(`"qcm" must be a list of ${nQ} questions.`);
+  else if (nQ != null && rawQ.length !== nQ) top(`"qcm": exactly ${nQ} questions (found ${rawQ.length}).`);
+  else if (rawQ.length > MAX_QCM) top(`"qcm": ${MAX_QCM} questions at most (found ${rawQ.length}).`);
+  rawQ.slice(0, MAX_QCM).forEach((q, i) => {
     const where = `QCM ${i + 1}`;
     const bad = (msg: string) => p.push({ where, msg });
     if (!q || typeof q !== "object" || Array.isArray(q)) { bad("must be an object."); return; }
@@ -299,12 +314,12 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     const qc = itemConcepts(q.concepts, o, bad);
     qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad), notion, skills: skills(q.skills, bad), points: pts, ...(qc.length ? { concepts: qc } : {}) });
   });
-  // the Fiche niveaux: every capacity of the scope touched by at least 5 of the 10 items (an item may touch several)
+  // the Fiche niveaux: every capacity of the scope touched by at least 5 of the items (all of them when there are fewer)
   const declared = Array.isArray(data.concepts) ? [...new Set(data.concepts.map((c: unknown) => String(c).trim().toUpperCase()))] as string[] : [];
   const cscope = o.concepts?.scope.length ? o.concepts.scope : declared.filter((c) => !o.concepts || o.concepts.known.has(c));
   if (cscope.length && !p.length) for (const cc of cscope) {
-    const k = [...sits, ...qcm].filter((x) => (x.concepts ?? []).includes(cc)).length;
-    if (k < 5) top(`item ${cc} of the Fiche niveaux: worked on by ${k} situation(s) / QCM, at least 5 of the ${N_SITUATIONS + N_QCM} must work on it (add it to the ones that REALLY work on it, or change them so they do).`);
+    const k = [...sits, ...qcm].filter((x) => (x.concepts ?? []).includes(cc)).length, need = Math.min(5, sits.length + qcm.length);
+    if (k < need) top(`item ${cc} of the Fiche niveaux: worked on by ${k} situation(s) / QCM, at least ${need} of the ${sits.length + qcm.length} must work on it (add it to the ones that REALLY work on it, or change them so they do).`);
   }
   if (p.length) return { problems: p };
   const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
@@ -648,24 +663,25 @@ export const QCM_RULES = [
   "- Donc : même forme, même longueur, même vocabulaire pour les 4 choix ; la différence tient à un détail exact (le nom réel, la casse, l'unité, la valeur, le type, l'ordre, un off-by-one, liste vivante / statique, référence / copie…).",
   "- UNE SEULE réponse est juste, sans discussion possible : vérifie CHAQUE mauvais choix un par un et assure-toi qu'il est FAUX (il ne marche pas, ou ne donne pas le résultat demandé). INTERDIT par exemple : querySelector('.carte') ✓ avec getElementsByClassName('carte')[0], getElementsByClassName('carte').item(0) ou querySelectorAll('.carte')[0], qui donnent AUSSI le premier élément. Si plusieurs écritures sont justes, change la question.",
   "- Jamais un choix qu'on écarte sans connaître la notion (hors sujet, absurde, d'un autre type) ; la bonne réponse ne reprend pas un mot de la question et n'est pas la plus longue ; varie sa place (\"correct\").",
-  "- Les QCM portent sur LE CODE DES MISES EN SITUATION : chaque QCM teste la compréhension du code que l'apprenant a écrit dans une situation (QCM 1 → situation 1, QCM 2 → situation 2… ou le même ordre de difficulté) : les méthodes, les propriétés, les événements et les concepts qu'il y a utilisés, et POURQUOI ça marche. La question commence par le rappeler (« Dans la situation 2, … », « Dans ton code de la tachkila, … ») et reprend les mêmes noms (variables, id, classes, données).",
+  "- Les QCM portent sur LE CODE DES MISES EN SITUATION : chaque QCM teste la compréhension du code que l'apprenant a écrit dans une situation (les QCM suivent l'ordre des situations, du plus simple au plus difficile) : les méthodes, les propriétés, les événements et les concepts qu'il y a utilisés, et POURQUOI ça marche. La question commence par le rappeler (« Dans la situation 2, … », « Dans ton code de la tachkila, … ») et reprend les mêmes noms (variables, id, classes, données).",
   "- Exemples : que se passe-t-il si on remplace telle méthode par une autre ; que vaut cette variable après la ligne X ; pourquoi un seul écouteur sur la liste suffit ; quelle ligne provoque l'erreur si l'élément n'existe pas ; que renvoie cette méthode sur les données de la situation.",
-  "- Au moins 3 QCM sur 5 montrent un extrait de code (\"code\") TIRÉ DE LA SITUATION ou proche de lui. JAMAIS la solution complète d'une situation (l'apprenant peut revenir en arrière) : une variante, une ligne isolée, une version avec un bug, ou le code de départ.",
+  "- Au moins la moitié des QCM montrent un extrait de code (\"code\") TIRÉ DE LA SITUATION ou proche de lui. JAMAIS la solution complète d'une situation (l'apprenant peut revenir en arrière) : une variante, une ligne isolée, une version avec un bug, ou le code de départ.",
 ];
 /** What makes a situation test the class's limits (in the prompt, and what the AI review checks). */
 export const SIT_RULES = [
   "- La difficulté monte PROGRESSIVEMENT, une marche à la fois :",
-  "    · situation 1 (difficulty 1) : ACCESSIBLE, une seule notion de base de la semaine, 2 ou 3 sous-questions courtes, réussie par presque toute la classe ;",
-  "    · situation 2 (difficulty 2) : une notion de plus, un petit cas à gérer ;",
-  "    · situation 3 (difficulty 3) : 2 ou 3 notions ensemble, une condition ou un cas limite ;",
-  "    · situations 4 et 5 (difficulty 4 et 5) : des exercices de CODE plus longs qui COMBINENT tout ce qui a été vu dans le sprint : le DOM (sélectionner, créer, modifier, supprimer des éléments, écouter des événements) + la manipulation de TABLEAUX (parcourir, filtrer, chercher, ajouter, compter, trier…) + les CONDITIONS + les BOUCLES (et les fonctions, objets… s'ils ont été vus). La 5 est la plus exigeante (plusieurs cas limites, plusieurs vérifications).",
+  "    · la première (difficulty 1) : ACCESSIBLE, une seule notion de base de la semaine, 2 ou 3 sous-questions courtes, réussie par presque toute la classe ;",
+  "    · les suivantes (difficulty 2) : une notion de plus, un petit cas à gérer ;",
+  "    · au milieu (difficulty 3) : 2 ou 3 notions ensemble, une condition ou un cas limite ;",
+  "    · les dernières (difficulty 4 et 5) : des exercices de CODE plus longs qui COMBINENT tout ce qui a été vu dans le sprint : le DOM (sélectionner, créer, modifier, supprimer des éléments, écouter des événements) + la manipulation de TABLEAUX (parcourir, filtrer, chercher, ajouter, compter, trier…) + les CONDITIONS + les BOUCLES (et les fonctions, objets… s'ils ont été vus). La 5 est la plus exigeante (plusieurs cas limites, plusieurs vérifications).",
   "- GUIDAGE PAS À PAS (on garde l'aide) : les sous-questions sont des étapes numérotées dans l'ordre où on code (« 1. Sélectionne… 2. Écoute le clic… 3. … ») et peuvent nommer la notion ou la méthode à utiliser ; le code de départ peut contenir des commentaires qui donnent les étapes (« // 1. Sélectionne le bouton »). Les situations 4 et 5 restent guidées mais avec des étapes plus larges.",
   "- Les \"notions\" de chaque situation sont affichées à l'apprenant comme indices : mets-y les vraies notions utiles (querySelector, addEventListener, filter, for…of…).",
   "- Les vérifications testent ce qui est demandé, cas limites compris, pour qu'une solution approximative ne passe pas.",
 ];
 
 
-export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string; concepts?: { block: string; scope: string[] } }): string {
+export function buildPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek; next: ProgramWeek | null; techs: string[]; comps: string[]; metier?: string; brief?: { title: string; text: string } | null; wishes?: string; concepts?: { block: string; scope: string[] }; count?: { situations: number; qcm: number } }): string {
+  const nS = o.count?.situations ?? N_SITUATIONS, nQ = o.count?.qcm ?? N_QCM, need = Math.min(5, nS + nQ);
   const w = o.week;
   const names = new Map(o.program.referential.map((c) => [c.code, c.name]));
   const compLine = (s: string) => { const pc = parseComp(s); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""}${names.get(pc.code) ? ` (${names.get(pc.code)})` : ""}` : s; };
@@ -697,13 +713,13 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     `- Compétences à évaluer (et AUCUNE autre, dans "competencies") : ${comps.map(compLine).join(" ; ") || "—"}`,
     o.metier ? `- Métier / thème : ${o.metier}` : o.brief ? "- Métier / thème : celui du brief ci-dessous." : "- Métier / thème : choisis un métier marocain crédible (coopérative, riad, souk, transport, santé…).",
     ...(o.brief ? ["", `BRIEF DE LA SEMAINE « ${o.brief.title} » (les mises en situation y sont LIÉES) :`, "<<<", o.brief.text.slice(0, 9000), ">>>",
-      "- Les 5 mises en situation et les QCM se passent DANS ce projet : le même client, le même métier, les mêmes noms, les mêmes données, des morceaux des fonctionnalités du brief (une page, un formulaire, une liste, un calcul…).",
+      `- Les ${nS} mises en situation${nQ ? " et les QCM" : ""} se passent DANS ce projet : le même client, le même métier, les mêmes noms, les mêmes données, des morceaux des fonctionnalités du brief (une page, un formulaire, une liste, un calcul…).`,
       "- Elles testent les notions dont l'apprenant a besoin pour réussir CE brief, une par une, du plus simple au plus difficile.",
       "- Ne demande jamais tout le brief : chaque situation est un petit morceau qu'on code en 10 à 25 minutes."] : []),
     ...(o.wishes ? ["", "EXIGENCES DU FORMATEUR (à respecter ABSOLUMENT, elles passent avant les autres consignes sauf le format JSON) :", o.wishes.slice(0, 1500)] : []),
     "",
     "CE QUE TU ÉCRIS",
-    `- ${N_SITUATIONS} mises en situation de difficulté CROISSANTE ("difficulty" 1 → 5, TOUJOURS dans le périmètre de la semaine). Chacune vérifie que les notions sont VRAIMENT maîtrisées, et révèle ce qui ne l'est pas.`,
+    `- EXACTEMENT ${nS} mise${nS > 1 ? "s" : ""} en situation de difficulté CROISSANTE ("difficulty" 1 → 5, jamais en baisse, TOUJOURS dans le périmètre de la semaine). Chacune vérifie que les notions sont VRAIMENT maîtrisées, et révèle ce qui ne l'est pas.`,
     ...SIT_RULES.map((r) => `  ${r}`),
     "  Pour chacune :",
     "  - \"title\", \"context\" (2 à 4 phrases : un métier marocain fictif, un personnage, un besoin concret), \"difficulty\", \"competencies\", \"notions\" (1 à 5) ;",
@@ -717,10 +733,10 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     ...usable.map((k) => `    · ${checksDoc[k]}`),
     `  - "errorHints" : les erreurs probables, parmi ces identifiants : ${ERROR_CATEGORIES.map((c) => `${c.id} (${c.label})`).join(", ")} ;`,
     "  - \"points\" (facultatif) : 1 à 10, 3 par défaut.",
-    `- ${N_QCM} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
-    ...QCM_RULES.map((r) => `  ${r}`),
+    ...(nQ ? [`- EXACTEMENT ${nQ} QCM : "question" (avec "code" facultatif), "choices" (4 choix), "correct" = l'index de la SEULE bonne réponse (0 = le premier), "competencies", "notion", "points" (facultatif, 1 par défaut).`,
+      ...QCM_RULES.map((r) => `  ${r}`)] : ["- AUCUN QCM : \"qcm\": [] (le formateur ne veut que des situations de code)."]),
     ...(o.concepts?.scope.length ? ["", o.concepts.block,
-      `- Dans ce fichier : "concepts" sur CHAQUE situation et CHAQUE QCM (les éléments de la Fiche qu'il vérifie vraiment), et "concepts" en haut du fichier = ${JSON.stringify(o.concepts.scope)}. Avec ${N_SITUATIONS} situations et ${N_QCM} QCM, chaque élément doit être vérifié par au moins 5 de ces ${N_SITUATIONS + N_QCM} : une situation peut en vérifier plusieurs (ses étapes), un QCM un ou deux.`] : []),
+      `- Dans ce fichier : "concepts" sur CHAQUE situation et CHAQUE QCM (les éléments de la Fiche qu'il vérifie vraiment), et "concepts" en haut du fichier = ${JSON.stringify(o.concepts.scope)}. Avec ${nS} situation${nS > 1 ? "s" : ""} et ${nQ} QCM, chaque élément doit être vérifié par au moins ${need} de ces ${nS + nQ} : une situation peut en vérifier plusieurs (ses étapes)${nQ ? ", un QCM un ou deux" : ""}.`] : []),
     "",
     "RÈGLES",
     "- En français, phrases claires. Exigeant mais juste : tout ce qui est demandé a été vu en cours, rien n'est ambigu.",
@@ -728,10 +744,10 @@ export function buildPrompt(o: { program: Pick<Program, "name" | "referential" |
     "- Les vérifications doivent passer avec ta solution de référence, et échouer avec le code de départ.",
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",
     "",
-    `FORMAT (à suivre exactement, "format" compris ; ${N_SITUATIONS} situations et ${N_QCM} QCM, l'exemple n'en montre qu'une partie) :`,
+    `FORMAT (à suivre exactement, "format" compris ; ${nS} situation${nS > 1 ? "s" : ""} et ${nQ} QCM, l'exemple n'en montre qu'une partie) :`,
     JSON.stringify(o.concepts?.scope.length ? { ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies, concepts: o.concepts.scope,
-      situations: MISE_EXAMPLE.situations.map((s) => ({ ...s, concepts: o.concepts!.scope.slice(0, 2) })), qcm: MISE_EXAMPLE.qcm.map((q) => ({ ...q, concepts: o.concepts!.scope.slice(0, 1) })) }
-      : { ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies }, null, 2),
+      situations: MISE_EXAMPLE.situations.map((s) => ({ ...s, concepts: o.concepts!.scope.slice(0, 2) })), qcm: nQ ? MISE_EXAMPLE.qcm.map((q) => ({ ...q, concepts: o.concepts!.scope.slice(0, 1) })) : [] }
+      : { ...MISE_EXAMPLE, week: w.n, competencies: comps.length ? comps : MISE_EXAMPLE.competencies, ...(nQ ? {} : { qcm: [] }) }, null, 2),
   ].filter((x) => x !== null).join("\n");
 }
 
@@ -795,7 +811,7 @@ export interface MiseCheck { ok: boolean; text: string; tip?: boolean }
  * teacher should look at before giving it — the competencies of the week, the ones chosen and not tested, situations
  * graded by hand, the difficulty, the QCM, the brief it's linked to.
  */
-export function miseChecks(c: MiseContent, o: { weekComps?: string[]; selected?: string[]; brief?: string | null } = {}): MiseCheck[] {
+export function miseChecks(c: MiseContent, o: { weekComps?: string[]; selected?: string[]; brief?: string | null; count?: { situations: number; qcm: number } } = {}): MiseCheck[] {
   const code = (x: string) => parseComp(x)?.code ?? x;
   const used = new Set([...c.situations.flatMap((s) => s.competencies), ...c.qcm.flatMap((q) => q.competencies)].map(code));
   const chosen = (o.selected?.length ? o.selected : c.competencies).map((x) => normComp(x)).filter(Boolean) as string[];
@@ -816,7 +832,7 @@ export function miseChecks(c: MiseContent, o: { weekComps?: string[]; selected?:
   const right = c.qcm.map((q) => q.correct);
   const sameRight = right.length >= 4 && new Set(right).size === 1;
   const out: MiseCheck[] = [
-    { ok: c.situations.length === N_SITUATIONS && c.qcm.length === N_QCM, text: `${c.situations.length} situations and ${c.qcm.length} QCM` },
+    { ok: !o.count || (c.situations.length === o.count.situations && c.qcm.length === o.count.qcm), text: `${c.situations.length} situation${c.situations.length > 1 ? "s" : ""} and ${c.qcm.length} QCM${o.count && (c.situations.length !== o.count.situations || c.qcm.length !== o.count.qcm) ? ` (asked: ${o.count.situations} and ${o.count.qcm})` : ""}` },
     { ok: !d.some((x, i) => i && x < d[i - 1]), text: `Difficulty ${d.join(" → ")}` },
     { ok: !untested.length, text: untested.length ? `Chosen but never tested: ${untested.join(", ")}` : `Every competency chosen is tested (${chosen.join(", ") || "—"})` },
     ...(week.length ? [{ ok: !missing.length, text: missing.length ? `Competencies of the week not in it: ${missing.join(", ")}` : "All the technical competencies of the week are in it" }] : []),

@@ -37,7 +37,7 @@ async function viewMises() {
   MSIT.list = r.items;
   const live = r.items.filter((m) => m.status === "live");
   view.innerHTML = `
-    <div class="page-head"><div><h1>Mises en situation</h1><p class="sub">Live practical tests for the class: 5 situations with real code (increasing difficulty) and 5 QCM, for the week's programme or a brief. Upload a JSON, or let the AI write it. Learners code in their browser, in full screen; you follow each one live.</p></div>
+    <div class="page-head"><div><h1>Mises en situation</h1><p class="sub">Live practical tests for the class: as many situations with real code as you want (increasing difficulty) and QCM (or none), for the week's programme or a brief. Upload a JSON, or let the AI write it. Learners code in their browser, in full screen; you follow each one live.</p></div>
       <div class="toolbar" style="margin:0"><button class="btn primary" id="mes-new">＋ New mise en situation</button></div></div>
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">🧪</span><div><b>${live.length}</b><span>live now</span></div></div>
@@ -76,7 +76,7 @@ async function mesWizard(opts = {}) {
         <div class="seg-row">${segHtml("mw-src", MES_SRC, "json")}</div>
         <div data-ms="json"><p class="small muted" style="margin:8px 0">The week, the sprint and the competencies are read from the file: check them below.</p></div>
         <div data-ms="brief" hidden>
-          <p class="small muted" style="margin:8px 0">The AI writes 5 situations and 5 QCM inside the brief's project (same client, same data), on the notions the learners need for it.</p>
+          <p class="small muted" style="margin:8px 0">The AI writes the situations and QCM inside the brief's project (same client, same data), on the notions the learners need for it.</p>
           ${segHtml("mw-bsrc", [["ours", "One of our briefs"], ["file", "A brief page (.html)"]], "ours")}
           <div data-bs="ours" style="margin-top:8px"><select id="mw-brief" aria-label="The brief"><option value="">Loading the briefs…</option></select></div>
           <div data-bs="file" hidden style="margin-top:8px"><label class="drop" id="mw-bdrop"><input type="file" id="mw-bfile" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label></div>
@@ -94,6 +94,10 @@ async function mesWizard(opts = {}) {
         <div class="field-row" id="mw-ai-f">
           <div><label for="mw-met">Job / theme <span class="muted">(optional)</span></label><input type="text" id="mw-met" placeholder="e.g. a cooperative of argan oil, a riad in Fès, a pharmacy"></div>
           <div><label for="mw-wish">Your wishes <span class="muted">(optional)</span></label><input type="text" id="mw-wish" maxlength="1500" placeholder="e.g. a SQL situation, no regex, S5 on objects"></div></div>
+        <div class="field-row" id="mw-cnt-f">
+          <div><label for="mw-ns">Coding situations</label><input type="number" id="mw-ns" min="1" max="15" value="5" style="width:110px"></div>
+          <div><label for="mw-nq">QCM <span class="muted">(0 = none)</span></label><input type="number" id="mw-nq" min="0" max="30" value="5" style="width:110px"></div></div>
+        <p class="small muted" id="mw-cnt-i" style="margin:4px 0 0"></p>
         <div class="toolbar" style="margin:8px 0 0"><button class="btn primary" id="mw-gen" type="button">✨ Generate</button><button class="btn" id="mw-cp" type="button" hidden>📋 Copy</button><span class="small muted" id="mw-st"></span></div>
         <textarea id="mw-prompt" class="cj-json" readonly hidden aria-label="The prompt for Claude"></textarea>
         <div id="mw-jbox">${jsonBox("mw-json", '{ "format": "classbot-mise-en-situation@1", "title": "…", "week": 3, "competencies": ["C4N1"], "situations": [ … ], "qcm": [ … ] }')}</div></li>
@@ -147,6 +151,7 @@ async function mesWizard(opts = {}) {
     const ai = v === "brief" || v === "sprint";
     $("#mw-mk-t").textContent = ai ? "Generate with the AI" : v === "claude" ? "The prompt, then Claude's JSON" : "The JSON";
     $("#mw-ai-f").hidden = v === "json";
+    $("#mw-cnt-f").hidden = $("#mw-cnt-i").hidden = v === "json";
     $("#mw-gen").hidden = v === "json";
     $("#mw-gen").textContent = v === "claude" ? "✨ Generate the prompt for Claude" : "✨ Generate the mise en situation";
     $("#mw-cp").hidden = true; $("#mw-prompt").hidden = true;
@@ -199,7 +204,13 @@ async function mesWizard(opts = {}) {
   loadCnLater = loadCn;
   loadCn();
   cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });
-  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
+  // how many situations and QCM (an uploaded file: as many as it has)
+  const counts = () => (W.src === "json" ? {} : { nSituations: Math.max(1, Math.min(15, Number($("#mw-ns").value) || 5)), nQcm: Math.max(0, Math.min(30, Math.round(Number($("#mw-nq").value) || 0))) });
+  const cntInfo = () => { const c = counts(); if (!c.nSituations) return; const min = c.nSituations * 15 + c.nQcm * 2;
+    $("#mw-cnt-i").textContent = `${c.nSituations} coding situation${c.nSituations > 1 ? "s" : ""} (difficulty going up)${c.nQcm ? ` + ${c.nQcm} QCM on their code` : ", no QCM"} · about ${min} minutes for the learners${c.nSituations > 8 && W.src !== "claude" ? " · the AI may take several rounds for that many" : ""}`; };
+  ["#mw-ns", "#mw-nq"].forEach((x) => $(x).oninput = () => { cntInfo(); stale(); });
+  setTimeout(cntInfo);
+  const scope = () => ({ ...counts(), week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
     ...($("[data-cncap]", cnBox) ? { concepts: pickedConcepts(cnBox) } : {}) });
   const show = (r, auto) => {
     W.res = r;
@@ -237,7 +248,7 @@ async function mesWizard(opts = {}) {
       copyText(r.prompt, "Prompt copied: paste it in Claude, then paste its JSON below");
       return;
     }
-    $("#mw-st").textContent = "⏳ The AI writes 5 situations with their solution and checks, and 5 QCM, then rewrites whatever doesn’t match the requirements (1 to 4 minutes)…";
+    { const c = counts(); $("#mw-st").textContent = `⏳ The AI writes ${c.nSituations} situation${c.nSituations > 1 ? "s" : ""} with their solution and checks${c.nQcm ? `, and ${c.nQcm} QCM` : ""}, then rewrites whatever doesn’t match the requirements (1 to ${Math.max(4, Math.ceil(c.nSituations * 0.8))} minutes)…`; }
     try {
       const r = await api("/mises/generate", { method: "POST", body });
       $("#mw-json").value = r.json; W.json = r.json; $("#mw-jbox").hidden = false;

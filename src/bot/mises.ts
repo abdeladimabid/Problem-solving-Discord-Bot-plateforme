@@ -273,7 +273,7 @@ function intro(info) {
   if (info.status === "live" && info.taker === "active" && LOCK) return start();
   if (info.status === "submitted") return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>');
   if (info.status === "closed" || info.status === "draft") return screen('<div class="big">🔒</div><h1>Cette mise en situation est fermée</h1><p class="muted">Demande à ton formateur si tu penses que c’est une erreur.</p>');
-  var rules = ["💻 <span>" + info.n.situations + " mises en situation avec du code (de la plus facile à la plus difficile), puis " + info.n.qcm + " QCM.</span>",
+  var rules = ["💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>",
     "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>",
     info.lockScreen ? "💾 <span>Tout est enregistré au fur et à mesure : tu peux revenir sur une question jusqu’à l’envoi.</span>" : "💾 <span>Tout est enregistré au fur et à mesure : tu peux recharger la page ou revenir sur une question jusqu’à l’envoi.</span>",
     info.lockScreen ? "🖥️ <span>Elle se passe <b>en plein écran</b>.</span>" : "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",

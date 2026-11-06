@@ -23,7 +23,7 @@ import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { QCM_RULES, SIT_RULES, readJson } from "./mises.ts";
+import { N_QCM, N_SITUATIONS, QCM_RULES, SIT_RULES, miseCounts, readJson } from "./mises.ts";
 
 export class MiseError extends Error { status: number; constructor(msg: string, status = 400) { super(msg); this.status = status; } }
 
@@ -147,7 +147,7 @@ export async function promptFor(env: Env, g: GuildRow, b: any) {
   if (!w) throw new MiseError("Pick a week of the programme.");
   if (!comps.length) throw new MiseError("Choose at least one competency.");
   const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true });
-  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500), count: miseCounts(b),
     concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined }), techs: techSoFar(p, w), concepts: cn.scope };
 }
 
@@ -161,13 +161,15 @@ async function aiContext(env: Env, g: GuildRow, b: any) {
   await aiBudgetUse(env, 4);
   const techs = techSoFar(p, w);
   const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true, file: b.json ? readJson(b.json).data : undefined });
-  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+  // how many situations and QCM: the teacher's choice (5 and 5 by default)
+  const count = miseCounts(b) ?? { situations: N_SITUATIONS, qcm: N_QCM };
+  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500), count,
     concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined });
   const ask = (extra: string) => chat(env, [
     { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
     { role: "user", content: prompt + extra },
-  ], { maxTokens: 16000, temperature: 0.5, timeoutMs: 170000, json: true });
-  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope } } };
+  ], { maxTokens: Math.min(32000, Math.max(16000, 2800 * count.situations + 400 * count.qcm)), temperature: 0.5, timeoutMs: 170000, json: true });
+  return { p, w, br, comps, techs, ask, count, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope }, count } };
 }
 const readAi = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
 
@@ -226,8 +228,8 @@ async function perfectMise(env: Env, data: any, x: Awaited<ReturnType<typeof aiC
   }
   return {
     json: JSON.stringify(data, null, 2), problems: [...r.problems, ...review], preview: r.problems.length ? null : r.preview,
-    checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title }) : [],
-    detected: { week: w.n, sprint: w.sprint ?? null, comps, concepts: opts.concepts?.scope ?? [] }, brief: br?.id ? { id: br.id, title: br.title } : null,
+    checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title, count: x.count }) : [],
+    detected: { week: w.n, sprint: w.sprint ?? null, comps, concepts: opts.concepts?.scope ?? [], count: x.count }, brief: br?.id ? { id: br.id, title: br.title } : null,
   };
 }
 
@@ -271,14 +273,14 @@ async function reviewQuality(env: Env, c: MiseContent): Promise<{ where: string;
       { role: "system", content: `Tu es un formateur exigeant qui relit une évaluation de développement web avant de la donner.
 QCM : imagine un apprenant qui NE CONNAÎT PAS la notion avec précision. Peut-il trouver la bonne réponse en éliminant des choix (hors sujet, d'une autre forme, absurdes) ou parce qu'elle se distingue ? Chaque QCM porte-t-il bien sur le code d'une des situations (ses méthodes, ses concepts, ses noms) ? Montre-t-il la solution complète d'une situation (interdit) ? Règles :
 ${QCM_RULES.join("\n")}
-SITUATIONS : chacune est-elle à sa place dans la progression (la 1 accessible, puis une marche à la fois ; la 4 et la 5 combinent DOM + tableaux + conditions + boucles) ? Règles :
+SITUATIONS : chacune est-elle à sa place dans la progression (la première accessible, puis une marche à la fois ; les dernières, de difficulté 4 et 5, combinent DOM + tableaux + conditions + boucles) ? Règles :
 ${SIT_RULES.join("\n")}
 Réponds UNIQUEMENT avec ce JSON : {"weak": [{"n": 2, "why": "…"}], "unrelated": [{"n": 3, "why": "…"}], "level": [{"n": 1, "fix": "easier" | "harder" | "combine", "why": "…"}]} ("weak" = QCM devinables à refaire ; "unrelated" = QCM qui ne portent pas sur le code d'une situation, ou qui en montrent la solution complète ; "level" = situations pas à leur place : trop difficile → easier, trop facile → harder, la 4 ou la 5 ne combine pas le DOM, les tableaux, les conditions et les boucles → combine ; listes vides si tout est bon).` },
       { role: "user", content: JSON.stringify({
         qcm: c.qcm.map((q, i) => ({ n: i + 1, question: q.question, code: q.code ?? "", choices: q.choices, correct: q.choices[q.correct] })),
         situations: c.situations.map((y, i) => ({ n: i + 1, difficulty: y.difficulty, context: y.context, questions: y.questions, notions: y.notions, checks: y.checks.map((k) => k.label), solution: y.solution.map((f) => f.content).join("\n").slice(0, 1500) })),
       }) },
-    ], { maxTokens: 2500, temperature: 0.1, timeoutMs: 90000, json: true });
+    ], { maxTokens: Math.min(6000, 1500 + 150 * (c.qcm.length + c.situations.length)), temperature: 0.1, timeoutMs: 90000, json: true });
     const j = readAi(raw);
     const pick = (v: any, max: number) => (Array.isArray(v) ? v : []).filter((y: any) => Number.isInteger(Number(y?.n)) && Number(y.n) >= 1 && Number(y.n) <= max).slice(0, max);
     const FIX: Record<string, string> = {
@@ -340,7 +342,7 @@ async function repairMise(data: any, problems: { where: string; msg: string }[],
   const got = d?.items && typeof d.items === "object" ? d.items : null;
   if (!got) return null;
   for (const [k, v] of Object.entries(got)) {
-    const m = /^([sq])(\d)$/.exec(k);
+    const m = /^([sq])(\d+)$/.exec(k);
     if (!m || !v || typeof v !== "object") continue;
     const arr = m[1] === "q" ? out.qcm : out.situations, i = Number(m[2]) - 1;
     if (Array.isArray(arr) && i >= 0 && i < arr.length) arr[i] = v;
@@ -356,10 +358,11 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   const { br, w, comps } = await scopeOf(env, g, p, b, det);
   // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
   const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope } });
+  const count = miseCounts(b);
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count });
   const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
-  const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title }) : [];
+  const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count }) : [];
   if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
@@ -452,7 +455,7 @@ async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: stri
     : m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
   return dm(env, tk.discord_id, {
     embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
-      description: [`${c.situations.length} mises en situation avec du code et ${c.qcm.length} QCM, dans ton navigateur.`, when,
+      description: [`${c.situations.length} mise${c.situations.length > 1 ? "s" : ""} en situation avec du code${c.qcm.length ? ` et ${c.qcm.length} QCM` : ""}, dans ton navigateur.`, when,
         late ? "" : m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
     components: [row(linkBtn("Ouvrir ma mise en situation", url, "🧪"))],
   });

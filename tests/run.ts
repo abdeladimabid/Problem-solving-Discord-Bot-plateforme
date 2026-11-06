@@ -7375,7 +7375,21 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
   const probs = (mut: (d: any) => void, o: any = opts) => { const d = good(); mut(d); return M.checkMise(d, o).problems; };
   const has = (ps: { where: string; msg: string }[], where: string, re: RegExp) => ps.some((p) => p.where === where && re.test(p.msg));
   check(has(probs((d) => { d.format = "classbot-assessment@1"; }), "file", /"format" must be "classbot-mise-en-situation@1"/), "wrong format named");
-  check(has(probs((d) => { d.situations.pop(); }), "file", /exactly 5 mises en situation \(found 4\)/), "4 situations refused");
+  // as many situations and QCM as the teacher asks (1 to 15, 0 to 30); none asked: any count within the limits
+  check(has(probs((d) => { d.situations.pop(); }, { ...opts, count: { situations: 5, qcm: 5 } }), "file", /exactly 5 mises en situation \(found 4\)/), "5 situations asked: 4 refused");
+  check(!probs((d) => { d.situations.pop(); }).some((p) => /situations/.test(p.where + p.msg)) || !probs((d) => { d.situations.pop(); }).length, "…none asked: 4 situations are fine");
+  { const d3 = good(); d3.situations = d3.situations.slice(0, 3).map((x: any, i: number) => ({ ...x, difficulty: [1, 3, 5][i] })); d3.qcm = [];
+    const r3 = M.checkMise(d3, { ...opts, count: { situations: 3, qcm: 0 } });
+    check(!r3.problems.length && r3.content!.situations.length === 3 && r3.content!.qcm.length === 0, "3 situations and NO QCM, as asked " + JSON.stringify(r3.problems.slice(0, 2)));
+    const { qcm: _q, ...noQ } = d3;
+    check(!M.checkMise(noQ, { ...opts, count: { situations: 3, qcm: 0 } }).problems.length, "…the qcm list may even be left out");
+    check(has(probs((d) => { d.qcm = []; }, { ...opts, count: { situations: 5, qcm: 5 } }), "file", /exactly 5 questions \(found 0\)/), "…but 5 QCM asked: an empty list is refused"); }
+  { const d12 = good(); d12.situations = Array.from({ length: 12 }, (_, i) => ({ ...good().situations[i % 5], title: `Situation ${i + 1}`, difficulty: [1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5][i] }));
+    const r12 = M.checkMise(d12, { ...opts, count: { situations: 12, qcm: 5 } });
+    check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
+    check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
+  const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
+  check(/EXACTEMENT 8 mises en situation/.test(prN) && /AUCUN QCM/.test(prN) && !/EXACTEMENT \d+ QCM/.test(prN), "the prompt asks for the counts chosen (8 situations, no QCM)");
   check(has(probs((d) => { d.qcm[3].choices = ["a", "b"]; }), "QCM 4", /3 or 4 plausible choices/), "a QCM with 2 choices: QCM number + field");
   check(has(probs((d) => { d.qcm[1].correct = [0, 1]; }), "QCM 2", /ONE right choice/), "a QCM with two right answers refused");
   check(has(probs((d) => { d.situations[1].difficulty = 5; d.situations[2].difficulty = 1; }), "file", /must go up/), "difficulty going down refused");
@@ -7468,7 +7482,7 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     errorHints: ["selection", "syntax"] });
   const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
-  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
+  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
   check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
   const prev = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
   check(prev.status === 200 && !prev.data.problems.length && prev.data.preview.situations.length === 5 && !prev.data.id, "…a good one: a preview first, nothing saved " + JSON.stringify(prev.data.problems?.slice(0, 2)));
