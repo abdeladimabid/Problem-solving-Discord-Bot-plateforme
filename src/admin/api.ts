@@ -1,4 +1,6 @@
 // JSON API behind the teacher dashboard.
+import { pendingProposals } from "../shared/actpropose.ts";
+import { ConceptError, briefSprint, conceptsView, decideConcept, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
 import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
@@ -62,6 +64,7 @@ import { boardHidden, inClass, setTeacherRank, standings, teacherRank } from "..
 import { notifyCfg, notifyTest, saveNotifyCfg } from "../shared/notify.ts";
 import { workOn, workOnNote } from "../shared/workon.ts";
 import { learningApi } from "./learnapi.ts";
+import { createMcpKey, mcpKeys, revokeMcpKey } from "./mcp.ts";
 import { activitiesApi } from "./actapi.ts";
 import { vscodeApi } from "./vscapi.ts";
 import { misesApi } from "./misesapi.ts";
@@ -72,7 +75,7 @@ import { competencyMap, studentBriefs } from "../shared/learning.ts";
 import { makeGuide } from "../shared/wpguide.ts";
 import { setTeacherLevel, studentInsight } from "../shared/stuinsight.ts";
 import { classHome } from "../shared/home.ts";
-import { SheetError, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, sheetView } from "../shared/gsheet.ts";
+import { SheetError, docsToken, fillSheet, markSheetDirty, namesView, saveKey, saveNames, saveSheet, serviceEmail, sheetView } from "../shared/gsheet.ts";
 
 class HttpError extends Error {
   status: number;
@@ -117,6 +120,10 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     // ------------------------------------------------------------ general
     if (path === "/me") return ok({ email: user.email, mode: user.mode ?? "access", publicUrl: env.PUBLIC_URL?.replace(/\/$/, "") ?? null });
     if (path === "/guilds") return ok(await guilds(env));
+    // 🤖 the Claude connector's keys (for all the classes): made (its URL shown once), listed, revoked
+    if (path === "/mcp-keys" && method === "GET") return ok(await mcpKeys(env));
+    if (path === "/mcp-keys" && method === "POST") return ok(await createMcpKey(env, url.origin, body.label, body.scope));
+    if (path.startsWith("/mcp-keys/") && method === "DELETE") return ok(await revokeMcpKey(env, Number(path.split("/")[2])));
     if (path === "/overview") return ok(await overview(env, await guild()));
     if (path === "/discord") return ok(await discordInfo(env, await guild()));
     if (path === "/export.csv") return exportCsv(env, await guild());
@@ -495,7 +502,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
-      if (!m[2] && method === "PUT") { await savePlanEdits(env, g, pid, body); return ok(await workPlanView(env, g, pid)); }
+      if (!m[2] && method === "PUT") { await savePlanEdits(env, g, pid, body); if ("feedback" in body) await markSheetDirty(env, g.id); return ok(await workPlanView(env, g, pid)); }
       if (!m[2] && method === "DELETE") return ok(await deletePlan(env, g, pid));
       if (m[2] === "diagnose" && method === "POST") { await diagnose(env, g, pid, String(body.ask ?? "")); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "ai" && method === "POST") return ok(await stepAi(env, g, pid, body));
@@ -633,6 +640,56 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           return ok(await intranetMatchView(env, g.id));
         }
       } catch (e) { if (e instanceof IntranetError) throw new HttpError(400, e.message); throw e; }
+    }
+    // 📐 what a learner understood in a sprint (Fiche niveaux): each capacity, the questions behind it, the level it gives
+    if (path === "/concepts/mastery" && method === "GET") {
+      const g = await guild();
+      const uid = String(url.searchParams.get("uid") || "");
+      if (!/^\d{1,25}$/.test(uid)) throw new HttpError(400, "Which learner?");
+      const s = await getConcepts(env, g.id);
+      const brief = Number(url.searchParams.get("brief")) || null;
+      const sp = Number(url.searchParams.get("sprint")) || (brief ? await briefSprint(env, g, brief, s) : null);
+      if (!sp || !s.sprints.some((x) => x.n === sp)) return ok({ sprint: null, sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })) });
+      const m = await masteryOf(env, g.id, uid, sp, s, brief ? { live: { briefId: brief } } : {});
+      return ok({ sprint: sp, title: s.sprints.find((x) => x.n === sp)?.title ?? "", sprints: s.sprints.map((x) => ({ n: x.n, title: x.title })), min: 5, ...m });
+    }
+    // 📐 old evaluations linked to the Fiche's items by the AI: one (preview, then apply), or the list of those not linked yet
+    if (path === "/concepts/link" && method === "POST") {
+      const g = await guild();
+      const { FicheLinkError, linkFiche } = await import("../shared/fichelink.ts");
+      try { return ok(await linkFiche(env, g, body ?? {})); }
+      catch (e) { if (e instanceof FicheLinkError) throw new HttpError(400, e.message); throw e; }
+    }
+    if (path === "/concepts/old" && method === "GET") {
+      const g = await guild();
+      const { oldEvaluations } = await import("../shared/fichelink.ts");
+      return ok({ items: await oldEvaluations(env, g) });
+    }
+    if (path === "/concepts/decide" && method === "POST") {
+      const g = await guild();
+      try { await decideConcept(env, g, String(body.uid || ""), String(body.code || ""), body.ok == null ? null : !!body.ok); }
+      catch (e) { if (e instanceof ConceptError) throw new HttpError(400, e.message); throw e; }
+      return ok({ ok: true });
+    }
+    // 📐 the capacities an evaluation should cover (its brief, week or topic → its sprint): ticked, the teacher changes them
+    if (path === "/concepts/suggest" && method === "GET") {
+      const g = await guild();
+      return ok(await suggestScope(env, g, { brief_id: url.searchParams.get("brief_id"), week: url.searchParams.get("week"), sprint: url.searchParams.get("sprint"), text: url.searchParams.get("text"), limit: url.searchParams.get("limit") }));
+    }
+    // 📐 the Fiche niveaux (the sprints' capacities and levels): read from the Google Doc (or pasted), what counts
+    if (path === "/settings/concepts" || path.startsWith("/settings/concepts/")) {
+      const g = await guild();
+      try {
+        const withEmail = async (v: any) => ({ ...v, email: await serviceEmail(env) });
+        if (path === "/settings/concepts" && method === "GET") return ok(await withEmail(await conceptsView(env, g)));
+        if (path === "/settings/concepts" && method === "PUT") return ok(await withEmail(await saveConceptChoices(env, g, body)));
+        if (path === "/settings/concepts/import" && method === "POST") {
+          if (body.text) return ok(await withEmail(await importFiche(env, g, String(body.text).slice(0, 300000), { kind: "paste", doc: null })));
+          const id = docIdOf(String(body.url || (await getConcepts(env, g.id)).source.doc || ""));
+          const text = await readGoogleDoc(env, id, (await docsToken(env)) ?? undefined);
+          return ok(await withEmail(await importFiche(env, g, text, { kind: "doc", doc: id })));
+        }
+      } catch (e) { if (e instanceof ConceptError || e instanceof SheetError) throw new HttpError(400, e.message); throw e; }
     }
     // 📗 the trainer's Google Sheet (Suivi Formateur), filled by ClassBot
     if (path === "/settings/gsheet" || path.startsWith("/settings/gsheet/")) {
@@ -1000,7 +1057,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         one<{ n: number }>(env, `SELECT COUNT(*) AS n FROM activity_claims c JOIN activities a ON a.id = c.activity_id
           WHERE c.guild_id = ? AND (c.status = 'pending' OR (c.status = 'approved' AND a.day <= ?))`, g.id, new Date().toISOString().slice(0, 10)).catch(() => null),
       ]);
-      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0 });
+      return ok({ hands: h?.n ?? 0, faq: f?.n ?? 0, shop: sh?.n ?? 0, assess: lk?.n ?? 0, debriefs: db?.n ?? 0, pres: pr?.n ?? 0, props: await pendingProposals(env) });
     }
     // -------------------------------------------------- ✨ AI generation
     if (path === "/path/lesson-ai" && method === "POST") {

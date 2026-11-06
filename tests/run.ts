@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { intranetFake, googleFake } from "./harness.ts";
+import { intranetFake, googleFake, googleDocFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
 import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import botRaw from "../src/bot/index.ts";
@@ -3088,7 +3088,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/n’étai(?:t|ent) pas encore claires? : [^\n]*la différence entre margin et padding/.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/Ce que tu dois apprendre en priorité :\n[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -3097,7 +3097,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  const notP = fb.split("\n\n").find((x: string) => /pas encore claires?/.test(x)) || "";
+  const notP = fb.split("\n\n").find((x: string) => /apprendre en priorité/.test(x)) || "";
   check(notP.toLowerCase().includes(o2.data.review.oral[2].notion.toLowerCase()) && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => notP.toLowerCase().includes(x.notion.toLowerCase())) && !/Cordialement|Notions à revoir/.test(fb) && !/\b(vous|votre|vos)\b/i.test(fb), "the comment: the oral question not answered is a notion to review, in « tu »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
@@ -4043,7 +4043,8 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     checks: [{ id: "nav", label: "Menu", ok: true }, { id: "commits", label: "Commits réguliers", ok: false, n: 2, days: 1 }, { id: "branches", label: "Branches", ok: false }, { id: "active", label: "Page en cours", ok: false }],
     result: { exigences: ex, competences: [{ code: "C3", avis: "validable" }, { code: "C4", avis: "non_visible" }] },
     oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "…" }, { q: "Que fait <main> ?", notion: "Le rôle de la balise <main>", a: "…" }],
-    final: { oral: [true, false] },
+    // a bonus starts unchecked: the teacher switched the dark mode on
+    final: { oral: [true, false], ex: ex.map((e: any) => (e.type === "bonus" ? e.statut === "fait" : undefined)) },
     remarks: { text: "Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox." },
   };
   const d = C.commentData({ first: "Sara", project: rec.brief, rec });
@@ -4051,13 +4052,15 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const paras = fb.split("\n\n");
   check(paras[0] === "Sara," && !/Bonjour|Cordialement|Points forts|Axes d|Notions à revoir|Bonus\n/.test(fb), "the teacher's way: the first name, then paragraphs (no titles, no « Bonjour », no « Cordialement »)");
   check(!/\b(vous|votre|vos)\b/i.test(fb) && /\btu\b/.test(fb) && !/\*\*|#|!|(^|\n)\s*[–-] /.test(fb), "« tu », plain text, no markdown, no bullet list, no exclamation mark");
-  check(/Tu as aussi réalisé un bonus, ce qui est une très bonne initiative\./.test(fb) && !/mode sombre|animation/.test(fb), "the bonus: said, not listed");
-  const miss = paras.find((x) => /il manque encore|Il te reste/.test(x)) || "";
-  check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il te reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(fb),
+  check(!/bonus|il manque encore|Il te reste|mode sombre|page contact|fonctionnalités demandées/i.test(fb), "one learner: what they can and can't do technically, never the brief's deliverables nor the bonus");
+  const sqm = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
+  check(/Vous avez aussi réalisé un bonus, ce qui est une très bonne initiative\./.test(sqm) && !/mode sombre|animation/.test(sqm), "a squad: the bonus said, not listed");
+  const miss = sqm.split("\n\n").find((x) => /il manque encore|Il vous reste/.test(x)) || "";
+  check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il vous reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(sqm),
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
-  const not = paras.find((x) => /pas encore claires?/.test(x)) || "";
-  check(not.includes("la différence entre margin et padding") && not.includes("le rôle de la balise <main>") && !/flexbox|attribut alt/i.test(not) && /Prends le temps de les revoir/.test(not),
+  const not = paras.find((x) => /apprendre en priorité/.test(x)) || "";
+  check(not.toLowerCase().includes("la différence entre margin et padding") && not.toLowerCase().includes("le rôle de la balise <main>") && !/flexbox|attribut alt|à l’oral|échange|évaluation/i.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
   check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
   const flipped = { ...rec, checks: rec.checks.map((c: any) => (c.id === "nav" ? c : { ...c, ok: !c.ok })), final: { ...rec.final, ck: { commits: true, branches: true, active: true } } };
@@ -4066,35 +4069,85 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     && !C.themesOf(["Site en ligne sur GitHub Pages"]).some((t: string) => /Git$/.test(t)), "a grid line, a thing, something to do; GitHub Pages is the deployment, not Git");
   // the verdict follows the teacher's level
   const lvl = (l: string) => C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: { ...rec, level: { lvl: l } } }));
-  check(/^Sara,\n\nExcellent travail\./.test(lvl("excellent")) && /globalement bien réalisé/.test(lvl("bon")) && /correct dans l’ensemble/.test(lvl("moyen")) && /encore fragile/.test(lvl("faible")) && /loin de ce qui est attendu/.test(lvl("critique"))
-    && !/bon travail|excellent/i.test(lvl("faible")) && !/excellent/i.test(lvl("moyen")) && /Sara, il faut/.test(lvl("faible")), "the verdict and the closing follow the teacher's level (never « bon travail » for a weak one)");
+  check(/^Sara,\n\nExcellent travail[ .:]/.test(lvl("excellent")) && /globalement bien réalisé/.test(lvl("bon")) && /correct dans l’ensemble/.test(lvl("moyen")) && /encore fragile/.test(lvl("faible")) && /loin de ce qui est attendu/.test(lvl("critique"))
+    && !/bon travail|excellent/i.test(lvl("faible")) && !/excellent/i.test(lvl("moyen")) && /Sara, (il faut|en reprenant)/.test(lvl("faible")), "the verdict and the closing follow the teacher's level (never « bon travail » for a weak one)");
   // everything validated, nothing said in the one-to-one: a short comment, nothing made up
   const good: any = { ...rec, result: { exigences: ex.filter((e) => e.statut === "fait" && e.type !== "bonus"), competences: [{ code: "C3", avis: "validable" }] }, oral: [], remarks: null, final: {}, level: { lvl: "excellent" } };
   const fg = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: good }));
-  check(/^Sara,\n\nExcellent travail\. Tu as réalisé l’ensemble des fonctionnalités demandées/.test(fg) && !/bonus|manque|revoir|claire/i.test(fg) && /Continue comme ça\.$/.test(fg) && C.wordCount(fg) < 60,
+  check(/^Sara,\n\nExcellent travail : tu as une très bonne compréhension des notions de ce brief/.test(fg) && !/bonus|manque|revoir|claire/i.test(fg) && /Continue comme ça\.$/.test(fg) && C.wordCount(fg) < 60,
     `everything validated: short, nothing made up (${C.wordCount(fg)} words)`);
   // a squad: everyone, « vous »; a member's own note
   const sqc = C.buildComment("", { ...rec, squad: { name: "Les Pixels" } }, rec.final);
   check(/^Les Pixels,\n\n/.test(sqc) && /\bvous\b/i.test(sqc) && !/\btu\b/.test(sqc), "a squad's comment: to everyone, « vous »");
   const mc = C.memberComment({ name: "omar_benali" }, rec, { co: { C3: false, C4: true }, note: "Confond flex et grid." });
-  check(mc.startsWith("Omar,") && mc.includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
+  check(mc.startsWith("Omar,") && mc.toLowerCase().includes("la différence entre flex et grid") && !mc.includes("margin et padding"), "a squad member: their own note");
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
-  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && pr.includes("BONUS RÉALISÉS : oui (1)") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée. Tu as aussi réalisé un bonus, ce qui est une bonne initiative.\n\nIl manque encore la page contact avec son formulaire, l’adaptation aux écrans de 768 px et 1024 px et la planification dans le README.\n\nPendant l’échange, la différence entre margin et padding n’était pas claire pour toi, tout comme le rôle de la balise <main>. Ce sont des bases importantes pour structurer une page.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && !pr.includes("BONUS") && pr.includes("INDIVIDUEL, TECHNIQUE") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois apprendre en priorité :\n1. La différence entre margin et padding : la base de tout espacement autour et à l’intérieur d’un bloc.\n2. Le rôle de la balise <main> : choisir la balise qui correspond au rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
   check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: "Points forts\n\n" + body }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
-    && C.aiCommentText({ ...lvD, bonus: [] }, { commentaire: body }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
+    && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Tu as aussi réalisé un bonus.") }) === null && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Il manque encore la page contact.") }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
     "an AI comment that says « vous », has titles or bullets, invents a bonus, praises above the level, uses markdown or greets is refused (the template is used)");
   {
     // a notion that is neither in the brief nor in the assessment (« fetch et async/await » for an HTML/CSS brief) is refused
-    const extra = body.replace("Tu as aussi réalisé un bonus", "Tu maîtrises aussi les appels d’API avec fetch et async/await. Tu as aussi réalisé un bonus");
+    const extra = body.replace("maîtrisée.", "maîtrisée. Tu maîtrises aussi les appels d’API avec fetch et async/await.");
     check(C.outsideNotions(lvD, extra).length > 0 && C.aiCommentText(lvD, { commentaire: extra }) === null && C.outsideNotions(lvD, body).length === 0,
       `a comment about a notion outside the brief and the assessment is refused (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
     const withApi = { ...lvD, scope: [...lvD.scope, ...C.outsideNotions(lvD, extra)] };
     check(C.aiCommentText(withApi, { commentaire: extra }) !== null, "…and accepted when the brief or the assessment is about it");
+  }
+  {
+    // what is still to learn: said directly (never « HTML : », « CSS : »), one short line each, from every source, one
+    // notion once; never where it was seen, the level, the Fiche, a feature of the project
+    const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
+      assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
+      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
+    const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
+    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
+    check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
+      && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
+      && lines.filter((l: string) => /margin/.test(l)).length === 1 && !/bouton supprimer|^\d\. (HTML|CSS|JavaScript|Git) :/m.test(list),
+      `what to learn, directly: the remarks, the Fiche, the oral, the assessment; one notion once; never a category nor a feature (${lines.join(" | ")})`);
+    check(lines.every((l: string) => C.wordCount(l) <= 35) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list),
+      "…short lines, never where it was seen, the level or the Fiche");
+    check(C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…in the scope: the AI may talk about them");
+    const sq2 = C.buildComment("", { ...r2, squad: { name: "Les Pixels" } }, r2.final);
+    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez apprendre en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
+    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires : margin, padding, alt, main et le DOM. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
+    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment without the numbered list of what is still to learn is refused");
+    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre en priorité :\n${lines.join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. La différence, vue à l’oral,") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null
+      && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. CSS : la différence") }) === null,
+      "an AI comment that says where a point was seen, the learner's level, or a category head (« CSS : ») is refused");
+    // a remark that only names a subject: its essentials, without what they showed they master
+    check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
+    const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
+    const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
+    const pl = t3.split("\n").find((l: string) => /^1\. La planification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. L’utilisation de Tailwind/.test(l)) || "";
+    check(/user stories/.test(pl) && /tâches/.test(pl) && C.wordCount(pl) <= 40, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
+    check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/\(|a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
+    const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
+    check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
+  }
+  {
+    // one learner, a Laravel brief: technical only (what they master, what blocks them), the general notions said in PHP
+    const rl: any = { first: "Salmane", brief: "Blog Laravel", checks: [], result: { exigences: [{ type: "story", texte: "En tant que visiteur, je vais voir les articles", statut: "absent" }, { type: "bonus", texte: "Mode sombre", statut: "fait" }], competences: [] },
+      oral: [{ q: "Comment passer une variable du contrôleur à la vue ?", notion: "passage de données à la vue", a: "return view('page', compact('x'))" }, { q: "Composer ou Artisan ?", notion: "Composer et Artisan", a: "Composer gère les dépendances, Artisan est la CLI." }],
+      final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
+      assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
+    const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Les relations Eloquent : définir hasMany et belongsTo/.test(tl) && /\n2\. Écrire une migration : créer une table avec Schema::create\(\)/.test(tl)
+      && /\n\d\. Les fonctions : écrire une fonction/.test(tl) && !/JavaScript|bonus|il manque|articles|Mode sombre|\(hasMany/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
+      `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
+    // never said mastered when it is also to learn (the same notion, from another source)
+    const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
+      assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
+    const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n1\. La manipulation du DOM et les sélecteurs JavaScript : sélectionner un élément/.test(th) && /\n2\. Flexbox : aligner/.test(th),
+      `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
@@ -4102,7 +4155,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'draft', ?)", bid, G, who, JSON.stringify({ ...rec, at: Date.now(), result: { ...rec.result, feedback: "" } }), clock.now());
   const w = await api("POST", `/api/briefs/${bid}/review/commentai`, { g: G, who, states: {} });
   const wf = w.data.review?.result?.feedback || "";
-  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Carol,\n\nTon projet est bien structuré") && wf.includes("des bonus") && wf.includes("Continue sur cette lancée, Carol,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
+  check(w.status === 200 && w.data.by === "ai" && wf.startsWith("Carol,\n\nTon projet est bien structuré") && !wf.includes("bonus") && wf.includes("Continue sur cette lancée, Carol,") && !!w.data.review.edited, `✨ the AI writes the comment (${w.data.by} ${w.data.msg || ""})`);
   check(!ai.users[ai.users.length - 1].includes("Sara") && !/commits|branches/i.test(ai.users[ai.users.length - 1]), "…without the name, nor the automatic checks");
   // the comment greets the student by the name the teacher gave them (Students page), not the one from the analysis
   run1("UPDATE players SET name = 'Karima Benali', name_lock = 1 WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
@@ -4113,13 +4166,16 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
+  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
+  check(/\n\d\. Écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
   const one = await api("POST", `/api/briefs/${bid}/review/remarks`, { g: G, who, text: "il sont reponder sur tous les questions", ai: true });
   const of = one.data.review?.result?.feedback || "";
   check(one.status === 200 && JSON.stringify(one.data.states.oral) === "[true,true]" && one.data.review.remarks.oralSet === 1 && ai.users[ai.users.length - 1].includes("QUESTIONS ORALES :\n1. À quoi sert alt ?") && ai.prompts[ai.prompts.length - 1].includes("au tutoiement"),
     "one-to-one: the oral questions it says were answered are switched on");
-  check(of.includes("Lors de notre échange, tu as répondu correctement à toutes les questions de l’échange.") && !/pas encore claires?/.test(of) && !/\b(vous|votre)\b/i.test(of),
+  check(of.includes("Tu as répondu correctement à toutes les questions de l’échange.") && !/pas encore claires?/.test(of) && !/\b(vous|votre)\b/i.test(of),
     "…what went well goes in the comment (« tu »), nothing left to review");
   run1("DELETE FROM brief_reviews WHERE brief_id = ?", bid);
   run1("DELETE FROM briefs WHERE id = ?", bid);
@@ -5823,6 +5879,16 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(JSON.stringify(lastPatch()).includes("already taken"), "nobody else can take it");
   await slash(U.bob, "activity", {}, "mine");
   check(JSON.stringify(lastPatch()).includes("Présenter Sélecteurs DOM modernes"), "/activity mine: the subject once it's approved");
+  {
+    // a long subject: never more than Discord takes in one message (6000 characters of embeds): the rest follows
+    const { splitPayload, errorText } = await import("../src/bot/ix.ts");
+    const big = { embeds: [{ title: "Mes activités", description: "a".repeat(3000) }, { title: "Mes propositions", description: "b".repeat(1500) }, { title: "Sujet", description: "c".repeat(3900) }, { description: "d".repeat(3900) }], components: [{ type: 1 }] };
+    const parts = splitPayload(big);
+    const len = (p: any) => p.embeds.reduce((n: number, e: any) => n + (e.title ?? "").length + (e.description ?? "").length, 0);
+    check(parts.length === 3 && parts.every((p: any) => len(p) <= 6000) && parts.flatMap((p: any) => p.embeds).length === 4 && (parts[0] as any).components && !(parts[1] as any).components,
+      `/activity mine with a long subject: split in messages of at most 6000 characters, nothing lost (${parts.map(len).join(", ")})`);
+    check(!errorText("fr", new Error("DiscordError: PATCH /webhooks/123/aW50ZXJhY3Rpb24 → 400")).includes("webhooks"), "…and an error never shows the interaction's token");
+  }
   // the teacher adds a third person, then grades
   const claim = ok1.data && q1("SELECT id FROM activity_claims WHERE activity_id = ? AND status = 'approved'", v1).id;
   check((await api("PUT", `/api/activities/claims/${claim}/members?g=${G}`, { members: [U.alice.id, U.bob.id, U.carol.id] })).status === 200, "a third person added to the binôme");
@@ -5884,6 +5950,45 @@ section("🎤 Activités: shared in Discord, /activity choose with a binôme, ap
   check(q1("SELECT COUNT(*) AS n FROM activity_claims WHERE activity_id = ? AND status IN ('pending', 'approved')", v2).n === 0, "a deleted activity takes its requests with it");
   const pg = await api("GET", `/api/students/${U.alice.id}?g=${G}`);
   check(pg.status === 200, "student page still fine");
+}
+
+section("💡 Proposals: students propose a veille or a live coding, every teacher sees them, one plans it on a free day (open to all) or turns it down");
+{
+  const alice = q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name as string;
+  run1("DELETE FROM activity_proposals");
+  await slash(U.alice, "activity", { kind: "veille", subject: "ab" }, "propose");
+  check(/4 characters/.test(JSON.stringify(lastPatch())) && !q1("SELECT 1 AS x FROM activity_proposals"), "a subject too short: refused, nothing saved");
+  await slash(U.alice, "activity", { kind: "veille", subject: "Les container queries en CSS", details: "Montrer comment une carte s'adapte à son conteneur, pas à l'écran." }, "propose");
+  const p1 = q1("SELECT * FROM activity_proposals WHERE by = ? ORDER BY id DESC", U.alice.id);
+  check(/Proposal sent|Proposition envoyée/.test(JSON.stringify(lastPatch())) && p1?.kind === "veille" && p1.status === "pending" && p1.guild_id === G, "/activity propose: saved as waiting, the student told what happens next");
+  await slash(U.alice, "activity", { kind: "live", subject: "Un mini jeu du pendu en JS" }, "propose");
+  const p2 = q1("SELECT * FROM activity_proposals WHERE by = ? AND kind = 'live'", U.alice.id);
+  check(/My proposals|Mes propositions/.test(JSON.stringify(await slash(U.alice, "activity", {}, "mine")) + JSON.stringify(lastPatch())), "/activity mine: the student's proposals and where they are");
+  const pills = await api("GET", `/api/pills?g=${G}`);
+  check(pills.data.props === 2, `the menu counts the proposals waiting (${pills.data.props})`);
+  const view = await api("GET", `/api/activities/proposals?g=${G}`);
+  const it = view.data.items?.find((x: any) => x.id === p1.id);
+  check(view.status === 200 && it?.name === alice && it.mine && it.details?.includes("conteneur"), "every teacher sees the proposals, with who proposed and from which class");
+  const free = view.data.free?.veille || [];
+  check(Array.isArray(free) && free.length > 0 && free.every((d: string) => d > new Date().toISOString().slice(0, 10)), `…and the free veille days of the next weeks (${free.slice(0, 3).join(", ")})`);
+  check((await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: "2020-01-06", ai: false })).status === 400, "planning on a day that isn't free: refused");
+  const dm0 = discordCalls.length;
+  const plan = await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: free[0], ai: false });
+  const act = q1("SELECT * FROM activities WHERE id = ?", plan.data.activity);
+  const after = q1("SELECT status, plans FROM activity_proposals WHERE id = ?", p1.id);
+  check(plan.status === 200 && act?.day === free[0] && act.kind === "veille" && act.title === "Les container queries en CSS" && act.md.includes("conteneur") && after.status === "planned" && JSON.parse(after.plans)[0].guild === G,
+    `planned: the activity created on that day from the proposal (${plan.data.error ?? act?.day})`);
+  check(plan.data.shared === true && discordCalls.slice(dm0).some((c) => c.path === "/channels/555000111/messages" && JSON.stringify(c.body).includes("container queries")), "…shared in the activities channel: open to every student");
+  check(discordCalls.slice(dm0).some((c) => c.path === `/channels/dm-${U.alice.id}/messages` && /planned|planifiée/.test(JSON.stringify(c.body))), "…the student told by DM");
+  check(text(await slash(U.bob, "activity", {}, "list")).includes("container queries"), "…another student sees it in /activity list (open to all)");
+  check((await api("POST", `/api/activities/proposals/${p1.id}/plan?g=${G}`, { day: free[1] ?? free[0], ai: false })).status === 400, "…planned twice in the same class: refused");
+  check((await api("POST", `/api/activities/proposals/${p1.id}/deny?g=${G}`, { note: "x" })).status === 400, "…a planned proposal can't be turned down any more");
+  const dm1 = discordCalls.length;
+  const deny = await api("POST", `/api/activities/proposals/${p2.id}/deny?g=${G}`, { note: "Déjà vu ce mois-ci, repropose-le au prochain sprint." });
+  check(deny.status === 200 && q1("SELECT status, note FROM activity_proposals WHERE id = ?", p2.id).status === "denied"
+    && discordCalls.slice(dm1).some((c) => c.path === `/channels/dm-${U.alice.id}/messages` && JSON.stringify(c.body).includes("prochain sprint")), "turned down with a word: the student gets it by DM");
+  check((await api("GET", `/api/pills?g=${G}`)).data.props === 0, "…nothing waiting any more");
+  run1("DELETE FROM activities WHERE id = ?", plan.data.activity);
 }
 
 section("assessments with Claude: a quiz imported from JSON, the papers exported anonymous for grading, Claude's grading imported as the teacher's");
@@ -6271,6 +6376,21 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   discordFake.chan["/channels/c1/messages"] = [1, 2, 3].map((i) => ({ id: String(9010 + i), timestamp: ts(600 + i), author: { id: A }, content: "", embeds: [] }));
   const Lh = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who });
   check(Lh.data.links.hidden === true && !Lh.data.members[A].hints.T5, "…Discord hides the messages' text (Message Content intent off): said, and CT5 isn't guessed");
+  // an individual debrief: the same check, for the learner themself
+  {
+    const solo = `u:${A}`;
+    const had = q1("SELECT 1 AS x FROM brief_reviews WHERE brief_id = ? AND who = ?", id, solo);
+    if (!had) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'draft', ?)", id, G, solo, clock.now());
+    discordFake.chan["/channels/c1/messages"] = [
+      { id: "9023", timestamp: ts(500), author: { id: A }, content: "le lien de mon site https://alice.github.io/projet", embeds: [] },
+      { id: "9022", timestamp: ts(700), author: { id: B }, content: "https://bob.example.com (not theirs)", embeds: [] }];
+    const S0 = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${encodeURIComponent(solo)}`);
+    const S1 = await api("POST", `/api/briefs/${id}/review/links?g=${G}`, { who: solo });
+    const S2 = await api("GET", `/api/briefs/${id}/review/insights?g=${G}&who=${encodeURIComponent(solo)}`);
+    check(S0.status === 200 && S1.status === 200 && S1.data.links.mine.length === 1 && /alice\.github\.io/.test(S1.data.links.mine[0].url) && S2.data.links.mine.length === 1 && !S1.data.links.hidden,
+      `an individual debrief: the links the learner shared on Discord (not the others'), kept with it (${S1.status} ${JSON.stringify(S1.data).slice(0, 200)})`);
+    if (!had) run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, solo);
+  }
   delete discordFake.chan["/channels/c1/messages"];
   // 🔍 the lines an AI wrote: index.html (AI in VS Code) and style.css (typed)
   const pemK = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----";
@@ -6291,7 +6411,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   // ↻ Switches: the comment written again from their switches and the one-to-one note (the text that was there goes)
   const note = "Il a su répondre aux questions sur flex, mais il doit revoir grid";
   const rw = await api("POST", `/api/briefs/${id}/review/membercomment?g=${G}`, { who, gid: A, members: { [A]: { quiz: 80, note, coSet: true, co: { C3: true }, text: "Bon travail sur les sélecteurs, revois le modèle de boîte. Bravo pour ta veille !" } } });
-  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/.test(rw.data.comment) && rw.data.members[A].note === note && rw.data.members[A].text === rw.data.comment && rw.data.comments[A] === rw.data.comment,
+  check(rw.status === 200 && rw.data.by === "ai" && !rw.data.comment.includes("Bravo pour ta veille") && /grid/i.test(rw.data.comment) && rw.data.members[A].note === note && rw.data.members[A].text === rw.data.comment && rw.data.comments[A] === rw.data.comment,
     `↻ Switches replaces their comment with one written from their switches and note, the gaps in the note included (${rw.status} ${rw.data.error ?? ""})`);
   const { remarkNotions } = await import("../src/shared/review/comment.ts");
   check(remarkNotions(note).join("|") === "grid" && remarkNotions("Elle confond margin et padding.").join("|").includes("la différence entre margin et padding"), "…the template finds the notion in the note (« mais il doit revoir grid » → grid), not the positive part");
@@ -6302,8 +6422,8 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
     const R = (await getReview(env, id, who))!.rec;
     const mA = R.contrib.find((x: any) => x.gid === A), dA = memberCommentData(mA, R, R.members[A]);
     const pA = aiCommentPrompt(dA);
-    check(dA.mode === "assess" && dA.assess!.ok.length > 0 && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n- /.test(pA)
-      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && /Lors de l’évaluation, tu as montré que tu maîtrises/.test(commentText(dA)),
+    check(dA.mode === "assess" && dA.assess!.ko.some((n) => /marge|margin|boîte|boite/i.test(n)) && /TYPE DE COMMENTAIRE : INDIVIDUEL/.test(pA) && /CE QU’IL MAÎTRISE :/.test(pA)
+      && /revois le modèle de boîte/.test(pA) && !/FONCTIONNALITÉS DU BRIEF VALIDÉES|POINTS DU BRIEF VALIDÉS/.test(pA) && !/sélecteurs/.test(commentText(dA).split("\n\n")[1]),
       `a member's comment: what goes well comes from their assessment (what they mastered, the grader's comment), never the project's features (${dA.mode} ${JSON.stringify(dA.assess)})`);
     const dS = commentData({ first: R.squad.name, group: R.squad.name, project: R.brief, rec: R }), pS = aiCommentPrompt(dS);
     check(dS.mode === "group" && !dS.assess && /TYPE DE COMMENTAIRE : ÉQUIPE/.test(pS) && /CE QUI EST RÉUSSI DANS LE PROJET|CE QUI EST À AMÉLIORER DANS LE PROJET/.test(pS) && /CONTRIBUTION DE CHAQUE MEMBRE :?[\s\S]*commits/.test(pS) && !/MAÎTRISÉ À L’ÉVALUATION/.test(pS),
@@ -6314,7 +6434,7 @@ section("squad debriefs, member by member: assessment, AI flags, questions, sugg
   discordCalls.length = 0;
   const fz = await api("POST", `/api/briefs/${id}/review/finalize?g=${G}`, { who, notify: true });
   const dmA = text(discordCalls.find((c) => c.path === `/channels/dm-${A}/messages`)?.body), dmB = text(discordCalls.find((c) => c.path === `/channels/dm-${B}/messages`)?.body);
-  check(fz.status === 200 && fz.data.sent === 2 && dmA.includes("grid") && !dmA.includes("SQUAD-COMMENT") && dmB.length > 50 && !dmB.includes("SQUAD-COMMENT") && dmA !== dmB,
+  check(fz.status === 200 && fz.data.sent === 2 && /grid/i.test(dmA) && !dmA.includes("SQUAD-COMMENT") && dmB.length > 50 && !dmB.includes("SQUAD-COMMENT") && dmA !== dmB,
     `Finalize with DM: each member gets their own comment (the one on their card, else from their switches), never the squad's (${fz.status} sent ${fz.data.sent})`);
   delete github.commitFiles[sha];
   run1("UPDATE players SET gh_inst = ? WHERE guild_id = ? AND discord_id = ?", bobGh, G, B);
@@ -6807,6 +6927,7 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
   const SID = "1SheetIdForTheTestsXXXXXXXXXXXXXXXX";
   const cells: Record<string, Record<string, any>> = { "Niveau technique": { A3: "Durand Alice", A4: "BOB martin", A5: "DUPONT carol", A6: "Inconnu Total", G3: "Bon", C3: 9 }, "Suivi et Validation Classe": {}, "Suivi fil rouge": { A4: "x" }, "Plan daction  Retro": {} };
   const calls: string[] = [];
+  const valid: Record<string, Record<string, string[]>> = {};
   let tokens = 0, badSig = 0;
   const col = (c: string) => c.charCodeAt(0) - 65, colName = (i: number) => String.fromCharCode(65 + i);
   const parse = (r: string) => { const m = r.match(/^'((?:[^']|'')*)'!([A-Z])(\d+)(?::([A-Z])(\d+))?$/)!; return { tab: m[1].replace(/''/g, "'"), c0: col(m[2]), r0: Number(m[3]), c1: col(m[4] || m[2]), r1: Number(m[5] || m[3]) }; };
@@ -6822,10 +6943,19 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     }
     if (!url.pathname.startsWith(`/v4/spreadsheets/${SID}`)) return Response.json({ error: { message: "nope" } }, { status: 403 });
     const rest = decodeURIComponent(url.pathname.slice(`/v4/spreadsheets/${SID}`.length));
+    // a cell's dropdown (data validation)
+    if (!rest && url.searchParams.get("ranges")) { const p = parse(url.searchParams.get("ranges")!); const dv = valid[p.tab]?.[`${colName(p.c0)}${p.r0}`]; return Response.json({ sheets: [{ data: [{ rowData: dv ? [{ values: [{ dataValidation: { condition: { type: "ONE_OF_LIST", values: dv.map((x) => ({ userEnteredValue: x })) } } }] }] : [] }] }] }); }
     if (!rest) return Response.json({ properties: { title: "Suivi_Formateur_TEST" }, sheets: Object.keys(cells).map((t) => ({ properties: { title: t } })) });
     if (rest.startsWith("/values/") && method === "GET") {
       const p = parse(rest.slice(8)), out: any[] = [];
-      for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
+      if (p.r1 > p.r0 && p.c1 > p.c0) {   // a block: rows of cells
+        const rows: any[][] = [];
+        for (let r = p.r0; r <= p.r1; r++) { const row: any[] = []; for (let c = p.c0; c <= p.c1; c++) row.push(cells[p.tab][`${colName(c)}${r}`] ?? ""); while (row.length && row[row.length - 1] === "") row.pop(); rows.push(row); }
+        while (rows.length && !rows[rows.length - 1].length) rows.pop();
+        return Response.json({ values: rows });
+      }
+      if (p.r0 === p.r1 && p.c1 > p.c0) for (let c = p.c0; c <= p.c1; c++) out.push(cells[p.tab][`${colName(c)}${p.r0}`] ?? "");   // a row
+      else for (let r = p.r0; r <= p.r1; r++) out.push(cells[p.tab][`${colName(p.c0)}${r}`] ?? "");
       while (out.length && out[out.length - 1] === "") out.pop();
       return Response.json({ values: out.length ? [out] : [] });
     }
@@ -6887,8 +7017,39 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     const row = [0, 1, 2].map((k) => top + k).find((r) => SU[`B${r}`] === "'=Brief Sheet")!;
     check(!!row && SU[`C${row}`] === "2026-09-14" && SU[`D${row}`] === "2026-09-18", `Suivi: the brief (never read as a formula) with its start and end dates (${JSON.stringify(SU)})`);
     check(SU[`E${row}`] === "En cours" && !SU[`F${row}`] && SU[`G${top}`] !== "Oui", "…debriefing individuel « En cours » (one debrief of three): no collective debriefing nor retro yet");
-    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === "1. Une page en flex\n2. Git" && PL.G4 === "2026-10-30" && !PL.B5,
-      `Plan d'action: the plan sent (not the draft): the student as in the sheet, level, difficulties, start, actions, end (${JSON.stringify(PL)})`);
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.C4 === "Critique" && PL.D4 === "Flexbox, Git" && PL.E4 === "2026-10-20" && PL.F4 === ai.planSum && PL.G4 === "2026-10-30" && !PL.B5 && !PL.H4 && !PL.I4,
+      `Plan d'action (no titles: the old layout B…G): the plan sent (not the draft): the student as in the sheet, level, difficulties, start, what it asks summed up, end (${JSON.stringify(PL)})`);
+    check(JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `wplan:${G}:9901`).v).sumup?.by === "ai", "…the summary is kept with the plan (made once)");
+    // the new columns: found by their titles (row 3), Feedback and Résultat (its dropdown's words)
+    Object.assign(PL, { B3: "", C3: "Niveau", D3: "Difficultés", E3: "Date début", F3: "Actions", G3: "Date fin", H3: "Feedback", I3: "Résultat", H4: "écrit à la main" });
+    valid["Plan daction  Retro"] = { I4: ["✅ Réalisé", "🟠 Partiellement", "❌ Non réalisé"] };
+    const aiN = ai.users.length;
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(ai.users.length === aiN && PL.F4 === ai.planSum, "the summary isn't asked again while the actions don't change");
+    check(PL.B3 === "Apprenant(e)" && PL.B4 === "BOB martin" && PL.H4 === "écrit à la main" && PL.I4 === "❌ Non réalisé", `past its end, nothing done: « not done » in the list's own words; no feedback in ClassBot: what's typed in the sheet stays (${PL.H4} ${PL.I4})`);
+    const { savePlanEdits: spe } = await import("../src/shared/workplan.ts");
+    const gRow = await getGuild(env, G);
+    await spe(env, gRow!, 9901, { feedback: "Bon début, Git à revoir." });
+    const pl = JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `wplan:${G}:9901`).v);
+    pl.steps[0].review = { ok: true, comment: "", at: clock.now() };
+    run1("UPDATE app_settings SET v = ? WHERE k = ?", JSON.stringify(pl), `wplan:${G}:9901`);
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(PL.H4 === "Bon début, Git à revoir." && PL.I4 === "🟠 Partiellement", `the teacher's feedback; one action of two done: « partly » (${PL.H4} ${PL.I4})`);
+    pl.steps[1].review = { ok: true, comment: "", at: clock.now() }; pl.feedback = "Bon début, Git à revoir."; pl.steps.push({ id: "cccc", kind: "brief", title: "Un portfolio", notion: "Flexbox", brief: { context: "", tasks: ["Une grille"], deliverable: "", hours: 3 }, review: { ok: true, comment: "", at: 1 } });
+    run1("UPDATE app_settings SET v = ? WHERE k = ?", JSON.stringify(pl), `wplan:${G}:9901`);
+    ai.planSumDown = true;
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    ai.planSumDown = false;
+    check(PL.I4 === "✅ Réalisé", "every action done: « done »");
+    check(PL.F4 === "À faire : 1 exercice de code (Flexbox : Une page en flex) ; 1 question (Git) ; 1 mini-projet (« Un portfolio » (≈ 3 h))." , `its actions changed and the AI is down: summed up without it (${PL.F4})`);
+    // a Google Sheets table: the titles in row 1 (Resultat before Feedback), ClassBot's old « Apprenant(e) » in B3
+    for (const k of ["C3", "D3", "E3", "F3", "G3", "H3", "I3"]) delete PL[k];
+    Object.assign(PL, { B1: "Nom", C1: "Niveau", D1: "Difficultés", E1: "Date de début d'action", F1: "Actions", G1: "Date de fin d'action", H1: "Resultat", I1: "Feedback", B3: "Apprenant(e)", H4: "", I4: "" });
+    valid["Plan daction  Retro"] = {};
+    await api("POST", `/api/settings/gsheet/fill`, { g: G });
+    check(PL.B4 === "BOB martin" && PL.E4 === "2026-10-20" && PL.F4 && PL.G4 === "2026-10-30" && PL.H4 === "Fait" && PL.I4 === "Bon début, Git à revoir." && !PL.B3,
+      `titles in row 1 (a table): found there, Resultat and Feedback filled; the old « Apprenant(e) » of B3 removed (${JSON.stringify(PL)})`);
+    delete valid["Plan daction  Retro"];
     check(!calls.some((x) => x.includes("fil")) && Object.keys(cells["Suivi fil rouge"]).length === 1, "Suivi fil rouge never touched");
     // every debrief finalized: Oui, and the collective debriefing and the retro too
     for (const u of N.data.students.map((x: any) => x.id).filter((x: string) => x !== U.alice.id)) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, '{}', 'final', ?)", bid, G, `u:${u}`, clock.now());
@@ -6897,7 +7058,7 @@ section("google sheet: the Suivi Formateur filled by ClassBot (levels per sprint
     check(SU[`E${row}`] === "Oui" && SU[`F${row}`] === "Oui", "every debrief finalized: individual « Oui », collective « Oui »");
     const block = [0, 1, 2].map((k) => top + k).filter((r) => SU[`B${r}`]);
     check(block.every((r) => SU[`E${r}`] === "Oui") === (SU[`G${top}`] === "Oui"), "…and the retro once every brief of the sprint is finalized");
-    check(!PL.B4 && !PL.F4 && PL.B3 === "Apprenant(e)", "a plan deleted: its row emptied");
+    check(!PL.B4 && !PL.F4 && !PL.I4 && !PL.H4 && PL.B1 === "Nom" && !PL.B3, "a plan deleted: its row emptied (the titles stay)");
 
     // automatically: a debrief finalized marks the sheet, the cron fills it 2 minutes later (every 5 minutes)
     const fills0 = calls.filter((x) => x.endsWith("batchUpdate")).length;
@@ -7417,6 +7578,26 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   check(String(rcsv.data).includes("Score %") && String(rcsv.data).includes("Bob"), "results as CSV");
   const list = await api("GET", `/api/mises?g=${G}`);
   check(list.data.items.some((m: any) => m.id === mid && m.status === "closed" && m.done === 2), "the list: status and papers handed in");
+  // a learner absent at the launch: given it later with their own time (from when they open it); closed for the others
+  const dmL = discordCalls.length;
+  const lt = await api("POST", `/api/mises/${mid}/late`, { g: G, students: [U.carol.id, U.alice.id], minutes: 20 });
+  check(lt.status === 200 && lt.data.invited === 1 && lt.data.minutes === 20 && lt.data.mise.status === "closed" && lt.data.takers.find((t: any) => t.discord_id === U.carol.id)?.late?.minutes === 20
+    && discordCalls.slice(dmL).some((x) => JSON.stringify(x.body ?? {}).includes("20 minutes")), `an absent learner gets it later: their own 20 minutes, by DM; the others keep theirs (${lt.status} ${lt.data.error ?? ""})`);
+  check((await api("POST", `/api/mises/${mid}/late`, { g: G, students: [U.carol.id] })).status === 400, "…not twice");
+  const lk = (await api("GET", `/api/mises/${mid}/links?g=${G}`)).data.links;
+  const late = async (action = "", body?: any) => {
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${lk[U.carol.id].split("/mes/")[1]}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, makeCtx());
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const li = await late("info");
+  check(li.data.status === "live" && li.data.minutes === 20 && !li.data.endsAt, "…their link is open (the session is closed): their time hasn't started");
+  const ls = await late("start", {});
+  check(ls.status === 200 && Math.abs(ls.data.endsAt - (clock.now() + 1200)) <= 2 && (await late("save", { item: "q1", answer: { choice: 0 }, cur: "q1" })).status === 200, "…it starts when they open it: 20 minutes from now, and they can work");
+  check((await mes(U.bob.id, "start", {})).status === 409, "…the others' papers stay closed");
+  clock.advance(22 * 60);
+  await runCron(env);
+  check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.carol.id).status === "submitted" && q1("SELECT status FROM mises WHERE id = ?", mid).status === "closed" && (await late("save", { item: "q2", answer: { choice: 1 } })).status === 409,
+    "…their own time up: handed in by the cron, the session still closed");
   // the teacher tests it as a learner (staff: never in « the whole class »), then time is up: the cron closes it
   check(setup.data.staff.some((x: any) => x.discord_id === U.prof.id), "setup: the teacher is offered to test it themselves");
   const imp2 = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id], testers: [U.prof.id] });
@@ -7481,7 +7662,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.miseJson2 = JSON.stringify(file);
   db.prepare("DELETE FROM ai_usage").run();
   const nBefore = q("SELECT id FROM mises WHERE guild_id = ?", G).length;
-  const gen = await api("POST", "/api/mises/generate", { g: G, brief: bid, comps: ["C3N1", "C4N1"], wishes: "pas de regex" });
+  const gen = await api("POST", "/api/mises/generate", { g: G, concepts: [], brief: bid, comps: ["C3N1", "C4N1"], wishes: "pas de regex" });
   check(gen.status === 200 && !gen.data.problems.length && gen.data.preview.situations.length === 5 && gen.data.brief.id === bid && gen.data.detected.week === 3, "AI for a brief: the brief's week, a full preview " + JSON.stringify(gen.data).slice(0, 300));
   check(ai.users.some((u) => u.includes("BRIEF DE LA SEMAINE « Ittihad Al Fajr »") && u.includes("pas de regex")) && ai.users.some((u) => u.includes("TA PROPOSITION PRÉCÉDENTE NE RESPECTE PAS") && u.includes("exactly 5 questions")), "…the brief and the wishes go to the AI; a problem of the whole file: the whole file written again");
   // a situation and a QCM out of the requirements: only those two written again, until it matches
@@ -7492,7 +7673,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.miseJson = JSON.stringify(off); ai.miseJson2 = "";
   ai.miseItems = JSON.stringify({ items: { s4: file.situations[3], q5: file.qcm[4] } });
   ai.users.length = 0;
-  const gen2 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen2 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   const rep = ai.users.find((u) => u.includes("Réécris UNIQUEMENT ces éléments")) ?? "";
   check(gen2.status === 200 && !gen2.data.problems.length && JSON.parse(gen2.data.json).situations[4].notions.length === 5 && !gen2.data.json.includes("fetch"), "out of the requirements: written again until it matches (" + JSON.stringify(gen2.data.problems) + ")");
   // the QCM read again: one that can be guessed is written again
@@ -7500,38 +7681,38 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   ai.qcmWeak = [[{ n: 2, why: "les autres choix sont hors sujet" }], []];
   ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Quel événement pour un clic ?", choices: ["click", "mousedown", "pointerup", "dblclick"], notion: "événement click" } } });
   ai.users.length = 0;
-  const gen3 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen3 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen3.status === 200 && JSON.parse(gen3.data.json).qcm[1].choices.includes("mousedown") && ai.users.some((u) => u.includes("QCM 2") && u.includes("facile à deviner")), "a QCM that can be guessed without the notion: written again with credible wrong choices");
   check(ai.users.some((u) => u.includes("PIÈGES") && u.includes("removeNode()") && u.includes("GUIDAGE PAS À PAS") && u.includes("situations 4 et 5")), "…the prompt asks for traps that look like the answer (the teacher's examples), guided steps, a progression, DOM + arrays + conditions + loops in the last two");
   // a situation too guided: written again, harder
   ai.qcmWeak = [[], []]; ai.sitEasy = [[{ n: 1, fix: "easier", why: "trop de notions pour une première situation" }], []];
   ai.miseItems = JSON.stringify({ items: { s1: { ...file.situations[0], questions: ["1. Affiche le nom de la coopérative dans le titre, sans espaces au début ni à la fin.", "2. Si le nom est vide, affiche « Sans nom »."] } } });
   ai.users.length = 0;
-  const gen4 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen4 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen4.status === 200 && JSON.parse(gen4.data.json).situations[0].questions[1].includes("Sans nom") && ai.users.some((u) => u.includes("situation 1") && u.includes("TROP DIFFICILE pour sa place")), "a situation not at its place in the progression (the first one too hard): written again");
   ai.sitEasy = [];
   // a QCM with two right answers (the AI that judges without the key finds A and C): written again until only one is
   ai.qcmJudge = [{ 1: [0, 2] }, { 1: [0, 2] }];
   ai.miseItems = JSON.stringify({ items: { q1: { ...file.qcm[0], question: "Que vaut el après : const el = document.getElementById('.carte') ?", choices: ["null", "le premier .carte", "une liste vide", "undefined"], correct: 0 } } });
   ai.users.length = 0;
-  const gen5 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen5 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen5.status === 200 && !gen5.data.problems.length && JSON.parse(gen5.data.json).qcm[0].choices[0] === "null" && ai.users.some((u) => u.includes("QCM 1") && u.includes("PLUSIEURS choix sont justes (A, C)")), "a QCM with two right answers (checked twice, without the key): written again until exactly one is right");
   // a QCM that isn't about the code of the situations: written again on it, with the situations' code to work from
   ai.qcmUnrelated = [[{ n: 3, why: "une question de culture générale sur HTTP" }], []];
   ai.miseItems = JSON.stringify({ items: { q3: { ...file.qcm[2], question: "Dans la situation 3, que vaut document.querySelector('#titre') si l'id est mal écrit ?", choices: ["null", "undefined", "une erreur", "une liste vide"], correct: 0 } } });
   ai.users.length = 0;
-  const gen7 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen7 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   const rq = ai.users.find((u) => u.includes("ne porte pas sur le code des situations")) ?? "";
   check(gen7.status === 200 && JSON.parse(gen7.data.json).qcm[2].question.startsWith("Dans la situation 3") && rq.includes("LES SITUATIONS DE CETTE MISE EN SITUATION") && rq.includes("solution :"), "a QCM not about the situations' code: written again on it (the AI gets the situations and their code)");
   check(ai.users.some((u) => u.includes("LE CODE DES MISES EN SITUATION") && u.includes("JAMAIS la solution complète")), "…and the prompt asks for QCM on the code of the situations, never their full solution");
   ai.qcmUnrelated = [];
   // still wrong after the rounds: shown, and « Fix » goes on from that JSON, rewriting only what's wrong
   ai.qcmJudge = Array.from({ length: 40 }, () => ({ 2: [1, 3] }));
-  const gen6 = await api("POST", "/api/mises/generate", { g: G, week: 3, comps: ["C3N1", "C4N1"] });
+  const gen6 = await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"] });
   check(gen6.status === 200 && gen6.data.problems.some((x: any) => x.where === "QCM 2"), "…still wrong after every try: the problem is shown (never saved as right)");
   ai.qcmJudge = [{ 2: [1, 3] }, { 2: [1, 3] }];   // checked again: still two right answers, then fixed
   ai.miseItems = JSON.stringify({ items: { q2: { ...file.qcm[1], question: "Que vaut [1, 2, 3].indexOf(4) ?", choices: ["-1", "0", "undefined", "null"], correct: 0 } } });
-  const fx = await api("POST", "/api/mises/fix", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: gen6.data.json });
+  const fx = await api("POST", "/api/mises/fix", { g: G, concepts: [], week: 3, comps: ["C3N1", "C4N1"], json: gen6.data.json });
   check(fx.status === 200 && !fx.data.problems.length && JSON.parse(fx.data.json).qcm[1].choices[0] === "-1" && JSON.parse(fx.data.json).qcm[0].question === JSON.parse(gen6.data.json).qcm[0].question, "« Fix with the AI »: only the item with a problem is rewritten, the rest is kept");
   ai.qcmJudge = [];
   check(M.outOfScope("const data = JSON.stringify(x);", ["HTML", "CSS", "JavaScript"]).length === 0 && M.outOfScope("fetch('/x')", ["HTML", "CSS", "JavaScript"])[0].includes("« fetch »"), "out of scope: JSON.stringify is plain JavaScript; the word that gave it away is named for the AI");
@@ -7539,7 +7720,7 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
   check(rep.includes("situation 4") && rep.includes("QCM 5") && !rep.includes("situation 5 (") && rep.includes("RAPPEL DU PÉRIMÈTRE"), "…only the items with a problem are sent back, with what's out of scope; too many notions is fixed without the AI");
   check(q("SELECT id FROM mises WHERE guild_id = ?", G).length === nBefore, "…nothing saved before the teacher saves");
   ai.miseJson = "{ broken"; ai.miseJson2 = "";
-  check((await api("POST", "/api/mises/generate", { g: G, week: 3 })).status === 502, "AI from the sprint: an answer that isn't JSON is a clear error");
+  check((await api("POST", "/api/mises/generate", { g: G, concepts: [], week: 3 })).status === 502, "AI from the sprint: an answer that isn't JSON is a clear error");
   ai.miseJson = "";
   // saved with the brief, in full screen
   const sv = await api("POST", "/api/mises/import", { g: G, json: gen.data.json, brief: bid, week: 3, comps: ["C3N1", "C4N1"], save: true });
@@ -7654,6 +7835,110 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("GET", `/api/mises/${sv5.data.id}?g=${G}`)).data.takers.every((t: any) => t.net == null), "…network alerts off: no network column data");
     for (const id of [sv4.data.id, sv5.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
   }
+  // reopen with more time: who handed in by the closing can continue; a learner's paper deleted, then invited again
+  {
+    const sv6 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    const M6 = sv6.data.id;
+    await api("POST", `/api/mises/${M6}/launch`, { g: G, students: [U.alice.id, U.bob.id], lockScreen: false, send: false });
+    const L6 = (await api("GET", `/api/mises/${M6}/links?g=${G}`)).data.links;
+    const call6 = async (u: string, a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${L6[u].split("/mes/")[1]}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as any;
+    await call6(U.alice.id, "start", {}); await call6(U.bob.id, "start", {});
+    await call6(U.alice.id, "save", { item: "q1", answer: { choice: 0 } });
+    await api("POST", `/api/mises/${M6}/close`, { g: G });
+    const v6 = (await api("GET", `/api/mises/${M6}?g=${G}`)).data;
+    const ta = v6.takers.find((t: any) => t.discord_id === U.alice.id), tb = v6.takers.find((t: any) => t.discord_id === U.bob.id);
+    check(v6.mise.status === "closed" && ta.status === "submitted" && ta.autoSub && tb.autoSub, "closed: their papers handed in by the closing (said so)");
+    const rx = await api("POST", `/api/mises/${M6}/extend`, { g: G, minutes: 20, continue: [ta.id] });
+    const ra = rx.data.takers.find((t: any) => t.id === ta.id), rb = rx.data.takers.find((t: any) => t.id === tb.id);
+    check(rx.status === 200 && rx.data.continued === 1 && rx.data.mise.status === "live" && rx.data.mise.ends_at > clock.now() + 1100 && ra.status === "resume" && rb.status === "submitted",
+      `reopened with 20 more minutes: the one ticked can continue, the other stays handed in (${rx.status} ${ra?.status} ${rb?.status})`);
+    check(!q("SELECT 1 FROM competency_results WHERE source = 'mise' AND ref = ? AND discord_id = ?", String(M6), U.alice.id).length, "…their results wait until they hand it in again");
+    const back6 = await call6(U.alice.id, "start", {});
+    check(back6.paper && back6.answers.q1?.choice === 0 && q1("SELECT status FROM mise_takers WHERE id = ?", ta.id).status === "active", "…they go on where they were, their answers kept");
+    // handed in by mistake while it's open: their paper alone opens again
+    await call6(U.alice.id, "submit", {});
+    check(q1("SELECT status FROM mise_takers WHERE id = ?", ta.id).status === "submitted", "(handed in by mistake)");
+    const ro = await api("POST", `/api/mises/${M6}/reopen`, { g: G, taker: ta.id });
+    check(ro.status === 200 && ro.data.continued === 1 && ro.data.takers.find((t: any) => t.id === ta.id).status === "resume" && (await call6(U.alice.id, "start", {})).answers?.q1?.choice === 0,
+      `a paper handed in by mistake: reopened alone, they go on where they were (${ro.status} ${ro.data.error ?? ""})`);
+    check((await api("POST", `/api/mises/${M6}/reopen`, { g: G, taker: ta.id })).status === 400, "…a paper not handed in: said");
+    const c0 = discordCalls.length;
+    const rs = await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: tb.id, invite: true });
+    const nb = rs.data.takers.find((t: any) => t.discord_id === U.bob.id);
+    check(rs.status === 200 && rs.data.removed === 1 && nb && nb.id !== tb.id && nb.status === "invited" && !q1("SELECT 1 AS x FROM mise_takers WHERE id = ?", tb.id)
+      && discordCalls.slice(c0).some((x) => JSON.stringify(x.body ?? {}).includes("/mes/")), "a learner's paper deleted and invited again: a new empty paper, the new link by DM");
+    const rs2 = await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: ta.id, invite: false });
+    check(rs2.data.removed === 1 && !rs2.data.takers.some((t: any) => t.discord_id === U.alice.id), "…or only deleted (they can be added again later)");
+    check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
+    await api("DELETE", `/api/mises/${M6}?g=${G}`);
+  }
+  // 📐 the Fiche niveaux: every item of its scope worked on by 5 of the 10 situations / QCM at least
+  {
+    const sc = ["S2.M2", "S2.M4"];
+    const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
+    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's items on its situations: refused, one by one");
+    const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.M2"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.M4"] : ["S2.M2"] })) });
+    const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
+    check(four.data.problems.some((p: any) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…an item in 4 only: refused, with how many");
+    const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
+    const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
+    check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.M2,S2.M4" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.M4", "…in 5 each: saved, with its items (the mise's and each situation's / QCM's)");
+    const pr = await api("POST", "/api/mises/prompt", { g: G, week: 3, comps: ["C3N1"], concepts: sc });
+    check(pr.status === 200 && pr.data.prompt.includes("CONCEPTS OBLIGATOIRES") && pr.data.prompt.includes('"concepts" en haut du fichier = ["S2.M2","S2.M4"]') && pr.data.prompt.includes("S2.M4 [Moyen]"), "the prompt for Claude: the items with their level, 5 of the 10 each, \"concepts\" on every one");
+    await api("DELETE", `/api/mises/${five.data.id}?g=${G}`);
+  }
+  // the learners' work for Claude (claude.ai) to grade, and its correction back
+  {
+    const sv7 = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), save: true });
+    const M7 = sv7.data.id;
+    await api("POST", `/api/mises/${M7}/launch`, { g: G, students: [U.alice.id, U.bob.id], lockScreen: false, send: false });
+    const L7 = (await api("GET", `/api/mises/${M7}/links?g=${G}`)).data.links;
+    const call7 = async (u: string, a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${L7[u].split("/mes/")[1]}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as any;
+    const st7 = await call7(U.alice.id, "start", {});
+    const s1 = st7.paper.situations[0].id, q1id = st7.paper.qcm[0].id;
+    await call7(U.alice.id, "save", { item: s1, answer: { files: { "index.html": '<h1 id="titre">Bienvenue</h1>', "script.js": "document.querySelector('#titre').textContent = 'Tifawin';" } } });
+    await call7(U.alice.id, "save", { item: q1id, answer: { choice: 1 } });
+    await call7(U.alice.id, "submit", {});
+    const raw7 = await admin.fetch(new Request(`https://dash.example.workers.dev/api/mises/${M7}/answers.json?g=${G}`), env, makeCtx());
+    const ex = await raw7.json() as any;
+    const al = ex.learners.find((x: any) => x.name === U.alice.name || x.work?.[s1]?.attempted);
+    check(raw7.status === 200 && /attachment; filename="mise-\d+-copies\.json"/.test(raw7.headers.get("content-disposition") || "") && ex.format === "classbot-mise-answers@1" && /Corrige|corriges/.test(ex.instructions) && ex.output_format.format === "classbot-mise-grades@1",
+      `⬇ Answers for Claude: a JSON file with the instructions and the format of the answer (${raw7.status})`);
+    check(ex.items.length === 10 && ex.items[0].model_solution?.length && ex.items[0].questions.length && ex.items.find((x: any) => x.kind === "qcm").correct_text === "Il change le texte", "…the paper: each item, what's expected, the model solution, the QCM's right answer");
+    check(!!al && al.work[s1].files["script.js"].includes("Tifawin") && al.work[q1id].choice === 1 && al.work[q1id].right === false && ex.learners.length === 1, "…each learner who started: their code and their choices (not the ones who didn't start)");
+    const before = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data.score;
+    const gi = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: "Voici la correction :\n```json\n" + JSON.stringify({ format: "classbot-mise-grades@1",
+      grades: [{ learner: al.learner, item: s1, score: 100, comment: "Bien sélectionné et modifié." }, { learner: "nobody", item: s1, score: 50, comment: "x" }, { learner: al.learner, item: "zz9", score: 10 }],
+      comments: [{ learner: al.learner, comment: "Bon travail sur le DOM, revois les QCM." }] }) + "\n```" });
+    const d7 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    check(gi.status === 200 && gi.data.grades === 1 && gi.data.comments === 1 && gi.data.skipped.length === 2 && d7.grades[s1].score === 100 && d7.grades[s1].teacher && d7.grades[s1].comment === "Bien sélectionné et modifié." && d7.comment === "Bon travail sur le DOM, revois les QCM.",
+      `📥 Claude's grades imported (even wrapped in text): your grade of the item, their comment; unknown learners and items skipped, and said (${gi.status} ${JSON.stringify(gi.data.skipped)})`);
+    check(d7.score >= before, "…the score follows");
+    check((await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: "pas du json" })).status === 400, "…not Claude's JSON: refused, with what to paste");
+    // a comment for every item (QCM and items not done: no score), then the results by DM with each one
+    const q2id = st7.paper.qcm[1].id, s2 = st7.paper.situations[1].id;
+    const autoQ = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data.items[q1id].score;
+    const gc = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: JSON.stringify({ format: "classbot-mise-grades@1", grades: [
+      { learner: al.learner, item: q1id, comment: "Tu as choisi « change le style » : textContent change le texte. À revoir : textContent." },
+      { learner: al.learner, item: s2, comment: "Pas faite : revois addEventListener." }] }) });
+    const d8 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    const gr2 = await api("POST", `/api/mises/${M7}/claude-grades`, { g: G, json: JSON.stringify({ format: "classbot-mise-grades@1", grades: [
+      { learner: al.learner, item: s2, score: 40, comment: "Le clic n'est pas écouté" }, { learner: al.learner, item: st7.paper.qcm[2].id, comment: "Mauvais choix." }] }) });
+    const d9 = (await api("GET", `/api/mises/${M7}/taker/${al.learner}?g=${G}`)).data;
+    check(gr2.status === 200 && /^Le clic n'est pas écouté\. À revoir : .+\.$/.test(d9.grades[s2].comment) && /^Mauvais choix\. À revoir : .+\.$/.test(d9.grades[st7.paper.qcm[2].id].comment) && !/À revoir/.test(d9.grades[s1].comment),
+      `a comment that doesn't say what to study again gets the item's notions (not when it's fully right) (${d9.grades[s2].comment} | ${d9.grades[st7.paper.qcm[2].id].comment})`);
+    check(gc.data.grades === 2 && d8.grades[q1id].comment.includes("textContent") && !d8.grades[q1id].teacher && d8.items[q1id].score === autoQ && d8.grades[s1].score === 100,
+      "a comment without a score (a QCM, an item not done): kept, the automatic score stays, the other grades too");
+    await api("PUT", `/api/mises/${M7}/grade`, { g: G, taker: Number(al.learner), item: s2, score: 0, comment: "Pas faite : revois addEventListener." });
+    const c9 = discordCalls.length;
+    const sr = await api("POST", `/api/mises/${M7}/results`, { g: G });
+    const dmMsg = discordCalls.slice(c9).find((x) => x.body?.embeds?.[0]?.fields);
+    const fl = dmMsg?.body.embeds[0].fields || [];
+    check(sr.data.sent >= 1 && fl.length === 10 && fl[0].value === "Bien sélectionné et modifié." && fl.some((f: any) => /textContent change le texte/.test(f.value)) && fl.some((f: any) => /Pas faite : revois addEventListener/.test(f.value))
+      && fl.some((f: any) => /La bonne réponse :/.test(f.value)) && dmMsg.body.embeds[0].description.includes("Bon travail sur le DOM"),
+      `the results by DM: each question with what was wrong and what to study again (its comment, else the right answer and the notion) (${JSON.stringify(fl.map((f: any) => f.value)).slice(0, 300)})`);
+    await api("DELETE", `/api/mises/${M7}?g=${G}`);
+  }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
 }
 
@@ -7695,6 +7980,276 @@ section("papers: Sign in with Discord, one device per paper, network alerts");
   const so = await api("POST", `/api/assessments/${aid}/options`, { g: G, oneDevice: false, netAlerts: false });
   check(so.status === 200 && so.data.assessment.settings.oneDevice === false && so.data.assessment.settings.netAlerts === false, "…the teacher can turn both off " + so.status);
   await api("DELETE", `/api/assessments/${aid}?g=${G}`);
+}
+
+section("debrief steps skipped: they count for nothing");
+{
+  const E = await import("../src/shared/review/engine.ts");
+  const rec: any = { result: { exigences: [{ type: "story", texte: "A", statut: "fait" }, { type: "story", texte: "B", statut: "fait" }], competences: [] }, oral: [{ q: "q1" }, { q: "q2" }], assess: [{ score: 80 }] };
+  const st = (skip: any) => ({ ...E.reviewStates({ ...rec, final: { ex: [true, true], oral: [false, false], mes: { r: "non_valide" }, skip } }) });
+  const withLive = E.debriefLevel(rec, st({})), noLive = E.debriefLevel(rec, st({ live: true }));
+  check(st({ live: true }).skip.live === true && st({}).skip.live === false, "the skipped steps are kept with the switches");
+  check(["faible", "moyen"].includes(withLive) && ["bon", "excellent"].includes(noLive), `the live check skipped: its oral questions not answered and its task don't lower the level (${withLive} → ${noLive})`);
+  const C = await import("../src/shared/review/comment.ts");
+  const d1 = C.commentData({ project: "P", rec: { ...rec, final: { ex: [true, false], oral: [false, false], skip: { live: true, project: true } } } });
+  check(!d1.oralMissed.length && !d1.improve.length, "…and the comment says nothing of a skipped step (no oral question « missed », no requirement « to finish »)");
+}
+
+section("📐 Fiche niveaux: each level's items in every evaluation, what each learner knows, the levels (100% of a level)");
+{
+  const C = await import("../src/shared/concepts.ts");
+  // the Fiche A1 built in: Sprint 1 and 2, 12 capacities each, the 5 level boxes
+  const r = C.parseFiche(C.BUILTIN_FICHE);
+  const lv = (n: number) => C.LEVELS.map((l) => r.sprints.find((s) => s.n === n)!.levels[l].length).join(",");
+  check(r.sprints.length === 2 && r.sprints.every((s) => s.caps.length === 12) && lv(1) === "6,8,11,12,10" && lv(2) === "6,9,11,12,10" && r.sprints[0].title.startsWith("Conception") && !r.problems.length,
+    `the Fiche read: 2 sprints, 12 capacities each, every item of the 5 levels (${lv(1)} / ${lv(2)})`);
+  const s1 = r.sprints[0], s2 = r.sprints[1];
+  check(s1.caps[9].title.startsWith("Utiliser Git et GitHub") && s1.caps[9].points.length === 8 && s2.caps[2].title === "Gérer les événements", "…each capacity with its points");
+  check(s1.levels.critique[5].text.startsWith("Faire un premier commit") && s1.levels.critique[5].caps.join() === "10" && s1.levels.bon[2].caps.join() === "3,7" && s2.levels.faible[5].caps.join() === "8",
+    "…each level item linked to its capacities (the Fiche A1's links, checked by hand)");
+  // a Fiche pasted (or read from the Google Doc): bullets, no table
+  const fiche3 = ["FICHE DE VALIDATION DU SPRINT 3", "Sprint 3 A1 — Back-end PHP", "Finalité du sprint. Développer un back-end en PHP.", "Lecture de la grille de niveaux",
+    "CRITIQUE", "Ce que l’apprenant sait faire à ce niveau", "* Écrire un script PHP simple.", "* Afficher une variable.", "FAIBLE", "* Traiter un formulaire en PHP.", "MOYEN", "* Se connecter à une base avec PDO.",
+    "BON", "* Faire un CRUD complet avec PDO.", "EXCELLENT", "* Sécuriser toutes les requêtes avec PDO.", "Détail des capacités attendues", "1. Écrire du PHP", "* Variables, conditions et fonctions.",
+    "2. Traiter un formulaire", "* Lire les données envoyées et les valider.", "3. Utiliser PDO", "* Requêtes préparées et CRUD.", "Synthèse de validation du sprint", "La suite."].join("\n");
+  const r3 = C.parseFiche(fiche3);
+  check(r3.sprints.length === 1 && r3.sprints[0].n === 3 && r3.sprints[0].caps.length === 3 && r3.sprints[0].levels.moyen[0].caps.join() === "3" && r3.sprints[0].goal.startsWith("Développer"),
+    "a Fiche in plain text (Google Doc): its capacities, its levels, each item linked from its words");
+  // 5 questions per item at least (a question touches 2): the plan grows when it's too small
+  const pl = C.planConcepts(["S2.M2", "S2.M3", "S2.M4", "S2.M5"], 8);
+  const cov = C.coverage(pl.map((x) => ({ concepts: x })), ["S2.M2", "S2.M3", "S2.M4", "S2.M5"]);
+  check(pl.length === 10 && !cov.missing.length && pl.every((x) => x.length >= 1 && x.length <= 2 && new Set(x).size === x.length), `8 questions asked for 4 items: 10 (5 each at least) (${JSON.stringify(cov.count)})`);
+  check(C.planConcepts(["S2.M2"], 12).length === 12 && C.coverage([{ concepts: ["S2.M2"] }], ["S2.M2"]).missing[0].need === 4, "…more questions asked: kept; under 5: how many are missing");
+  // each item of a level box is a concept on its own, with its code
+  const S0 = { source: { kind: "builtin" as const, doc: null, at: 0 }, sprints: r.sprints, off: [], links: {} };
+  const all = C.sprintConcepts(S0, 2);
+  check(all.length === 48 && all[2].code === "S2.C3" && all[2].level === "critique" && all[2].text.startsWith("Ajouter un écouteur") && C.conceptOf(S0, "s2-m4")?.text.startsWith("Comprendre la propagation") && C.normConcept("S2.3") === null,
+    "every item of the 5 levels is a concept with its code (S2.C3 = Critique, 3rd item); a capacity code is not an item");
+  // the level: the class is checked on Moyen and Bon; EVERY item of a level (its minimum); under Moyen, Faible decides
+  type F = "ok" | "ko" | "few";
+  const lvOf = (f: (c: { code: string; level: string }) => F) => C.levelFrom(all.map((c) => ({ code: c.code, level: c.level, final: f(c) })));
+  const up = (c: any) => c.level === "moyen" || c.level === "bon";
+  const t1 = lvOf((c) => (c.code === "S2.B3" ? "ko" : up(c) ? "ok" : "few"));
+  check(t1.reached === "moyen" && !t1.below && t1.next?.level === "bon" && t1.next.missing === 1 && t1.probe === null, "every Moyen item known, Bon one short: Moyen (Faible and Critique never asked: they come with it)");
+  const t2 = lvOf((c) => (up(c) ? "ok" : "few"));
+  check(t2.reached === "bon" && t2.probe === "excellent" && t2.next?.level === "excellent", "Moyen and Bon known: Bon; the debrief checks Excellent");
+  check(lvOf(() => "ok").reached === "excellent" && lvOf(() => "ok").next === null, "…Excellent too: Excellent");
+  const t4 = lvOf((c) => (c.code === "S2.M4" ? "ko" : c.level === "faible" || up(c) ? "ok" : "few"));
+  check(t4.reached === "faible" && t4.below && t4.next?.level === "moyen", "one Moyen item not known (Bon all known): under Moyen; every Faible item known in the debrief → Faible (Bon doesn't count without Moyen)");
+  const t5 = lvOf((c) => (c.code === "S2.M4" || c.code === "S2.F2" ? "ko" : c.level === "faible" || up(c) ? "ok" : "few"));
+  check(t5.reached === "critique" && t5.probe === "faible" && t5.next?.level === "faible", "…one Faible item not known: Critique (never asked itself: the floor)");
+  const t6 = lvOf((c) => (c.code === "S2.M4" ? "ko" : up(c) ? "ok" : "few"));
+  check(t6.reached === null && t6.toCheck && t6.probe === "faible" && t6.next?.level === "faible" && t6.next.missing === 9 && C.ficheLevelText(t6).startsWith("sous Moyen"),
+    "under Moyen, Faible not checked yet: « Faible or Critique, to check in the debrief », its 9 items to ask");
+  const t7 = lvOf(() => "few");
+  check(t7.reached === null && !t7.toCheck && t7.next?.level === "moyen", "nothing evaluated enough: no level yet, Moyen to check");
+  check(C.scopeFromText(S0, 2, "la délégation d'événements et la propagation").every((c) => /^S2\.[MB]\d+$/.test(c)) && ["S2.M4", "S2.M5", "S2.B4"].every((c) => C.scopeFromText(S0, 2, "la délégation d'événements et la propagation").includes(c))
+    && C.scopeFromText(S0, 2, "").some((c) => c.startsWith("S2.M")) && C.scopeFromText(S0, 2, "").some((c) => c.startsWith("S2.B")),
+    "an evaluation's items: Moyen and Bon (half each), the ones its words point to; never Critique");
+  check(C.cleanConcepts(S0, ["S2.C1", "S2.M1"]).join() === "S2.M1" && C.questionsFor(12) === 20 && C.questionsFor(4) === 10, "Critique items are never asked; 12 items: 20 questions (up to 3 items per question)");
+
+  // ---- Settings → Fiche niveaux
+  let V = await api("GET", `/api/settings/concepts?g=${G}`);
+  check(V.status === 200 && V.data.source.kind === "builtin" && V.data.sprints.length === 2 && V.data.min === 5, "Settings: the Fiche A1 built in at first");
+  V = await api("POST", "/api/settings/concepts/import", { g: G, text: fiche3 });
+  check(V.status === 200 && V.data.sprints.map((x: any) => x.n).join() === "1,2,3" && V.data.read[0].caps === 3 && V.data.source.kind === "paste", "a Fiche pasted: its sprint added, the others stay");
+  googleDocFake.text = null;
+  const no = await api("POST", "/api/settings/concepts/import", { g: G, url: "https://docs.google.com/document/d/1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY/edit?tab=t.0" });
+  check(no.status === 400 && /Anyone with the link/.test(no.data.error), "a Google Doc not shared: said how to share it");
+  googleDocFake.text = fiche3.replace("Back-end PHP", "Back-end PHP et MySQL");
+  V = await api("POST", "/api/settings/concepts/import", { g: G, url: "https://docs.google.com/document/d/1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY/edit?tab=t.0" });
+  check(V.status === 200 && V.data.source.kind === "doc" && V.data.source.doc === "1hsdITb8FDMX233uUwr-39B06TRxPhkgNcaG1fRIuKRY" && V.data.sprints.find((x: any) => x.n === 3).title === "Back-end PHP et MySQL", "the Google Doc read (shared with the link): its sprints replace the same ones");
+  googleDocFake.text = null;
+  V = await api("PUT", "/api/settings/concepts", { g: G, off: { "S2.12": false, "S2.E8": false } });
+  const v2 = V.data.sprints.find((x: any) => x.n === 2);
+  check(V.data.off.includes("S2.12") && v2.caps.find((c: any) => c.code === "S2.12").off && v2.levels.faible[8].off && v2.levels.moyen[10].off && v2.levels.excellent[7].off && !v2.levels.excellent[6].off,
+    "a capacity turned off: its items too (Jira); an item turned off on its own");
+  V = await api("PUT", "/api/settings/concepts", { g: G, link: { key: "S3.critique.2", caps: [1, 2] } });
+  check(V.data.sprints.find((x: any) => x.n === 3).levels.critique[1].caps.join() === "1,2", "a level item linked by hand");
+  const sug = await api("GET", `/api/concepts/suggest?g=${G}&week=3&text=${encodeURIComponent("événements, délégation, formulaires et regex")}`);
+  check(sug.status === 200 && sug.data.sprint === 2 && sug.data.items.length === 37 && !sug.data.items.some((c: any) => c.level === "critique") && !sug.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8") && sug.data.scope.length >= 1 && sug.data.scope.every((c: string) => /^S2\.[CFMBE]\d+$/.test(c)) && sug.data.scope.length === sug.data.items.filter((c: any) => c.level === "moyen" || c.level === "bon").length && sug.data.scope.every((c: string) => /^S2\.[MB]\d+$/.test(c)) && (await api("GET", `/api/concepts/suggest?g=${G}&week=3&limit=6`)).data.scope.length <= 6,
+    `an assessment's items: its week's sprint, EVERY Moyen and Bon item ticked (a mise: the 6 its subject points to) (${sug.data.scope.length})`);
+
+  // ---- assessments: 5 questions per capacity, the prompts for Claude, the import
+  ai.gen = "plan";
+  const gq = await api("POST", "/api/assessments/generate", { g: G, topic: "Le DOM", count: 3, concepts: ["S2.M2", "S2.M4"], techs: ["JavaScript"], codeLang: "javascript", mix: { code: 40, explain: 20, mcq: 40 } });
+  ai.gen = "";
+  const per = (c: string) => gq.data.questions.filter((q: any) => (q.concepts || []).includes(c)).length;
+  check(gq.status === 200 && gq.data.questions.length >= 5 && per("S2.M2") >= 5 && per("S2.M4") >= 5 && !gq.data.concepts.missing.length && gq.data.questions.every((q: any) => q.concepts.every((c: string) => ["S2.M2", "S2.M4"].includes(c))),
+    `AI assessment: 3 questions asked for 2 items → at least 5 per item, each question tagged (${gq.status} ${gq.data.questions?.length} ${JSON.stringify(gq.data.concepts?.count)})`);
+  check(ai.prompts.some((x) => x.includes("CONCEPTS OBLIGATOIRES") && x.includes("S2.M4 [Moyen] « Comprendre la propagation") && x.includes("AU MOINS 5") && x.includes("MINIMUM")), "…the AI is told the items, their level, and the rule");
+  const cp = await api("GET", `/api/assessments/claude-prompt?g=${G}&week=3&concepts=S2.M2,S2.M4`);
+  check(cp.status === 200 && cp.data.prompt.includes("CONCEPTS OBLIGATOIRES") && cp.data.prompt.includes('"concepts" (OBLIGATOIRE sur chaque question)') && cp.data.prompt.includes("au moins 5 questions") && cp.data.concepts.scope.join() === "S2.M2,S2.M4", "the prompt for Claude: the items, 5 questions each, \"concepts\" on every question");
+  const quiz = (n: number) => ({ format: "classbot-assessment@1", title: "DOM et événements", minutes: 40, lang: "fr", codeLang: "javascript", passAt: 60, points: 20, brief_id: null, concepts: ["S2.M2", "S2.M4"],
+    questions: Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Question ${i + 1} sur le DOM et les événements ?`, choices: ["A1", "B1", "C1", "D1"], correct: 0, points: 1, concepts: i < n ? ["S2.M2", "S2.M4"] : ["S2.M2"] })) });
+  const ci = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(4)), concepts: ["S2.M2", "S2.M4"] });
+  check(ci.data.problems.some((p: any) => /item S2\.M4 of the Fiche niveaux: checked by 4 question\(s\), at least 5/.test(p.msg)), "Claude's quiz with an item under 5 questions: refused, with which one and how many");
+  const bad = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), questions: quiz(5).questions.map((q, i) => (i ? q : { ...q, concepts: ["S9.C9"] })) }), concepts: ["S2.M2", "S2.M4"] });
+  check(bad.data.problems.some((p: any) => /S9\.C9 unknown/.test(p.msg)), "…an unknown item code: refused");
+  const okq = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify(quiz(5)), concepts: ["S2.M2", "S2.M4"], import: true });
+  const qa = (await api("GET", `/api/assessments/${okq.data.id}?g=${G}`)).data.assessment;
+  check(okq.status === 200 && !okq.data.problems.length && qa.settings.concepts.join() === "S2.M2,S2.M4" && qa.questions.every((q: any) => q.concepts.includes("S2.M2")), "…5 each: imported, its items kept (the assessment's and each question's)");
+  // the same assessment again (a copy for another class): said at the preview; the library shows it once
+  const again = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), title: "DOM et événements (copie)" }), concepts: ["S2.M2", "S2.M4"] });
+  check(again.status === 200 && again.data.duplicate?.id === okq.data.id, "the same questions imported again: « already in your Assessment library » (which one)");
+  const cpy = await api("POST", "/api/assessments/claude-import", { g: G, json: JSON.stringify({ ...quiz(5), title: "DOM et événements (copie)" }), concepts: ["S2.M2", "S2.M4"], import: true });
+  const lst = (await api("GET", `/api/assessments?g=${G}`)).data.items;
+  check(lst.find((x: any) => x.id === cpy.data.id)?.copyOf === okq.data.id && !lst.find((x: any) => x.id === okq.data.id)?.copyOf, "…imported anyway: marked as a copy of the first (the library folds it under it)");
+  await api("DELETE", `/api/assessments/${cpy.data.id}?g=${G}`);
+  // an existing assessment brought up to the Fiche by Claude
+  const old = await api("POST", "/api/assessments", { g: G, title: "Ancienne évaluation", questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2 }], settings: { minutes: 20 } });
+  const ap = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.M4"] });
+  check(ap.status === 200 && ap.data.prompt.includes("Explique addEventListener.") && ap.data.prompt.includes("AJOUTE des questions") && ap.data.prompt.includes('"concepts": [\n    "S2.M4"\n  ]'), "an existing assessment: the prompt for Claude with its questions, to tag them and add what's missing");
+  const fixed = { ...quiz(5), concepts: ["S2.M4"], questions: [{ type: "explain", prompt: "Explique addEventListener.", expected: "écouter un événement", points: 2, concepts: ["S2.M4"] }, ...quiz(5).questions.slice(0, 4).map((q) => ({ ...q, concepts: ["S2.M4"] }))] };
+  const ap2 = await api("POST", `/api/assessments/${old.data.assessment.id}/claude-concepts`, { g: G, concepts: ["S2.M4"], json: JSON.stringify(fixed), apply: true });
+  check(ap2.status === 200 && ap2.data.assessment.questions.length === 5 && ap2.data.assessment.questions[0].id === old.data.assessment.questions[0].id && ap2.data.assessment.settings.concepts.join() === "S2.M4",
+    "…Claude's answer back into the same assessment: its question kept (same id), the new ones added, the scope saved");
+
+  // ---- what a learner knows: every question that checked an item, in the sprint
+  const A = U.alice.id;
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Fiche S2", questions: [
+    ...Array.from({ length: 5 }, (_, i) => ({ type: "mcq", prompt: `Fiche question ${i + 1} sur la sélection ?`, choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.M2"] })),
+    { type: "mcq", prompt: "Fiche question 6 sur les événements ?", choices: ["a", "b"], answer: [0], points: 1, concepts: ["S2.M4"] }], settings: { minutes: 10, concepts: ["S2.M2", "S2.M4"] } });
+  const aid = mk.data.assessment.id, qids = mk.data.assessment.questions.map((q: any) => q.id);
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [A], send: true });
+  const grade = (right: number) => run1("UPDATE assessment_takers SET status = 'graded', submitted_at = ?, grades = ? WHERE assessment_id = ? AND discord_id = ?", clock.now(),
+    JSON.stringify(Object.fromEntries(qids.map((id: string, i: number) => [id, { verdict: i < 5 ? (i < right ? "correct" : "wrong") : "correct", score: 0, comment: "" }]))), aid, A);
+  grade(3);
+  const mastery = async () => (await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=2`));
+  let M = await mastery();
+  const it = (code: string) => M.data.items.find((c: any) => c.code === code);
+  check(M.status === 200 && it("S2.M2").asked === 5 && it("S2.M2").got === 3 && it("S2.M2").state === "ok" && it("S2.M2").evidence.length === 5 && it("S2.M2").level === "moyen" && !M.data.items.some((c: any) => c.level === "critique"), "3 right out of 5 questions checking an item: known");
+  check(it("S2.M4").asked === 1 && it("S2.M4").state === "few" && !M.data.items.some((c: any) => c.code === "S2.F9" || c.code === "S2.E8"), "…fewer than 5 questions: not decided yet; an item turned off: not shown");
+  run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[3], JSON.stringify({ verdict: "partial", score: 50, comment: "" }), aid, A);
+  run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[2], JSON.stringify({ verdict: "wrong", score: 0, comment: "" }), aid, A);
+  M = await mastery();
+  check(it("S2.M2").got === 2.5 && it("S2.M2").state === "ko", "2 right and one partly (2.5 out of 5): exactly half is not more than half: not known");
+  // a code answer counts its real score: 85% + 60% instead of a wrong one and a half one → 2 + 0.85 + 0.6 = 3.45 / 5: known
+  const setG = (qi: number, v: string, sc: number) => run1("UPDATE assessment_takers SET grades = json_set(grades, '$.' || ?, json(?)) WHERE assessment_id = ? AND discord_id = ?", qids[qi], JSON.stringify({ verdict: v, score: sc, comment: "" }), aid, A);
+  setG(3, "correct", 85); setG(2, "partial", 60);
+  M = await mastery();
+  check(it("S2.M2").got === 3.5 && it("S2.M2").state === "ok" && it("S2.M2").evidence.some((e: any) => e.got === 0.85), `a code answer counts its score (85% = 0.85, 60% = 0.6): 3.5 out of 5, known (${it("S2.M2").got})`);
+  setG(3, "partial", 25); setG(2, "partial", 45); setG(1, "wrong", 0);
+  M = await mastery();
+  check(it("S2.M2").got === 1.7 && it("S2.M2").state === "ko", `…1 right, 25%, 45% and 2 wrong: 1.7 out of 5, not known (${it("S2.M2").got})`);
+  setG(3, "partial", 50); setG(2, "wrong", 0); setG(1, "correct", 100);
+  check(M.data.level.reached === null && M.data.level.toCheck && M.data.level.probe === "faible" && M.data.level.next.level === "faible", "a Moyen item not known: under Moyen, Faible to check in the debrief");
+  // the teacher decides an item, or every item of a capacity (Git judged on the repo)
+  for (const c of ["S2.M3", "S2.M4", "S2.M5"]) await api("POST", "/api/concepts/decide", { g: G, uid: A, code: c, ok: true });
+  const git = await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.11", ok: true });
+  M = await mastery();
+  check(git.status === 200 && it("S2.M4").teacher === true && it("S2.M4").final === "ok" && ["S2.F8", "S2.M10", "S2.B11", "S2.E9"].every((c) => it(c).final === "ok") && !it("S2.C6") && it("S2.F1").teacher === null,
+    "the teacher decides an item, or a whole capacity (Git: its items, one per level; Critique's never)");
+  for (const c of ["S2.F1", "S2.F2", "S2.F3", "S2.F4", "S2.F5", "S2.F6", "S2.F7"]) await api("POST", "/api/concepts/decide", { g: G, uid: A, code: c, ok: true });
+  M = await mastery();
+  check(M.data.level.reached === "faible" && M.data.level.below && !M.data.level.toCheck && M.data.level.next.level === "moyen", "every Faible item known (checked in the debrief): Faible, under Moyen");
+  // a finalized debrief: its oral questions (✓), its live task and the project's code (each proof confirmed) count
+  const bidF = q1("SELECT id FROM briefs WHERE guild_id = ? AND id NOT IN (SELECT brief_id FROM brief_reviews WHERE who = ?) ORDER BY id LIMIT 1", G, `u:${A}`).id;
+  const hadRev = q1("SELECT 1 AS x FROM brief_reviews WHERE brief_id = ? AND who = ?", bidF, `u:${A}`);
+  if (!hadRev) run1("INSERT INTO brief_reviews (brief_id, guild_id, who, record, status, updated_at) VALUES (?, ?, ?, ?, 'final', ?)", bidF, G, `u:${A}`,
+    JSON.stringify({ brief: "Projet", oral: [{ q: "Que fait closest ?", a: "le parent", concepts: ["S2.M2"] }, { q: "Et parentElement ?", a: "le parent direct", concepts: ["S2.M2"] }], final: { oral: [true, true] },
+      challenge: { titre: "Une regex pour l'email", result: "valide", concepts: ["S2.M7"] },
+      fiche: { at: 1, sprint: 2, items: [{ code: "S2.M6", level: "moyen", text: "Valider un formulaire", ai: "ok", proof: "validate() dans form.js" }, { code: "S2.B6", level: "bon", text: "Messages d'erreur", ai: "ko", proof: "aucun message" }], ok: { "S2.M6": true } } }), clock.now());
+  M = await mastery();
+  const from = (code: string, f: string) => it(code).evidence.filter((e: any) => e.from === f).length;
+  check(!hadRev && it("S2.M2").asked === 7 && it("S2.M2").got === 4.5 && it("S2.M2").state === "ok" && from("S2.M2", "oral") === 2, "a finalized debrief's oral questions (✓) count like questions: 4.5 out of 7, known");
+  check(from("S2.M7", "task") === 1 && it("S2.M7").got === 1 && from("S2.M6", "code") === 1 && it("S2.M6").got === 1 && it("S2.B6").asked === 0, "…its live task (validated: 1) and each code proof you confirmed (not the others) count too");
+  const fc = await api("POST", `/api/briefs/${bidF}/review/fiche`, { g: G, who: `u:${A}`, all: true });
+  M = await mastery();
+  check(fc.status === 200 && fc.data.fiche.ok["S2.B6"] === false && from("S2.B6", "code") === 1 && it("S2.B6").got === 0, "« Confirm the AI's »: every proof the AI found counts (here: Bon item not shown → a wrong answer)");
+  check(M.data.level.reached === "faible" && !M.data.level.below && M.data.level.next.level === "moyen", `…Moyen still open (not every item checked): Faible, Moyen next (${JSON.stringify(M.data.level.next)})`);
+  for (const c of ["S2.M3", "S2.M4", "S2.M5", "S2.11", "S2.F1", "S2.F2", "S2.F3", "S2.F4", "S2.F5", "S2.F6", "S2.F7"]) await api("POST", "/api/concepts/decide", { g: G, uid: A, code: c, ok: null });
+  M = await mastery();
+  check(it("S2.M4").teacher === null && it("S2.F8").teacher === null && M.data.level.reached === null && !M.data.level.toCheck, "…the decisions taken back: the proofs decide again");
+  check((await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.Z1", ok: true })).status === 400 && (await api("POST", "/api/concepts/decide", { g: G, uid: A, code: "S2.C1", ok: true })).status === 400, "…an unknown code, or a Critique item: refused");
+  // 📐 an old assessment linked to the Fiche by the AI (its past answers then count)
+  const oldA = await api("POST", "/api/assessments", { g: G, title: "Vieux quiz DOM", questions: [
+    { type: "mcq", prompt: "Que renvoie querySelectorAll ?", choices: ["une NodeList", "un tableau"], answer: [0], points: 1 },
+    { type: "explain", prompt: "Explique la propagation d'un événement.", expected: "capture puis bouillonnement", points: 2 },
+    { type: "mcq", prompt: "Question hors sujet sur la météo ?", choices: ["a", "b"], answer: [0], points: 1 }], settings: { minutes: 10 } });
+  const oid = oldA.data.assessment.id;
+  check((await api("GET", `/api/concepts/old?g=${G}`)).data.items.some((x: any) => x.kind === "assessment" && x.id === oid), "Settings: the old evaluations not linked to the Fiche yet, listed");
+  const lk = await api("POST", "/api/concepts/link", { g: G, kind: "assessment", id: oid, sprint: 2 });
+  check(lk.status === 200 && lk.data.units.length === 3 && lk.data.units[0].after.join() === "S1.M1" && lk.data.items.some((c: any) => c.code.startsWith("S1.")) && !lk.data.items.some((c: any) => c.code.startsWith("S3.")) && lk.data.units[2].after.length === 0 && !lk.data.applied
+    && !JSON.stringify(q1("SELECT questions FROM assessments WHERE id = ?", oid).questions).includes("S2.M"), "the AI's links shown first, the sprint's items and the ones before (a review counts for Sprint 1 too); an unknown code dropped, a question off the Fiche: none; nothing saved yet");
+  const lk2 = await api("POST", "/api/concepts/link", { g: G, kind: "assessment", id: oid, sprint: 2, apply: true, links: { 1: ["S2.M1"], 2: ["S2.M4", "S2.C1"], 3: [] } });
+  const qsA = JSON.parse(q1("SELECT questions, settings FROM assessments WHERE id = ?", oid).questions);
+  check(lk2.status === 200 && qsA[0].concepts.join() === "S2.M1" && qsA[1].concepts.join() === "S2.M4" && !qsA[2].concepts?.length && JSON.parse(q1("SELECT settings FROM assessments WHERE id = ?", oid).settings).concepts.join() === "S2.M1,S2.M4"
+    && !(await api("GET", `/api/concepts/old?g=${G}`)).data.items.some((x: any) => x.kind === "assessment" && x.id === oid), "…saved as shown (a Critique code dropped): each question's items and the assessment's; no longer listed");
+  check((await api("POST", "/api/concepts/link", { g: G, kind: "assessment", id: 999999 })).status === 400, "…an unknown evaluation: said");
+  await api("DELETE", `/api/assessments/${oid}?g=${G}`);
+  const nos = await api("GET", `/api/concepts/mastery?g=${G}&uid=${A}&sprint=7`);
+  check(nos.status === 200 && nos.data.sprint === null && nos.data.sprints.length === 3, "a sprint not in the Fiche yet: said (nothing invented)");
+  // clean up
+  if (!hadRev) run1("DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", bidF, `u:${A}`);
+  for (const id of [aid, okq.data.id, old.data.assessment.id]) await api("DELETE", `/api/assessments/${id}?g=${G}`);
+  run1("DELETE FROM app_settings WHERE k LIKE 'concept%'");
+}
+
+section("🔌 the Claude connector (MCP): reads the classes live, writes drafts only");
+{
+  const mk = await api("POST", "/api/mcp-keys", { g: G, label: "Mon laptop" });
+  check(mk.status === 200 && /^https:\/\/dash\.example\.workers\.dev\/mcp\/cbk_[\w-]{40,}$/.test(mk.data.url) && mk.data.keys.length === 1 && !JSON.stringify(mk.data.keys).includes("cbk_"), "a key: its URL shown once, only its hash kept");
+  const path = new URL(mk.data.url).pathname;
+  const mcp = async (body: any, p = path) => {
+    const ctx = makeCtx();
+    const r = await admin.fetch(new Request("https://dash.example.workers.dev" + p, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify(body) }), env, ctx);
+    await ctx.flush();
+    return { status: r.status, data: r.status === 202 ? null : await r.json().catch(() => null) } as any;
+  };
+  const call = async (name: string, args: any = {}) => {
+    const r = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } });
+    const t = r.data?.result?.content?.[0]?.text ?? "";
+    let j: any = null; try { j = JSON.parse(t); } catch { /* an error's text */ }
+    return { error: !!r.data?.result?.isError, text: t, json: j };
+  };
+  const init = await mcp({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "claude", version: "1" } } });
+  check(init.status === 200 && init.data.result.protocolVersion === "2025-06-18" && init.data.result.capabilities.tools && /draft/i.test(init.data.result.instructions), "initialize: the protocol, the tools, how to use them");
+  check((await mcp({ jsonrpc: "2.0", method: "notifications/initialized" })).status === 202, "…a notification: 202, nothing to answer");
+  const tl = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  const names = tl.data.result.tools.map((t: any) => t.name);
+  check(["list_classes", "class_overview", "class_diagnosis", "learner_profile", "fiche_niveaux", "debrief", "assessment_results", "mise_results", "assessment_instructions", "create_assessment", "mise_instructions", "create_mise", "create_activity", "create_action_plan"].every((n) => names.includes(n))
+    && names.includes("api_get") && names.includes("api_routes") && !names.includes("api_write") && tl.data.result.tools.find((t: any) => t.name === "create_mise").annotations.readOnlyHint === false,
+    "a « read + drafts » link: reading everything, writing drafts (no api_write)");
+  const lc = await call("list_classes");
+  check(!lc.error && lc.json.some((g: any) => g.id === G), "list_classes");
+  const ov = await call("class_overview", { class: G });
+  check(!ov.error && ov.json.learners.some((x: any) => x.name === "Alice") && !/token|"email"|avatar/i.test(ov.text), "class_overview: the learners, never tokens, e-mails or avatars");
+  const lp = await call("learner_profile", { class: G, learner: "alic" });
+  check(!lp.error && lp.json.learner.id === U.alice.id && "insight" in lp.json, "learner_profile: found by a part of the name");
+  check((await call("learner_profile", { class: G, learner: "personne" })).error, "…an unknown learner: said");
+  const ai = await call("assessment_instructions", { class: G });
+  check(!ai.error && typeof ai.json.prompt === "string" && ai.json.prompt.length > 500, "assessment_instructions: ClassBot's own prompt and format");
+  const n0 = (q1("SELECT COUNT(*) AS n FROM assessments WHERE guild_id = ?", G) as any).n;
+  const ca = await call("create_assessment", { class: G, json: "{\"pas\":\"un quiz\"}" });
+  check(!ca.error && ca.json.problems?.length > 0 && (q1("SELECT COUNT(*) AS n FROM assessments WHERE guild_id = ?", G) as any).n === n0, "create_assessment: a wrong JSON is refused with its problems (nothing saved)");
+  const cp = await call("create_action_plan", { class: G, learner: "Alice", title: "Revoir le DOM", message: "Courage !", steps: [{ kind: "answer", title: "Le DOM", notion: "DOM", why: "Base", prompt: "Explique querySelector." }] });
+  check(!cp.error && cp.json.saved && cp.json.steps === 1, "create_action_plan: a draft for the learner");
+  check((await call("nope")).error === false && (await mcp({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "nope" } })).data.error.code === -32602, "an unknown tool: a JSON-RPC error");
+  check((await mcp({ jsonrpc: "2.0", id: 4, method: "ping" })).data.result !== undefined, "ping");
+  check((await mcp({ jsonrpc: "2.0", id: 5, method: "tools/list" }, "/mcp/cbk_" + "x".repeat(43))).status === 401, "a wrong key: refused");
+  { const fs = await import("node:fs"); const gen: any = await import("../scripts/mcp-routes.mjs");
+    check(fs.readFileSync("src/admin/mcproutes.ts", "utf8").replace(/\r/g, "") === gen.body, "the routes list is up to date (node scripts/mcp-routes.mjs)"); }
+  // reading anything: the routes, then any GET
+  const rt = await call("api_routes", { filter: "sprints" });
+  check(!rt.error && rt.json.routes.some((r: any) => r.path.includes("/sprints")) && !JSON.stringify(rt.json).includes("mcp-keys"), "api_routes: the dashboard's routes, by a word");
+  const ag = await call("api_get", { class: G, path: `/students/${U.alice.id}/insight` });
+  check(!ag.error && ag.json && !/avatar/.test(ag.text), "api_get: any page, read");
+  check((await call("api_get", { class: G, path: "/mcp-keys" })).error, "…never the connector's own keys");
+  check((await mcp({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "PUT", path: `/students/${U.alice.id}`, body: { name: "Alice B" } } } })).data.error?.code === -32602, "…api_write refused with a « read + drafts » link");
+  // full access: anything the dashboard does, every change logged
+  const fk = await api("POST", "/api/mcp-keys", { g: G, label: "Tout", scope: "full" });
+  const fpath = new URL(fk.data.url).pathname;
+  check(fk.data.keys.find((k: any) => k.label === "Tout").scope === "full" && (await mcp({ jsonrpc: "2.0", id: 8, method: "tools/list" }, fpath)).data.result.tools.some((t: any) => t.name === "api_write" && t.annotations.destructiveHint), "a « full access » link: api_write too (marked as acting for real)");
+  const aw = await mcp({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "PUT", path: `/students/${U.alice.id}`, body: { name: "Alice B" } } } }, fpath);
+  check(!aw.data.result.isError && q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name === "Alice B", "api_write: the change made (here the learner's name)");
+  await api("PUT", `/api/students/${U.alice.id}`, { g: G, name: "" });
+  const lg = (await api("GET", `/api/mcp-keys?g=${G}`)).data.log;
+  check(lg.some((l: any) => l.tool === "api_write" && l.method === "PUT" && l.path === `/students/${U.alice.id}` && l.status === 200 && l.label === "Tout") && lg.some((l: any) => l.tool === "create_action_plan"), "…every change is logged (what, by which link), the drafts too");
+  check((await mcp({ jsonrpc: "2.0", id: 10, method: "tools/call", params: { name: "api_write", arguments: { class: G, method: "POST", path: "/mcp-keys", body: { scope: "full" } } } }, fpath)).data.result.isError, "…never a new key through the connector");
+  await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
+  await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
+  check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
 }
 
 section("the assistant knows the app: its pages and how to set up");

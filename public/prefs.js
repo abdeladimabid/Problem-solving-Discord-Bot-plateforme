@@ -31,6 +31,26 @@
     paintTheme();
   }
 
+  // ---- size: compact (90 %, the default on a wide screen) or normal ----
+  if (who) {
+    const size = document.createElement("button");
+    size.type = "button"; size.id = "size"; size.className = "icon-btn lang-btn";
+    const paintSize = () => {
+      const compact = root.dataset.size === "compact";
+      size.textContent = compact ? "A+" : "A−";
+      size.title = compact ? "Larger display" : "Smaller display";
+      size.setAttribute("aria-label", size.title);
+    };
+    size.addEventListener("click", () => {
+      root.dataset.size = root.dataset.size === "compact" ? "normal" : "compact";
+      store.set("classbot.size", root.dataset.size);
+      paintSize();
+    });
+    paintSize();
+    const min = document.getElementById("nav-min");
+    if (min && min.parentNode === who) who.insertBefore(size, min); else who.append(size);
+  }
+
   // ---- language ----
   const FR = store.get("classbot.lang") === "fr" && window.CB_FR;
   if (who) {

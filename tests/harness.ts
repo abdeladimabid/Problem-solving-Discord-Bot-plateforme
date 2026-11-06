@@ -142,6 +142,8 @@ let msgId = 1000;
 
 /** Google (OAuth token + Sheets API): the test sets the handler. */
 export const googleFake = { handler: null as null | ((url: URL, method: string, body: string, headers: any) => Response | Promise<Response>) };
+/** A Google Doc shared « anyone with the link » (its text export): null = not shared (Google's sign-in page). */
+export const googleDocFake = { text: null as string | null };
 export const libraryHub = { handler: null as null | ((r: Request) => Promise<Response>), target: "", down: false };
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init: any = {}) => {
@@ -164,6 +166,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "css-guide.example.org" || url.hostname === "brave-found.example.org" || url.hostname === "stackoverflow.com") return new Response("<html></html>", { status: 200 });
   // pages the chat's links point at: /ok exists, the rest is a 404
   if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
+  if (url.hostname === "docs.google.com" && /\/export$/.test(url.pathname)) return googleDocFake.text == null ? new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } }) : new Response(googleDocFake.text, { headers: { "content-type": "text/plain; charset=utf-8" } });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
@@ -440,9 +443,10 @@ export const ai = {
   searchCalls: [] as string[],   // the hosts the web search asked
   chatProse: false,   // the chat's AI answers in plain text once it has the data
   chatSeen: [] as string[],   // everything the chat sent to the AI   // the answer length each call allowed
-  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
+  gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups" | "plan",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
   miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
+  planSum: "Écrire une page en Flexbox et répondre à une question sur Git.", planSumDown: false,   // the sheet's « Actions »: what a plan d'action asks, summed up
 };
 
 // Activités: a week's plan for the days asked, a veille (one invented link among them), a live coding in JavaScript;
@@ -537,6 +541,7 @@ function fakeAI() {
       if (!input.messages[1]) return { response: '{"ok": true}' };            // health check
       if (sys.includes("Tu prépares les activités quotidiennes")) return { response: activityAnswer(user) };
       // Mises en situation, "Vérifier mon code": categories, plus what must never reach the learner (a line, a fix, unknown ids)
+      if (sys.includes("Tu résumes un plan d'action pédagogique")) { if (ai.planSumDown) throw new Error("AI down"); return { response: ai.planSum }; }
       if (sys.includes("qui relit une évaluation")) { const w = ai.qcmWeak.shift(); const e = ai.sitEasy.shift(); const u = ai.qcmUnrelated.shift(); return { response: JSON.stringify({ weak: w ?? [], unrelated: u ?? [], level: e ?? [] }) }; }
       // the QCM's answers judged without the key: by default the first choice of each is the only right one
       if (sys.includes("expert en développement web très rigoureux")) { const qs = JSON.parse(user); const j = ai.qcmJudge.shift(); return { response: JSON.stringify({ q: qs.map((x: any) => ({ n: x.n, right: j?.[x.n] ?? [0] })) }) }; }
@@ -617,11 +622,12 @@ function fakeAI() {
       }
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
-        const notions = ((user.match(/NOTIONS À REVOIR :\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+        const learn = ((user.match(/CE QU’IL DOIT ENCORE APPRENDRE[^\n]*\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => /^\d+\. /.test(l))
+          .map((l) => l.replace(/^\d+\. /, "").split(" — ")).map(([n, ...r]) => `${n} : ${(r.find((x) => x.startsWith("en quoi ça consiste : ")) || "").replace("en quoi ça consiste : ", "") || "ce n’est pas encore clair pour toi, et c’est important pour la suite"}.`);
         const p = ["Ton projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site."];
         if (/BONUS RÉALISÉS : oui/.test(user)) p[0] += " Tu as aussi réalisé des bonus, ce qui est une très bonne initiative.";
         if (missing.length) p.push(`Il manque encore ${missing.join(", ")} : c’est à terminer pour que ton rendu soit complet.`);
-        if (notions.length) p.push(`Pendant l’échange, ${notions.join(", ")} n’étaient pas encore clairs pour toi. Ce sont des notions importantes à bien comprendre pour la suite.`);
+        if (learn.length) p.push(`Ce que tu dois apprendre en priorité :\n${learn.map((x, i) => `${i + 1}. ${x}`).join("\n")}`);
         p.push("Continue sur cette lancée, {prénom}, et consolide ces points pour progresser encore.");
         return { response: JSON.stringify({ commentaire: p.join("\n\n") }) };
       }
@@ -852,7 +858,17 @@ function fakeAI() {
           table: { title: "Faux", columns: ["X"], rows: [["inventé"]] } }) };
         return { response: JSON.stringify({ answer: `La classe a ${(Object.values(data)[0] as any).apprenants} apprenants.`, table: { title: "Faibles", columns: ["Apprenant", "Niveau"], rows: faibles.map((f: any) => [f.code, f.niveau]) } }) };
       }
+      // 📐 old evaluations linked to the Fiche: question n → the n-th Moyen item listed (a fake but stable answer); "aucun" → none
+      if (sys.includes("RELIER À LA FICHE NIVEAUX")) {
+        const moyen = [...user.matchAll(/^(S\d+\.M\d+) \[/gm)].map((x) => x[1]);
+        const qs = [...user.matchAll(/^(\d+)\. (.*)$/gm)];
+        return { response: JSON.stringify({ links: qs.map((q) => ({ n: Number(q[1]), concepts: /hors sujet/i.test(q[2]) ? [] : [moyen[(Number(q[1]) - 1) % moyen.length], "S9.M1"] })) }) };
+      }
       if (sys.includes("questions d’évaluation") || sys.includes("You write assessment questions")) {
+        // one distinct question per line of the plan (with the capacities of its line): the Fiche niveaux tests
+        if (ai.gen === "plan") { const lines = [...user.matchAll(/^Q(\d+) — "(\w+)"[^\n]*?(?:concepts : ([^\n]+))?$/gm)];
+          return { response: JSON.stringify({ questions: lines.map((m) => ({ type: m[2], prompt: `Quiz ${ai.calls}x${m[1]}`,
+            ...(m[2] === "mcq" ? { choices: ["un", "deux", "trois", "quatre"], answer: [0] } : { expected: "la réponse attendue", lang: "javascript" }), points: 1, concepts: (m[3] || "").split(/,\s*/).filter(Boolean) })) }) }; }
         if (ai.gen === "comps") return { response: JSON.stringify({ questions: [
           { type: "code", prompt: "Écris la structure HTML sémantique d’une page.", lang: "html", expected: "<header>…</header>", points: 2, comps: ["C1N1", "C3N1"] },
           { type: "explain", prompt: "Explique le rôle de la balise main.", expected: "le contenu principal", points: 2, comps: ["C9N1"] }] }) };

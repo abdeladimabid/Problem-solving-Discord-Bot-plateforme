@@ -88,7 +88,8 @@ async function mesWizard(opts = {}) {
         <div><label for="mw-wk">Week</label><select id="mw-wk"></select></div></div>
         <p class="small muted" id="mw-wkinfo"></p>
         <details class="mes-cd" id="mw-cd"><summary><b>Competencies to test</b> <span id="mw-csum"></span> <span class="muted small">· change</span></summary>
-          <p class="small muted" style="margin:6px 0 0">Of the week and its sprint. Empty: the ones of the file, the brief or the week.</p><div class="mes-chips" id="mw-comps"></div></details></li>
+          <p class="small muted" style="margin:6px 0 0">Of the week and its sprint. Empty: the ones of the file, the brief or the week.</p><div class="mes-chips" id="mw-comps"></div></details>
+        <div id="mw-cn"></div></li>
       <li data-step="make"><b id="mw-mk-t">Make it</b>
         <div class="field-row" id="mw-ai-f">
           <div><label for="mw-met">Job / theme <span class="muted">(optional)</span></label><input type="text" id="mw-met" placeholder="e.g. a cooperative of argan oil, a riad in Fès, a pharmacy"></div>
@@ -124,8 +125,10 @@ async function mesWizard(opts = {}) {
     compSum();
   };
   const compSum = () => { $("#mw-csum").innerHTML = W.comps.length ? W.comps.map((c) => compChip(c)).join(" ") : `<span class="muted small">${W.src === "json" || W.src === "claude" ? "from the file" : W.src === "brief" ? "from the brief" : "none chosen"}</span>`; };
+  let loadCnLater = null;
   const setWeek = (n, why) => {
     if (!n || !st.weeks.some((w) => w.n === n)) return;
+    if (W.week !== n) { W.cn = null; setTimeout(() => loadCnLater && loadCnLater(), 0); }
     W.week = n; const w = st.weeks.find((x) => x.n === n);
     spSel.value = w?.sprint ? String(w.sprint) : ""; drawWeeks();
     $("#mw-wsrc").textContent = why ? `· ${why}` : "";
@@ -133,7 +136,7 @@ async function mesWizard(opts = {}) {
   const stale = () => { if (W.res) { $("#mw-save").disabled = true; $("#mw-check").classList.add("primary"); } };
   spSel.value = w0?.sprint ? String(w0.sprint) : "";
   spSel.onchange = () => { W.manual = true; drawWeeks(); stale(); };
-  weekSel.onchange = () => { W.week = Number(weekSel.value) || null; W.manual = true; $("#mw-wsrc").textContent = ""; drawComps(); stale(); };
+  weekSel.onchange = () => { W.week = Number(weekSel.value) || null; W.manual = true; $("#mw-wsrc").textContent = ""; drawComps(); stale(); W.cn = null; if (typeof loadCnLater === "function") loadCnLater(); };
   drawWeeks();
   // ---- how
   const showSrc = (v) => {
@@ -171,8 +174,9 @@ async function mesWizard(opts = {}) {
     const id = Number($("#mw-brief").value);
     if (!id) { W.brief = null; $("#mw-bpre").innerHTML = ""; return; }
     const B = await api(`/briefs/${id}`);
-    W.brief = id; W.briefSrc = null;
+    W.brief = id; W.briefSrc = null; W.cn = null;
     briefShown(B.brief.data.title, briefComps(B.brief.data.competencies), B.brief.week);
+    loadCn();
   };
   const readBrief = async (f) => {
     if (!f) return;
@@ -189,7 +193,14 @@ async function mesWizard(opts = {}) {
   bdrop.ondragleave = () => bdrop.classList.remove("over");
   bdrop.ondrop = (e) => { e.preventDefault(); bdrop.classList.remove("over"); readBrief(e.dataTransfer.files[0]); };
   // ---- the request: what the teacher picked (else the server reads the file / the brief)
-  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}) });
+  // 📐 the capacities of the Fiche niveaux it covers (each in 5 items): ticked from the brief / week, the teacher changes them
+  const cnBox = $("#mw-cn");
+  const loadCn = () => conceptsPicker(cnBox, { week: W.week, brief_id: W.src === "brief" ? W.brief : "", limit: 6 }, W.cn, { mise: true });
+  loadCnLater = loadCn;
+  loadCn();
+  cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });
+  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
+    ...($("[data-cncap]", cnBox) ? { concepts: pickedConcepts(cnBox) } : {}) });
   const show = (r, auto) => {
     W.res = r;
     if (r.detected) {
@@ -197,7 +208,10 @@ async function mesWizard(opts = {}) {
       else if (r.detected.week && auto) $("#mw-wsrc").textContent = "· read from the file";
       if (!W.manual && r.detected.comps?.length) { W.comps = r.detected.comps; drawComps(); }
     }
-    $("#mw-prev").innerHTML = (r.problems?.length ? problemsHtml(r.problems) : "") + (r.preview ? `<div class="mes-res">${mesPreviewHtml(r.preview)}<div><h3 class="mes-h">Checklist</h3>${mesChecksHtml(r.checks)}</div></div>` : "");
+    // 📐 how many of the 10 items work on each capacity of the Fiche niveaux (5 at least)
+    let cov = "";
+    try { const d = JSON.parse($("#mw-json").value || W.json || "{}"); const sc = r.detected?.concepts?.length ? r.detected.concepts : W.cn || []; if (sc.length) cov = conceptCoverageHtml(sc, [...(d.situations || []), ...(d.qcm || [])]); } catch { /* not JSON yet */ }
+    $("#mw-prev").innerHTML = (r.problems?.length ? problemsHtml(r.problems) : "") + cov + (r.preview ? `<div class="mes-res">${mesPreviewHtml(r.preview)}<div><h3 class="mes-h">Checklist</h3>${mesChecksHtml(r.checks)}</div></div>` : "");
     $("#mw-save").disabled = !!r.problems?.length || !r.preview;
     // problems left: the AI rewrites only the situations / QCM that have one (the rest is kept)
     $("#mw-fix").hidden = !r.problems?.length;
@@ -290,7 +304,7 @@ function mesRender() {
         ${m.status === "draft" ? `<button class="btn primary" id="me-launch">Launch · choose who takes it</button>` : ""}
         ${m.status === "live" && takers.some((t) => t.status === "locked") ? `<button class="btn primary" id="me-unall">Let everyone stopped back in (${takers.filter((t) => t.status === "locked").length})</button>` : ""}
         ${m.status === "live" || m.status === "scheduled" ? `<button class="btn" id="me-add">＋ Add learners</button><button class="btn" id="me-ext">⏱ More time</button><button class="btn danger" id="me-close">Close for everyone</button>` : ""}
-        ${m.status === "closed" ? `<button class="btn" id="me-ext">⏱ Reopen with more time</button>` : ""}
+        ${m.status === "closed" ? `<button class="btn primary" id="me-late" title="Learners who were absent: they get it now with their own time, the session stays closed for the others">＋ Give it to absent learners</button><button class="btn" id="me-ext">⏱ Reopen with more time</button>` : ""}
         <button class="btn danger" id="me-del">Delete</button></div></div>
     <div class="tabs" role="tablist">
       <button role="tab" data-mt="content">Content</button>
@@ -311,6 +325,7 @@ function mesRender() {
   if ($("#me-unall")) $("#me-unall").onclick = (e) => busy(e.currentTarget, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: {} }); toast("They can come back: their page asks for full screen again"); mesRender(); });
   if ($("#me-add")) $("#me-add").onclick = (e) => busy(e.currentTarget, () => mesAddDialog());
   if ($("#me-ext")) $("#me-ext").onclick = () => mesExtendDialog();
+  if ($("#me-late")) $("#me-late").onclick = (e) => busy(e.currentTarget, () => mesLateDialog());
   if ($("#me-close")) $("#me-close").onclick = () => confirmDialog("Close it for everyone?", "Every paper still open is handed in as it is now (the work saved so far). Their links stop working.", "Close", async () => { MSIT.d = await api(`/mises/${m.id}/close`, { method: "POST", body: {} }); mesRender(); });
   $("#me-del").onclick = () => confirmDialog("Delete this mise en situation?", "Its papers and the results it put in the learners' records are deleted. This can't be undone.", "Delete", async () => { await api(`/mises/${m.id}`, { method: "DELETE", confirmed: true }); location.hash = "#/mises-en-situation"; }, true);
   // live: refreshed every 5 s (not while a window is open)
@@ -325,8 +340,8 @@ function mesRender() {
 // ---------------------------------------------------------------- content (the reference solutions are here: teacher only)
 function mesContentTab(root) {
   const m = MSIT.d.mise, c = m.content;
-  root.innerHTML = `${m.status === "draft" ? `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="mc-edit">Edit</button><button class="btn" id="mc-json">{ } Edit the JSON</button><button class="btn" id="mc-dl">⬇ Download the JSON</button></div>`
-      : `<div class="toolbar" style="margin:0 0 12px"><button class="btn" id="mc-dl">⬇ Download the JSON</button><span class="muted small">The learners have it: its content can't change anymore.</span></div>`}
+  root.innerHTML = `${m.status === "draft" ? `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="mc-edit">Edit</button><button class="btn" id="mc-json">{ } Edit the JSON</button><button class="btn" id="mc-dl">⬇ Download the JSON</button><button class="btn" id="mc-link" title="The AI links each situation and QCM to the Fiche's items it checks: nothing else changes, the past answers count at once">📐 Link to the Fiche (AI)</button></div>`
+      : `<div class="toolbar" style="margin:0 0 12px"><button class="btn" id="mc-dl">⬇ Download the JSON</button><button class="btn" id="mc-link" title="The AI links each situation and QCM to the Fiche's items it checks: nothing else changes, the past answers count at once">📐 Link to the Fiche (AI)</button><span class="muted small">The learners have it: its content can't change anymore.</span></div>`}
     ${(m.checks || []).length ? `<section class="panel mes-cl"><details ${m.status === "draft" ? "open" : ""}><summary><b>Checklist</b> <span class="small muted">${m.checks.filter((x) => !x.ok && !x.tip).length ? `${m.checks.filter((x) => !x.ok && !x.tip).length} warning(s)` : "nothing to fix"}</span></summary>${mesChecksHtml(m.checks)}</details></section>` : ""}
     ${c.situations.map((s, i) => `<section class="panel mes-sit">
       <div class="panel-head"><h2>S${i + 1} · ${esc(s.title)}</h2><span class="small muted">difficulty ${s.difficulty}/5 · ${s.points} pts (${mesWeight(c, s.id).pct}% of the score) · ${esc(RUNTIME[s.runtime] || s.runtime)}</span></div>
@@ -342,6 +357,7 @@ function mesContentTab(root) {
     <section class="panel"><h2>QCM</h2>${c.qcm.map((q, i) => `<div class="mes-qcm"><p style="margin:0 0 6px"><b>Q${i + 1}.</b> ${esc(q.question)} <span class="small muted">${q.points} pt (${mesWeight(c, q.id).pct}%)</span> ${q.competencies.map((x) => compChip(x)).join(" ")} <span class="tag lang">${esc(q.notion)}</span></p>
       ${q.code ? `<pre class="code-view">${esc(q.code)}</pre>` : ""}<ul class="mcq-res small">${q.choices.map((ch, k) => `<li class="${k === q.correct ? "right" : ""}">${"ABCD"[k]}. ${esc(ch)}${k === q.correct ? " <span class='tag easy'>right answer</span>" : ""}</li>`).join("")}</ul></div>`).join("")}</section>`;
   const json = () => JSON.stringify({ ...c, situations: c.situations.map(({ id, ...s }) => ({ ...s, checks: s.checks.map(({ id: _, ...k }) => k) })), qcm: c.qcm.map(({ id, ...q }) => q) }, null, 2);
+  $("#mc-link").onclick = () => ficheLinkDialog("mise", m.id, m.title, () => route());
   $("#mc-dl").onclick = () => saveBlob(new Blob([json()], { type: "application/json" }), `mise-en-situation-${m.id}.json`);
   if ($("#mc-edit")) $("#mc-edit").onclick = (e) => busy(e.currentTarget, () => mesEditor(root));
   if ($("#mc-json")) $("#mc-json").onclick = () => {
@@ -461,7 +477,7 @@ function mesLiveTab(root) {
       <div class="panel-head"><div class="mes-filters" role="group" aria-label="Filter">${MES_FILTERS.filter(([k]) => (m.settings.lockScreen ? k !== "left" : k !== "locked")).map(([k, l]) => `<button type="button" class="btn small" data-mf="${k}" aria-pressed="${MSIT.filter === k}">${esc(l)}${k !== "all" ? ` <span class="muted">${cnt(k)}</span>` : ""}</button>`).join("")}</div>
         <span class="toolbar" style="margin:0"><span class="muted small">${m.status === "live" ? "Refreshes every 5 s" : ""}</span><button class="btn small" id="ml-links">Copy the links</button><a class="btn small" href="/api/mises/${m.id}/live.csv?g=${encodeURIComponent(S.g)}" download>⬇ CSV</a></span></div>
       ${table([
-        { label: "Learner", sort: "nameS", html: (t) => `<button class="res-who" data-ml="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b>${t.test ? ` <span class="tag">test</span>` : ""}<small>open →</small></span></button>` },
+        { label: "Learner", sort: "nameS", html: (t) => `<button class="res-who" data-ml="${t.id}">${avatar(t.name, t.discord_id)}<span><b>${esc(t.name || t.discord_id)}</b>${t.test ? ` <span class="tag">test</span>` : ""}${t.late ? ` <span class="tag" title="Given later: their own ${t.late.minutes} minutes from when they open it${t.late.endsAt ? `, until ${fmtDateTime(t.late.endsAt)}` : ""}">⏱ own time</span>` : ""}<small>open →</small></span></button>` },
         { label: "Status", sort: "statusS", html: (t) => `${mesLive(t.live)}${t.away && t.live !== "locked" ? ` <span class="small muted">away now</span>` : ""}${t.live === "locked" ? `<div class="small muted">${t.status === "resume" ? "let back in · coming back" : esc(MES_LOCK[t.lockWhy] || "left full screen")}${t.locks > 1 ? ` · ${t.locks}×` : ""}</div>` : ""}` },
         // where they are and for how long: 10 min or more on the same question = stuck (blocked)
         { label: "On question", sort: "onSec", html: (t) => (["active", "locked", "resume"].includes(t.status) && t.item ? `<b>${mesItemLabel(c, t.item)}</b>${t.itemSince ? `<div class="mes-on ${stuck(t) ? "stuck" : ""}" title="Time on this question">⏱ ${mesDur(nowS - t.itemSince)}${stuck(t) ? " · stuck?" : ""}</div>` : ""}` : "—") },
@@ -472,7 +488,7 @@ function mesLiveTab(root) {
           : { label: "Left page", num: true, sort: "leaves", html: (t) => (t.leaves ? `<b>${t.leaves}×</b><div class="small muted">${mesDur(t.awaySec)}</div>` : "0") },
         ...(m.settings.netAlerts ? [{ label: "Network", html: (t) => netHtml(t.net) }] : []),
         { label: "Pastes", num: true, sort: "pastes", html: (t) => (t.pastes || t.blockedPastes ? `<b>${t.pastes}</b>${t.pasteChars ? `<div class="small muted">${t.pasteChars} chars</div>` : ""}${t.blockedPastes ? `<div class="small" style="color:var(--warn)">${t.blockedPastes} blocked</div>` : ""}` : "0") },
-        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ""}</span>` },
+        { label: "", html: (t) => `<span class="mes-acts">${t.status === "locked" ? `<button class="btn small primary" data-mu="${t.id}">Let back in</button>` : ""}${t.status !== "submitted" && m.status !== "closed" ? `<button class="btn small" data-mr="${t.id}" title="Send their link again by DM">Resend</button>` : ""}${t.status === "submitted" && m.status !== "closed" ? `<button class="btn small" data-mro="${t.id}" title="Handed in by mistake: their paper opens again, where they were">Reopen paper</button>` : ""}${t.status === "invited" ? ` <button class="btn small danger" data-mx="${t.id}" title="Take back the invitation">Remove</button>` : ` <button class="btn small danger" data-mdel="${t.id}" title="Delete their paper and results, then invite them again">Delete paper</button>`}</span>` },
       ], rows, { empty: MSIT.filter === "all" ? "Nobody yet: launch it for the class." : "Nobody in this filter." })}
     </section>`;
   $$("[data-mf]", root).forEach((b) => b.onclick = () => { MSIT.filter = b.dataset.mf; mesLiveTab(root); });
@@ -480,6 +496,10 @@ function mesLiveTab(root) {
   $$("[data-mr]", root).forEach((b) => b.onclick = () => busy(b, async () => { const r = await api(`/mises/${m.id}/resend`, { method: "POST", body: { taker: Number(b.dataset.mr) } }); toast(r.sent ? "Link sent by DM" : "The DM didn't go through: copy their link instead", !r.sent); }));
   $$("[data-mu]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: { taker: Number(b.dataset.mu) } }); toast("Let back in: their page asks for full screen again"); mesRender(); }));
   $$("[data-mx]", root).forEach((b) => b.onclick = () => busy(b, async () => { MSIT.d = await api(`/mises/${m.id}/remove`, { method: "POST", body: { taker: Number(b.dataset.mx) } }); mesRender(); }));
+  $$("[data-mdel]", root).forEach((b) => b.onclick = () => { const t = takers.find((x) => x.id === Number(b.dataset.mdel)); if (t) mesResetDialog(t); });
+  $$("[data-mro]", root).forEach((b) => b.onclick = () => { const t = takers.find((x) => x.id === Number(b.dataset.mro)); if (!t) return;
+    confirmDialog(`Reopen ${t.name || t.discord_id}'s paper?`, "Handed in by mistake: they open their link again and go on where they were (their answers are kept). Their results come back when they hand it in again.", "Reopen their paper",
+      async () => { MSIT.d = await api(`/mises/${m.id}/reopen`, { method: "POST", body: { taker: t.id } }); toast("Reopened: they open their link again"); mesRender(); }); });
   $("#ml-links").onclick = (e) => busy(e.currentTarget, async () => { const l = (await api(`/mises/${m.id}/links`)).links; copyText(takers.map((t) => `${t.name || t.discord_id}: ${l[t.discord_id]}`).join("\n"), "Links copied"); });
 }
 
@@ -528,7 +548,7 @@ function mesResultsTab(root) {
       <div class="figure"><span class="ico">📨</span><div><b>${done.filter((t) => t.sent_at).length}</b><span>results sent</span></div></div>
     </div>
     <section class="panel">
-      <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0"><a class="btn small" href="/api/mises/${m.id}/results.csv?g=${encodeURIComponent(S.g)}" download>⬇ CSV</a><button class="btn small primary" id="mr-send" ${done.length ? "" : "disabled"}>Send the results by DM</button></span></div>
+      <div class="panel-head"><h2>Results</h2><span class="toolbar" style="margin:0"><a class="btn small" href="/api/mises/${m.id}/results.csv?g=${encodeURIComponent(S.g)}" download>⬇ CSV</a><a class="btn small" href="/api/mises/${m.id}/answers.json?g=${encodeURIComponent(S.g)}" download title="Their work, the paper and the instructions: give this file to Claude (claude.ai) to grade it">⬇ Answers for Claude (JSON)</a><button class="btn small" id="mr-claude" ${done.length ? "" : "disabled"}>📥 Import Claude's grades</button><button class="btn small primary" id="mr-send" ${done.length ? "" : "disabled"}>Send the results by DM</button></span></div>
       <p class="muted small" style="margin-top:0">The automatic score: the share of checks passed (situations) and the right answer (QCM), weighted by the points. Click a score to change it (✎ = yours), a learner to see everything they did and write their comment. Results go to their competencies once nothing is left to grade.</p>
       <p class="muted small">Weight of each item in the score (its points ÷ ${mesWeight(c, ids[0]).total} points). Under each result: what it adds to the score.<br>${ids.map((id) => `<b>${mesItemLabel(c, id)}</b> ${mesWeight(c, id).pct}%`).join(" · ")}</p>
       ${done.length ? `<div class="table-wrap"><table class="res-table"><thead><tr><th>Learner</th><th>Score</th>${ids.map((id) => `<th class="ctr"><span class="qh">${mesItemLabel(c, id)}</span><span class="mes-w">${mesWeight(c, id).pct}%</span></th>`).join("")}</tr></thead>
@@ -538,6 +558,7 @@ function mesResultsTab(root) {
     </section>`;
   $$("[data-ml]", root).forEach((b) => b.onclick = () => busy(b, () => mesLearner(Number(b.dataset.ml))));
   $$("[data-mg]", root).forEach((b) => b.onclick = () => busy(b, async () => { const d = await api(`/mises/${m.id}/taker/${b.dataset.mg}`); mesGradeDialog(d, b.dataset.it, () => viewMise(m.id)); }));
+  if ($("#mr-claude")) $("#mr-claude").onclick = () => mesClaudeImport(m);
   if ($("#mr-send")) $("#mr-send").onclick = () => confirmDialog("Send the results?", `Each learner whose paper is fully graded gets their score, each item and your comment (or a short professional one written from their score) by DM.${toGrade ? ` ${toGrade} item(s) still to grade: those learners are skipped.` : ""}`, "Send", async () => {
     const r = await api(`/mises/${m.id}/results`, { method: "POST", body: {} });
     toast(`Sent to ${r.sent} learner(s)${r.skipped ? ` · ${r.skipped} skipped (to grade)` : ""}`);
@@ -549,13 +570,14 @@ function mesGradeDialog(d, item, after) {
   openDialog(`${mesItemLabel(c, item)} · ${d.name || d.discord_id}`, `
     <p class="small muted" style="margin-top:0">Automatic: <b>${it.auto == null ? "no check (to grade)" : it.auto + "%"}</b>${it.attempted ? "" : " · not attempted"}</p>
     <div class="field-row"><div><label for="mg-s">Score (0–100)</label><input type="number" id="mg-s" min="0" max="100" value="${g.teacher ? g.score : it.auto ?? ""}"></div></div>
-    <label for="mg-c">Comment <span class="muted">(for you)</span></label><textarea id="mg-c" rows="3" style="width:100%">${esc(g.comment || "")}</textarea>`,
-  [...(g.teacher ? [{ label: "Back to automatic", action: async () => { await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: null } }); dlg.close(); after(); } }] : []),
-    { label: "Save", primary: true, action: async () => { const v = $("#mg-s").value; if (v === "") throw new Error("Give a score from 0 to 100."); await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: Number(v), comment: $("#mg-c").value } }); dlg.close(); toast("Grade saved"); after(); } }]);
+    <label for="mg-c">Comment <span class="muted">(sent to the learner with the results: what was wrong, what to study again)</span></label><textarea id="mg-c" rows="3" style="width:100%">${esc(g.comment || "")}</textarea>
+    <p class="small muted" style="margin:4px 0 0">Leave the score empty to keep the automatic one (the comment is kept).</p>`,
+  [...(g.teacher ? [{ label: "Back to automatic", action: async () => { await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: null, comment: $("#mg-c").value.trim() } }); dlg.close(); after(); } }] : []),
+    { label: "Save", primary: true, action: async () => { const v = $("#mg-s").value, cm = $("#mg-c").value.trim(); if (v === "" && !cm) throw new Error("Give a score from 0 to 100, or a comment."); await api(`/mises/${MSIT.d.mise.id}/grade`, { method: "PUT", body: { taker: d.id, item, score: v === "" ? null : Number(v), comment: cm } }); dlg.close(); toast("Saved"); after(); } }]);
 }
 
 // ---------------------------------------------------------------- one learner: everything they did
-const MES_EV = { lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in" };
+const MES_EV = { lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in", reopen: "⏱ Reopened: continues their paper" };
 async function mesLearner(takerId) {
   const m = MSIT.d.mise, c = m.content;
   const d = await api(`/mises/${m.id}/taker/${takerId}`);
@@ -578,11 +600,12 @@ async function mesLearner(takerId) {
       ${ck ? `<ul class="small mes-ck">${ck.results.map((r) => `<li class="${r.ok ? "ok" : "ko"}">${r.ok ? "✓" : "✗"} ${esc(r.label)}</li>`).join("")}</ul>` : ""}
       <p class="small" style="margin:8px 0 4px"><b>AI categories</b> ${ai.length ? "" : `<span class="muted">· none asked</span>`}</p>
       ${ai.length ? `<ul class="small">${ai.map((x) => `<li><span class="muted">${fmtDateTime(x.at)}${x.submit ? " · at hand-in" : ""}</span> ${x.categories.map((k) => `<span class="tag ${k.id === "none" ? "easy" : "medium"}">${esc(k.label)}</span>`).join(" ")}</li>`).join("")}</ul>` : ""}
+      ${d.grades[s.id]?.comment ? `<p class="small mes-note">💬 ${esc(d.grades[s.id].comment)}</p>` : ""}
       <div class="toolbar" style="margin:8px 0 0">${visits.length ? `<button class="btn small" data-rp="${s.id}">⏯ Typing replay (${visits.length} visit${visits.length > 1 ? "s" : ""})</button>` : `<span class="small muted">No typing record.</span>`}<button class="btn small" data-gr="${s.id}">✎ Grade</button></div></details>`;
   };
   const qcmHtml = (q, i) => {
     const a = d.answers[q.id], it = d.items[q.id], pick = a && a.choice != null ? a.choice : null;
-    return `<li><b>Q${i + 1}</b> ${esc(q.question.slice(0, 120))} — ${pick == null ? `<span class="lvl none">no answer</span>` : `${"ABCD"[pick]}. ${esc(q.choices[pick])} ${pick === q.correct ? "<span class='tag easy'>right</span>" : `<span class='tag hard'>wrong</span> <span class="muted small">(right: ${"ABCD"[q.correct]})</span>`}`}${it.teacher ? ` ✎ ${it.score}%` : ""} <button class="btn small" data-gr="${q.id}">✎</button></li>`;
+    return `<li><b>Q${i + 1}</b> ${esc(q.question.slice(0, 120))} — ${pick == null ? `<span class="lvl none">no answer</span>` : `${"ABCD"[pick]}. ${esc(q.choices[pick])} ${pick === q.correct ? "<span class='tag easy'>right</span>" : `<span class='tag hard'>wrong</span> <span class="muted small">(right: ${"ABCD"[q.correct]})</span>`}`}${it.teacher ? ` ✎ ${it.score}%` : ""}${d.grades[q.id]?.comment ? `<div class="small mes-note">💬 ${esc(d.grades[q.id].comment)}</div>` : ""} <button class="btn small" data-gr="${q.id}">✎</button></li>`;
   };
   openDialog(`${d.name || d.discord_id} · ${m.title}`, `
     <div class="figures cs-figs mes-figs">
@@ -693,11 +716,70 @@ async function mesAddDialog() {
       dlg.close(); MSIT.d = r; toast(`${ids.length} added · ${r.sent} DM sent`); mesRender();
     } }] : []);
 }
+/** Learners absent at the launch: they get it now, with their own time (from when they open it); closed for the others. */
+async function mesLateDialog() {
+  const m = MSIT.d.mise;
+  const st = MSIT.setup || (MSIT.setup = await api("/mises/setup"));
+  const have = new Set(MSIT.d.takers.map((t) => t.discord_id));
+  const rest = st.students.filter((s) => !have.has(s.discord_id));
+  // their time: the session's minutes, else how long it was open
+  const was = m.ends_at && (m.starts_at || m.opened_at) ? Math.round((m.ends_at - (m.starts_at || m.opened_at)) / 60) : 0;
+  const def = Math.max(5, Math.min(600, m.settings?.minutes || was || 60));
+  openDialog("＋ Give it to absent learners", rest.length ? `<p class="small muted" style="margin-top:0">The learners who didn't take it. Each one gets <b>their own time</b>, counted from when they open their link (valid two weeks): give it when they're in class. The session stays closed for the others; their results count like everyone's.</p>
+      <div class="mes-people">${rest.map((s) => `<label class="check"><input type="checkbox" value="${esc(s.discord_id)}"> ${avatar(s.name, s.discord_id)} ${esc(s.name || s.discord_id)}</label>`).join("")}</div>
+      <p style="margin:12px 0 0"><label for="mlt-min">Their time (minutes)</label> <input type="number" id="mlt-min" min="5" max="600" value="${def}" style="width:110px"></p>
+      <label class="check" style="margin-top:8px"><input type="checkbox" id="mlt-dm" checked> Send them their link by Discord DM now</label>`
+    : `<p class="muted">Every learner of the class already has it. To give someone a new paper, reset theirs in the Live tab.</p>`,
+    rest.length ? [{ label: "Give it to them", primary: true, action: async () => {
+      const ids = $$(".mes-people input:checked", dlg).map((x) => x.value);
+      if (!ids.length) throw new Error("Pick at least one learner.");
+      const r = await api(`/mises/${m.id}/late`, { method: "POST", body: { students: ids, minutes: Number($("#mlt-min").value), send: $("#mlt-dm").checked } });
+      dlg.close(); MSIT.d = r; toast(`${r.invited} learner${r.invited > 1 ? "s" : ""} · ${r.minutes} min each${r.sent ? ` · ${r.sent} DM sent` : " · copy their link in the Live tab"}`); mesRender();
+    } }] : []);
+}
 function mesExtendDialog() {
   const m = MSIT.d.mise;
-  openDialog("⏱ More time", `<p class="small muted" style="margin-top:0">${m.ends_at ? `Now it ends ${fmtDateTime(m.ends_at)}.` : "It has no end: this gives it one."} Everyone gets the same extra time${m.status === "closed" ? " and the session opens again (papers already handed in stay handed in)" : ""}.</p>
-    <label for="me-m">Extra minutes</label><input type="number" id="me-m" min="1" max="600" value="15" style="width:120px">`,
-  [{ label: "Add the time", primary: true, action: async () => { MSIT.d = await api(`/mises/${m.id}/extend`, { method: "POST", body: { minutes: Number($("#me-m").value) } }); dlg.close(); toast("Time added"); mesRender(); } }]);
+  // papers handed in: the teacher chooses who continues theirs (ticked: handed in by the closing or the time running out)
+  const done = (MSIT.d.takers || []).filter((t) => t.status === "submitted");
+  openDialog(m.status === "closed" ? "⏱ Reopen with more time" : "⏱ More time", `<p class="small muted" style="margin-top:0">${m.ends_at ? `${m.status === "closed" ? "It ended" : "Now it ends"} ${fmtDateTime(m.ends_at)}.` : "It has no end: this gives it one."} Everyone gets the same extra time${m.status === "closed" ? " and the session opens again" : ""}.</p>
+    <label for="me-m">Extra minutes</label><input type="number" id="me-m" min="1" max="600" value="15" style="width:120px">
+    ${done.length ? `<h4 style="margin:14px 0 4px">Let them continue their paper</h4>
+      <p class="small muted" style="margin:0 0 6px">They go on where they were (their answers are kept); their results come back when they hand it in again. Ticked: handed in by the closing or when the time ran out.</p>
+      <div class="mes-people">${done.map((t) => `<label class="check"><input type="checkbox" value="${t.id}" data-cont ${t.autoSub ? "checked" : ""}> <span>${esc(t.name || t.discord_id)} <span class="muted small">${t.autoSub ? "handed in by the closing" : "handed it in themselves"}</span></span></label>`).join("")}</div>` : ""}`,
+  [{ label: m.status === "closed" ? "Reopen" : "Add the time", primary: true, action: async () => {
+    const cont = $$("[data-cont]:checked", dlg).map((x) => Number(x.value));
+    const r = await api(`/mises/${m.id}/extend`, { method: "POST", body: { minutes: Number($("#me-m").value), continue: cont } });
+    MSIT.d = r; dlg.close();
+    toast(m.status === "closed" ? `Reopened${r.continued ? ` · ${r.continued} can continue: they open their link again` : ""}` : "Time added"); mesRender(); } }]);
+}
+/** Claude's correction back: the JSON it answered becomes your grades (each still editable) and their comments. */
+function mesClaudeImport(m) {
+  openDialog("📥 Import Claude's grades", `<ol class="small" style="margin:0 0 10px;padding-left:18px">
+      <li><b>⬇ Answers for Claude (JSON)</b>: the paper, what's expected, each learner's work and the instructions.</li>
+      <li>In <a href="https://claude.ai" target="_blank" rel="noopener noreferrer">claude.ai</a>, attach the file and write « Corrige ». Claude answers with a JSON.</li>
+      <li>Paste that JSON here (or choose the file).</li></ol>
+    <textarea id="mc-json" rows="10" style="width:100%;font-family:var(--mono, monospace);font-size:12px" placeholder='{ "format": "classbot-mise-grades@1", "grades": [ … ], "comments": [ … ] }'></textarea>
+    <p class="toolbar" style="margin:6px 0 0"><input type="file" id="mc-file" accept=".json,application/json,text/plain"></p>
+    <p class="muted small" style="margin:6px 0 0">Each grade becomes yours (✎, you can still change it) and each comment goes with their results. Nothing is sent to the learners until you press « Send the results by DM ».</p>`,
+  [{ label: "Import the grades", primary: true, action: async () => {
+    const txt = $("#mc-json", dlg).value.trim();
+    if (!txt) throw new Error("Paste Claude's JSON first.");
+    const r = await api(`/mises/${m.id}/claude-grades`, { method: "POST", body: { json: txt } });
+    MSIT.d = r; dlg.close();
+    toast(`${r.grades} grade(s) and ${r.comments} comment(s) imported for ${r.learners} learner(s)${r.skipped.length ? ` · skipped: ${r.skipped.slice(0, 3).join(", ")}` : ""}`, !!r.skipped.length && !r.grades);
+    mesRender(); } }]);
+  $("#mc-file", dlg).onchange = async (e) => { const f = e.target.files[0]; if (f) $("#mc-json", dlg).value = await f.text(); };
+}
+/** Delete a learner's paper (their work and results), and invite them again with a new paper if asked. */
+function mesResetDialog(t) {
+  const m = MSIT.d.mise, closed = m.status === "closed";
+  openDialog(`Delete ${t.name || t.discord_id}'s paper?`, `<p>Their answers, their record of this mise en situation and the results it put on their profile are deleted. This can't be undone.</p>
+    <label class="check"><input type="checkbox" id="me-rinv" checked> <span><b>Invite them again</b> <span class="muted small">(a new, empty paper${closed ? "; it's closed: reopen it with more time so they can take it" : ", their new link by DM"})</span></span></label>`,
+  [{ label: "Delete their paper", danger: true, action: async () => {
+    const invite = $("#me-rinv").checked;
+    const r = await api(`/mises/${m.id}/reset`, { method: "POST", body: { taker: t.id, invite }, confirmed: true });
+    MSIT.d = r; dlg.close();
+    toast(invite ? (r.sent ? "Deleted · invited again, new link sent by DM" : closed ? "Deleted · invited again: reopen it so they can take it" : "Deleted · invited again (the DM didn't go through: copy their link)") : "Their paper is deleted"); mesRender(); } }]);
 }
 
 // « Give work » (the students' page, a plan d'action): one of the mises en situation, for the students chosen.

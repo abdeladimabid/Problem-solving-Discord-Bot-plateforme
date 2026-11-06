@@ -1185,7 +1185,7 @@ function renderDebrief() {
       <p class="sub">${T.handin ? `Handed in <a href="https://github.com/${esc(T.handin.repo)}" target="_blank" rel="noopener">${esc(T.handin.repo)}</a> ${fmtAgo(T.handin.at)}` : "Not handed in: the analysis uses the repo they pushed to during the brief"}
         ${rec ? ` · analyzed ${fmtAgo(Math.floor(rec.at / 1000))}${rec.model ? ` <span class="muted small">(${esc(rec.model)})</span>` : ""}` : ""} ${R.status ? status(final ? "solved" : "pending", final ? "Finalized" : "Draft") : ""}</p></div>
       <div class="toolbar" style="margin:0">
-        ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next →</a>` : ""}
+        ${nav(at - 1) ? `<a class="btn" href="${nav(at - 1)}">← Previous learner</a>` : ""}${nav(at + 1) ? `<a class="btn" href="${nav(at + 1)}">Next learner →</a>` : ""}
         ${final ? "" : `<button class="btn ${rec ? "" : "primary"}" id="db-an">${rec ? "↻ Analyze again" : "🔍 Analyze the work"}</button>`}</div></div>
     <div id="db-body"></div>`;
   if ($("#db-an")) $("#db-an").onclick = () => analyzeWork();
@@ -1223,7 +1223,7 @@ function renderDebrief() {
   body.innerHTML = `<div class="db-grid${sq ? " db-sq" : ""}">
     <div class="stack">
       ${sq ? "" : assessPanelHtml(rec.assess)}
-      <section class="panel"><div class="panel-head"><h2>3 · Project (GitHub)</h2><span id="db-pct"></span></div>
+      <section class="panel" id="db-proj"><div class="panel-head"><h2>Project (GitHub)</h2><span id="db-pct"></span></div>
         <div id="db-meter"></div>
         ${r.resume ? `<p>${esc(r.resume)}</p>` : ""}
         <div class="grid cols-2-even">
@@ -1232,13 +1232,13 @@ function renderDebrief() {
         </div>
         <p class="muted small">Repo${(rec.repos || []).length > 1 ? "s" : ""}: ${(rec.repos || []).map((x) => `<a href="https://github.com/${esc(x)}" target="_blank" rel="noopener">${esc(x)}</a>`).join(", ") || "—"} · ${rec.count ?? 0} commit(s) during the brief</p>
       </section>
-      ${otherChecks.length ? `<section class="panel"><details class="db-fold db-fold-top"><summary><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">· ${otherChecks.length}</span></h2></summary>
+      ${otherChecks.length ? `<section class="panel" id="db-checks"><details class="db-fold db-fold-top"><summary><h2>${otherChecks.length < checks.length ? "Other automatic checks" : "Automatic checks"} <span class="muted">· ${otherChecks.length}</span></h2></summary>
         <p class="muted small" style="margin:8px 0 0">Read in the code: sure${otherChecks.length < checks.length ? " · the others are in the requirements" : ""}. For your information only: they don't go in the comment.</p>
         <div class="db-rows">${otherChecks.map((c) => `<div class="db-row ${c.info ? "info" : ""}">
           ${c.info || typeof st.ck[c.id] !== "boolean" ? `<span class="db-i">ℹ️</span>` : sw(`data-ck="${esc(c.id)}"`, st.ck[c.id], final)}
           <div><b>${esc(c.label || c.id)}</b><div class="small muted">${esc(c.detail || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
-      <section class="panel"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
-        ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|livrable|deliverable|bonus)$/i.test(type);
+      <section class="panel" id="db-req"><h2>Requirements of the brief <span class="muted">switch = validated</span></h2>
+        ${Object.entries(exByType).map(([type, idx]) => { const fold = /^(crit[eè]re|criterion|bonus)$/i.test(type);
           const head = `${esc(EXTYPE[type] || type)} <span class="muted small">${idx.filter((i) => st.ex[i]).length}/${idx.length}${NOT_IN_PCT(type) ? " · not counted in the %" : ""}</span>`;
           // Criterion, Deliverable and Bonus: folded by default (open them to check or switch)
           return `${fold ? `<details class="db-fold"><summary><h3>${head}</h3></summary>` : `<h3>${head}</h3>`}
@@ -1247,7 +1247,7 @@ function renderDebrief() {
               <div><span>${esc(noVerifText(e.texte))}</span> <span class="lvl ${s[0]}">${esc(s[1])}</span>
               <div class="small muted">${bound ? `🔎 automatic check: ${esc(ckDetail[e.check] || ckLabel[e.check] || e.check)}` : esc(e.preuve || "")}</div></div></div>`; }).join("")}</div>${fold ? "</details>" : ""}`; }).join("") || `<p class="empty">No requirement found.</p>`}
       </section>
-      ${(r.commits || []).length ? `<section class="panel"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
+      ${(r.commits || []).length ? `<section class="panel" id="db-commits"><details><summary><b>Commits</b> <span class="muted small">${r.commits.length} · what the AI thought of each</span></summary>
         <div class="db-rows" style="margin-top:10px">${r.commits.map((c) => `<div class="db-row"><span class="db-i">${c.ok === true ? "✅" : c.ok === false ? "⚠️" : "·"}</span>
           <div><code>${esc(c.sha)}</code> ${esc(c.msg)}<div class="small muted">${esc(c.note || "")}</div></div></div>`).join("")}</div></details></section>` : ""}
     </div>
@@ -1260,20 +1260,28 @@ function renderDebrief() {
         <p class="muted small" style="margin:4px 0 8px">What you noticed face to face: the lacunes, what they can or can't explain. It counts in the level, the comment and, with ✨, the AI tells which competencies it confirms or questions.</p>
         <p class="muted small" style="margin:-4px 0 8px">With ✨, what went well goes in the comment's strengths, what to review in its notions, and the oral questions your remarks say were answered are switched on.</p>
         <textarea id="db-rm" style="min-height:110px" ${final ? "readonly" : ""} placeholder="e.g. Ne sait pas expliquer la différence entre margin et padding. Maîtrise bien Flexbox. N'a pas compris le responsive.">${esc(rec.remarks?.text || "")}</textarea>
-        ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small" id="db-rms">Save</button><button class="btn small primary" id="db-rmai">✨ Save and check the competencies</button></p>`}
+        ${final ? "" : `<p class="toolbar" style="margin:8px 0 0"><button class="btn small primary" id="db-rmai">✨ Check the competencies</button><span class="small muted" id="db-rmst">Saved by itself as you type</span></p>`}
         ${rec.remarks?.forStudent ? `<p class="small" style="margin:8px 0 0"><span class="muted">In the comment:</span> ${esc(rec.remarks.forStudent)}</p>` : ""}</section>`}
-      ${sq ? "" : `<section class="panel"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+      ${sq ? "" : `<section class="panel" id="db-comps"><div class="panel-head" style="align-items:flex-start"><h2>Competencies <span class="muted">assessment, project, one-to-one, mise en situation and oral questions · your switch decides</span></h2>
+        ${final ? "" : `<button class="btn small" id="db-coreset" title="Set each competency again from what the debrief shows now: the one-to-one first (read again if you changed it), then the assessment, then the project as switched (at least half of the requirements validated, unless skipped); a live task not done takes a technical competency down">↻ Recalculate</button>`}</div>
+        ${final ? "" : `<div class="sq-links" id="db-links"><span>🔗 <b>CT5</b> · links the learner shared on Discord during the brief</span><button class="btn small" id="db-ilk">Check Discord</button><span class="small muted" id="db-lkst"></span></div>`}
         <div class="db-rows">${(r.competences || []).map((c) => { const a = AVIS[c.avis] || ["", c.avis];
           const base = (parseC(c.code) || {}).code;
           const ax = (rec.assess || []).map((x) => [x, x.comps?.[base]]).filter(([, v]) => v);
           return `<div class="db-row">${sw(`data-co="${esc(c.code)}"`, st.co[c.code], final)}
             <div>${compChip(c.code + (lvlOf[c.code] ? "N" + lvlOf[c.code] : ""))} <span class="small">${esc(compName(c.code))}</span>
-            <div style="margin-top:4px">${ax.map(([x, v]) => `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">📝 assessment: ${v.ok ? "validated" : "not validated"}</span>`).join(" ")}
+            <div style="margin-top:4px">${ax.map(([x, v]) => {
+              // the assessment or the class mise en situation (each its own result); two of a kind: their titles say which
+              const mise = x.kind === "mise", same = ax.filter(([y]) => (y.kind === "mise") === mise).length > 1;
+              const what = `${mise ? "🧪 mise en situation" : "📝 assessment"}${same ? ` « ${esc(String(x.title || "").replace(/^Mise en situation · /, "").slice(0, 30))} »` : ""}`;
+              return `<span class="lvl ${v.ok ? "good" : "bad"}" title="${esc(x.title)}${v.note ? ` · ${esc(v.note)}` : ""}">${what}: ${v.ok ? "validated" : "not validated"}</span>`; }).join(" ")}
               <span class="lvl ${a[0]}">📁 project: ${esc(a[1])}</span>${(rec.assess || []).some((x) => x.score != null) && !ax.length ? ` <span class="small muted">not in the assessment</span>` : ""}</div>
+            ${/^C?T5/.test(c.code) ? `<div class="db-ilinks" data-ilinks></div>` : ""}
             ${compAdvice(c.avis, aV[base])}
             ${(() => { const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code); return ad ? `<div class="db-adv ${ad.avis === "ok" ? "ok" : "ko"}">🗣️ One-to-one: <b>${ad.avis === "ok" ? "confirms it" : "questions it"}</b>${ad.why ? `. ${esc(ad.why)}` : ""}</div>` : ""; })()}
             <div class="small muted">${esc(c.raison || "")}</div></div></div>`; }).join("") || `<p class="muted small">This brief has no competencies.</p>`}</div>
       </section>`}
+      ${sq && !rec.fiche?.items?.length ? "" : `<section class="panel" id="db-fiche"><div class="panel-head"><h2>📐 Fiche niveaux</h2><span class="small muted">${sq ? "the squad's code (counts for every member)" : "what they know in this sprint: assessments, mises en situation, oral questions, the live task and the project's code"}</span></div><div id="db-fichebox">${sq ? "" : `<p class="muted small">Loading…</p>`}</div></section>`}
       <section class="panel" id="db-cpanel"><div class="panel-head"><h2>${sq ? "Squad comment" : "Comment"}</h2><span class="toolbar" style="margin:0"><button class="btn small" id="db-cp">Copy</button>${final ? "" : `<button class="btn small" id="db-rb" title="Write it again from the switches">↻ Rebuild</button><button class="btn small" id="db-cai" title="The AI phrases the same points (nothing else)">✨ Write with AI</button>`}</span></div>
         <textarea id="db-c" style="min-height:300px" ${final ? "readonly" : ""}>${esc(r.feedback || "")}</textarea>
         <p class="muted small" id="db-cst">${final ? "" : rec.commentBy === "ai" ? "Written by the AI from your switches: kept when you change a switch (↻ Rebuild to write it again from them)." : rec.edited ? "Your edited comment is kept when you change a switch (↻ Rebuild to write it again from them)." : "Written from your switches: the requirements of the brief, the bonus, the competencies, the one-to-one remarks and the oral questions (not the other automatic checks). Edit it freely: your text is kept."}</p></section>
@@ -1299,12 +1307,214 @@ function renderDebrief() {
     toast(!ai ? "Remarks saved (in the comment and the level)" : n ? `Remarks saved: ${n} oral question${n > 1 ? "s" : ""} switched on as answered; see the competencies and the comment` : "Remarks saved: see the competencies and the comment");
     renderDebrief();
   };
-  if ($("#db-rms")) $("#db-rms").onclick = (e) => busy(e.currentTarget, saveRm(false));
+  // the remarks save by themselves (a moment after typing, and when leaving the field): no button, no page redrawn
+  if ($("#db-rm") && !final) {
+    let t = null, last = $("#db-rm").value;
+    const save = async () => {
+      clearTimeout(t);
+      const text = $("#db-rm").value;
+      if (text === last) return;
+      last = text;
+      $("#db-rmst").textContent = "Saving…";
+      try { const R = await api(`/briefs/${DB.bid}/review/remarks`, { method: "POST", body: { who: DB.who, text, quick: true } }); if (DB.R.review) { DB.R.review.remarks = R.remarks; if (!DB.commentEdited && !R.edited && R.feedback && $("#db-c")) { DB.R.review.result.feedback = R.feedback; $("#db-c").value = R.feedback; } } dbxDraw(); $("#db-rmst").textContent = "Saved · in the level and the comment"; }
+      catch (err) { last = null; $("#db-rmst").textContent = "Not saved yet: tried again in a moment"; clearTimeout(t); t = setTimeout(save, 8000); void err; }
+    };
+    $("#db-rm").addEventListener("input", () => { $("#db-rmst").textContent = "…"; clearTimeout(t); t = setTimeout(save, 4000); });
+    $("#db-rm").addEventListener("blur", save);
+  }
   if ($("#db-rmai")) $("#db-rmai").onclick = (e) => busy(e.currentTarget, saveRm(true));
+  // the competencies set again from the debrief as it is now (once switched, a competency kept its first value)
+  if ($("#db-coreset")) $("#db-coreset").onclick = (e) => busy(e.currentTarget, async () => {
+    // remarks changed since the AI last read them: read again first, so the one-to-one counts as written now
+    const text = ($("#db-rm")?.value || "").trim(), rm = DB.R?.review?.remarks;
+    if (text && (!rm?.advice || (rm.checkedText !== undefined && rm.checkedText !== text))) { await saveStatesNow(); await saveRm(true)(); }
+    DB.coManual = new Set();
+    const changed = applyComps(), kept = compTargets().filter((t) => t.want === null).map((t) => t.code);
+    toast(changed.length ? `${changed.length} competenc${changed.length > 1 ? "ies" : "y"} changed: ${changed.join(", ")}` : "Already up to date: nothing changed"
+      + (kept.length ? ` · kept as they are (project skipped, nothing else to go on): ${kept.join(", ")}` : ""));
+  });
   updateMeter();
   wireDebrief();
   renderSteps(final);
   if (typeof wDebriefExtras === "function") wDebriefExtras();
+  if (!sq) debriefSteps(body, final);
+}
+
+// ================================================================= the debrief, step by step (one learner)
+// ① the project and its requirements · ② the mise en situation and the oral questions · ③ the summary: what went well,
+// what didn't, the Fiche niveaux and the level · ④ the comment, the competencies validated and Finalize. Always there:
+// the competencies and the one-to-one remarks (beside the steps), and the evidence (assessment, the class's mise en
+// situation, AI use, the brief's steps) as small chips that open in a window. The same panels as before, moved: what
+// they do and how they save doesn't change.
+const DBX_STEPS = [["Project", "the work and its requirements"], ["Live check", "mise en situation and oral questions"], ["Summary", "what went well, the Fiche, the level"], ["Comment", "the comment and Finalize"]];
+function debriefSteps(body, final) {
+  const grid = $(".db-grid", body);
+  if (!grid) return;
+  const key = `db-step:${DB.bid}:${DB.who}`;
+  if (DB.stepKey !== key) { DB.stepKey = key; let k = 0; try { k = Number(localStorage.getItem(key)) || 0; } catch { /* storage blocked */ } DB.step = final ? 3 : Math.min(3, k); }
+  const take = (id) => { const x = $(`#${id}`, body); return x; };
+  const shell = document.createElement("div");
+  shell.className = "dbx";
+  shell.innerHTML = `
+    <nav class="dbx-steps" aria-label="Debrief steps">${DBX_STEPS.map(([t, d], i) => `<button type="button" class="dbx-st" data-dbx="${i}"><span class="dbx-n">${i + 1}</span><span class="dbx-t"><b>${t}</b><small>${d}</small><em class="dbx-s" data-dbxs="${i}"></em></span></button>`).join("")}</nav>
+    <div class="dbx-ctx" aria-label="Evidence"></div>
+    <div class="dbx-grid">
+      <div class="dbx-main">${DBX_STEPS.map((_, i) => `<div class="dbx-step" data-dbxstep="${i}"></div>`).join("")}
+        <div class="dbx-foot"><button type="button" class="btn" data-dbxgo="-1">← Previous</button><span class="dbx-where small muted"></span><button type="button" class="btn primary" data-dbxgo="1">Next →</button></div></div>
+      <aside class="dbx-side"></aside>
+    </div>
+    <div class="dbx-store" hidden></div>
+    <div class="dbx-modal" hidden role="dialog" aria-modal="true"><div class="dbx-box"><div class="dbx-mh"><b class="dbx-mt"></b><button type="button" class="btn small" data-dbxclose aria-label="Close">✕</button></div><div class="dbx-mb"></div></div></div>`;
+  const step = (i) => $(`[data-dbxstep="${i}"]`, shell);
+  const put = (i, ...ids) => ids.forEach((id) => { const x = take(id); if (x) step(i).append(x); });
+  // ① and ② can be skipped: a skipped step counts for nothing (not « not done »: not in the level, the comment, the Fiche)
+  DB.skip = { project: false, live: false, ...(DB.skip && DB.skipKey === key ? DB.skip : DB.R.states?.skip || {}) };
+  DB.skipKey = key;
+  const SKIP = { 0: ["project", "The project's requirements"], 1: ["live", "The mise en situation and the oral questions"] };
+  for (const [i, [k, what]] of Object.entries(SKIP)) step(Number(i)).insertAdjacentHTML("afterbegin", `<div class="dbx-skip" data-skipbox="${k}"></div>`);
+  // ① the project
+  put(0, "db-proj", "db-req", "db-checks", "db-commits");
+  // ② live: the mise en situation done in front of you, then the oral questions
+  put(1, "db-mes", "db-oral");
+  // ③ the summary (written here, from the switches), the Fiche niveaux (wide), the level
+  const sum = document.createElement("section"); sum.className = "panel"; sum.id = "dbx-sum"; step(2).append(sum);
+  put(2, "db-fiche", "db-level");
+  // ④ the competencies validated, the comment, Finalize
+  const val = document.createElement("section"); val.className = "panel"; val.id = "dbx-val"; step(3).append(val);
+  put(3, "db-cpanel", "db-fpanel");
+  // beside: always
+  const side = $(".dbx-side", shell);
+  ["db-rem", "db-comps"].forEach((id) => { const x = take(id); if (x) side.append(x); });
+  // the evidence: in the store, opened in a window
+  const store = $(".dbx-store", shell);
+  const ev = [];
+  const assessSec = $$(".db-step1", body);
+  assessSec.forEach((x) => store.append(x));
+  const A = (DB.R.review?.assess || []);
+  const as = A.filter((x) => x.kind !== "mise"), ms = A.filter((x) => x.kind === "mise");
+  const scoreTxt = (list) => { const g = list.filter((x) => x.score != null); return g.length ? g.map((x) => `${x.score}%`).join(" · ") : list.length ? "not graded yet" : "none"; };
+  if (assessSec[0]) ev.push({ k: "as", ic: "📝", t: "Assessment", v: scoreTxt(as), node: assessSec[0], tone: as.some((x) => x.score != null) ? toneOf(Math.min(...as.filter((x) => x.score != null).map((x) => x.score))) : "" });
+  if (assessSec[1]) ev.push({ k: "ms", ic: "🧪", t: "Class mise en situation", v: scoreTxt(ms), node: assessSec[1], tone: ms.some((x) => x.score != null) ? toneOf(Math.min(...ms.filter((x) => x.score != null).map((x) => x.score))) : "" });
+  const ai = take("db-ai");
+  if (ai) { store.append(ai); const c = DB.R.review?.aiCheck; ev.push({ k: "ai", ic: "🤖", t: "AI use", v: c ? ({ low: "low", some: "some", high: "high" })[c.level] || c.level : "not checked", node: ai, tone: c ? ({ low: "good", some: "warn", high: "bad" })[c.level] || "" : "" }); }
+  const stp = take("db-steps");
+  if (stp) { store.append(stp); const sr = DB.R.stepRecs || {}, n = (DB.R.steps || []).length; const ok = Object.values(sr).filter((x) => x && /a_temps|valid/.test(String(x.result || x.status || ""))).length; ev.push({ k: "st", ic: "🗓️", t: "Steps of the brief", v: `${n} step${n > 1 ? "s" : ""}`, node: stp, tone: "" }); void ok; }
+  const ctx = $(".dbx-ctx", shell);
+  ctx.innerHTML = ev.map((e, i) => `<button type="button" class="dbx-chip ${e.tone}" data-dbxev="${i}"><span aria-hidden="true">${e.ic}</span><span><small>${e.t}</small><b>${esc(e.v)}</b></span></button>`).join("");
+  grid.replaceWith(shell);
+  // the window
+  const modal = $(".dbx-modal", shell), mb = $(".dbx-mb", shell);
+  const close = () => { while (mb.firstChild) store.append(mb.firstChild); modal.hidden = true; };
+  $$("[data-dbxev]", ctx).forEach((b) => b.onclick = () => { const e = ev[Number(b.dataset.dbxev)]; close(); $(".dbx-mt", shell).textContent = `${e.ic} ${e.t}`; mb.append(e.node); modal.hidden = false; });
+  $("[data-dbxclose]", shell).onclick = close;
+  modal.onclick = (e) => { if (e.target === modal) close(); };
+  if (!DB.dbxEsc) { DB.dbxEsc = true; document.addEventListener("keydown", (e) => { const m = $(".dbx-modal:not([hidden])"); if (e.key === "Escape" && m && !document.querySelector("dialog[open]")) $("[data-dbxclose]", m).click(); }); }
+  // the steps
+  const go = (i) => {
+    DB.step = Math.max(0, Math.min(3, i));
+    try { localStorage.setItem(key, String(DB.step)); } catch { /* storage blocked */ }
+    $$("[data-dbxstep]", shell).forEach((x) => (x.hidden = Number(x.dataset.dbxstep) !== DB.step));
+    $$("[data-dbx]", shell).forEach((x) => { const k = Number(x.dataset.dbx); x.classList.toggle("on", k === DB.step); x.classList.toggle("past", k < DB.step); x.setAttribute("aria-current", k === DB.step ? "step" : "false"); });
+    const prev = $('[data-dbxgo="-1"]', shell), next = $('[data-dbxgo="1"]', shell);
+    prev.style.visibility = DB.step ? "visible" : "hidden";
+    next.style.display = DB.step === 3 ? "none" : "";
+    next.textContent = DB.step < 3 ? `Next: ${DBX_STEPS[DB.step + 1][0]} →` : "";
+    $(".dbx-where", shell).textContent = `Step ${DB.step + 1} of 4`;
+    if (DB.step === 2 || DB.step === 3) dbxDraw();
+    if (DB.step === 2 && DB.ficheStale) { DB.ficheStale = false; DB.ficheLoad?.(); }
+  };
+  $$("[data-dbx]", shell).forEach((b) => b.onclick = () => { go(Number(b.dataset.dbx)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  $$("[data-dbxgo]", shell).forEach((b) => b.onclick = () => { go(DB.step + Number(b.dataset.dbxgo)); shell.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  // what each step says, and the summary, follow the switches
+  if (!body.dataset.dbxw) { body.dataset.dbxw = "1"; body.addEventListener("change", () => setTimeout(dbxDraw, 0)); body.addEventListener("click", (e) => { if (e.target.closest("[data-seg]")) setTimeout(dbxDraw, 0); }); }
+  const drawSkip = () => {
+    for (const [k, what] of Object.values(SKIP)) {
+      const box = $(`[data-skipbox="${k}"]`, shell), on = !!DB.skip[k];
+      box.classList.toggle("on", on);
+      box.closest(".dbx-step").classList.toggle("dbx-skipped", on);
+      box.innerHTML = on ? `<span>⏭️ <b>Step skipped</b> · ${what} count for nothing: not in the level, the comment or the Fiche niveaux (not « not done »).</span>${final ? "" : `<button type="button" class="btn small primary" data-skip="${k}">Include it again</button>`}`
+        : `<span class="small muted">${what}: ${k === "live" ? "not done with this learner?" : "not relevant for this learner?"}</span>${final ? "" : `<button type="button" class="btn small" data-skip="${k}">⏭️ Skip this step</button>`}`;
+      const b = $("[data-skip]", box);
+      if (b) b.onclick = () => { DB.skip[k] = !DB.skip[k]; drawSkip(); saveStatesSoon(); setTimeout(() => { DB.lvDraw?.(); dbxDraw(); }, 0); DB.ficheStale = true; };
+    }
+  };
+  drawSkip();
+  go(DB.step);
+  dbxDraw();
+}
+const toneOf = (p) => (p >= 75 ? "good" : p >= 55 ? "warn" : "bad");
+/** The summary (step ③), the competencies validated (step ④) and each step's little status, from what's on the screen. */
+function dbxDraw() {
+  const rec = DB.R.review;
+  if (!rec || !$(".dbx")) return;
+  const st = currentStates();
+  const ex = rec.result?.exigences || [];
+  const req = ex.map((e, i) => [e, st.ex[i]]).filter(([e]) => e && !NOT_IN_PCT(e.type));
+  const okReq = req.filter(([, v]) => v), koReq = req.filter(([, v]) => !v);
+  const pct = req.length ? Math.round((okReq.length / req.length) * 100) : null;
+  const comps = rec.result?.competences || [];
+  const coOk = comps.filter((c) => st.co[c.code]), coKo = comps.filter((c) => !st.co[c.code]);
+  const oral = rec.oral || [], or = st.oral || [];
+  const orOk = oral.filter((_, i) => or[i]).length;
+  const mes = st.mes?.r || "";
+  const MESN = { valide: ["Validated", "good"], partiel: ["Partly", "warn"], non_valide: ["Not validated", "bad"] };
+  const A = rec.assess || [];
+  const as = A.filter((x) => x.kind !== "mise" && x.score != null), ms = A.filter((x) => x.kind === "mise" && x.score != null);
+  const ai = rec.aiCheck;
+  const lv = rec.level || {};
+  const LVN = { excellent: "Excellent", bon: "Bon", moyen: "Moyen", faible: "Faible", critique: "Critique" };
+  const stat = (i, h) => { const x = $(`[data-dbxs="${i}"]`); if (x) x.innerHTML = h; };
+  const sk = st.skip || {};
+  stat(0, sk.project ? "⏭️ skipped" : pct == null ? "" : `<i class="dbx-dot ${toneOf(pct)}"></i>${okReq.length}/${req.length} requirements`);
+  stat(1, sk.live ? "⏭️ skipped" : `${rec.challenge ? `<i class="dbx-dot ${MESN[mes]?.[1] || ""}"></i>${mes ? MESN[mes][0] : "task to do"}` : "no task yet"} · ${oral.length ? `${orOk}/${oral.length} oral` : "no oral yet"}`);
+  stat(2, lv.lvl ? `<i class="dbx-dot pgc-${lv.lvl}"></i>Level ${LVN[lv.lvl]}` : "level to set");
+  stat(3, DB.R.status === "final" ? "✓ Finalized" : `${coOk.length}/${comps.length} competencies`);
+  const li = (list, f) => list.length ? `<ul class="dbx-list">${list.map(f).join("")}</ul>` : "";
+  const sum = $("#dbx-sum");
+  if (sum) {
+    // what they master and what they don't: from the assessment and the class's mise en situation (each notion of the
+    // questions they got right or missed), the live check (unless skipped) and the Fiche; never the brief's list
+    const uid = DB.who.startsWith("u:") ? DB.who.slice(2) : "";
+    const mine = (list) => list.map((x) => x.members?.[uid]).filter(Boolean);
+    const am = mine(A.filter((x) => x.kind !== "mise")), mm = mine(A.filter((x) => x.kind === "mise"));
+    const uniq = (a) => [...new Set(a.map((x) => String(x).trim()).filter(Boolean))];
+    const asKo = uniq(am.flatMap((m) => m.ko || [])), msKo = uniq(mm.flatMap((m) => m.ko || []));
+    const asOk = uniq(am.flatMap((m) => m.ok || [])).filter((x) => !asKo.includes(x)), msOk = uniq(mm.flatMap((m) => m.ok || [])).filter((x) => !msKo.includes(x));
+    const oralKo = sk.live ? [] : uniq(oral.filter((_, i) => !or[i]).map((q) => q.notion || q.q)), oralOk = sk.live ? [] : uniq(oral.filter((_, i) => or[i]).map((q) => q.notion || q.q));
+    const fi = DB.ficheM?.items || [];
+    const fiOk = fi.filter((i) => i.final === "ok"), fiKo = fi.filter((i) => i.final === "ko");
+    const line = (ic, t, list, n = 6) => list.length ? `<li><b>${ic} ${t}</b> ${list.slice(0, n).map(esc).join(", ")}${list.length > n ? `, +${list.length - n}` : ""}</li>` : "";
+    const good = [
+      line("📝", "Assessment:", asOk), line("🧪", "Mise en situation:", msOk),
+      !sk.live && mes === "valide" ? `<li><b>🎯 Live task</b> done in front of you</li>` : "",
+      line("🗣️", "Oral:", oralOk), fiOk.length ? `<li><b>📐 Fiche:</b> ${fiOk.length} item${fiOk.length > 1 ? "s" : ""} known (${uniq(fiOk.map((i) => i.code)).slice(0, 8).join(", ")})</li>` : "",
+    ].filter(Boolean);
+    const bad = [
+      line("📝", "Assessment:", asKo), line("🧪", "Mise en situation:", msKo),
+      !sk.live && (mes === "non_valide" || mes === "partiel") ? `<li><b>🎯 Live task</b> ${mes === "partiel" ? "partly done" : "not done"}${st.mes?.note ? `: ${esc(st.mes.note)}` : ""}</li>` : "",
+      line("🗣️", "Oral, not answered:", oralKo), fiKo.length ? `<li><b>📐 Fiche, not known yet:</b> ${fiKo.slice(0, 6).map((i) => `${esc(i.code)} ${esc(i.text.replace(/\.$/, ""))}`).join(" · ")}${fiKo.length > 6 ? `, +${fiKo.length - 6}` : ""}</li>` : "",
+    ].filter(Boolean);
+    const tile = (ic, t, v, tone, sub = "") => `<div class="dbx-tile ${tone}"><span aria-hidden="true">${ic}</span><div><small>${t}</small><b>${v}</b>${sub ? `<em>${sub}</em>` : ""}</div></div>`;
+    sum.innerHTML = `<div class="panel-head" style="margin:0"><h2>Summary of the debrief</h2><span class="small muted">follows your switches</span></div>
+      <div class="dbx-tiles">
+        ${tile("📁", "Project", sk.project ? "skipped" : pct == null ? "—" : `${pct}%`, sk.project || pct == null ? "" : toneOf(pct), sk.project ? "not counted" : `${okReq.length}/${req.length} requirements`)}
+        ${tile("📝", "Assessment", as.length ? as.map((x) => `${x.score}%`).join(" · ") : "—", as.length ? toneOf(Math.min(...as.map((x) => x.score))) : "", as.length ? "" : "none graded")}
+        ${tile("🧪", "Class mise en situation", ms.length ? ms.map((x) => `${x.score}%`).join(" · ") : "—", ms.length ? toneOf(Math.min(...ms.map((x) => x.score))) : "", ms.length ? "" : "none")}
+        ${tile("🎯", "Live task", sk.live ? "skipped" : rec.challenge ? (mes ? MESN[mes][0] : "Not done yet") : "—", !sk.live && rec.challenge && mes ? MESN[mes][1] : "", sk.live ? "not counted" : "")}
+        ${tile("🗣️", "Oral questions", sk.live ? "skipped" : oral.length ? `${orOk}/${oral.length}` : "—", !sk.live && oral.length ? toneOf((orOk / oral.length) * 100) : "", sk.live ? "not counted" : oral.length ? "answered" : "")}
+        ${tile("🤖", "AI use", ai ? ({ low: "Low", some: "Some", high: "High" })[ai.level] || ai.level : "—", ai ? ({ low: "good", some: "warn", high: "bad" })[ai.level] || "" : "", ai ? "suspicion" : "not checked")}
+        ${tile("✅", "Competencies", `${coOk.length}/${comps.length}`, comps.length ? toneOf((coOk.length / comps.length) * 100) : "", "validated")}
+      </div>
+      <div class="dbx-two">
+        <div class="dbx-col good"><h3>👍 What they master</h3>${good.length ? `<ul class="dbx-list">${good.join("")}</ul>` : `<p class="small muted">Nothing graded yet (assessment, mise en situation, oral).</p>`}</div>
+        <div class="dbx-col bad"><h3>🛠️ To work on again</h3>${bad.length ? `<ul class="dbx-list">${bad.join("")}</ul>` : `<p class="small muted">Nothing missed in what was graded.</p>`}</div>
+      </div>
+      ${rec.remarks?.text ? `<p class="small" style="margin:10px 0 0"><span class="muted">🗣️ One-to-one:</span> ${esc(rec.remarks.text)}</p>` : ""}`;
+  }
+  const val = $("#dbx-val");
+  if (val) val.innerHTML = `<div class="panel-head" style="margin:0"><h2>Competencies of this debrief</h2><span class="small muted">change them on the right</span></div>
+    <div class="dbx-comps">${coOk.map((c) => `<span class="dbx-cc ok" title="${esc(compName(c.code))}">✓ ${esc(c.code)}</span>`).join("")}${coKo.map((c) => `<span class="dbx-cc ko" title="${esc(compName(c.code))}">✗ ${esc(c.code)}</span>`).join("")}${comps.length ? "" : `<span class="small muted">This brief has no competencies.</span>`}</div>
+    ${coOk.length ? `<ul class="dbx-list small" style="margin-top:8px">${coOk.map((c) => `<li><b>${esc(c.code)}</b> ${esc(compName(String(c.code).replace(/N\d$/, "")) || compName(c.code) || "")}</li>`).join("")}</ul>` : ""}`;
 }
 
 // Steps of the brief: the bot proposes from the repo at the step's date (files, commits), the teacher decides
@@ -1442,6 +1652,7 @@ function memberCardHtml(rec, st, m, comps, final) {
       <div><h4>Competencies <span class="muted small">suggested · your switch decides</span></h4>
         <div class="db-rows mc-comps">${comps.map((c) => `<div class="db-row">${sw(`data-mco="${esc(c)}"`, co[c], final)}<div>${compChip(c)} <span class="small">${esc(compName(c))}</span><div class="small mc-hint" data-hint="${esc(c)}"></div></div></div>`).join("")}</div>
         ${final ? "" : `<button class="ap-link small" data-mhints hidden>↻ Use the suggestions</button>`}</div>
+      <div><button type="button" class="btn small" data-mfiche="${esc(m.gid)}" data-name="${esc(name)}" title="What they understood in this sprint (Fiche niveaux)">📐 Fiche niveaux</button></div>
       <div><h4>Questions to ask ${esc(firstNameOf(name))}</h4><ol class="mc-q small" data-box="q"><li class="muted">Loading…</li></ol></div>
     </div>
     <div class="mc-cols">
@@ -1459,6 +1670,27 @@ function memberCardHtml(rec, st, m, comps, final) {
 }
 const firstNameOf = (n) => String(n || "").trim().split(/\s+/)[0] || "";
 
+// an individual debrief: the links the learner shared on Discord during the brief (CT5), like a squad member's
+async function loadSoloLinks() {
+  if (!$("#db-ilk") && !$("[data-ilinks]")) return;
+  const key = `${DB.bid}~${DB.who}`;
+  if (!DB.ins || DB.ins.key !== key) {
+    try { DB.ins = { key, ...(await api(`/briefs/${DB.bid}/review/insights?who=${encodeURIComponent(DB.who)}`)) }; } catch { return; }
+  }
+  drawSoloLinks();
+}
+function drawSoloLinks() {
+  const lk = DB.ins?.links;
+  if ($("#db-lkst")) $("#db-lkst").innerHTML = !lk ? "Not checked yet" : lk.error ? `<span style="color:var(--down)">${esc(lk.error)}</span>`
+    : lk.hidden ? `<span style="color:var(--down)">Discord hides the text of the messages: turn on the bot's <b>Message Content Intent</b> (Discord Developer Portal → your app → Bot), then check again.</span>`
+    : `Checked ${fmtAgo(lk.at)} · ${lk.scanned} message(s) read`;
+  const mine = lk && !lk.error && Array.isArray(lk.mine) ? lk.mine : null;
+  for (const box of $$("[data-ilinks]")) {
+    box.innerHTML = !mine ? "" : mine.length
+      ? `<span class="lvl good" title="A suggestion: your switch decides">🔗 Discord: ${mine.length} link${mine.length > 1 ? "s" : ""} shared during the brief</span> <details class="mc-lk"><summary>See them</summary>${mine.map((l) => `<div><a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.url.replace(/^https?:\/\//, "").slice(0, 70))}</a> <span class="muted">#${esc(l.channel)} · ${esc(fmtDateTime(l.at))}</span></div>`).join("")}</details>`
+      : lk.hidden ? "" : `<span class="lvl bad" title="A suggestion: your switch decides">🔗 Discord: no link shared during the brief</span>`;
+  }
+}
 // what ClassBot knows about each member (assessment, AI flags, questions, suggestions): kept for this debrief
 async function loadMemberInsights(fresh = false) {
   const cards = $$(".mc");
@@ -1652,6 +1884,15 @@ async function aiLinesDialog(gid) {
         <pre class="ail-code ${esc(f.label)}">${f.lines.map((l) => esc(l)).join("\n")}${f.more ? `\n… ${f.more} more line(s)` : ""}</pre></details>`; }).join("")}</div>`).join("") || (r.note ? "" : `<p class="empty">No commit to show.</p>`)}`;
 }
 
+// the Fiche niveaux's items still to learn (for the comment): the ones not known up to the level to reach, the base first
+const FG_ORDER = ["faible", "moyen", "bon", "excellent"];
+function ficheGaps(m) {
+  const lv = m?.level || {}, items = Array.isArray(m?.items) ? m.items : [];
+  const target = lv.next?.level || lv.probe || lv.reached || "moyen", top = FG_ORDER.indexOf(target === "critique" ? "faible" : target);
+  return items.filter((c) => FG_ORDER.indexOf(c.level) >= 0 && FG_ORDER.indexOf(c.level) <= top && (c.final === "ko" || (c.level === target && c.final !== "ok")))
+    .sort((a, b) => FG_ORDER.indexOf(a.level) - FG_ORDER.indexOf(b.level) || (a.final === "ko" ? -1 : 1) - (b.final === "ko" ? -1 : 1))
+    .slice(0, 8).map((c) => ({ code: c.code, text: c.text, level: c.level }));
+}
 function currentStates() {
   const ck = {}, ex = [], co = {};
   $$("[data-ck]").forEach((c) => (ck[c.dataset.ck] = c.checked));
@@ -1659,7 +1900,7 @@ function currentStates() {
   $$("[data-exck]").forEach((c) => (ck[c.dataset.exck] = (ck[c.dataset.exck] ?? true) && c.checked));
   $$("[data-co]").forEach((c) => (co[c.dataset.co] = c.checked));
   const oral = $$("[data-or]").length ? $$("[data-or]").map((c) => c.checked) : undefined;
-  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral };
+  return { ck, ex, co, mes: { r: segVal(document, "mes"), note: $("#db-mn")?.value ?? "" }, oral, skip: { ...(DB?.skip || DB?.R?.states?.skip || {}) }, ...(DB?.ficheLv !== undefined ? { ficheLevel: DB.ficheLv } : {}), ...(DB?.ficheM ? { ficheGaps: ficheGaps(DB.ficheM) } : {}) };
 }
 /** The requirements that never count in the project's % (the same rule as the server's level). */
 const NOT_IN_PCT = (t) => /^(bonus|crit|oral)/i.test(String(t || ""));
@@ -1670,11 +1911,53 @@ function updateMeter() {
   if ($("#db-meter")) $("#db-meter").innerHTML = meter(pct, "Requirements validated");
   if ($("#db-pct")) $("#db-pct").innerHTML = pct == null ? "" : `<b style="color:${masteryInk(pct)}">${pct}%</b> <span class="muted small">of the requirements · ${$$("[data-co]:checked").length}/${$$("[data-co]").length} competencies</span>`;
 }
+/**
+ * What each competency should be from the debrief as it is now: the most recent evidence first (the one-to-one, then
+ * the assessment done in class, then the project as switched: "can be validated" and at least half of the brief's
+ * requirements validated); a live task not done takes a technical competency down. want: null = nothing to go on
+ * (the project skipped). fromProject: only the project decides it (what the requirements' switches change).
+ */
+function compTargets() {
+  const rec = DB.R?.review || {}, comps = rec.result?.competences || [];
+  const sk = DB?.skip || DB?.R?.states?.skip || {};
+  const aV = assessVerdicts(rec.assess);
+  const ex = rec.result?.exigences || [];
+  const req = $$("[data-ex]").map((c) => [ex[Number(c.dataset.ex)], c.checked]).filter(([x]) => x && !NOT_IN_PCT(x.type));
+  const reqOk = !req.length || req.filter(([, v]) => v).length / req.length >= 0.5;
+  const live = sk.live ? "" : segVal(document, "mes");
+  return comps.map((c) => {
+    const base = (parseC(c.code) || {}).code;
+    const ad = (rec.remarks?.advice || []).find((x) => x.code === c.code);
+    const tested = typeof aV[base] === "boolean";
+    let want = ad ? ad.avis === "ok" : tested ? aV[base] : sk.project ? null : c.avis === "validable" && reqOk;
+    if (!ad && want !== false && /^C\d/.test(base || "") && live === "non_valide") want = false;
+    return { code: c.code, want, fromProject: !ad && !tested && !sk.project };
+  });
+}
+/** The competency switches set to what the debrief shows (only those given, if any); returns what changed ("C3 ✗"). */
+function applyComps(only = null) {
+  const changed = [];
+  for (const t of compTargets()) {
+    if (t.want === null || (only && !only(t))) continue;
+    const box = $(`[data-co="${CSS.escape(t.code)}"]`);
+    if (!box || box.checked === t.want) continue;
+    box.checked = t.want;
+    box.dispatchEvent(new Event("change"));
+    changed.push(`${t.code} ${t.want ? "✓" : "✗"}`);
+  }
+  return changed;
+}
+
 function saveStatesSoon() {
   updateMeter();
   clearTimeout(DB.timer);
   $("#db-cst").textContent = "Saving…";
-  DB.timer = setTimeout(async () => {
+  DB.timer = setTimeout(saveStatesNow, 700);
+}
+/** The switches saved now (a save still waiting is done at once): what reads the debrief from the server next sees them. */
+async function saveStatesNow() {
+  clearTimeout(DB.timer);
+  {
     try {
       const keep = DB.commentEdited;
       const R = await api(`/briefs/${DB.bid}/review/states`, { method: "POST", body: { who: DB.who, states: { ...currentStates(), keepComment: keep, comment: keep ? $("#db-c").value : undefined } } });
@@ -1682,12 +1965,20 @@ function saveStatesSoon() {
       if (!keep) $("#db-c").value = R.review?.result?.feedback ?? $("#db-c").value;
       $("#db-cst").textContent = keep ? "Saved · your edited comment is kept (↻ Rebuild to write it from the switches)" : "Saved · comment updated";
     } catch (e) { $("#db-cst").textContent = ""; toast(e.message, true); }
-  }, 700);
+  }
 }
 
 function wireDebrief() {
   const { bid, who } = DB;
   $$("[data-ck], [data-ex], [data-co]").forEach((c) => c.onchange = saveStatesSoon);
+  // a competency switched by hand is the teacher's: the requirements don't move it any more (↻ Recalculate does)
+  DB.coManual ||= new Set();
+  $$("[data-co]").forEach((c) => c.addEventListener("change", (e) => { if (e.isTrusted) DB.coManual.add(c.dataset.co); }));
+  // the brief's requirements switched: the competencies only the project decides follow at once
+  $$("[data-ex]").forEach((c) => c.addEventListener("change", () => {
+    const changed = applyComps((t) => t.fromProject && !DB.coManual.has(t.code));
+    if (changed.length) toast(`Competencies follow the project: ${changed.join(", ")}`);
+  }));
   $$("[data-ck]").forEach((c) => c.addEventListener("change", () => {
     $$(`[data-exck="${CSS.escape(c.dataset.ck)}"]`).forEach((x) => { x.checked = c.checked; });
     updateMeter();
@@ -1739,6 +2030,31 @@ function wireDebrief() {
   loadMemberVsc();
   wireMembers();
   loadMemberInsights();
+  // 📐 the Fiche niveaux of the brief's sprint: each capacity, from every question that touched it (this debrief's oral too)
+  DB.ficheLoad = () => {
+    const fb = $("#db-fichebox");
+    if (!fb) return;
+    // the project's code, item by item (the AI's proofs, confirmed here), then what the learner knows
+    let cb = $("#db-fichecode");
+    if (!cb) { cb = document.createElement("div"); cb.id = "db-fichecode"; fb.before(cb); }
+    const fiche = DB.R?.review?.fiche;
+    cb.innerHTML = ficheCodeHtml(fiche);
+    $$("[data-fc],[data-fcall]", cb).forEach((b) => b.onclick = () => busy(b, async () => {
+      const r = await api(`/briefs/${DB.bid}/review/fiche`, { method: "POST", body: b.dataset.fcall ? { who: DB.who, all: true } : { who: DB.who, code: b.dataset.fc, ok: b.dataset.v === "auto" ? null : b.dataset.v === "true" } });
+      if (DB.R?.review) DB.R.review.fiche = r.fiche;
+      DB.ficheLoad();
+    }));
+    if (DB.who.startsWith("u:")) loadMastery(fb, DB.who.slice(2), { brief: DB.bid }, { focus: () => DB.R.review?.level?.lvl || (typeof wPropLevel === "function" ? wPropLevel() : "") || "", onLoad: (m) => { DB.ficheM = m; const lv = m?.level?.toCheck ? "faible" : m?.level?.reached || ""; const was = DB.ficheLv; DB.ficheLv = lv; if (DB.R.review) DB.R.review.level = { ...(DB.R.review.level || {}), fiche: lv || undefined }; dbxDraw(); DB.lvDraw?.(); if (was !== undefined && was !== lv && DB.R.status !== "final") saveStatesSoon(); else if (was === undefined && (DB.R.review?.level?.fiche || "") !== lv && DB.R.status !== "final") saveStatesSoon(); } });
+  };
+  DB.ficheLoad();
+  $$("[data-mfiche]").forEach((b) => b.onclick = () => masteryDialog(b.dataset.mfiche, b.dataset.name, { brief: DB.bid }));
+  loadSoloLinks();
+  if ($("#db-ilk")) $("#db-ilk").onclick = (e) => busy(e.currentTarget, async () => {
+    toast("⏳ Reading the Discord channels of the brief's dates…");
+    const r = await api(`/briefs/${DB.bid}/review/links`, { method: "POST", body: { who: DB.who } });
+    DB.ins = { key: `${DB.bid}~${DB.who}`, ...r };
+    drawSoloLinks();
+  });
   // each member's own level: a chip sets it (again: removes it), ✨ asks the AI on their data. Their fields are saved
   // first: the page is drawn again after, and nothing you typed may be lost.
   $$("[data-mlv]").forEach((b) => b.onclick = () => busy(b, async () => {
@@ -1864,8 +2180,8 @@ function importAssessmentDialog() {
     $("#im-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>${p.from ? ` <span class="small muted">· from ${esc(p.from)}</span>` : ""}
       <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points${p.minutes ? ` · ${p.minutes} min` : ""}</p>
       ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : ""}
-      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
-    $(".dlg-foot .btn.primary", dlg).textContent = "Import as a draft";
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>${r.duplicate ? `<div class="notice" style="margin-top:8px">📚 <b>Already in your Assessment library</b>: « ${esc(r.duplicate.title)} » has the same questions. To give it to your class, <a href="#/assessment/${r.duplicate.id}">open that one</a> and invite your learners: no copy needed (each class keeps its own papers). Import only if you want a separate version.</div>` : ""}`;
+    $(".dlg-foot .btn.primary", dlg).textContent = r.duplicate ? "Import a copy anyway" : "Import as a draft";
     return;
   } }]);
   $("#im-url", dlg).oninput = () => { previewed = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Preview"; };
@@ -1894,7 +2210,8 @@ async function importQuizJsonDialog() {
   openDialog("{ } Import a quiz (JSON)", `
     <div class="cj-step"><b>1 · Write it with Claude</b>
       <p class="small muted" style="margin:4px 0 8px">Pick the programme week: the prompt gives Claude the exact format, the rules (French, beginners) and that week's objective, notions, competencies and technologies, with what comes later as out of scope.</p>
-      <div class="toolbar" style="margin:0"><select id="cj-week" style="flex:1"><option>Loading…</option></select><button class="btn small" id="cj-cp">📋 Copy the prompt for Claude (creation)</button></div></div>
+      <div class="toolbar" style="margin:0"><select id="cj-week" style="flex:1"><option>Loading…</option></select><button class="btn small" id="cj-cp">📋 Copy the prompt for Claude (creation)</button></div>
+      <div id="cj-cn"></div></div>
     <div class="cj-step"><b>2 · Paste Claude's JSON</b>
       ${jsonBox("cj-q", '{ "format": "classbot-assessment@1", "title": "…", "questions": [ … ] }')}</div>
     <div id="cj-prev"></div>`,
@@ -1902,11 +2219,11 @@ async function importQuizJsonDialog() {
     const json = $("#cj-q", dlg).value;
     if (!json.trim()) throw new Error("Paste the JSON, or choose the .json file.");
     if (checked && checked === json) {
-      const r = await api("/assessments/claude-import", { method: "POST", body: { json, import: true } });
+      const r = await api("/assessments/claude-import", { method: "POST", body: { json, import: true, concepts: cjScope() } });
       if (r.problems?.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; return; }
       dlg.close(); toast("Imported as a draft ✅"); location.hash = `#/assessment/${r.id}`; return;
     }
-    const r = await api("/assessments/claude-import", { method: "POST", body: { json } });
+    const r = await api("/assessments/claude-import", { method: "POST", body: { json, concepts: cjScope() } });
     const btn = $(".dlg-foot .btn.primary", dlg);
     if (r.problems.length) { $("#cj-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
     const p = r.preview;
@@ -1914,19 +2231,26 @@ async function importQuizJsonDialog() {
     $("#cj-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(p.title)}</b>
       <p class="small" style="margin:6px 0">${p.n} questions (${[p.code && `${p.code} code`, p.explain && `${p.explain} explain`, p.mcq && `${p.mcq} multiple choice`].filter(Boolean).join(", ")}) · ${p.points} points · ${p.minutes} min</p>
       ${p.comps.length ? `<div>${p.comps.map((c) => compChip(c)).join("")}</div>` : `<p class="small muted">No competency.</p>`}
-      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>`;
-    btn.textContent = "Import as a draft";
+      <ol class="small muted">${p.prompts.map((x) => `<li>${esc(x)}</li>`).join("")}${p.n > p.prompts.length ? "<li>…</li>" : ""}</ol></div>${r.duplicate ? `<div class="notice" style="margin-top:8px">📚 <b>Already in your Assessment library</b>: « ${esc(r.duplicate.title)} » has the same questions. To give it to your class, <a href="#/assessment/${r.duplicate.id}">open that one</a> and invite your learners: no copy needed (each class keeps its own papers). Import only if you want a separate version.</div>` : ""}`;
+    btn.textContent = r.duplicate ? "Import a copy anyway" : "Import as a draft";
   } }]);
   dlg.classList.add("wide");
   wireJsonBox(dlg, "cj-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
-  // the programme weeks (the current one first selected) and the prompt of the week picked
-  const load = async (week) => api(`/assessments/claude-prompt${week ? `?week=${encodeURIComponent(week)}` : ""}`);
+  // the programme weeks (the current one first selected) and the prompt of the week picked, with the capacities of
+  // the Fiche niveaux it must cover (ticked from its sprint; the import checks the same ones)
+  const cnBox = $("#cj-cn", dlg);
+  const cjScope = () => ($("[data-cncap]", cnBox) ? pickedConcepts(cnBox) : undefined);
+  const load = async (week, concepts) => api(`/assessments/claude-prompt?${new URLSearchParams({ ...(week ? { week } : {}), ...(concepts ? { concepts: concepts.join(",") } : {}) })}`);
   let cur = await load("").catch(() => null);
   const sel = $("#cj-week", dlg);
   if (sel && cur) sel.innerHTML = cur.weeks.length ? cur.weeks.map((w) => `<option value="${w.n}" ${w.n === cur.week ? "selected" : ""}>Week ${w.n}${w.sprint ? ` · sprint ${w.sprint}` : ""} · ${esc(w.title || "")}</option>`).join("") : `<option value="">No programme week</option>`;
-  if (sel) sel.onchange = async () => { cur = await load(sel.value).catch(() => cur); };
+  const pickCn = () => conceptsPicker(cnBox, { week: sel?.value || cur?.week || "" }, cur?.concepts?.scope);
+  if (sel) sel.onchange = async () => { cur = await load(sel.value).catch(() => cur); pickCn(); };
+  pickCn();
   $("#cj-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
-    if (!cur || String(cur.week ?? "") !== String(sel.value || cur.week || "")) cur = await load(sel.value);
+    const sc = cjScope();
+    if (sc && !sc.length) throw new Error("Tick at least one item of the Fiche niveaux.");
+    cur = await load(sel.value, sc);
     copyText(cur.prompt, "Prompt copied: paste it in Claude");
   });
 }
@@ -1997,9 +2321,19 @@ async function shareAssessmentDialog(id) {
   $("#sh-copy", dlg).onclick = () => copyText($("#sh-url", dlg).textContent, "Link copied");
 }
 
-async function viewAssessments() {
+async function viewAssessments(tab) {
   const r = await api("/assessments");
   const locked = r.items.reduce((s, a) => s + (a.status === "open" ? a.locked : 0), 0);
+  // two tabs: the ones given to the class (invited at least one learner: the default), and the whole library
+  const lib = tab === "library";
+  const mine = r.items.filter((a) => a.takers > 0);
+  // the library shows each assessment once: a copy (the same questions, e.g. one per class) folds under the first one
+  let showCopies = false;
+  try { showCopies = localStorage.getItem("as-copies") === "1"; } catch { /* storage blocked */ }
+  const copies = {};
+  for (const a of r.items) if (a.copyOf) (copies[a.copyOf] ||= []).push(a);
+  const nCopies = r.items.filter((a) => a.copyOf).length;
+  const rows = lib ? r.items.filter((a) => showCopies || !a.copyOf) : mine;
   view.innerHTML = `
     <div class="page-head"><div><h1>Assessments</h1><p class="sub">Web tests in full screen: each student gets their own link, questions in their own order. Leaving full screen stops them until you let them back in. Results go to their competencies and skills.</p></div>
       <div class="toolbar" style="margin:0"><button class="btn" id="as-imp">🔗 Import from a link</button><button class="btn" id="as-json" title="A quiz written by Claude, as JSON: the prompt to write it is inside">{ } Import a quiz (JSON)</button><button class="btn" id="as-blank">Blank assessment</button><button class="btn primary" id="as-gen">✨ Generate with AI</button></div></div>
@@ -2008,20 +2342,61 @@ async function viewAssessments() {
       <div class="figure ${locked ? "cs-attn" : ""}"><span class="ico">⛔</span><div><b>${locked}</b><span>student(s) stopped, waiting for you</span></div></div>
       <div class="figure"><span class="ico">✅</span><div><b>${r.items.reduce((s, a) => s + a.done, 0)}</b><span>papers handed in</span></div></div>
     </div>
+    <div class="tabs" role="tablist" style="margin:0 0 12px">
+      <a role="tab" href="#/assessments" aria-selected="${!lib}">📝 My class <span class="muted small">(${mine.length})</span></a>
+      <a role="tab" href="#/assessments/library" aria-selected="${lib}">📚 Assessment library <span class="muted small">(${r.items.length})</span></a></div>
+    <p class="small muted" style="margin:0 0 10px">${lib ? `Every assessment, once: yours, drafts, and the shared library's. To give one to your class, open it and invite your learners: no copy needed, each class keeps its own papers.${nCopies ? ` <label class="check" style="display:inline-flex"><input type="checkbox" id="as-copies" ${showCopies ? "checked" : ""}> show the ${nCopies} cop${nCopies > 1 ? "ies" : "y"} too</label>` : ""}` : "The assessments given to your class (at least one learner invited). The others are in the Assessment library."}</p>
     <section class="panel">${table([
-      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}${a.lib_key ? ` <span class="lib-tag" title="In the shared library: the other classes have it too">📚 shared</span>` : ""}` },
+      { label: "Assessment", sort: "title", html: (a) => `<b>${esc(a.title)}</b>${a.brief_id ? ` <span class="tag">brief</span>` : ""}${a.lib_key ? ` <span class="lib-tag" title="In the shared library: the other classes have it too">📚 shared</span>` : ""}${lib && copies[a.id] ? ` <span class="tag" title="${esc(copies[a.id].map((c) => c.title).join(" · "))}">+${copies[a.id].length} cop${copies[a.id].length > 1 ? "ies" : "y"}</span>` : ""}${lib && a.copyOf ? ` <span class="tag">copy</span>` : ""}` },
       { label: "Status", sort: "status", html: (a) => status(a.status === "open" ? "active" : a.status, STATUS[a.status] || a.status) },
       { label: "Questions", num: true, sort: "n", html: (a) => `${a.n}` },
       { label: "Done", num: true, html: (a) => `${a.done}/${a.takers}${a.locked ? ` <span class="pill-inline">${a.locked} stopped</span>` : ""}` },
       { label: "Average", num: true, sort: "avg", html: (a) => (a.avg == null ? "—" : `<b style="color:${masteryInk(a.avg)}">${a.avg}%</b>`) },
       { label: "Created", sort: "created_at", html: (a) => `<span class="small">${fmtDate(a.created_at)}</span>` },
-    ], r.items, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: "No assessment yet." })}</section>`;
+    ], rows, { onRow: (a) => (location.hash = `#/assessment/${a.id}`), empty: lib ? "No assessment yet." : "No assessment given to your class yet: pick one in the Assessment library (and invite your learners), or create one." })}</section>`;
+  if ($("#as-copies")) $("#as-copies").onchange = (e) => { try { localStorage.setItem("as-copies", e.target.checked ? "1" : ""); } catch { /* storage blocked */ } viewAssessments(tab); };
   $("#as-gen").onclick = () => generateQuestionsDialog(null);
   $("#as-imp").onclick = () => importAssessmentDialog();
   $("#as-json").onclick = (e) => busy(e.currentTarget, () => importQuizJsonDialog());
   $("#as-blank").onclick = (e) => busy(e.currentTarget, async () => {
     const a = await api("/assessments", { method: "POST", body: { title: "New assessment", questions: [], settings: { minutes: 45 } } });
     location.hash = `#/assessment/${a.assessment.id}`;
+  });
+}
+
+/**
+ * 📐 An existing assessment brought up to the Fiche niveaux by Claude: the prompt (its questions and the capacities), then
+ * Claude's JSON back into this assessment (a draft: new questions added; open: only the questions' capacities).
+ */
+function claudeConceptsDialog(a, dirty) {
+  if (dirty) throw new Error("Save your changes first.");
+  let checked = "";
+  openDialog("📋 Bring it up to the Fiche niveaux with Claude", `
+    <div class="cj-step"><b>1 · The prompt</b><p class="small muted" style="margin:4px 0 8px">Its questions and the items it covers (${esc((AS.cscope || []).join(", ") || "pick them first")}): Claude tags each question and adds questions where a item has fewer than 5.</p>
+      <button class="btn small" id="cc-cp">📋 Copy the prompt for Claude</button></div>
+    <div class="cj-step"><b>2 · Paste Claude's JSON</b>${jsonBox("cc-q", '{ "format": "classbot-assessment@1", … }')}</div>
+    <div id="cc-prev"></div>
+    ${a.status !== "draft" ? `<p class="small muted">Students already have it: only the items of its questions change (no question added). Claude may also use the other items of the sprint and the ones before.</p>` : ""}`,
+  [{ label: "Check", primary: true, action: async () => {
+    const json = $("#cc-q", dlg).value;
+    if (!json.trim()) throw new Error("Paste Claude's JSON first.");
+    const btn = $(".dlg-foot .btn.primary", dlg);
+    if (checked && checked === json) {
+      const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { json, apply: true, concepts: AS.cscope } });
+      if (r.problems?.length) { $("#cc-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+      dlg.close(); AS.A = r; toast("Updated ✅"); renderAssessment(); return;
+    }
+    const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { json, concepts: AS.cscope } });
+    if (r.problems.length) { $("#cc-prev", dlg).innerHTML = problemsHtml(r.problems); checked = ""; btn.textContent = "Check"; return; }
+    checked = json;
+    $("#cc-prev", dlg).innerHTML = `<div class="imp-card"><b>${esc(r.preview.title)}</b><p class="small">${r.preview.n} questions · every item has its 5 questions ✅</p></div>`;
+    btn.textContent = a.status === "draft" ? "Replace its questions" : "Update the items";
+  } }]);
+  dlg.classList.add("wide");
+  wireJsonBox(dlg, "cc-q", () => { checked = ""; const b = $(".dlg-foot .btn.primary", dlg); if (b) b.textContent = "Check"; });
+  $("#cc-cp", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    const r = await api(`/assessments/${a.id}/claude-concepts`, { method: "POST", body: { concepts: AS.cscope } });
+    copyText(r.prompt, "Prompt copied: paste it in Claude");
   });
 }
 
@@ -2038,11 +2413,12 @@ async function generateQuestionsDialog(onDone, preset = null) {
       <div><label for="gq-s">For one student <span class="muted">(their weak points)</span></label><select id="gq-s"><option value="">—</option>${students.map((s) => `<option value="${s.discord_id}">${esc(s.name || s.discord_id)}</option>`).join("")}</select></div>
     </div>
     <div class="field-row">
-      <div><label for="gq-n">Questions</label><input type="number" id="gq-n" min="1" max="30" value="10"></div>
+      <div><label for="gq-n">Questions</label><input type="number" id="gq-n" min="1" max="30" value="10"><div class="small" id="gq-nw"></div></div>
       <div><label for="gq-l">Level</label><select id="gq-l">${LV_NAMES.map((l, i) => `<option value="${i + 1}">N${i + 1} · ${l}</option>`).join("")}</select></div>
 
       <div><label for="gq-lang">Language</label><select id="gq-lang"><option value="fr">Français</option><option value="en">English</option></select></div>
     </div>
+    <div id="gq-cn"><p class="small muted">Loading the Fiche niveaux…</p></div>
     <label>Mix <span class="muted">(%, always 100 in total)</span></label>
     <div class="field-row"><div><label class="small">Write code</label><input type="number" id="gq-mc" value="50" min="0" max="100"></div>
       <div><label class="small">Explain</label><input type="number" id="gq-me" value="20" min="0" max="100"></div>
@@ -2050,15 +2426,20 @@ async function generateQuestionsDialog(onDone, preset = null) {
     <p class="small" id="gq-st"></p>`,
     [{ label: "Generate", primary: true, action: async () => {
       $("#gq-st").textContent = "⏳ Writing the questions (up to a minute)…";
-      const body = { topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
+      const concepts = pickedConcepts($("#gq-cn", dlg));
+      if ($("[data-cncap]", dlg) && !concepts.length) throw new Error("Tick at least one item of the Fiche niveaux: every evaluation must cover it.");
+      if (cnMin && Number($("#gq-n").value) < cnMin) { $("#gq-n").value = String(cnMin); nWarn(); }   // every item its 5 questions
+      const body = { concepts, topic: $("#gq-t").value, brief_id: $("#gq-b").value || null, for_student: $("#gq-s").value || null, count: $("#gq-n").value, level: $("#gq-l").value,
         techs: tagValues(dlg, "gq-tech"), codeLang: (tagValues(dlg, "gq-tech")[0] || "javascript").toLowerCase(), lang: $("#gq-lang").value, mix: { code: $("#gq-mc").value, explain: $("#gq-me").value, mcq: $("#gq-mm").value },
         existing: $$("[data-qprompt]").map((t) => t.value).filter(Boolean) };   // the questions already in the assessment: not again
       if (!body.techs.length) throw new Error("Pick at least one technology to assess.");
       try { localStorage.setItem("classbot.techs", JSON.stringify(body.techs)); } catch { /* private window */ }
       const r = await api("/assessments/generate", { method: "POST", body }).catch((e) => { $("#gq-st").textContent = ""; throw e; });
+      const low = r.concepts?.missing || [];
+      if (low.length) toast(`⚠️ ${low.map((x) => `${x.code} ${x.n}/5`).join(", ")}: add questions on ${low.length > 1 ? "them" : "it"} (✨ Add with AI)`, true);
       if (onDone) { dlg.close(); onDone(r.questions); return; }
       const title = body.topic || br.items.find((b) => String(b.id) === body.brief_id)?.title || "Assessment";
-      const a = await api("/assessments", { method: "POST", body: { title, brief_id: body.brief_id, questions: r.questions, settings: { minutes: 45, lang: body.lang, codeLang: body.codeLang, target: body.for_student ? [body.for_student] : [] } } });
+      const a = await api("/assessments", { method: "POST", body: { title, brief_id: body.brief_id, questions: r.questions, settings: { minutes: 45, lang: body.lang, codeLang: body.codeLang, target: body.for_student ? [body.for_student] : [], concepts: r.concepts?.scope || concepts } } });
       dlg.close(); toast(`${r.questions.length} questions written: check them`); location.hash = `#/assessment/${a.assessment.id}`;
     } }]);
   dlg.classList.add("wide");
@@ -2073,6 +2454,30 @@ async function generateQuestionsDialog(onDone, preset = null) {
   const setLevel = () => { const l = briefLevel($("#gq-b", dlg).value); if (l) $("#gq-l", dlg).value = String(l); };
   $("#gq-b", dlg).addEventListener("change", setLevel);
   setLevel();
+  // 📐 the capacities to cover: from the brief (or the topic), ticked; the number of questions follows (5 per capacity)
+  const cn = $("#gq-cn", dlg);
+  const loadCn = () => conceptsPicker(cn, { brief_id: $("#gq-b", dlg).value, text: $("#gq-t", dlg).value }, preset?.concepts);
+  // 📐 the number of questions follows the items ticked (5 each, up to 3 per question); a bigger number typed by hand stays,
+  // a smaller one is said (and raised when generating: otherwise some items wouldn't get their 5 questions)
+  let cnMin = 0, cnN = 0, nByHand = false;
+  const nWarn = () => {
+    const n = $("#gq-n", dlg), w = $("#gq-nw", dlg);
+    w.innerHTML = cnMin && Number(n.value) < cnMin ? `<span style="color:var(--down)">⚠ ${cnN} items of the Fiche need at least <b>${cnMin}</b> questions (5 each): with ${Number(n.value) || 0}, some wouldn't be checked enough. <button type="button" class="ap-link small" id="gq-nfix">Use ${cnMin}</button></span>`
+      : cnMin ? `<span class="muted">${cnN} item${cnN > 1 ? "s" : ""} × 5 → ${cnMin} at least</span>` : "";
+    const f = $("#gq-nfix", dlg);
+    if (f) f.onclick = () => { n.value = String(cnMin); nByHand = false; nWarn(); };
+  };
+  $("#gq-n", dlg).addEventListener("input", () => { nByHand = true; nWarn(); });
+  cn.addEventListener("cnchange", (e) => {
+    const n = $("#gq-n", dlg);
+    cnMin = e.detail.min || 0; cnN = e.detail.n || 0;
+    n.max = String(Math.max(30, cnMin));
+    if (cnMin && (!nByHand || Number(n.value) < cnMin)) { n.value = String(cnMin); nByHand = false; }
+    nWarn();
+  });
+  $("#gq-b", dlg).addEventListener("change", loadCn);
+  $("#gq-t", dlg).addEventListener("change", () => { if (!$("#gq-b", dlg).value) loadCn(); });
+  loadCn();
   // the mix always adds up to 100: a value changed (at most 100) leaves the rest to the other two, in their proportion
   const mix = ["#gq-mc", "#gq-me", "#gq-mm"].map((sel) => $(sel, dlg));
   mix.forEach((inp, i) => inp.addEventListener("input", () => {
@@ -2157,13 +2562,19 @@ function assessQuestionsTab(root) {
         ${a.brief_id && !(AS.briefs || []).some((b) => b.id === a.brief_id) ? `<option value="${a.brief_id}" selected>Brief #${a.brief_id} (deleted)</option>` : ""}</select>
       <label class="check"><input type="checkbox" id="aq-show" ${s.showResults ? "checked" : ""}> Students get their score and the corrections by DM when you send the results, with a link to their full correction (each question, their answer, what to look up)</label>
     </section>
+    <section class="panel"><div id="aq-cnpick"><p class="small muted">Loading the Fiche niveaux…</p></div><div id="aq-cov"></div>
+      <p class="toolbar" style="margin:6px 0 0"><button class="btn small" id="aq-claude-cn" title="Claude tags each question with its items and adds questions where an item has fewer than 5">📋 Bring it up to the Fiche with Claude</button><button class="btn small" id="aq-link-cn" title="The AI links each existing question to the items it checks: nothing else changes, the past answers count at once">📐 Link its questions to the Fiche (AI)</button></p></section>
     ${locked ? `<div class="notice" style="margin-top:16px">Students already have it: you can fix the wording and the expected answers, not add or remove questions.</div>` : ""}
     <div id="aq-list" class="qe-list"></div>
     ${locked ? "" : `<p class="toolbar" style="margin-top:14px"><button class="btn" data-addq="code">+ Write code</button><button class="btn" data-addq="explain">+ Explain</button><button class="btn" data-addq="mcq">+ Multiple choice</button><button class="btn" id="aq-ai">✨ Add with AI</button><button class="btn" id="aq-pdf" title="A quiz you made on Wayground (or any worksheet): download it as a PDF and drop it here">📄 Import a quiz (PDF)</button></p>`}
     ${saveBarHtml("aq-save")}`;
   let Q = JSON.parse(JSON.stringify(a.questions));
+  // 📐 the capacities of the Fiche niveaux it covers, and how many questions touch each (5 at least)
+  const cov = () => { const qs = $$(".qe", root).length ? readQuestions() : Q; $("#aq-cov").innerHTML = conceptCoverageHtml(AS.cscope || [], qs, AS.clabels || {}); };
+  AS.cscope = s.concepts || [];
   const draw = () => {
     $("#aq-list").innerHTML = Q.map((q, i) => questionCard(q, i, Q.length, locked)).join("") || `<p class="empty">No question yet.</p>`;
+    cov();
     $$(".qe", root).forEach((card) => {
       const i = Number(card.dataset.i);
       $("[data-qt]", card).onchange = (e) => { Q = readQuestions(); Q[i].type = e.target.value; if (Q[i].type === "mcq" && !Q[i].choices?.length) { Q[i].choices = ["", ""]; Q[i].answer = [0]; } draw(); mark(); };
@@ -2199,9 +2610,21 @@ function assessQuestionsTab(root) {
       onCancel: () => { bsel.value = String(was); } }).catch((e) => { bsel.value = String(was); toast(e.message, true); });
   };
   root.addEventListener("input", mark);
+  root.addEventListener("change", (e) => { if (e.target.closest("[data-qcn]")) cov(); });
   draw();
+  const pick = $("#aq-cnpick", root);
+  pick.addEventListener("cnchange", () => {
+    const was = (AS.cscope || []).join();
+    AS.cscope = pickedConcepts(pick);
+    AS.clabels = Object.fromEntries($$("[data-cncap]", pick).map((c) => [c.value, c.closest("label").textContent.trim()]));
+    if (was !== AS.cscope.join()) { if (was) mark(); Q = $$(".qe", root).length ? readQuestions() : Q; draw(); }
+  });
+  // its subject: the title and what its questions ask (an old one's title alone says little: « Evaluation 2 »)
+  conceptsPicker(pick, { brief_id: a.brief_id, text: [a.title, ...(a.questions || []).map((q) => q.prompt)].join(" ").replace(/\s+/g, " ").slice(0, 1500) }, s.concepts);
+  $("#aq-claude-cn", root).onclick = () => { try { claudeConceptsDialog(a, AS.dirty); } catch (e) { toast(e.message, true); } };
+  $("#aq-link-cn", root).onclick = () => { if (AS.dirty) return toast("Save your changes first.", true); ficheLinkDialog("assessment", a.id, a.title, () => route()); };
   $$("[data-addq]", root).forEach((b) => b.onclick = () => { Q = readQuestions(); Q.push(b.dataset.addq === "mcq" ? { type: "mcq", prompt: "", choices: ["", "", "", ""], answer: [0], points: 1, skills: [] } : { type: b.dataset.addq, prompt: "", points: 2, skills: [], lang: s.codeLang }); draw(); mark(); $$(".qe", root).pop()?.scrollIntoView({ block: "center" }); });
-  if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); });
+  if ($("#aq-ai")) $("#aq-ai").onclick = () => generateQuestionsDialog((qs) => { Q = [...readQuestions(), ...qs]; draw(); mark(); toast(`${qs.length} questions added: save to keep them`); }, { brief: a.brief_id, title: a.title, concepts: (() => { const qs = readQuestions(); const m = (AS.cscope || []).filter((c) => qs.filter((q) => (q.concepts || []).includes(c)).length < 5); return m.length ? m : AS.cscope; })() });
   if ($("#aq-pdf")) $("#aq-pdf").onclick = () => importPdfDialog((qs, title) => {
     Q = [...readQuestions(), ...qs]; draw(); mark();
     if (title && /^(new assessment|nouvelle évaluation|assessment)$/i.test($("#aq-title").value.trim())) $("#aq-title").value = title;
@@ -2212,7 +2635,7 @@ function assessQuestionsTab(root) {
     const bad = qs.findIndex((q) => q.prompt.trim().length < 5 || (q.type === "mcq" && (q.choices.filter(Boolean).length < 2 || !q.answer.length)));
     if (bad >= 0) throw new Error(`Question ${bad + 1}: write the question${qs[bad].type === "mcq" ? ", at least 2 choices and tick the right one(s)" : ""}.`);
     AS.A = await api(`/assessments/${a.id}`, { method: "PUT", body: { title: $("#aq-title").value, questions: qs,
-      settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked } } });
+      settings: { minutes: $("#aq-min").value, lang: $("#aq-lang").value, codeLang: s.codeLang, passAt: $("#aq-pass").value, points: $("#aq-pts").value, showResults: $("#aq-show").checked, concepts: AS.cscope || [] } } });
     AS.dirty = false; toast("Saved"); renderAssessment();
   });
 }
@@ -2301,6 +2724,7 @@ function questionCard(q, i, n, locked) {
       : `<label class="small">Expected answer / key points <span class="muted">(never shown; the AI grades with it)</span></label><textarea data-qexp ${q.type === "code" ? 'class="code"' : ""} style="min-height:80px">${esc(q.expected || "")}</textarea>`}
     <div class="qe-meta">
       <div class="small qe-skills"><span class="muted">Skills</span> ${tagSelect(`sk-${i}`, skillOptions(), q.skills || [], { max: 3, placeholder: "Search a skill…" })}</div>
+      <div class="small q-cn" data-qcn><span class="muted">📐 Fiche</span> ${[...new Set([...(AS?.cscope || []), ...(q.concepts || [])])].map((c) => `<label class="cn-qc" title="${esc((AS?.clabels || {})[c] || c)}"><input type="checkbox" value="${esc(c)}" ${(q.concepts || []).includes(c) ? "checked" : ""}> ${esc(c)}</label>`).join("") || `<span class="muted">pick the Fiche's capacities above</span>`}</div>
       <div class="small qe-comps"><span class="muted">Competencies</span> ${(q.comps?.length ? q.comps : q.comp ? [{ code: q.comp, level: q.level || 1 }] : []).map((c) => compRow(c, ref)).join("")}
         <button type="button" class="btn small" data-addcomp>+ Competency</button></div>
     </div></article>`;
@@ -2317,6 +2741,7 @@ function readQuestions() {
     const q = { type, prompt: $("[data-qprompt]", card).value, points: Number($("[data-qp]", card).value) || 1, code: $("[data-qcode]", card).value,
       skills: tagValues(card, `sk-${card.dataset.i}`).slice(0, 3) };
     if (card.dataset.id) q.id = card.dataset.id;
+    q.concepts = $$("[data-qcn] input:checked", card).map((c) => c.value);
     q.comps = $$(".qe-comp", card).map((r) => [$("[data-qcomp]", r).value, $("[data-qlvl]", r).value]).filter(([c]) => c).map(([c, l]) => `${c}N${l}`);
     if (type === "code") { q.lang = $("[data-qlang]", card)?.value || "javascript"; q.starter = $("[data-qstart]", card)?.value || ""; }
     if (type !== "mcq") q.expected = $("[data-qexp]", card)?.value ?? "";
@@ -2360,7 +2785,12 @@ async function inviteDialog() {
   // the options are always asked before the first invitation of an assessment
   if (!A.takers.length && AS.optsAsked !== a.id) return assessOptionsDialog(() => inviteDialog());
   const invited = new Set(A.takers.map((t) => t.discord_id));
-  openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `
+  // 📐 the Fiche niveaux: said before inviting when a capacity of its scope has fewer than 5 questions (or none was chosen)
+  const scope = a.settings.concepts || [];
+  const low = scope.filter((c) => a.questions.filter((q) => (q.concepts || []).includes(c)).length < 5);
+  const cnWarn = !scope.length ? `<div class="notice" style="margin-bottom:10px">📐 No item of the Fiche niveaux chosen for this assessment: its results won't count in the students' levels. Pick them in Questions → Fiche niveaux.</div>`
+    : low.length ? `<div class="notice danger" style="margin-bottom:10px">📐 ${low.map((c) => `<b>${esc(c)}</b> ${a.questions.filter((q) => (q.concepts || []).includes(c)).length}/5`).join(", ")}: fewer than 5 questions. Add questions on ${low.length > 1 ? "them" : "it"} before inviting (Questions → ✨ Add with AI, or 📋 Bring it up to the Fiche with Claude).</div>` : "";
+  openDialog(A.takers.length ? "Invite more students" : "Invite students · step 2 of 2", `${cnWarn}
     <div class="iv-sum"><span class="iv-h">Options</span> ${optsChips(a.settings)} <button class="ap-link" id="iv-chg">Change</button></div>
     <p class="muted small" style="margin-top:12px">Each student gets their own link by Discord DM.</p>
     ${segHtml("who", [["some", "Chosen students"], ["all", "The whole class"]], "some")}

@@ -3,7 +3,9 @@
 //   • Suivi et Validation      per sprint (3 rows each): the briefs, their start and end dates, the individual debriefing
 //                              (Non / En cours / Oui), the collective debriefing and the retro (Oui once every debrief is final)
 //   • Suivi fil rouge          never touched
-//   • Plan d'action Retro      every plan d'action sent: student, level, difficulties, start, actions, end
+//   • Plan d'action Retro      every plan d'action sent: student, level, difficulties, start, actions (what the plan asks,
+//                              summed up), end, feedback (the teacher's word on the plan), résultat (done / partly / not
+//                              done, once it's due or done). The columns are found by their titles (row 3).
 // ClassBot writes with a Google service account (its key: the Cloudflare secret GOOGLE_SERVICE_ACCOUNT, or pasted in
 // Settings, never shown again); the trainer shares the sheet with its email as Editor. Filled on "Fill now", and by
 // itself: 2 minutes after a debrief is finalized, a sprint level is set or a plan is sent; every Monday; the day after
@@ -11,6 +13,10 @@
 import type { Env, GuildRow } from "./types.ts";
 import { all, getGuild, now, one, run } from "./db.ts";
 import { sheetLevels } from "./sprints.ts";
+import { chat } from "./ai.ts";
+import { forClass } from "./aictx.ts";
+import { planStatus } from "./workplan.ts";
+import type { Step, WorkPlan } from "./workplan.ts";
 
 export class SheetError extends Error {}
 
@@ -55,24 +61,32 @@ async function saKey(env: Env): Promise<(SaKey & { source: "secret" | "settings"
 }
 
 const b64url = (bytes: Uint8Array) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
-let tokenCache: { email: string; token: string; exp: number } | null = null;
-async function accessToken(k: SaKey): Promise<string> {
+let tokenCache: { email: string; scope: string; token: string; exp: number } | null = null;
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+async function accessToken(k: SaKey, scope = SHEETS_SCOPE): Promise<string> {
   const t0 = Math.floor(Date.now() / 1000);
-  if (tokenCache && tokenCache.email === k.client_email && tokenCache.exp > t0 + 60) return tokenCache.token;
+  if (tokenCache && tokenCache.email === k.client_email && tokenCache.scope === scope && tokenCache.exp > t0 + 60) return tokenCache.token;
   const der = Uint8Array.from(atob(k.private_key.replace(/-----(BEGIN|END)[^-]*-----/g, "").replace(/\\n/g, "").replace(/[^A-Za-z0-9+/=]/g, "")), (c) => c.charCodeAt(0));
   let key: CryptoKey;
   try { key = await crypto.subtle.importKey("pkcs8", der, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]); }
   catch { throw new SheetError("The private key in this JSON can't be read: download a new JSON key."); }
   const part = (o: unknown) => b64url(new TextEncoder().encode(JSON.stringify(o)));
-  const data = `${part({ alg: "RS256", typ: "JWT" })}.${part({ iss: k.client_email, scope: "https://www.googleapis.com/auth/spreadsheets", aud: "https://oauth2.googleapis.com/token", iat: t0 - 30, exp: t0 + 3500 })}`;
+  const data = `${part({ alg: "RS256", typ: "JWT" })}.${part({ iss: k.client_email, scope, aud: "https://oauth2.googleapis.com/token", iat: t0 - 30, exp: t0 + 3500 })}`;
   const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(data)));
   const res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
     body: `grant_type=${encodeURIComponent("urn:ietf:params:oauth:grant-type:jwt-bearer")}&assertion=${data}.${b64url(sig)}` });
   const j: any = await res.json().catch(() => ({}));
   if (!res.ok || !j.access_token) throw new SheetError(`Google refused the key (${j.error_description || j.error || res.status}). Is the service account still there, and the key not deleted?`);
-  tokenCache = { email: k.client_email, token: j.access_token, exp: t0 + (Number(j.expires_in) || 3600) };
+  tokenCache = { email: k.client_email, scope, token: j.access_token, exp: t0 + (Number(j.expires_in) || 3600) };
   return j.access_token;
 }
+
+/** The service account's token to read a Google Doc (the Fiche niveaux), when the class has a key; else null. */
+export async function docsToken(env: Env): Promise<(() => Promise<string>) | null> {
+  const k = await saKey(env);
+  return k ? () => accessToken(k, "https://www.googleapis.com/auth/documents.readonly") : null;
+}
+export async function serviceEmail(env: Env): Promise<string | null> { return (await saKey(env))?.client_email ?? null; }
 
 async function gapi(env: Env, path: string, init: { method?: string; body?: unknown } = {}): Promise<any> {
   const k = await saKey(env);
@@ -157,7 +171,71 @@ const text = (s: string) => (/^[=+\-@]/.test(s) ? `'${s}` : s);   // never read 
 const today = () => new Date(Date.now()).toLocaleDateString("en-CA", { timeZone: "Africa/Casablanca" });
 
 /** Everything ClassBot writes, as ranges and values (null = leave the cell as it is). */
-export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: ReturnType<typeof findTabs>, sheetNames: string[]) {
+// ------------------------------------------------------------------ Plan d'action: its columns, the result, the actions summed up
+export type PlanCol = "name" | "level" | "diff" | "start" | "actions" | "end" | "feedback" | "result";
+/** The old layout (no titles in row 3): B student · C level · D difficulties · E start · F actions · G end. */
+export const PLAN_DEFAULT: Partial<Record<PlanCol, number>> = { name: 1, level: 2, diff: 3, start: 4, actions: 5, end: 6 };
+/** The columns of the Plan d'action tab, by their titles (row 3, A = 0). null: no titles ClassBot knows (the old layout). */
+export function planColumns(headers: string[]): Partial<Record<PlanCol, number>> | null {
+  const out: Partial<Record<PlanCol, number>> = {};
+  headers.forEach((h, i) => {
+    const t = norm(h);
+    if (!t) return;
+    const k: PlanCol | null = /result/.test(t) ? "result" : /feedback|commentaire|remarque|retour|appreciation/.test(t) ? "feedback"
+      : /debut|start/.test(t) ? "start" : /\bfin\b|echeance|deadline|\bend\b/.test(t) ? "end" : /niveau/.test(t) ? "level"
+      : /difficult|lacune/.test(t) ? "diff" : /apprenant|\bnom\b|etudiant|stagiaire|eleve/.test(t) ? "name" : /action/.test(t) ? "actions" : null;
+    if (k && out[k] === undefined) out[k] = i;
+  });
+  if (!Object.keys(out).length) return null;
+  // the student's column often has no title (ClassBot writes « Apprenant(e) » in B3)
+  if (out.name === undefined && !Object.values(out).includes(1) && !String(headers[1] ?? "").trim()) out.name = 1;
+  return out;
+}
+const colL = (i: number) => (i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(64 + Math.floor(i / 26)) + String.fromCharCode(65 + (i % 26)));
+
+export type PlanResult = "done" | "partly" | "not";
+export const RESULT_DEFAULT: Record<PlanResult, string> = { done: "Fait", partly: "Partiellement fait", not: "Non fait" };
+/** The words of the « Résultat » column's list (its dropdown), when it has one: each result → the option that says it. */
+export function resultWords(options: string[]): Record<PlanResult, string> {
+  const o = options.map((x) => ({ x, t: norm(x) }));
+  const partly = o.find((v) => /partiel|en partie|moitie|partly|partial/.test(v.t));
+  const not = o.find((v) => v !== partly && /\bnon\b|\bpas\b|not|aucun|echec/.test(v.t));
+  const done = o.find((v) => v !== partly && v !== not && /fait|complet|termine|realise|oui|done|valide|atteint/.test(v.t));
+  return { done: done?.x ?? RESULT_DEFAULT.done, partly: partly?.x ?? RESULT_DEFAULT.partly, not: not?.x ?? RESULT_DEFAULT.not };
+}
+/** Done when every action is; once it's due: partly (something done) or not done; before that: nothing yet. */
+export function planResult(st: { done: number; total: number; pct: number }, dueAt: number | null, t = now()): PlanResult | null {
+  if (st.total && st.done >= st.total) return "done";
+  if (!dueAt || t < dueAt) return null;
+  return st.done > 0 || st.pct > 0 ? "partly" : "not";
+}
+
+const KIND_SUM: Record<string, [string, string]> = { challenge: ["défi", "défis"], code: ["exercice de code", "exercices de code"], answer: ["question", "questions"], mcq: ["QCM", "QCM"], brief: ["mini-projet", "mini-projets"] };
+const stepWhat = (s: Step) => (s.kind === "brief" ? `« ${s.title || s.notion} »${s.brief?.hours ? ` (≈ ${s.brief.hours} h)` : ""}` : s.notion && s.title && norm(s.title) !== norm(s.notion) ? `${s.notion} : ${s.title}` : s.title || s.notion || "");
+/** What the plan asks, summed up without the AI: the actions by kind, with their notions. */
+export function sumupCalc(steps: Step[]): string {
+  const kinds = ["challenge", "code", "answer", "mcq", "brief"].map((k) => steps.filter((s) => s.kind === k)).filter((l) => l.length);
+  const parts = kinds.map((l) => { const w = KIND_SUM[l[0].kind] || [l[0].kind, l[0].kind]; const what = l.map(stepWhat).filter(Boolean); return `${l.length} ${l.length > 1 ? w[1] : w[0]}${what.length ? ` (${what.join(", ")})` : ""}`; });
+  return parts.length ? `À faire : ${parts.join(" ; ")}.` : "";
+}
+const stepsHash = (steps: Step[]) => { let h = 0; for (const c of JSON.stringify(steps.map((s) => [s.kind, s.title, s.notion, s.brief?.tasks ?? []]))) h = (h * 31 + c.charCodeAt(0)) | 0; return String(h >>> 0); };
+/** What the plan asks, summed up by the AI in 1 to 3 sentences (else without it). */
+export async function sumupAi(env: Env, steps: Step[]): Promise<{ text: string; by: "ai" | "calc" }> {
+  const calc = sumupCalc(steps);
+  const lines = steps.map((s, i) => `${i + 1}. [${(KIND_SUM[s.kind] || [s.kind])[0]}] ${s.title || ""}${s.notion ? ` — notion : ${s.notion}` : ""}${s.kind === "brief" && s.brief ? `\n   mini-projet : ${s.brief.tasks.slice(0, 8).join(" ; ")}${s.brief.hours ? ` (≈ ${s.brief.hours} h)` : ""}` : s.prompt ? `\n   consigne : ${s.prompt.replace(/\s+/g, " ").slice(0, 300)}` : ""}`);
+  try {
+    const out = await chat(env, [
+      { role: "system", content: "Tu résumes un plan d'action pédagogique pour le tableau de suivi du formateur (colonne « Actions »)." },
+      { role: "user", content: `LES ACTIONS DU PLAN :\n${lines.join("\n")}\n\nEn 1 à 3 phrases courtes (300 caractères au plus), dis ce que ce plan demande concrètement à l'apprenant : ce qu'il doit faire (défis, code à écrire, questions, mini-projet) et sur quelles notions. Écris à l'infinitif (« Résoudre… », « Écrire… »), sans « tu », sans liste numérotée, sans guillemets autour du texte. Réponds seulement par ce texte.` },
+    ], { maxTokens: 300, temperature: 0.3, timeoutMs: 20000 });
+    const t = String(out || "").replace(/^["«\s]+|["»\s]+$/g, "").replace(/\s*\n+\s*/g, " ").trim();
+    if (t.length >= 20 && t.length <= 600 && !/^\s*[{\[]/.test(t)) return { text: t, by: "ai" };
+  } catch { /* the calculated one */ }
+  return { text: calc, by: "calc" };
+}
+
+/** Everything ClassBot writes, as ranges and values (null = leave the cell as it is). */
+export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: ReturnType<typeof findTabs>, sheetNames: string[], plan: { cols: Partial<Record<PlanCol, number>> | null; results: string[]; bTitled?: boolean; b3?: boolean } = { cols: null, results: [] }) {
   const S = await sheetLevels(env, g);
   const names = await studentNames(env, g, S.students);
   const match = matchNames(sheetNames, names, cfg.map);
@@ -212,25 +290,48 @@ export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: Retu
     }
   }
 
-  // 3. Plan d'action Retro: row 4 on, B student · C level · D difficulties · E start · F actions · G end
+  // 3. Plan d'action Retro: row 4 on, a plan per row, in the columns found by their titles (else B…G)
   if (tabs.plan) {
-    const plans = await all<{ sid: string; name: string | null; status: string; sent_at: number | null; created_at: number | null; due_at: number | null; lac: string | null; steps: string | null; summary: string | null }>(env,
-      `SELECT json_extract(a.v, '$.sid') AS sid, json_extract(a.v, '$.name') AS name, json_extract(a.v, '$.status') AS status, json_extract(a.v, '$.sent_at') AS sent_at,
-        json_extract(a.v, '$.created_at') AS created_at, json_extract(a.v, '$.due_at') AS due_at, json_extract(a.v, '$.diag.summary') AS summary,
-        (SELECT json_group_array(json_extract(l.value, '$.notion')) FROM json_each(a.v, '$.diag.lacunes') l) AS lac,
-        (SELECT json_group_array(COALESCE(NULLIF(json_extract(s.value, '$.title'), ''), json_extract(s.value, '$.notion'))) FROM json_each(a.v, '$.steps') s) AS steps
-       FROM app_settings a WHERE a.k LIKE ?`, `wplan:${g.id}:%`).catch(() => []);
+    const cols = plan.cols ?? PLAN_DEFAULT;
+    const words = resultWords(plan.results);
+    const recs = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `wplan:${g.id}:%`).catch(() => []);
+    const plans: WorkPlan[] = [];
+    for (const r of recs) { try { const p = JSON.parse(r.v); if (p && (p.status === "sent" || p.status === "done")) plans.push({ ...p, steps: Array.isArray(p.steps) ? p.steps : [] }); } catch { /* skip */ } }
+    plans.sort((a, b) => (a.sent_at || a.created_at || 0) - (b.sent_at || b.created_at || 0));
     const sheetOf = new Map(Object.entries(match).filter(([, v]) => v).map(([n, v]) => [v, n]));
-    const arr = (s: string | null) => { try { const a = JSON.parse(s || "[]"); return Array.isArray(a) ? a.filter((x) => x).map(String) : []; } catch { return []; } };
-    const rows = plans.filter((p) => p.status === "sent" || p.status === "done").sort((a, b) => (a.sent_at || a.created_at || 0) - (b.sent_at || b.created_at || 0)).map((p) => {
-      const lac = arr(p.lac), steps = arr(p.steps);
-      return [text(sheetOf.get(p.sid) || p.name || p.sid), LEVEL_SHEET[lastLevel(p.sid)] || null, text(lac.join(", ") || String(p.summary || "")), day(p.sent_at || p.created_at),
-        text(steps.map((s, i) => `${i + 1}. ${s}`).join("\n")), day(p.due_at)];
-    });
-    data.push({ range: `${q(tabs.plan)}!B3`, values: [["Apprenant(e)"]] });
-    if (rows.length) data.push({ range: `${q(tabs.plan)}!B4:G${3 + rows.length}`, values: rows });
-    if ((cfg.plan_rows || 0) > rows.length) clear.push(`${q(tabs.plan)}!B${4 + rows.length}:G${3 + (cfg.plan_rows || 0)}`);
-    res.plans = rows.length; res.plan_rows = rows.length;
+    // the actions summed up (the AI, once per plan: kept until its actions change), 6 new ones per fill at most
+    const aiEnv = forClass(env, g.id);
+    let made = 0;
+    for (const p of plans) {
+      const h = stepsHash(p.steps);
+      if (p.sumup && p.sumup.h === h && (p.sumup.by === "ai" || made >= 6)) continue;
+      if (made >= 6) { p.sumup = { h, text: sumupCalc(p.steps), by: "calc" }; continue; }
+      made++;
+      const su = await sumupAi(aiEnv, p.steps);
+      p.sumup = { h, ...su };
+      await run(env, "UPDATE app_settings SET v = json_set(v, '$.sumup', json(?)) WHERE k = ?", JSON.stringify(p.sumup), `wplan:${g.id}:${p.id}`).catch(() => {});
+    }
+    const sts = await Promise.all(plans.map((p) => planStatus(env, p).catch(() => null)));
+    const value: Record<PlanCol, (p: WorkPlan, i: number) => string | null> = {
+      name: (p) => text(sheetOf.get(p.sid) || p.name || p.sid),
+      level: (p) => LEVEL_SHEET[lastLevel(p.sid)] || null,
+      diff: (p) => { const lac = (p.diag?.lacunes || []).map((l) => l.notion).filter(Boolean); return text(lac.join(", ") || String(p.diag?.summary || "")); },
+      start: (p) => day(p.sent_at || p.created_at),
+      actions: (p) => text(p.sumup?.text || sumupCalc(p.steps)),
+      end: (p) => day(p.due_at),
+      feedback: (p) => (p.feedback ? text(p.feedback) : null),   // none: what the teacher typed in the sheet stays
+      result: (p, i) => { const r = sts[i] ? planResult(sts[i]!, p.due_at) : null; return r ? words[r] : null; },
+    };
+    // the student's column has no title: ClassBot gives it one
+    if (cols.name === 1 && !plan.bTitled) data.push({ range: `${q(tabs.plan)}!B3`, values: [["Apprenant(e)"]] });
+    if (plan.b3) clear.push(`${q(tabs.plan)}!B3`);
+    for (const [k, c] of Object.entries(cols) as [PlanCol, number][]) {
+      const L = colL(c);
+      if (plans.length) data.push({ range: `${q(tabs.plan)}!${L}4:${L}${3 + plans.length}`, values: plans.map((p, i) => [value[k](p, i)]) });
+      // rows of plans deleted since: emptied (the feedback typed in the sheet too, it was theirs)
+      if ((cfg.plan_rows || 0) > plans.length) clear.push(`${q(tabs.plan)}!${L}${4 + plans.length}:${L}${3 + (cfg.plan_rows || 0)}`);
+    }
+    res.plans = plans.length; res.plan_rows = plans.length;
   }
   const unmatched = sheetNames.filter((n) => n && !match[n]);
   const inSheet = new Set(Object.values(match).filter(Boolean));
@@ -247,6 +348,34 @@ async function readNames(env: Env, id: string, tab: string | null): Promise<stri
   return end < 0 ? col : col.slice(0, end);
 }
 
+/** The Plan d'action tab: its columns (titles in row 3) and the words of the « Résultat » list, when it has one. */
+async function readPlanLayout(env: Env, id: string, tab: string | null) {
+  if (!tab) return { cols: null, results: [] as string[], bTitled: false, b3: false };
+  // the titles: the row of 1 to 3 that has the most titles ClassBot knows (a Google Sheets table has them in row 1)
+  const j = await gapi(env, `${id}/values/${encodeURIComponent(`${q(tab)}!A1:Z3`)}`);
+  const rows3: string[][] = [0, 1, 2].map((r) => (j.values?.[r] || []).map((v: unknown) => String(v ?? "")));
+  const known = (h: string[]) => { const c = planColumns(h.map((x) => (norm(x) === "apprenant e" ? "" : x))); return c ? Object.keys(c).length - (c.name === 1 && !String(h[1] ?? "").trim() ? 1 : 0) : 0; };
+  const score = rows3.map(known);
+  const best = score.indexOf(Math.max(...score));
+  const heads = score[best] >= 2 ? rows3[best] : rows3[2];
+  const cols = planColumns(heads.map((x, i) => (i === 1 && norm(x) === "apprenant e" ? "" : x)));
+  const bTitled = !!String(heads[1] ?? "").trim() && norm(heads[1]) !== "apprenant e";
+  // ClassBot's old « Apprenant(e) » in B3, when the titles are in another row: it's in the way (removed)
+  const b3 = score[best] >= 2 && best !== 2 && norm(rows3[2][1] ?? "") === "apprenant e";
+  let results: string[] = [];
+  if (cols?.result !== undefined) {
+    // its dropdown (data validation « list of items »), read on the first row of plans
+    const L = colL(cols.result);
+    const v = await gapi(env, `${id}?ranges=${encodeURIComponent(`${q(tab)}!${L}4:${L}5`)}&fields=${encodeURIComponent("sheets(data(rowData(values(dataValidation))))")}`).catch(() => null);
+    const rows: any[] = v?.sheets?.[0]?.data?.[0]?.rowData || [];
+    for (const r of rows) {
+      const c = r?.values?.[0]?.dataValidation?.condition;
+      if (c?.type === "ONE_OF_LIST" && Array.isArray(c.values)) { results = c.values.map((x: any) => String(x?.userEnteredValue ?? "")).filter(Boolean); break; }
+    }
+  }
+  return { cols, results, bTitled: bTitled || (score[best] >= 2 && best !== 2), b3 };
+}
+
 // ------------------------------------------------------------------ filling
 /** Fill the sheet now. Never throws: the result (ok, or the error) is kept for the Settings page. */
 export async function fillSheet(env: Env, g: GuildRow, why = "manual"): Promise<FillResult> {
@@ -258,7 +387,8 @@ export async function fillSheet(env: Env, g: GuildRow, why = "manual"): Promise<
     const { tabs } = await tabsOf(env, cfg.id);
     if (!tabs.niveau && !tabs.suivi && !tabs.plan) throw new SheetError("None of the tabs Niveau technique, Suivi et Validation Classe or Plan d'action is in this sheet.");
     const names = await readNames(env, cfg.id, tabs.niveau);
-    const b = await buildFill(env, g, cfg, tabs, names);
+    const plan = await readPlanLayout(env, cfg.id, tabs.plan);
+    const b = await buildFill(env, g, cfg, tabs, names, plan);
     if (b.data.length) await gapi(env, `${cfg.id}/values:batchUpdate`, { method: "POST", body: { valueInputOption: "USER_ENTERED", data: b.data } });
     if (b.clear.length) await gapi(env, `${cfg.id}/values:batchClear`, { method: "POST", body: { ranges: b.clear } });
     const warn = [...b.warn];

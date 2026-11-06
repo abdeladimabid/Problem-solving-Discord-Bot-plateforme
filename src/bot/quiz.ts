@@ -107,7 +107,8 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     fr: { expired: "Ce lien a expiré ou n'existe pas.", intro: "Évaluation", q: "questions", min: "minutes", nolimit: "sans limite de temps",
       r1: "L'évaluation se fait en plein écran.", r2: "Si tu quittes le plein écran, changes d'onglet ou de fenêtre, ta session s'arrête. Seul ton formateur peut te laisser reprendre.",
       r3: "Tes réponses sont enregistrées au fur et à mesure.", r4: "Le copier-coller est bloqué dans les réponses.", start: "Commencer en plein écran", cont: "Continuer en plein écran",
-      prev: "← Précédente", next: "Suivante →", finish: "Terminer", sure: "Rendre ta copie ?", answered: "réponses données sur", send: "Rendre", back: "Revenir",
+      prev: "← Précédente", next: "Suivante →", finish: "Terminer", sure: "Rendre ta copie au formateur ?", answered: "réponses données sur", send: "Rendre ma copie", back: "Revenir à mon travail",
+      finwarn: "<b>⚠️ Ce bouton arrête l’évaluation</b> et envoie ta copie à ton formateur pour la correction. Après l’envoi, tu ne pourras plus rien modifier.<br><b>Appuie seulement quand tu as tout terminé.</b>", iamdone: "<b>J’ai terminé</b> et je veux rendre ma copie maintenant.",
       saved: "Enregistré", saving: "Enregistrement…", code: "Code", explain: "Explication", mcq: "QCM", several: "Plusieurs réponses possibles", pts: "pt",
       typecode: "Écris ton code ici…", typetext: "Écris ta réponse ici…",
       locked: "Session arrêtée", lockwhy: { fullscreen: "Tu as quitté le plein écran.", hidden: "Tu as changé d'onglet ou réduit la fenêtre.", blur: "Tu as changé de fenêtre.", reload: "La page a été rechargée ou ouverte ailleurs.", left: "Tu as quitté l'évaluation.", device: "Ta copie a été ouverte sur un autre appareil." },
@@ -122,7 +123,8 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     en: { expired: "This link has expired or doesn't exist.", intro: "Assessment", q: "questions", min: "minutes", nolimit: "no time limit",
       r1: "The assessment runs in full screen.", r2: "If you leave full screen, switch tab or window, your session stops. Only your teacher can let you continue.",
       r3: "Your answers are saved as you go.", r4: "Copy-paste is blocked in the answers.", start: "Start in full screen", cont: "Continue in full screen",
-      prev: "← Previous", next: "Next →", finish: "Finish", sure: "Hand in your paper?", answered: "answered out of", send: "Hand in", back: "Go back",
+      prev: "← Previous", next: "Next →", finish: "Finish", sure: "Hand in your paper to your teacher?", answered: "answered out of", send: "Hand in my paper", back: "Back to my work",
+      finwarn: "<b>⚠️ This button ends the assessment</b> and sends your paper to your teacher to be graded. After that, you can't change anything.<br><b>Only press it when you have finished everything.</b>", iamdone: "<b>I've finished</b> and want to hand in my paper now.",
       saved: "Saved", saving: "Saving…", code: "Code", explain: "Explain", mcq: "Multiple choice", several: "Several answers possible", pts: "pt",
       typecode: "Write your code here…", typetext: "Write your answer here…",
       locked: "Session stopped", lockwhy: { fullscreen: "You left full screen.", hidden: "You switched tab or minimized the window.", blur: "You switched window.", reload: "The page was reloaded or opened somewhere else.", left: "You left the assessment.", device: "Your paper was opened on another device." },
@@ -341,10 +343,14 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     const n = paper.filter(answered).length;
     const box = document.createElement("div");
     box.className = "card"; box.style.cssText = "position:fixed;inset:auto 0 0 0;margin:0 auto 24px;max-width:520px;z-index:20;text-align:center;box-shadow:0 18px 50px #0f1d3a40";
-    box.innerHTML = "<h2>" + tr("sure") + '</h2><p class="muted">' + n + " " + tr("answered") + " " + paper.length + '</p><div class="nav" style="justify-content:center"><button class="btn ghost" id="no">' + tr("back") + '</button><button class="btn" id="yes">' + tr("send") + "</button></div>";
+    box.innerHTML = "<h2>" + tr("sure") + '</h2><div style="border:1px solid #f59e0b;background:#fffbeb;color:#78350f;border-radius:10px;padding:10px 12px;margin:0 0 10px;text-align:left">' + tr("finwarn") + "</div>"
+      + '<p class="muted">' + n + " " + tr("answered") + " " + paper.length + '</p><label style="display:flex;gap:8px;align-items:flex-start;justify-content:center;margin:0 0 10px;cursor:pointer"><input type="checkbox" id="iamdone" style="margin-top:3px"> <span>' + tr("iamdone") + "</span></label>"
+      + '<div class="nav" style="justify-content:center"><button class="btn ghost" id="no">' + tr("back") + '</button><button class="btn" id="yes" disabled>' + tr("send") + "</button></div>";
     document.body.appendChild(box);
+    const yes = box.querySelector("#yes"), ok = box.querySelector("#iamdone");
+    ok.onchange = () => { yes.disabled = !ok.checked; };
     box.querySelector("#no").onclick = () => box.remove();
-    box.querySelector("#yes").onclick = () => { box.remove(); finish(false); };
+    yes.onclick = () => { if (!ok.checked) return; box.remove(); finish(false); };
   }
   async function finish(timeUp) {
     running = false;

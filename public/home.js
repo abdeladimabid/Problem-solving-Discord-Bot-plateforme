@@ -183,8 +183,9 @@ async function loadHome(pre) {
     const t = e.target.closest?.(".hm-hit");
     if (!t) { tip.hidden = true; return; }
     tip.textContent = t.dataset.tip; tip.hidden = false;
-    const r = box.getBoundingClientRect();
-    tip.style.left = `${Math.min(e.clientX - r.left + 12, r.width - tip.offsetWidth - 4)}px`; tip.style.top = `${e.clientY - r.top - tip.offsetHeight - 10}px`;
+    // the page may be zoomed (compact size): the mouse and the box are in screen pixels, the tooltip in the page's
+    const r = box.getBoundingClientRect(), z = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    tip.style.left = `${Math.min((e.clientX - r.left) / z + 12, r.width / z - tip.offsetWidth - 4)}px`; tip.style.top = `${(e.clientY - r.top) / z - tip.offsetHeight - 10}px`;
   });
   box.addEventListener("mouseleave", () => { tip.hidden = true; });
 }

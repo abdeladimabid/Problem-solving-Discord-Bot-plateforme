@@ -1471,6 +1471,33 @@ async function viewTeams() {
 // ========================================================== settings
 /** Settings → AI: the Groq key of this ClassBot (for all its classes). The key is never shown again. */
 /** Settings → AI: this class's AIs, in order. ClassBot asks the first; if it fails, the next one, and so on. */
+// 🔌 the Claude connector (src/admin/mcp.ts): a key makes the URL to add in Claude; shown once; revocable
+async function claudeSettings(box) {
+  const draw = (d, fresh) => {
+    box.innerHTML = `${d.needsMigration ? `<div class="notice warn">Update the database first (<code>npm run db:migrate</code>), then come back.</div>` : ""}
+      ${fresh ? `<div class="panel set-card" style="border-color:var(--ok, #16a34a)"><h3>✅ Your connector link</h3>
+        <p class="small">Copy it now: it is shown <b>only once</b>. Anyone with this link can read your classes, so keep it private.</p>
+        <div style="display:flex;gap:8px;align-items:center"><input id="mcp-url" readonly value="${esc(fresh)}" style="flex:1;font-family:monospace;font-size:12px"><button class="btn primary" id="mcp-copy">Copy</button></div>
+        <ol class="small" style="margin:12px 0 0;padding-left:20px;line-height:1.7"><li>In Claude (claude.ai or the Claude app): <b>Settings → Connectors → Add custom connector</b>.</li><li>Name it <b>ClassBot</b> and paste this link as its URL. Leave the OAuth fields empty.</li><li>In a new conversation, turn ClassBot on in the tools menu and ask, for example: « Fais un assessment pour DevStorm sur ce que la classe rate le plus ce sprint ».</li></ol></div>` : ""}
+      <div class="panel set-card"><h3>Links</h3>
+        ${d.keys.length ? `<table class="tbl"><thead><tr><th>Name</th><th>Access</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody>${d.keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td><td>${k.scope === "full" ? `<span class="tag" style="background:#fee2e2;color:#991b1b">full access</span>` : `<span class="tag">read + drafts</span>`}</td><td class="small">${fmtDateTime(k.created_at)}</td><td class="small">${k.last_used ? `${fmtDateTime(k.last_used)} · ${k.uses} call${k.uses > 1 ? "s" : ""}` : "never"}</td><td style="text-align:right"><button class="btn danger small" data-mcprev="${k.id}">Revoke</button></td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted small">No link yet.</p>`}
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center"><input id="mcp-label" placeholder="Name (e.g. my laptop)" maxlength="60" style="max-width:240px">
+          <select id="mcp-scope"><option value="drafts">Read everything + write drafts</option><option value="full">Full access: read and write everything</option></select>
+          <button class="btn primary" id="mcp-new">＋ Make a connector link</button></div>
+        <p class="muted small"><b>Read + drafts</b>: Claude reads every page and saves assessments, mises en situation, activities and plans d'action as drafts you review. <b>Full access</b>: Claude can also do any action of the dashboard (launch, assign, send DMs, delete…), asking you first each time; every change is logged below.</p>
+        <p class="muted small" style="margin-bottom:0">Revoke a link and Claude can't read your classes with it anymore (at once). What Claude reads goes to Anthropic, like any conversation with Claude: learners' names and results, never e-mails or keys.</p></div>
+      <div class="panel set-card"><h3>What Claude changed</h3>
+        ${d.log?.length ? `<table class="tbl"><thead><tr><th>When</th><th>Action</th><th>Class</th><th></th></tr></thead><tbody>${d.log.map((l) => `<tr><td class="small">${fmtDateTime(l.at)}</td><td><code class="small">${esc(l.method || "")} ${esc(l.path || "")}</code> <span class="muted small">${esc(l.tool)}${l.label ? ` · ${esc(l.label)}` : ""}</span></td><td class="small">${esc(l.guild_id || "")}</td><td>${l.status && l.status < 400 ? "✓" : `<span class="muted small">refused (${l.status})</span>`}</td></tr>`).join("")}</tbody></table>`
+          : `<p class="muted small" style="margin:0">Nothing yet.</p>`}</div>`;
+    if ($("#mcp-copy")) $("#mcp-copy").onclick = () => { navigator.clipboard.writeText($("#mcp-url").value).then(() => toast("Copied")); };
+    $("#mcp-new").onclick = (e) => busy(e.currentTarget, async () => { const r = await api("/mcp-keys", { method: "POST", body: { label: $("#mcp-label").value, scope: $("#mcp-scope").value } }); draw(r, r.url); });
+    box.querySelectorAll("[data-mcprev]").forEach((b) => b.onclick = (e) => busy(e.currentTarget, async () => {
+      draw(await api(`/mcp-keys/${b.dataset.mcprev}`, { method: "DELETE", confirmTitle: "Revoke this link?", confirmText: "Claude stops reading your classes with it, at once.", confirmLabel: "Revoke" }));
+    }));
+  };
+  try { draw(await api("/mcp-keys")); } catch (e) { box.innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; }
+}
 async function aiSettings(root, flash = null) {
   const d = await api("/settings/ai");
   const P = d.presets;
@@ -1720,12 +1747,12 @@ async function viewSettings(arg) {
   const ic = g.integrity || { editor: "required", explain: true, similarity: true, codeImage: true, quickLimit: 0, practiceWeight: 1 };
   const TABS = [
     ["general", "⚙️", "General", "Language, track, channels"],
-    ["programme", "🎓", "Programme", "Planning & competencies"],
+    ["programme", "🎓", "Programme & suivi", "Planning, Fiche niveaux, Suivi Formateur"],
     ["github", "🐙", "GitHub & Watcher", "App, webhooks, import"],
     ["ai", "🤖", "AI keys", "Groq, Gemini, ChatGPT…"],
+    ["claude", "🔌", "Claude connector", "Your classes in Claude"],
     ["library", "📚", "Shared library", "Same activities & quizzes as other teachers"],
     ["intranet", "🏫", "Intranet YouCode", "Signed connection"],
-    ["gsheet", "📗", "Google Sheet", "Suivi Formateur, filled for you"],
     ["vscode", "🧑‍💻", "VS Code tracking", "Learners' coding time"],
     ["roles", "🏷️", "Roles", "Contest & automatic roles"],
     ["scoring", "🧮", "Scoring", "Points per level and type"],
@@ -1734,7 +1761,11 @@ async function viewSettings(arg) {
     ["season", "🗓️", "Season", "Start a new season"],
     ["diag", "🩺", "Diagnostics", "Is everything answering?"],
   ];
-  const tab0 = TABS.some(([k]) => k === arg) ? arg : "general";
+  // Programme, Fiche niveaux and the Suivi Formateur sheet: one section, three tabs
+  const PGROUP = [["programme", "🎓", "Programme"], ["concepts", "📐", "Fiche niveaux"], ["gsheet", "📗", "Suivi Formateur (Google Sheet)"]];
+  const navOf = (k) => (PGROUP.some(([x]) => x === k) ? "programme" : k);
+  const pTabs = (k) => `<div class="tabs set-subtabs" role="tablist">${PGROUP.map(([x, ic, t]) => `<button type="button" role="tab" data-goto="${x}" aria-selected="${x === k}">${ic} ${t}</button>`).join("")}</div>`;
+  const tab0 = TABS.some(([k]) => k === arg) || PGROUP.some(([k]) => k === arg) ? arg : "general";
   const head = (title, sub) => `<header class="set-head"><h2>${title}</h2><p class="sub">${sub}</p></header>`;
   view.innerHTML = `
     <div class="page-head"><div><h1>Settings</h1><p class="sub">${esc(g.name || "this server")} · everything here is for this class only</p></div></div>
@@ -1766,6 +1797,7 @@ async function viewSettings(arg) {
     </section>
 
     <section class="set-sec" data-sec="programme" hidden>
+      ${pTabs("programme")}
       ${head("Programme", "The planning of the year (weeks, sprints) and the competency framework. Briefs, debriefs and the competency record follow it.")}
       <div id="set-programme"><p class="muted">Loading…</p></div>
     </section>
@@ -1881,6 +1913,11 @@ async function viewSettings(arg) {
       <div id="set-ai"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="claude" hidden>
+      ${head("Claude connector", "Use your classes in Claude (claude.ai): it reads them live — learners, Fiche niveaux, lacunes, briefs, debriefs, assessments, mises en situation, activities — and writes drafts for you (assessments, mises en situation, activities, plans d'action). Nothing is ever launched, assigned or sent from Claude: you review and do it here. For all your classes.")}
+      <div id="set-claude"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="library" hidden>
       ${head("Shared library", "Share the Activités (veilles, live codings, week overviews), the assessments, the live quizzes and the class games with the other teachers of your programme (for example every A1 class), even on their own ClassBot. One shared copy: when one of you generates, edits or deletes something, everyone gets it. Only your content is shared: never a student's name, answer or grade.")}
       <div id="set-library"><p class="muted">Loading…</p></div>
@@ -1891,7 +1928,14 @@ async function viewSettings(arg) {
       <div id="set-intranet"><p class="muted">Loading…</p></div>
     </section>
 
+    <section class="set-sec" data-sec="concepts" hidden>
+      ${pTabs("concepts")}
+      ${head("Fiche niveaux · what each level requires", "The official Fiche de validation of each sprint: the items of each level box are the minimum of that level, and the concepts every evaluation checks (5 questions each at least). A level needs all its items. Used by the assessments, the mises en situation, the debriefs and the sprint levels.")}
+      <div id="set-concepts"><p class="muted">Loading…</p></div>
+    </section>
+
     <section class="set-sec" data-sec="gsheet" hidden>
+      ${pTabs("gsheet")}
       ${head("Google Sheet · Suivi Formateur", "ClassBot fills your Suivi Formateur sheet: the sprint levels (Niveau technique), the briefs and where the debriefs are (Suivi et Validation Classe), and the plans d'action sent. Suivi fil rouge is never touched.")}
       <div id="set-gsheet"><p class="muted">Loading…</p></div>
     </section>
@@ -1908,7 +1952,7 @@ async function viewSettings(arg) {
     </div></div>`;
   const loaded = new Set();
   const showTab = (k) => {
-    $$(".set-nav a").forEach((a) => a.setAttribute("aria-current", String(a.dataset.tab === k)));
+    $$(".set-nav a").forEach((a) => a.setAttribute("aria-current", String(a.dataset.tab === navOf(k))));
     $$(".set-sec").forEach((x) => (x.hidden = x.dataset.sec !== k));
     history.replaceState(null, "", `#/settings/${k}`);
     if (!loaded.has(k)) {
@@ -1916,9 +1960,11 @@ async function viewSettings(arg) {
       if (k === "programme" && typeof programmeSettings === "function") programmeSettings($("#set-programme"));
       if (k === "github" && typeof githubSettings === "function") githubSettings($("#set-github"));
       if (k === "ai") aiSettings($("#set-ai"));
+      if (k === "claude") claudeSettings($("#set-claude"));
       if (k === "library") librarySettings($("#set-library"));
       if (k === "intranet") intranetSettings($("#set-intranet"));
       if (k === "gsheet" && typeof gsheetSettings === "function") gsheetSettings($("#set-gsheet"));
+      if (k === "concepts" && typeof conceptsSettings === "function") conceptsSettings($("#set-concepts"));
       if (k === "vscode" && typeof vscodeSettings === "function") vscodeSettings($("#set-vscode")).catch((e) => { $("#set-vscode").innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; });
     }
   };
@@ -2304,6 +2350,7 @@ async function viewPoints() {
   try {
     S.me = await fetch("/api/me").then((r) => r.json());
     $("#who").innerHTML = S.me.mode === "password" ? `<a href="/logout" style="color:inherit">Sign out</a>` : S.me.email ? `Signed in as ${esc(S.me.email)}` : "";
+    if (S.me.email) $("#who").title = `Signed in as ${S.me.email}`;
     S.guilds = await api("/guilds");
     const sel = $("#guild");
     let saved = null;

@@ -25,7 +25,9 @@ export interface CommentData {
   comps: string[];           // the competencies validated (their names)
   bonus: string[];           // the bonus items done
   improve: string[];         // the requirements not validated, as written (never the criteria)
-  notions: string[];         // from the one-to-one remarks and the oral questions not answered
+  notions: string[];         // what is still to learn (the notions of toLearn, in its order)
+  mastered: string[];        // what they showed they master (assessments, oral questions answered), short
+  toLearn: ToLearn[];        // what is still to learn, from the most important: where it comes from, why, how to work it
   remarks: string;           // the teacher's one-to-one remarks, as written (the AI rewrites them as notions)
   positive: string;          // what went well in the one-to-one, one sentence in « vous » (from ✨ on the remarks)
   oralMissed: string[];      // the notions of the oral questions not answered
@@ -38,6 +40,8 @@ export interface CommentData {
   scope: string[];           // the notions the comment may talk about: the brief's requirements, the assessment's
                              // questions, the teacher's remarks, the oral questions (never anything else)
 }
+/** One thing still to learn: the notion, what was seen (why), how to work it, its sources and its weight (the order). */
+export interface ToLearn { notion: string; why: string; how: string; from: string[]; w: number }
 /** One learner's graded assessment(s) of the brief: what they mastered, what they missed, the grader's comment. */
 export interface AssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
 /** A squad's project beyond the features: interface and UX, planning, README, commits, team work. */
@@ -46,7 +50,7 @@ export interface ProjectFacts { good: string[]; bad: string[]; team: string[] }
 // requirements that show what was done (strengths), and those that say what to do (never the performance criteria)
 const STRONG = ["story", "technique", "livrable", "critere"];
 const TODO = ["story", "technique", "livrable"];
-const MAX = { themes: 4, comps: 4, bonus: 3, improve: 6, notions: 6 };
+const MAX = { themes: 4, comps: 4, bonus: 3, improve: 6, notions: 8 };
 
 const clean = (t: unknown, max = 160) => noVerif(String(t ?? "")).replace(/\s+/g, " ").trim().replace(/[.;:,\s]+$/, "").slice(0, max);
 const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
@@ -99,8 +103,11 @@ export function remarkNotions(text: unknown): string[] {
     .replace(/^(?:doit|dois|devez|devra|devras|faut|il faut|a besoin de|as besoin de)\s+(?:encore\s+|bien\s+|absolument\s+)?(?:revoir|retravailler|reprendre|approfondir|consolider|travailler(?: sur)?|réviser)\s+/i, "")
     .replace(/^(?:ne|n['’])\s*(?:sait|sais|savez|a|as|avez|ma[iî]trise|ma[iî]trises|ma[iî]trisez|comprend|comprends|comprenez|conna[iî]t|connais|connaissez|peut|peux|pouvez|est|es|êtes)\s+(?:pas|plus)\s+(?:bien\s+|encore\s+|vraiment\s+)?(?:expliquer|faire|utiliser|compris|capable d['e]\s*|à l['’]aise avec|clair sur)?\s*/i, "")
     .replace(/^(?:a|as|avez)\s+du mal (?:à|avec)\s+/i, "")
+    .replace(/^(?:pas\s+)?(?:su|pu|réussi à|réussi)\s+/i, "")
     .replace(/^confond(?:s|ez)?\s+(.+?)\s+et\s+(.+)$/i, "la différence entre $1 et $2")
-    .replace(/^(?:à revoir|revoir)\s*:?\s*/i, ""), 140)).filter((x) => x.length > 2).map(low);
+    .replace(/^(?:à revoir|revoir)\s*:?\s*/i, "")
+    // « Planification à revoir », « README incomplet »: the subject only
+    .replace(/\s+(?:est |sont )?(?:encore )?(?:à revoir|à retravailler|à reprendre|à améliorer|à consolider|à approfondir|incompl[eè]te?s?|insuffisante?s?|fragiles?|approximati(?:f|ve)s?)[.!;\s]*$/i, ""), 140)).filter((x) => x.length > 2).map(low);
 }
 
 const compName = (c: string) => low(String((REF_NAMES as any)[String(c).toUpperCase().replace(/N\d$/, "").replace(/^CT/, "T")] || ""));
@@ -152,6 +159,186 @@ export function projectFacts(rec: any, st: any): ProjectFacts {
   return { good: good.slice(0, 6), bad: bad.slice(0, 6), team: team.slice(0, 8) };
 }
 
+// What is still to learn is said by SUBJECT (HTML, CSS, JavaScript, Tailwind, Git, the planning…): one short line each,
+// what to work on in that subject (from every source: the remarks, the Fiche, the oral questions, the assessments and
+// the mises en situation, the live task), then one sentence on how to practise. Never where it was seen.
+type Subject = { name: string; title?: string; rx?: RegExp; essentials?: { t: string; m?: RegExp }[]; practice: string };
+export const SUBJECTS: Subject[] = [
+  { name: "La planification", rx: /plann?if|planning|jira|trello|backlog|kanban|scrum|gestion de projet/i,
+    essentials: [{ t: "découper le brief en user stories puis en tâches courtes" }, { t: "estimer et répartir ces tâches sur les jours disponibles" }, { t: "tenir le tableau à jour chaque jour" }],
+    practice: "Refais la planification de ce brief sur Jira ou Trello et compare-la à ce que tu as réellement fait." },
+  { name: "Tailwind", title: "L’utilisation de Tailwind", rx: /tailwind/i,
+    essentials: [{ t: "les classes utilitaires et les espacements" }, { t: "Flexbox et Grid avec Tailwind", m: /flex|grid/i }, { t: "le responsive avec les préfixes", m: /responsive|media/i }, { t: "les états au survol et au focus" }],
+    practice: "Reproduis une section de ta maquette uniquement avec Tailwind." },
+  { name: "Bootstrap", title: "L’utilisation de Bootstrap", rx: /bootstrap/i,
+    essentials: [{ t: "la grille et ses points de rupture", m: /responsive|grid/i }, { t: "les composants" }, { t: "la personnalisation sans casser le framework" }],
+    practice: "Refais une page de ton projet avec la grille et deux composants." },
+  { name: "Le README", title: "La rédaction du README", rx: /readme|documentation/i,
+    essentials: [{ t: "présenter le projet" }, { t: "expliquer son installation et son lancement" }, { t: "décrire ses fonctionnalités avec des captures" }],
+    practice: "Demande à un camarade de lancer ton projet en suivant uniquement ton README." },
+  { name: "La maquette", rx: /maquette|figma|wireframe|zoning/i,
+    essentials: [{ t: "passer du zoning au wireframe" }, { t: "prévoir le mobile et l’ordinateur", m: /responsive|media/i }, { t: "définir une charte graphique et la suivre dans le code" }],
+    practice: "Refais la maquette d’une page en mobile et en ordinateur, puis compare-la à ton rendu." },
+  { name: "L’accessibilité", rx: /accessib|\baria\b|contraste|lecteur d['’]écran/i,
+    essentials: [{ t: "une hiérarchie de titres correcte" }, { t: "des textes alternatifs utiles", m: /\balt\b/i }, { t: "un contraste suffisant et la navigation au clavier" }],
+    practice: "Passe ta page dans Lighthouse et corrige chaque problème relevé." },
+  { name: "Les outils de développement du navigateur", rx: /devtools|dev tools|outils de d[ée]veloppement|inspecteur|console/i,
+    essentials: [{ t: "l’inspecteur pour lire le HTML et le CSS appliqué" }, { t: "la console pour lire les erreurs et tester du code" }],
+    practice: "À chaque bug, ouvre les DevTools pour en trouver la cause avant de modifier le code." },
+  { name: "HTML", rx: /\bhtml\b|\bbalises?\b/i,
+    practice: "Refais une page de zéro, sans modèle, en vérifiant le rôle de chaque balise." },
+  { name: "CSS", rx: /\bcss\b|\bsass\b|\bscss\b/i,
+    practice: "Reproduis une section de ta maquette sans framework, en vérifiant chaque règle dans l’inspecteur." },
+  { name: "JavaScript", title: "Les bases de JavaScript", rx: /javascript|\bjs\b/i,
+    essentials: [{ t: "les conditions et les boucles", m: /condition|boucle/i }, { t: "les fonctions", m: /fonction/i }, { t: "les tableaux et leurs méthodes", m: /tableau|array/i }, { t: "la manipulation du DOM", m: /DOM|querySelector/i }, { t: "les événements", m: /[ée]v[ée]nement|addEventListener/i }],
+    practice: "Fais chaque jour un petit exercice sur ces points, sans copier de solution, jusqu’à pouvoir les expliquer." },
+  { name: "Git", title: "Le travail avec Git", rx: /\bgit(hub)?\b|commit|branche|versionn|pull request/i,
+    essentials: [{ t: "des commits petits et clairs" }, { t: "une branche par tâche" }, { t: "la fusion par pull request" }],
+    practice: "Fais ta prochaine tâche sur sa propre branche, en commits clairs, puis ouvre une pull request." },
+  { name: "PHP", title: "Les bases de PHP", rx: /\bphp\b|\bpdo\b/i,
+    essentials: [{ t: "la syntaxe de base" }, { t: "les données d’un formulaire et leur validation" }, { t: "PDO et les requêtes préparées", m: /pdo|requ[êe]te/i }],
+    practice: "Refais seul un petit CRUD complet en expliquant chaque ligne." },
+  { name: "Laravel", title: "Les bases de Laravel", rx: /laravel|eloquent|\bblade\b|artisan|migrations?\b|contr[ôo]leurs?\b|\broutes?\b|routing|\$fillable|belongsTo|hasMany|hasOne|\bcompact\(|composer/i,
+    essentials: [{ t: "le chemin route, contrôleur, vue" }, { t: "les migrations et les modèles Eloquent" }, { t: "la validation" }],
+    practice: "Construis seul un petit CRUD avec une relation entre deux modèles." },
+  { name: "SQL", title: "La conception de la base de données", rx: /\bsql\b|merise|\bmcd\b|\bmld\b|base de donn/i,
+    essentials: [{ t: "les entités et leurs relations" }, { t: "les clés primaires et étrangères" }, { t: "les requêtes de base et les jointures", m: /requ[êe]te|select/i }],
+    practice: "Écris toi-même les requêtes de ton projet et vérifie chaque résultat." },
+  { name: "React", title: "Les bases de React", rx: /\breact\b|\bjsx\b|useState|useEffect|\bprops\b|\bhooks?\b/i,
+    essentials: [{ t: "les composants et les props" }, { t: "l’état avec useState" }, { t: "les effets avec useEffect" }, { t: "l’affichage des listes et des conditions" }],
+    practice: "Construis un petit composant de zéro, puis fais-le évoluer en ajoutant un état et un effet." },
+  { name: "Node.js et Express", rx: /\bnode(?:\.?js)?\b|\bexpress\b|middleware|\bnpm\b/i,
+    essentials: [{ t: "créer un serveur et ses routes" }, { t: "les middlewares" }, { t: "la lecture des paramètres et du corps d’une requête" }],
+    practice: "Écris une petite API de zéro avec deux ou trois routes, et teste chacune." },
+  { name: "Les API REST", rx: /\bapi\b|\brest(?:ful)?\b|endpoint|postman|\bjson\b|codes? (?:http|de statut)/i,
+    essentials: [{ t: "les verbes HTTP et leurs usages" }, { t: "les codes de statut" }, { t: "le format JSON des réponses" }],
+    practice: "Teste chaque route de ton API dans Postman et vérifie le code de statut et la réponse." },
+  { name: "Docker", title: "Les bases de Docker", rx: /docker|conteneur|dockerfile|compose\.ya?ml/i,
+    essentials: [{ t: "la différence entre image et conteneur" }, { t: "l’écriture d’un Dockerfile" }, { t: "docker compose pour lancer plusieurs services" }],
+    practice: "Conteneurise toi-même un petit projet de zéro et lance-le avec docker compose." },
+  { name: "La programmation orientée objet", practice: "Modélise un objet de ton projet avec une classe, puis explique ce qu’est une instance." },
+  { name: "La mise en ligne", rx: /d[ée]ploi|h[ée]berg|mise en ligne|netlify|vercel|github pages/i,
+    essentials: [{ t: "préparer et publier le projet" }, { t: "tester la version en ligne sur mobile" }],
+    practice: "Mets ce projet en ligne et vérifie chaque page depuis ton téléphone." },
+  { name: "La présentation de ton travail", rx: /pr[ée]sentation|soutenance|expliquer son code/i,
+    essentials: [{ t: "expliquer le besoin et la solution" }, { t: "expliquer chaque partie de ton code avec tes mots" }],
+    practice: "Présente ton projet à voix haute en cinq minutes, sans lire ton code." },
+  { name: "La qualité du code", rx: /nommage|lisibilit|propret[ée]|clean code|indent|organisation du code|structure du code/i,
+    essentials: [{ t: "des noms clairs" }, { t: "une indentation régulière" }, { t: "des fichiers rangés par rôle" }],
+    practice: "Relis un de tes fichiers et renomme, range et simplifie ce qui n’est pas clair." },
+];
+// the notions of engine.ts's CONCEPTS, by subject, said shortly (without their subject's name)
+// each notion of engine.ts's CONCEPTS said directly: what to learn in it, in a few words
+export const LEARN: Record<string, string> = {
+  "la structure d’une page HTML (doctype, head, body)": "le rôle du doctype, de head et de body, et l’ordre des balises de base",
+  "le lien entre une page HTML et sa feuille CSS (<link>)": "relier une feuille de style avec la balise link et vérifier son chemin",
+  "les formulaires HTML (form, input, label, button)": "relier chaque label à son champ et choisir le bon type de champ et de bouton",
+  "les images et le texte alternatif (img, alt)": "insérer une image et écrire un texte alternatif qui la décrit",
+  "les liens hypertextes (a, href, target)": "créer des liens vers une page, une section ou un autre site, avec le bon chemin",
+  "les listes et les tableaux HTML": "choisir entre une liste et un tableau, puis les structurer correctement",
+  "les balises sémantiques": "choisir la balise qui correspond au rôle de chaque zone de la page",
+  "les sélecteurs CSS (balise, classe, id)": "cibler une balise, une classe ou un id, et savoir quelle règle l’emporte",
+  "le modèle de boîte et le centrage (margin, padding)": "la différence entre margin, padding et border, et le centrage d’un bloc",
+  "la propriété display (block, inline)": "la différence entre un élément block et un élément inline",
+  "Flexbox": "aligner et répartir des éléments sur une ligne ou une colonne",
+  "CSS Grid": "placer des éléments sur une grille de lignes et de colonnes",
+  "le responsive (media queries)": "adapter la mise en page à chaque taille d’écran avec les media queries, en partant du mobile",
+  "la mise en forme du texte et des couleurs en CSS": "régler la taille, la graisse et la couleur du texte en gardant un bon contraste",
+  "le positionnement en CSS": "placer un élément avec position relative, absolute ou fixed",
+  "les transitions et les animations CSS": "animer un changement d’état avec transition et keyframes",
+  "les événements JavaScript (addEventListener)": "réagir à un clic ou à une saisie avec addEventListener",
+  "la manipulation du DOM": "sélectionner un élément, modifier son contenu et ses classes, créer et insérer de nouveaux éléments",
+  "les appels d’API (fetch)": "récupérer des données d’une API avec fetch et les afficher dans la page",
+  "l’asynchrone (promesses, async / await)": "attendre le résultat d’une opération avec async et await, et gérer les erreurs",
+  "les boucles": "parcourir une suite de valeurs avec for et for...of",
+  "les conditions": "écrire des conditions avec if, else et les opérateurs de comparaison",
+  "les tableaux et leurs méthodes": "ajouter, transformer et garder une partie des valeurs d’un tableau avec push, map et filter",
+  "les fonctions": "écrire une fonction avec des paramètres et une valeur de retour",
+  "les variables": "choisir entre let et const et nommer clairement ses données",
+  "le localStorage": "enregistrer et relire des données avec localStorage et JSON",
+  "les requêtes SQL": "écrire les requêtes de base et les jointures",
+  "la programmation orientée objet": "créer une classe avec son constructeur et ses méthodes, puis l’instancier",
+  "Git (commit, branches)": "faire des commits clairs, travailler sur une branche et fusionner par pull request",
+};
+// the notions of the frameworks and tools (not in CONCEPTS), said the same way
+const LEARN_MORE: [RegExp, string][] = [
+  [/relations?|hasMany|belongsTo|hasOne|cl[ée] [ée]trang[èe]re/i, "définir hasMany et belongsTo dans les modèles et placer la clé étrangère du bon côté"],
+  [/migrations?/i, "créer une table avec Schema::create() et comprendre le rôle de up() et down()"],
+  [/fillable|mass assignment/i, "protéger les champs remplis en masse avec $fillable"],
+  [/eager|\bwith\(/i, "charger les relations en une seule requête avec with()"],
+  [/passage de donn|donn[ée]es? (?:à|vers) la vue|compact/i, "envoyer des données du contrôleur à la vue avec view() et compact()"],
+  [/composer.*artisan|artisan.*composer/i, "Composer installe les dépendances, Artisan est la ligne de commande de Laravel"],
+  [/\broutes?\b|routing/i, "écrire une route avec Route::get(), avec un paramètre, puis vers un contrôleur"],
+  [/contr[ôo]leurs?/i, "créer un contrôleur dont chaque méthode traite une route et retourne une vue"],
+  [/\bblade\b/i, "afficher des données et réutiliser un layout avec Blade"],
+  [/eloquent/i, "lire et enregistrer des données avec les modèles Eloquent"],
+  [/useState|\bétat\b/i, "garder et modifier l’état d’un composant avec useState"],
+  [/useEffect/i, "lancer un effet au bon moment avec useEffect"],
+  [/\bprops\b/i, "transmettre des données d’un composant parent à son enfant avec les props"],
+  [/dockerfile|conteneur|docker/i, "écrire un Dockerfile et lancer les services avec docker compose"],
+  [/devtools|inspecteur|console/i, "lire le HTML, le CSS appliqué et les erreurs dans les outils de développement du navigateur"],
+];
+const LV_W: Record<string, number> = { faible: 4.6, moyen: 4.2, bon: 3, excellent: 2 };
+const FILLER = /^(le|la|les|l['’]|du|de|des|d['’]|et|en|à|au|aux|sur|revoir|travail|projet|bien|son|sa|ses|utilisation|ma[iî]trise|notion|notions|bases?)$/i;
+/** A named subject a point is about (Tailwind, the planning, Laravel…): only those the CONCEPTS don't cover. */
+const topicOf = (text: string) => SUBJECTS.find((x) => x.rx && x.essentials && x.rx.test(text) && !["HTML", "CSS"].includes(x.name)) || null;
+// a remark about the code itself (not a feature of the project)
+const CAMEL = /\b[a-z]+[A-Z]\w*\b|\(\)|::|->|\$\w/;
+const TECH = /syntaxe|fonction|méthode|variable|classe|objet|requête|commande|algorithme|logique|framework|biblioth[èe]que|paquet|module|import|export|erreur|debug|\btypes?\b|compil|\btests?\b/i;
+/** A point that only names its subject (« planification à revoir », « revoir Tailwind », « Git »). */
+function vague(fact: string, s: Subject): boolean {
+  const words = fact.replace(/['’]/g, "’ ").split(/\s+/).filter((w) => w && !FILLER.test(w.replace(/’$/, "’")) && !FILLER.test(w));
+  return words.length <= 1 && words.every((w) => !!s.rx && s.rx.test(w));
+}
+/** A concept label said as a title: « les sélecteurs CSS (balise, classe, id) » → « les sélecteurs CSS ». */
+const titleOf = (label: string) => label.replace(/\s*\([^)]*\)/g, "").trim();
+/**
+ * What the learner still has to learn, said directly (never a category: « HTML », « CSS »…), from the most important:
+ * the teacher's remarks, the Fiche niveaux's items not known (the lowest level first), the oral questions not answered,
+ * the notions missed in the assessments and mises en situation, the live task. The same notion from several sources is
+ * one point, and goes up. Each point: what to learn, then in a few words what it is about (its notion, or for a subject
+ * only named — « planification à revoir » — its essentials, without what the learner already showed).
+ */
+export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; text: string; level: string }[]; oral: { q: string; a: string; notion: string }[]; ko: string[]; remarks: string; mastered?: string; task?: string[]; lang?: string }): ToLearn[] {
+  const M = o.mastered || "";
+  type P = { title: string; cs: string[]; topic: Subject | null; vague: boolean; from: string[]; w: number; i: number };
+  const ps: P[] = [];
+  const add = (fact: string, ctx: string, from: string, w: number) => {
+    const raw = clean(fact, 140);
+    if (!raw) return;
+    const isLabel = from === "evaluation" && !!LEARN[raw];
+    const title = isLabel ? titleOf(raw) : titleOf(raw).replace(/^(?:L['’]|(?:Le|La|Les|Un|Une|Des|Du)(?=\s))/, (x) => x.toLowerCase());
+    const topic = topicOf(raw);
+    const cs = conceptsOf(`${raw} ${raw.split(/\s+/).length <= 3 ? ctx : ""}`).filter((c: string) => LEARN[c]);
+    // a point with nothing technical to learn (a feature of the project: « la page grimoire »): not here
+    if (!topic && !cs.length && (from === "tache" || (from === "remarque" && !TECH.test(raw) && !CAMEL.test(raw)))) return;
+    const same = ps.find((p) => p.title.toLowerCase() === title.toLowerCase() || saidIn(title, p.title) || saidIn(p.title, title) ||
+      (!!topic && p.topic === topic && (p.vague || vague(raw, topic))) || (cs.length > 0 && cs[0] === p.cs[0]));
+    if (same) {
+      same.w = Math.max(same.w, w) + 0.5;
+      if (!same.from.includes(from)) same.from.push(from);
+      for (const c of cs) if (!same.cs.includes(c)) same.cs.push(c);
+      // the teacher's words win over a label; a vague mention gets the precise one
+      if (same.vague && !(topic && vague(raw, topic))) { same.title = title; same.vague = false; }
+      return;
+    }
+    ps.push({ title, cs, topic, vague: !!topic && vague(raw, topic), from: [from], w, i: ps.length });
+  };
+  for (const n of o.fromRemarks) add(n, "", "remarque", 5);
+  for (const g of o.gaps) add(g.text, "", "fiche", LV_W[g.level] ?? 2);
+  for (const q of o.oral) { const n = q.notion || q.q; if (n && !saidIn(n, o.remarks)) add(n, `${q.q} ${q.a}`, "oral", 3.8); }
+  o.ko.forEach((k, i) => { if (!saidIn(k, o.remarks)) add(k, "", "evaluation", 3.4 - i * 0.1); });
+  for (const t of o.task || []) add(t, "", "tache", 3.6);
+  return ps.sort((a, b) => b.w - a.w || a.i - b.i).slice(0, 6).map((p) => {
+    const ess = p.topic?.essentials ? p.topic.essentials.filter((e) => !e.m || !e.m.test(M)).map((e) => e.t) : [];
+    const title = p.vague && p.topic ? p.topic.title || p.topic.name : cap(p.title);
+    // what it is about: a subject only named → its essentials; else its notion (said once, if the title doesn't already)
+    const more = LEARN_MORE.find(([rx]) => rx.test(p.title));
+    const about = p.vague && ess.length ? andList(ess) : p.cs.length && !saidIn(LEARN[p.cs[0]], p.title) ? LEARN[p.cs[0]] : more && !saidIn(more[1], p.title) ? more[1] : "";
+    return { notion: title, why: about, how: "", from: p.from, w: p.w };
+  });
+}
+
 /**
  * The sections of the comment, from the teacher's decisions only. `states`: the switches (saved or on the screen);
  * `member`: in a squad, a member's own competencies and note (their one-to-one), when the teacher set them.
@@ -159,7 +346,8 @@ export function projectFacts(rec: any, st: any): ProjectFacts {
 export function commentData(o: { first?: string; group?: string; project: string; rec: any; states?: any; uid?: string | null; member?: { uid?: string; co?: Record<string, boolean>; note?: string; level?: string } | null }): CommentData {
   const rec = o.rec || {};
   const st = reviewStates({ ...rec, final: o.states ?? rec.final });
-  const ex: any[] = (rec.result && rec.result.exigences) || [];
+  // a skipped step (the requirements, or the live check) isn't in the comment
+  const ex: any[] = st.skip.project ? [] : (rec.result && rec.result.exigences) || [];
   const items = ex.map((e, i) => ({ type: String(e.type || ""), texte: String(e.texte || ""), ok: !!st.ex[i] }));
   const stories = items.filter((x) => x.type === "story");
   const okStories = stories.filter((x) => x.ok).length;
@@ -173,18 +361,28 @@ export function commentData(o: { first?: string; group?: string; project: string
   const own = String(o.member?.note || "").trim();
   const R = (!own && rec.remarks) || {};
   const remarks = String(own || R.text || "").trim();
-  const oral: any[] = rec.oral || [];
+  const oral: any[] = st.skip.live ? [] : rec.oral || [];
   const oralMissed = uniq(oral.filter((q, i) => !st.oral[i]).map((q) => clean(q.notion || q.q, 140)));
   const fromRemarks = Array.isArray(R.toReview) && R.positive !== undefined ? R.toReview.map((x: unknown) => low(clean(x, 140))).filter(Boolean) : remarkNotions(remarks);
   // one learner (a squad member, or alone): their assessment says what they mastered; a squad: the project only
   const assess = o.group ? null : assessFacts(rec, o.member?.uid ?? o.uid ?? null);
   const memberOnly = !o.group && !!o.member;
   const mode: CommentData["mode"] = o.group ? "group" : assess ? "assess" : "project";
-  const notions = uniq([...fromRemarks, ...oralMissed.filter((n) => !saidIn(n, remarks)).map(low),
-    ...(assess ? assess.ko.filter((n) => !saidIn(n, remarks)).map(low) : [])]).slice(0, MAX.notions);
+  // the Fiche niveaux's items not known yet (sent by the debrief page with the switches): one learner only
+  const gaps: { code?: string; text: string; level: string }[] = !o.group && !o.member && Array.isArray(rec.level?.gaps) ? rec.level.gaps : [];
+  // what they showed they master (the assessment, the oral questions answered, the remarks' good points): left out of the tips
+  const mastered = [...(assess ? assess.ok : []), ...oral.filter((q, i) => st.oral[i]).map((q) => `${q.notion || ""} ${q.q || ""}`), String(R.positive || ""),
+    ...remarks.split(/(?<=[.!?;])\s+|\n+|,?\s+(?:mais|par contre|cependant|en revanche|toutefois)\s+/i).filter((x) => x && !NEGATIVE.test(x))].join("\n");
+  // the live task (mise en situation in the debrief) not done: the gaps the teacher wrote about it
+  const task = !st.skip.live && st.mes && ["non_valide", "partiel"].includes(st.mes.r) ? remarkNotions(st.mes.note) : [];
+  // the brief's language: the general notions (functions, loops…) are said in it
+  const lang = /\bphp\b|laravel|eloquent|\bblade\b|symfony|\bpdo\b/i.test([o.project, remarks, ...items.map((x) => x.texte), ...oral.map((q) => q.q || ""), ...((rec.assess || []) as any[]).map((a) => a?.title || "")].join("\n")) ? "PHP" : "JavaScript";
+  const toLearn = toLearnOf({ fromRemarks, gaps, ko: assess ? assess.ko : [], remarks, mastered, task, lang,
+    oral: oral.filter((q, i) => !st.oral[i]).map((q) => ({ q: String(q.q || ""), a: String(q.a || ""), notion: String(q.notion || "") })) });
+  const notions = toLearn.map((x) => x.notion);
   // what the comment may talk about: the notions of the brief, of the assessment's questions, of the exchange
   const scope = uniq([
-    ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...fromRemarks].join("\n")),
+    ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...oral.filter((q, i) => !st.oral[i]).map((q) => String(q.a || "")), ...fromRemarks, ...gaps.map((x) => x.text), ...toLearn.map((x) => `${x.why} ${x.how}`)].join("\n")),
     ...((rec.assess || []) as any[]).flatMap((a) => (Array.isArray(a?.scope) ? a.scope : [])),
     ...(assess ? [...assess.ok, ...assess.ko] : []),
   ]);
@@ -200,7 +398,11 @@ export function commentData(o: { first?: string; group?: string; project: string
     comps,
     bonus: memberOnly ? [] : uniq(items.filter((x) => x.type === "bonus" && x.ok).map((x) => low(storyCore(x.texte)))).slice(0, MAX.bonus),
     improve: memberOnly ? [] : uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => clean(x.texte, 400))).slice(0, MAX.improve),
-    notions, remarks, oralMissed, mode, memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null, scope,
+    notions, toLearn, remarks, oralMissed, mode,
+    mastered: o.group ? [] : uniq([...(assess ? assess.ok : []), ...oral.filter((q, i) => st.oral[i]).map((q) => String(q.notion || ""))]
+      .map((x) => clean(x, 80).replace(/\s*\([^)]*\)/g, "").replace(/^(?:L['’]|(?:Le|La|Les|Un|Une|Des|Du)(?=\s))/, (w) => w.toLowerCase())).filter(Boolean)).filter((x, i, a) => !a.slice(0, i).some((y) => saidIn(x, y) || saidIn(y, x)))
+      // never said mastered when it is in what to learn (the same words, or the same notion)
+      .filter((x) => !toLearn.some((t) => saidIn(x, t.notion) || saidIn(t.notion, x) || conceptsOf(x).some((c: string) => conceptsOf(`${t.notion} ${t.why}`).includes(c)))).slice(0, 4), memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null, scope,
     positive: (o.group ? /\b(tu|ton|ta|tes|toi)\b/i : /\b(vous|votre|vos)\b/i).test(String(R.positive || "")) ? "" : clean(R.positive, 300).replace(/([^.!?])$/, "$1.").replace(/^\.$/, ""),
   };
 }
@@ -261,8 +463,8 @@ function openingAssess(d: CommentData): string {
     faible: "Ton travail est encore fragile : plusieurs aspects importants restent à renforcer.", critique: "Ton travail est encore loin de ce qui est attendu dans ce brief." }[lv]);
   const ok = a.ok.slice(0, 3);
   // never which competencies are validated: what they showed they master, in plain words
-  if (ok.length) s.push(`Lors de l’évaluation, tu as montré que tu maîtrises ${andList(ok)}.`);
-  if (d.positive) s.push(`Lors de notre échange, ${low(d.positive)}`);
+  if (ok.length) s.push(`Tu maîtrises déjà ${andList(ok)}.`);
+  if (d.positive) s.push(cap(d.positive));
   if (d.bonus.length) s.push(`Tu as aussi réalisé ${d.bonus.length > 1 ? "des bonus" : "un bonus"}, ce qui est une très bonne initiative.`);
   return s.join(" ");
 }
@@ -296,26 +498,55 @@ function missingPara(d: CommentData): string {
   return s.join(" ");
 }
 function notionsPara(d: CommentData): string {
-  if (!d.notions.length) return "";
-  const one = d.notions.length === 1;
-  // one learner with a graded assessment: their notions come from it too, not only from the exchange
-  if (d.mode === "assess") return `${one ? "Une notion n’est pas encore maîtrisée" : "Certaines notions ne sont pas encore maîtrisées"} : ${andList(d.notions.map(low))}. ` +
-    `Prends le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`;
-  return `${d.positive ? "Pendant l’échange, " : "Lors de notre échange, "}${one ? "une notion n’était pas encore claire" : "certaines notions n’étaient pas encore claires"} : ${andList(d.notions.map(low))}. ` +
-    Y(d, `Prends le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`, `Prenez le temps de ${one ? "la" : "les"} revoir et de ${one ? "la" : "les"} pratiquer sur de petits exemples.`);
+  const L = d.toLearn && d.toLearn.length ? d.toLearn : [];
+  if (!L.length) return "";
+  const lines = L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` : ${x.why}` : ""}.`);
+  return `${L.length > 1 ? Y(d, "Ce que tu dois apprendre en priorité :", "Ce que vous devez apprendre en priorité :") : Y(d, "Ce que tu dois apprendre en priorité :", "Ce que vous devez apprendre en priorité :")}\n${lines.join("\n")}`;
+}
+// a tip is written with « tu »: a squad's comment says « vous »
+const VOUS_OF: Record<string, string> = { réécris: "réécrivez", relie: "reliez", construis: "construisez", ajoute: "ajoutez", crée: "créez", reproduis: "reproduisez", reprends: "reprenez", écris: "écrivez", dessine: "dessinez", compare: "comparez", refais: "refaites", pars: "partez", mets: "mettez", entraîne: "entraînez", récupère: "récupérez", comprends: "comprenez", parcours: "parcourez", manipule: "manipulez", explique: "expliquez", enregistre: "enregistrez", modélise: "modélisez", travaille: "travaillez", teste: "testez", fais: "faites", vérifie: "vérifiez", nomme: "nommez", passe: "passez", observe: "observez", appelle: "appelez", relis: "relisez", utilise: "utilisez", gère: "gérez", convertis: "convertissez", fusionne: "fusionnez", présente: "présentez", demande: "demandez", corrige: "corrigez", renomme: "renommez", range: "rangez", simplifie: "simplifiez", remplace: "remplacez", cherche: "cherchez", garde: "gardez", transforme: "transformez" };
+const W = "A-Za-zÀ-ÿ’'";
+function toVous(t: string): string {
+  return t.replace(new RegExp(`(?<![${W}])(${Object.keys(VOUS_OF).join("|")})(?![${W}])`, "gi"), (w) => {
+    const v = VOUS_OF[w.toLowerCase()];
+    return w.charAt(0) === w.charAt(0).toUpperCase() ? cap(v) : v;
+  }).replace(/-toi\b/g, "-vous").replace(/(?<![A-Za-zÀ-ÿ])t[’']/g, "vous ").replace(/(?<![A-Za-zÀ-ÿ])tes(?![A-Za-zÀ-ÿ])/g, "vos").replace(/(?<![A-Za-zÀ-ÿ])t(?:on|a)(?![A-Za-zÀ-ÿ])/g, "votre").replace(/(?<![A-Za-zÀ-ÿ])tu(?![A-Za-zÀ-ÿ])/g, "vous");
 }
 function closingOf(d: CommentData): string {
-  const lv = levelOf(d), clean = !d.improve.length && !d.notions.length, who = !d.group && d.first ? `${d.first}, ` : "";
+  const lv = levelOf(d), clean = (!d.group || !d.improve.length) && !d.notions.length, who = !d.group && d.first ? `${d.first}, ` : "";
   if (lv === "excellent") return clean ? Y(d, "Continue comme ça.", "Continuez comme ça.") : Y(d, "Dans l’ensemble, c’est un excellent travail. Consolide ces quelques points et continue sur cette lancée.", "Dans l’ensemble, c’est un excellent travail. Consolidez ces quelques points et continuez sur cette lancée.");
-  if (lv === "bon") return clean ? Y(d, "C’est un bon travail, continue sur cette lancée.", "C’est un bon travail, continuez sur cette lancée.") : Y(d, "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques points, et tu atteindras rapidement un niveau encore plus solide.", "Dans l’ensemble, c’est un bon travail. Continuez sur cette lancée, consolidez ces quelques points, et vous atteindrez rapidement un niveau encore plus solide.");
+  if (lv === "bon") return clean ? Y(d, "C’est un bon travail, continue sur cette lancée.", "C’est un bon travail, continuez sur cette lancée.") : Y(d, "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques points, et tu vas encore gagner en solidité.", "Dans l’ensemble, c’est un bon travail. Continuez sur cette lancée, consolidez ces quelques points, et vous allez encore gagner en solidité.");
   if (lv === "moyen") return Y(d, "C’est un travail correct. En reprenant ces points, tu vas rapidement gagner en solidité.", "C’est un travail correct. En reprenant ces points, vous allez rapidement gagner en solidité.");
+  if ((lv === "faible" || lv === "critique") && methodPara(d)) return cap(`${who}${Y(d, "en reprenant ces bases sérieusement, tu peux rattraper ton retard rapidement.", "en reprenant ces bases sérieusement, vous pouvez rattraper votre retard rapidement.")}`);
   if (lv === "faible") return cap(`${who}${Y(d, "il faut maintenant consolider ton socle. Avec un travail régulier et ciblé sur ces points, tu vas gagner en confiance et en qualité.", "il faut maintenant consolider votre socle. Avec un travail régulier et ciblé sur ces points, vous allez gagner en confiance et en qualité.")}`);
   return cap(`${who}${Y(d, "il faut reprendre les bases avant d’aller plus loin. Prends le temps de travailler ces points régulièrement : c’est comme ça que tu vas réellement progresser.", "il faut reprendre les bases avant d’aller plus loin. Prenez le temps de travailler ces points régulièrement : c’est comme ça que vous allez réellement progresser.")}`);
 }
 const greetingOf = (d: CommentData) => (d.group && d.team ? `${d.team},` : d.first && !d.group ? `${d.first},` : "Bonjour,");
 /** The comment as a template: always available (and the fallback when the AI can't write it). */
 export function commentText(d: CommentData): string {
-  return [greetingOf(d), d.mode === "assess" ? openingAssess(d) : opening(d), d.mode === "group" ? projectPara(d) : "", missingPara(d), notionsPara(d), closingOf(d)].filter(Boolean).join("\n\n");
+  if (d.group) return [greetingOf(d), opening(d), projectPara(d), missingPara(d), notionsPara(d), closingOf(d)].filter(Boolean).join("\n\n");
+  // one learner: what they can and can't do technically (never the brief's deliverables or features)
+  return [greetingOf(d), learnerOpening(d), notionsPara(d), methodPara(d), closingOf(d)].filter(Boolean).join("\n\n");
+}
+const VERDICT: Record<string, string> = {
+  excellent: "Excellent travail : tu as une très bonne compréhension des notions de ce brief et tu sais les expliquer.",
+  bon: "Ton travail est globalement bien réalisé : l’essentiel est maîtrisé, il reste quelques points à préciser.",
+  moyen: "Ton travail est correct dans l’ensemble : les bases sont là, mais certains points ne sont pas encore assez solides.",
+  faible: "Ton travail est encore fragile : tu connais une partie des notions, mais plusieurs bases ne sont pas encore solides.",
+  critique: "Ton travail est encore loin de ce qui est attendu dans ce brief : les bases ne sont pas encore en place.",
+};
+/** One learner: an honest verdict, then what they master (the assessments, the oral questions, the one-to-one). */
+function learnerOpening(d: CommentData): string {
+  const s = [VERDICT[levelOf(d)] || VERDICT.moyen];
+  if (d.mastered.length) s.push(`${["excellent", "bon"].includes(levelOf(d)) ? "Tu maîtrises notamment" : "Tu maîtrises déjà"} ${andList(d.mastered)}.`);
+  if (d.positive) s.push(cap(d.positive));
+  return s.join(" ");
+}
+/** In difficulty with several points: how to work (practice, the documentation), like the teacher says it. */
+function methodPara(d: CommentData): string {
+  const lv = levelOf(d);
+  if (!["faible", "critique"].includes(lv) || d.toLearn.length < 2) return "";
+  return "Le plus important maintenant, c’est la pratique : écris le code toi-même chaque jour, sans copier, refais les mêmes exercices jusqu’à ne plus hésiter, et appuie-toi sur la documentation officielle.";
 }
 /** The debrief's comment from the switches: one student, or a squad (« vous » for everyone). */
 export function buildComment(firstName: string, rec: any, states?: any): string {
@@ -333,31 +564,33 @@ export const wordCount = (t: string) => (String(t).match(/[A-Za-zÀ-ÿ0-9’'-]+
 
 // ------------------------------------------------------------------ the AI: writes it like the teacher, from the debrief only
 export const AI_COMMENT_SYSTEM = [
-  "Tu aides un formateur en développement web à rédiger le commentaire de débriefing d’un projet, envoyé à l’apprenant.",
-  "Tu reçois ce que le formateur a DÉCIDÉ pendant le débriefing. Écris le commentaire comme LUI l’écrirait : un texte humain, suivi, en paragraphes qui s’enchaînent.",
-  "Son style (exemple d’un de ses commentaires, à imiter pour le ton et la construction, jamais pour le contenu) :",
+  "Tu aides un formateur en développement web à rédiger le commentaire de débriefing d’un brief, envoyé à l’apprenant.",
+  "Tu reçois ce que le formateur a DÉCIDÉ pendant le débriefing. Écris le commentaire comme LUI l’écrirait : un message humain, direct, clair et COURT (250 mots au plus), qui aide l’apprenant à progresser.",
+  "Son style (exemple d’un de ses commentaires INDIVIDUELS, à imiter pour le ton et la construction, jamais pour le contenu) :",
   "<<<",
-  "Ton travail est globalement très bien réalisé. La planification est claire, cohérente et bien structurée, ce qui montre que tu sais organiser ton travail et avancer de manière méthodique.",
+  "Ton travail montre que tu connais la surface de Laravel, mais pas encore sa structure. Tu sais ce que sont Blade et Artisan, tu écris des routes simples et tu passes des variables à une vue avec compact().",
   "",
-  "Tu montres une bonne maîtrise de ton projet, autant sur le plan fonctionnel que technique. Les seuls points à revoir concernent quelques notions spécifiques en PHP, notamment le type de $pdo ainsi que les types de retour de $stmt->execute() et $stmt->fetch(). Ce sont des détails importants à bien comprendre pour être totalement à l’aise avec PDO.",
+  "Ce que tu dois apprendre en priorité :",
+  "1. Les relations Eloquent : le rôle de $fillable, l’eager loading avec with() et le sens de hasMany et belongsTo.",
+  "2. Les migrations : la structure de Schema::create() et le rôle de up() et down().",
   "",
-  "Dans l’ensemble, c’est un bon travail. Continue sur cette lancée, consolide ces quelques notions techniques, et tu atteindras rapidement un niveau encore plus professionnel.",
+  "Le plus important maintenant, c’est la pratique : écris le code toi-même chaque jour, sans copier, et appuie-toi sur la documentation officielle.",
+  "",
+  "En reprenant ces bases sérieusement, tu peux rattraper ton retard en quelques semaines.",
   ">>>",
   "Règles strictes :",
   "- Tutoiement (« tu », « ton », « tes »), sauf si le commentaire est pour toute une équipe : alors « vous ».",
-  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces, pas de mise en forme (**, #, `), pas d’emoji.",
-  "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → travail insuffisant. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
-  "- Ce qui va bien dépend du TYPE DE COMMENTAIRE donné : INDIVIDUEL → UNIQUEMENT ce qu’il a maîtrisé à l’évaluation (notions maîtrisées, commentaire du correcteur), jamais les fonctionnalités du projet ; ÉQUIPE → le projet (fonctionnalités, interface et expérience utilisateur, planification, README, commits et travail en équipe), jamais l’évaluation ; sans type → les points du brief validés.",
-  "- Regroupe ce qui va bien en quelques thèmes, sans énumérer un par un. Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel, ni « tu as validé la compétence… ») : parle de ce qu’il sait faire, concrètement.",
-  "- INDIVIDUEL sans notion maîtrisée à l’évaluation : ce qui va bien vient du commentaire du correcteur ou de l’échange ; s’il n’y a rien, n’invente pas de réussite.",
-  "- ÉQUIPE : dis aussi ce qui est à améliorer dans le projet (interface, planification, README, commits, répartition du travail) quand c’est donné.",
-  "- Bonus : s’il y en a, dis simplement qu’il a réalisé des bonus et que c’est une bonne initiative, SANS les lister. S’il n’y en a pas, ne parle pas de bonus.",
-  "- Points non validés : dis naturellement ce qui manque encore (« il manque encore… »), dans une phrase, sans recopier la grille et sans « Compléter le point du brief ».",
-  "- Notions à revoir : c’est le cœur du commentaire quand il y en a. Appuie-toi sur les REMARQUES DU FORMATEUR et les questions orales non réussies : explique précisément ce qui n’est pas compris ou ce qui est confondu, et pourquoi c’est important, comme dans l’exemple. N’ajoute aucune notion qui n’y est pas.",
-  "- Si l’apprenant est en difficulté (niveau faible ou critique) et qu’il y a plusieurs notions à revoir, termine par un paragraphe « pour progresser » avec des conseils concrets UNIQUEMENT sur ces notions-là.",
-  "- Si tout est validé et qu’il n’y a rien à revoir, n’invente rien : quelques phrases suffisent pour dire que c’est un excellent ou un bon travail.",
-  "- Dernier paragraphe : une conclusion encourageante qui correspond au niveau. Tu peux y écrire {prénom} pour t’adresser à lui par son prénom (il sera remplacé).",
-  "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun niveau chiffré, aucun code de compétence.",
+  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces (seule la liste numérotée des points à travailler est permise), pas de mise en forme (**, #, `), pas d’emoji.",
+  "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné, en une ou deux phrases : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → les bases ne sont pas encore en place. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
+  "- INDIVIDUEL : uniquement ce qu’il SAIT FAIRE et ne sait PAS ENCORE FAIRE techniquement, et ce que le formateur a noté en face à face. JAMAIS les livrables, les fonctionnalités, les pages ou les exigences du brief, ni les bonus. Dans le premier paragraphe, après l’avis, ce qu’il maîtrise : UNIQUEMENT ce qui est dans « CE QU’IL MAÎTRISE » (et ce qui va bien selon l’échange), en une phrase ; si c’est vide, ne dis RIEN de ce qu’il maîtrise. Le commentaire du correcteur sert seulement à préciser ce qu’il doit apprendre.",
+  "- ÉQUIPE : parle du PROJET (fonctionnalités, interface, planification, README, commits, travail en équipe) : ce qui est réussi, ce qui manque encore (« il manque encore… », sans recopier la grille), ce qui est à améliorer. Bonus : s’il y en a, dis seulement qu’ils en ont réalisé, sans les lister ; sinon n’en parle pas.",
+  "- Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel).",
+  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Écris « Ce que tu dois apprendre en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner, et sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque point dit DIRECTEMENT ce qu’il doit apprendre (jamais une catégorie comme « HTML : », « CSS : », « JavaScript : » en tête de ligne), puis en quelques mots en quoi ça consiste (avec les mots du formateur et du correcteur quand ils sont précis) : une phrase, 30 mots au plus. Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options entre parenthèses.",
+  "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
+  "- Si l’apprenant est en difficulté (faible ou critique) avec plusieurs points, un court paragraphe sur la méthode : pratiquer chaque jour, écrire le code soi-même sans copier, s’appuyer sur la documentation officielle.",
+  "- Si tout est maîtrisé et qu’il n’y a rien à travailler, n’invente rien : deux ou trois phrases suffisent.",
+  "- Dernier paragraphe : une conclusion encourageante et lucide, en une ou deux phrases. Tu peux y écrire {prénom} pour t’adresser à lui par son prénom (il sera remplacé).",
+  "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun code de compétence. Ne parle JAMAIS du niveau de l’apprenant (ni « niveau », ni Faible, Moyen, Bon, Critique…), ni de la fiche des niveaux, ni d’aucun outil ou document interne de la formation.",
   'Réponds UNIQUEMENT avec ce JSON : {"commentaire":"le texte, paragraphes séparés par une ligne vide"}',
 ].join("\n");
 /** The decisions for the AI (no name: the greeting is ours, the AI may write {prénom}). */
@@ -367,19 +600,16 @@ export function aiCommentPrompt(d: CommentData): string {
   const remarks = `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`;
   const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`,
     `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`];
-  if (d.mode === "assess") {
-    const a = d.assess!;
+  if (!d.group) {
+    const a = d.assess;
     return [
       ...head,
-      `TYPE DE COMMENTAIRE : INDIVIDUEL. Ce qui va bien vient UNIQUEMENT de son ÉVALUATION (faite en classe, sans aide) : ce qu’il a maîtrisé. ${d.memberOnly ? "Les fonctionnalités du projet de groupe sont dans le commentaire de l’équipe : n’en parle pas." : "Ne cite pas les fonctionnalités du projet comme des réussites."}`,
-      `SCORE À L’ÉVALUATION : ${a.score != null ? `${a.score} %` : "(non noté)"}`,
-      `CE QU’IL A MAÎTRISÉ À L’ÉVALUATION :\n${list(a.ok)}`,
-      `COMMENTAIRE DU CORRECTEUR DE L’ÉVALUATION :\n${a.summary ? `<<<\n${a.summary}\n>>>` : "(aucun)"}`,
+      "TYPE DE COMMENTAIRE : INDIVIDUEL, TECHNIQUE. Parle uniquement de ce qu’il sait faire et ne sait pas encore faire techniquement, et de ce que le formateur a noté. Jamais les livrables, les fonctionnalités, les exigences du brief ni les bonus.",
+      `CE QU’IL MAÎTRISE :\n${list(d.mastered)}`,
+      `COMMENTAIRE DU CORRECTEUR DE SON ÉVALUATION (pour préciser ce qu’il sait et ne sait pas faire ; jamais de score) :\n${a && a.summary ? `<<<\n${a.summary}\n>>>` : "(aucun)"}`,
       `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
-      `BONUS RÉALISÉS : ${d.bonus.length ? `oui (${d.bonus.length})` : "aucun"}`,
-      `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
       remarks,
-      `NOTIONS À REVOIR :\n${list(d.notions)}`,
+      learnList(d),
     ].join("\n\n");
   }
   if (d.mode === "group") {
@@ -397,7 +627,7 @@ export function aiCommentPrompt(d: CommentData): string {
       `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
       `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
       remarks,
-      `NOTIONS À REVOIR :\n${list(d.notions)}`,
+      learnList(d),
     ].join("\n\n");
   }
   return [
@@ -409,8 +639,14 @@ export function aiCommentPrompt(d: CommentData): string {
     `POINTS DU BRIEF NON VALIDÉS :\n${list(missing)}`,
     `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
     remarks,
-    `NOTIONS À REVOIR :\n${list(d.notions)}`,
+    learnList(d),
   ].join("\n\n");
+}
+/** What is still to learn, for the AI: in its order, with what was seen and how to work it. */
+function learnList(d: CommentData): string {
+  const L = d.toLearn || [];
+  return `CE QU’IL DOIT ENCORE APPRENDRE (déjà classé du plus important au moins important ; garde cet ordre et tous les points) :\n${L.length
+    ? L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` — en quoi ça consiste : ${x.why}` : ""}`).join("\n") : "(rien)"}`;
 }
 /** The notions a comment talks about that are neither in the brief, nor in the assessment, nor in the exchange. */
 export function outsideNotions(d: Pick<CommentData, "scope">, body: string): string[] {
@@ -428,10 +664,17 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   body = who ? body.replace(/\{pr[ée]nom\}/gi, who) : body.replace(/\{pr[ée]nom\}\s*,\s*(\S)/gi, (_, c) => c.toUpperCase()).replace(/\s*\{pr[ée]nom\}/gi, "");
   if (MARKUP.test(body) || /^(bonjour|cordialement)/im.test(body) || /\{|\}/.test(body)) return null;
   if (d.group ? TU.test(body) : VOUS.test(body)) return null;
-  // no section titles, no bullet lists
-  if (body.split("\n").some((l) => /^\s*[–—•*-]\s/.test(l) || (l.trim() && l.trim().length < 45 && !/[.:?]$/.test(l.trim())))) return null;
+  // no section titles, no bullet lists: only the numbered list of what is still to learn, every point of it
+  const lines = body.split("\n"), numbered = lines.filter((l) => /^\s*\d+[.)]\s/.test(l));
+  if (lines.some((l) => /^\s*[–—•*-]\s/.test(l) || (l.trim() && !/^\s*\d+[.)]\s/.test(l) && l.trim().length < 45 && !/[.:?]$/.test(l.trim())))) return null;
+  if (!d.group && numbered.some((l) => /^\s*\d+[.)]\s+(?:HTML|CSS|JavaScript|JS|PHP|Tailwind|Git|SQL|Laravel|React)\s*:/i.test(l))) return null;
+  if (numbered.some((l) => l.trim().length < 25 || wordCount(l) > 60 || /\b[a-g]\)\s|à l['’]oral|la question «|lors de l['’]évaluation|pendant (?:notre|l['’])échange|face à face|mise en situation/i.test(l))) return null;
+  const nL = (d.toLearn || []).length;
+  if (nL >= 2 && numbered.length < nL - 1) return null;
   const lv = levelOf(d);
   if (lv !== "excellent" && /excellent/i.test(body)) return null;
+  // never the learner's level, nor the Fiche niveaux or any internal tool
+  if (/\bniveaux?\b|\bfiche\b|\bcritique\b|\b(?:faible|moyen)\s*[,.]|classbot/i.test(body)) return null;
   if ((lv === "faible" || lv === "critique") && /\b(bon|très bon|beau) travail\b/i.test(body)) return null;
   if (!d.bonus.length && /bonus/i.test(body)) return null;
   // never which competencies were validated
@@ -439,6 +682,8 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   // never a notion that is neither in the brief nor in the assessment (nor in the teacher's remarks)
   if (outsideNotions(d, body).length) return null;
   const words = wordCount(body), nothing = !d.improve.length && !d.notions.length;
-  if (words < 15 || words > (nothing ? 140 : 520)) return null;
+  if (words < 15 || words > (nothing ? 120 : 170 + 45 * nL)) return null;
+  // one learner: never the brief's deliverables nor the bonus
+  if (!d.group && /\bbonus\b|il manque encore|livrables?\b|fonctionnalités demandées/i.test(body)) return null;
   return `${greetingOf(d)}\n\n${body}`;
 }

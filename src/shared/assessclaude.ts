@@ -13,6 +13,7 @@ import { type AssessRow, type Grade, type Question, type TakerRow, applyResults,
 import { SKILL_KEYS } from "./skills.ts";
 import type { Program, ProgramWeek } from "./program.ts";
 import { compLabel, parseComp, techOfWeek } from "./program.ts";
+import { perQuestionFor, questionsFor } from "./concepts.ts";
 
 export const QUIZ_FORMAT = "classbot-assessment@1";
 export const EXPORT_FORMAT = "classbot-grading-export@1";
@@ -38,12 +39,12 @@ export function readJson(raw: unknown): { data: any; error?: string } {
 
 // ================================================================== A. a quiz written by Claude
 export interface QuizPreview { title: string; minutes: number; n: number; code: number; explain: number; mcq: number; points: number; comps: string[]; prompts: string[] }
-export interface QuizImport { title: string; brief_id: number | null; settings: { minutes: number; lang: "fr" | "en"; codeLang: string; passAt: number; points: number }; questions: any[] }
+export interface QuizImport { title: string; brief_id: number | null; settings: { minutes: number; lang: "fr" | "en"; codeLang: string; passAt: number; points: number; concepts?: string[] }; questions: any[] }
 /**
  * A classbot-assessment@1 file, checked strictly (every problem, with its question number), and mapped to the app's
  * model (what saveAssessment takes). `known`: the competency codes of the class's programme ("C3", "T2"…).
  */
-export function checkQuiz(raw: unknown, o: { known?: Set<string> } = {}): { problems: Problem[]; quiz?: QuizImport; preview?: QuizPreview } {
+export function checkQuiz(raw: unknown, o: { known?: Set<string>; concepts?: { known: Set<string>; scope: string[] } } = {}): { problems: Problem[]; quiz?: QuizImport; preview?: QuizPreview } {
   const { data, error } = readJson(raw);
   if (error) return { problems: [{ where: "file", msg: error }] };
   const p: Problem[] = [];
@@ -94,6 +95,16 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string> } = {}): { prob
     const notion = text(q.notion);
     if (notion.length > 80) bad(`"notion": 80 characters at most.`);
     const m: any = { type, prompt, points: pts, comps: codes, skills: skills.filter((s: string) => SKILL_KEYS.includes(s)).slice(0, 3) };
+    // the items of the Fiche niveaux it checks ("S2.M3")
+    if (q.concepts != null || o.concepts) {
+      const cs = (Array.isArray(q.concepts) ? q.concepts : []).map((c: unknown) => String(c).trim().toUpperCase());
+      if (q.concepts != null && !Array.isArray(q.concepts)) bad(`"concepts" must be a list (e.g. ["S2.M3"]).`);
+      const badC = o.concepts ? cs.filter((c: string) => !o.concepts!.known.has(c)) : cs.filter((c: string) => !/^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c));
+      if (badC.length) bad(`concept(s) ${badC.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.M3).`);
+      // [] written on purpose: the question checks no item of the Fiche (JavaScript basics…); left out: said
+      else if (o.concepts?.scope.length && q.concepts == null) bad(`"concepts": the items of the Fiche niveaux this question checks (at least one of ${o.concepts.scope.join(", ")}).`);
+      if (cs.length && !badC.length) m.concepts = [...new Set(cs)];
+    }
     if (text(q.code)) { if (text(q.code).length > 4000) bad(`"code": 4000 characters at most.`); m.code = text(q.code); }
     if (type === "mcq") {
       const choices = (Array.isArray(q.choices) ? q.choices : []).map(text);
@@ -125,12 +136,20 @@ export function checkQuiz(raw: unknown, o: { known?: Set<string> } = {}): { prob
     }
     out.push(m);
   });
+  // the Fiche niveaux: each capacity of the scope touched by at least 5 questions (the quiz's own list, else the one asked)
+  const declared = Array.isArray(data.concepts) ? data.concepts.map((c: unknown) => String(c).trim().toUpperCase()) : null;
+  if (declared && o.concepts) { const badC = declared.filter((c: string) => !o.concepts!.known.has(c)); if (badC.length) top(`"concepts": ${badC.join(", ")} unknown (codes of the Fiche niveaux, like S2.M3).`); }
+  const scope: string[] = declared?.length ? declared : o.concepts?.scope ?? [];
+  if (scope.length && !p.length) for (const c of scope) {
+    const k = out.filter((q) => (q.concepts ?? []).includes(c)).length;
+    if (k < 5) top(`item ${c} of the Fiche niveaux: checked by ${k} question(s), at least 5 are required.`);
+  }
   if (p.length) return { problems: p };
   const n = (t: string) => out.filter((q) => q.type === t).length;
   const codeLang = data.codeLang ? String(data.codeLang) : out.find((q) => q.type === "code")?.lang || "javascript";
   return {
     problems: [],
-    quiz: { title, brief_id: briefId, settings: { minutes, lang: lang as "fr" | "en", codeLang, passAt, points }, questions: out },
+    quiz: { title, brief_id: briefId, settings: { minutes, lang: lang as "fr" | "en", codeLang, passAt, points, ...(scope.length ? { concepts: scope } : {}) }, questions: out },
     preview: { title, minutes, n: out.length, code: n("code"), explain: n("explain"), mcq: n("mcq"), points: out.reduce((s, q) => s + q.points, 0), comps: [...comps].sort(), prompts: out.slice(0, 8).map((q) => q.prompt.split("\n")[0].slice(0, 120)) },
   };
 }
@@ -148,7 +167,7 @@ export const QUIZ_EXAMPLE = {
 };
 
 /** The prompt to paste in Claude to write a quiz on a programme week (and nothing that comes after it). */
-export function creationPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek | null; next: ProgramWeek | null; techs: string[] }): string {
+export function creationPrompt(o: { program: Pick<Program, "name" | "referential" | "sprints">; week: ProgramWeek | null; next: ProgramWeek | null; techs: string[]; concepts?: { block: string; scope: string[] } }): string {
   const w = o.week;
   const names = new Map(o.program.referential.map((c) => [c.code, c.name]));
   const compLine = (s: string) => { const pc = parseComp(s); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""}${names.get(pc.code) ? ` (${names.get(pc.code)})` : ""}` : s; };
@@ -181,11 +200,46 @@ export function creationPrompt(o: { program: Pick<Program, "name" | "referential
     "- \"competencies\" : une ou deux compétences du référentiel, au format C3N1 ou CT2N1 (le niveau 1 = débutant).",
     `- "skills" (facultatif, 3 au plus) parmi : ${SKILL_KEYS.join(", ")}.`,
     "- \"notion\" : la notion évaluée, en 2 à 5 mots.",
-    "- 8 à 15 questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; \"minutes\" : une durée réaliste pour des débutants.",
+    o.concepts?.scope.length ? `- "concepts" (OBLIGATOIRE sur chaque question) : les codes des éléments de la Fiche niveaux qu'elle vérifie (voir ci-dessous) ; et "concepts" en haut du fichier : la liste des éléments couverts (${o.concepts.scope.join(", ")}).` : "",
+    o.concepts?.scope.length ? `- Assez de questions pour que CHAQUE élément soit vérifié par au moins 5 questions (une question peut en vérifier jusqu'à ${perQuestionFor(o.concepts.scope.length)} quand ils vont ensemble) : au moins ${questionsFor(o.concepts.scope.length)} questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; "minutes" : une durée réaliste pour des débutants.`
+      : "- 8 à 15 questions, environ 40 % de code, 20 % d’explication et 40 % de QCM ; \"minutes\" : une durée réaliste pour des débutants.",
     "- Réponds UNIQUEMENT avec le JSON, sans texte avant ni après.",
+    o.concepts?.block ? `\n${o.concepts.block}` : "",
     "",
-    `FORMAT (exemple à suivre exactement, "format" compris) :`,
+    `FORMAT (exemple à suivre exactement, "format" compris${o.concepts?.scope.length ? ', avec "concepts" en plus en haut et sur chaque question' : ""}) :`,
     JSON.stringify(QUIZ_EXAMPLE, null, 2),
+  ].join("\n");
+}
+
+/**
+ * An existing assessment, for Claude to bring up to the Fiche niveaux: the same questions as a classbot-assessment@1
+ * file; Claude tags each one with the capacities it touches and adds questions until each capacity has 5.
+ */
+export function conceptsAuditPrompt(a: Pick<AssessRow, "title" | "brief_id">, qs: Question[], st: { minutes: number; lang: string; codeLang: string; passAt: number; points: number }, block: string, scope: string[],
+  o: { others?: string; locked?: boolean } = {}): string {
+  const file = {
+    format: QUIZ_FORMAT, title: a.title, minutes: st.minutes || 45, lang: st.lang, codeLang: st.codeLang, passAt: st.passAt, points: st.points, brief_id: a.brief_id ?? null, concepts: scope,
+    questions: qs.map((q) => ({ type: q.type, prompt: q.prompt, ...(q.code ? { code: q.code } : {}), ...(q.type === "code" ? { lang: q.lang, ...(q.starter ? { starter: q.starter } : {}) } : {}),
+      ...(q.type === "mcq" ? { choices: q.choices, correct: (q.answer ?? [0])[0] } : { expected: q.expected ?? "" }), points: q.points,
+      competencies: (q.comps ?? []).map((c) => `${compLabel(c.code)}N${c.level}`), skills: q.skills, concepts: q.concepts ?? [] })),
+  };
+  return [
+    "Tu es formateur en développement web. Voici une évaluation existante (format classbot-assessment@1). Mets-la en conformité avec la Fiche niveaux du sprint :",
+    "",
+    block,
+    o.others ? `\nLES AUTRES ÉLÉMENTS DE LA FICHE (ce sprint et les précédents) : utilise-les aussi quand une question les vérifie mieux que ceux du dessus (une révision du sprint d'avant compte pour ce sprint-là) :\n${o.others}` : "",
+    "",
+    "CE QUE TU FAIS",
+    `- Pour CHAQUE question existante : mets dans "concepts" les codes des éléments de la Fiche qu'elle vérifie (1 à 3 ; relis la question et la réponse attendue ; les QCM et les Vrai/Faux comptent aussi). Uniquement des codes listés${o.others ? " (au-dessus ou dans les autres éléments)" : ""}. Ne change pas la question si elle est bonne.`,
+    o.locked
+      ? `- Les apprenants l'ont DÉJÀ passée : n'ajoute AUCUNE question et ne change aucun énoncé (seuls les "concepts" seront repris). En haut du fichier, "concepts" = la liste des éléments vérifiés par AU MOINS 5 questions après ton travail.`
+      : `- Puis compte, pour chaque élément (${scope.join(", ")}), combien de questions le vérifient. Pour chaque élément en dessous de 5, AJOUTE des questions nouvelles (même style, même niveau, mêmes technologies, une seule bonne réponse pour un QCM) jusqu'à 5 au moins.`,
+    `- Garde "format", "title", "minutes" (augmente-le si tu ajoutes beaucoup de questions), "lang", "codeLang", "passAt", "points", "brief_id" et "concepts" (en haut) ; chaque question garde ses "competencies" et ses "skills".`,
+    `- Les QCM : "correct" = l'index de la seule bonne réponse. Les questions "code" et "explain" : "expected" (et "grading" si utile).`,
+    "- Réponds UNIQUEMENT avec le JSON complet, sans texte avant ni après.",
+    "",
+    "L'ÉVALUATION :",
+    JSON.stringify(file, null, 2),
   ].join("\n");
 }
 

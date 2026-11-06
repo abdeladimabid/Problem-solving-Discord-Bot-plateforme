@@ -1,6 +1,7 @@
 // Dashboard API for the learning part: programmes (planning + competencies), briefs (generator, editor, hand-ins,
 // debriefs), GitHub (settings, activity, import from GitHub Watcher) and assessments.
 // Returns null when the path isn't one of ours (the main API goes on).
+import { LEVEL_LABEL, askedConcepts, cleanConcepts, conceptsPrompt, coverage, getConcepts, knownConcepts, suggestScope } from "../shared/concepts.ts";
 import { netFlags } from "../shared/identity.ts";
 import type { Ctx, Env, GuildRow, PlayerRow } from "../shared/types.ts";
 import { libAssessment, syncLibrary } from "../shared/library.ts";
@@ -11,7 +12,7 @@ import { BUILTIN, TECHS, compLabel, compName, parseComp, programList, programOf,
 import type { Program } from "../shared/program.ts";
 import { BriefError, SECTIONS, brainstorm, briefChecks, briefFromText, cleanBrief, deleteBrief, generateBrief, getBrief, listBriefs, rewriteSection, saveBrief, simplonFields, simplonText } from "../shared/briefs.ts";
 import type { Section } from "../shared/briefs.ts";
-import { DebriefError, analyze, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
+import { DebriefError, analyze, decideFicheCode, saveRemarksText, checkAi, saveRemarks, writeComment, makeMemberLevel, setMemberLevel, briefAssessments, studentRepos, cleanSquads, delOral, getReview, putReview, gridToText, loadBriefCtx, makeChallenge, makeGrid, makeOral, makeReviewLevel, parseGrid, progressView, saveCommentText, saveMembers, saveStates, writeMemberComment, setReviewLevel, squadOf, statesOf } from "../shared/review/debrief.ts";
 import { CHECK_IDS, checkLabel } from "../shared/review/engine.ts";
 import { memberLevels } from "../shared/review/members.ts";
 import { activityOf, backfillRepos, briefChannel, ensureGithubChannels, ghAppOf, githubCanRead, githubCfg, githubReady, githubUrls, parseRepo, pushStatus, saveGhApp, saveGithubCfg, sendDaily, sendWeekly, testGithubChannels } from "../shared/github.ts";
@@ -24,12 +25,12 @@ import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComm
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { aiLines, makeProbes, memberInsights, scanLinks } from "../shared/review/insights.ts";
-import { AssessError, generateQuestions, gradeTaker, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, generateQuestions, gradeTaker, promptSet, sameAssessment, sameQuestions, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
 import { ShareError, importShared, renewShareLink, shareLink } from "../shared/assessshare.ts";
-import { applyGrading, checkQuiz, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
+import { applyGrading, checkQuiz, conceptsAuditPrompt, creationPrompt, exportForGrading, gradingInstructions, previewGrading } from "../shared/assessclaude.ts";
 import { nextProgrammeWeek, techSoFar } from "../shared/activities.ts";
 import { LinkError, changeLink, previewLink, unlinkBrief } from "../shared/assesslink.ts";
 import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub } from "../shared/ghdetail.ts";
@@ -293,14 +294,23 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     return ok(await briefView(env, g, id));
   }
   // ---- debrief of one student / squad
-  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|membercomment|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck|insights|links|ailines|probes))?$/))) {
+  if ((m = path.match(/^\/briefs\/(\d+)\/review(?:\/(analyze|repos|states|comment|commentai|challenge|members|membercomment|finalize|reopen|step|stepcheck|oral|level|remarks|aicheck|insights|links|ailines|probes|fiche))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const who = String(body.who || url.searchParams.get("who") || "");
     if (!/^(u:\d+|s:[a-f0-9]{6})$/.test(who)) bad("Unknown student or squad.");
+    const act = m[2];
+    // the frequent ones (open the page, a switch, the comment, the remarks as they're typed) don't need the brief's
+    // programme and text: lighter, under Cloudflare's CPU limit
+    if ((!act && method === "GET") || act === "states" || act === "comment" || (act === "remarks" && method === "POST" && body.quick)) {
+      if (!(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", id, g.id))) throw new ApiError(404, "This brief doesn't exist anymore.");
+      if (!act) return ok(await reviewView(env, g, id, who));
+      if (act === "states") { await saveStates(env, g, id, who, body.states ?? {}); return ok(await reviewView(env, g, id, who)); }
+      if (act === "comment") { await saveCommentText(env, g, id, who, String(body.text ?? "")); return ok(await reviewView(env, g, id, who)); }
+      return ok(await saveRemarksText(env, g, id, who, String(body.text ?? "")));
+    }
     const b = await loadBriefCtx(env, g, id);
     if (!b) throw new ApiError(404, "This brief doesn't exist anymore.");
-    const act = m[2];
     if (!act && method === "GET") return ok(await reviewView(env, g, id, who));
     if (!act && method === "DELETE") { await reopenReview(env, g, id, who, true); await run(env, "DELETE FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who); return ok({ ok: true }); }
     if (act === "repos" && method === "GET") {
@@ -338,20 +348,28 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "commentai" && method === "POST") { const w = await writeComment(env, g, id, who, body.states ?? null); return ok({ ...w, ...(await reviewView(env, g, id, who)) }); }
     if (act === "challenge") { await makeChallenge(env, g, b, who, body.states ?? null, String(body.member || ""), String(body.proposal || ""), String(body.lang || "")); return ok(await reviewView(env, g, id, who)); }
     // oral questions (at most 5) and the debrief's level (proposed, then the teacher's)
+    if (act === "fiche" && method === "POST") {
+      try { return ok({ fiche: await decideFicheCode(env, g, id, who, body ?? {}) }); }
+      catch (e) { if (e instanceof DebriefError) bad(e.message); throw e; }
+    }
     if (act === "remarks" && method === "POST") { await saveRemarks(env, g, b, who, String(body.text ?? ""), !!body.ai); return ok(await reviewView(env, g, id, who)); }
     // a squad, member by member: their assessment, AI flags, questions to ask, suggested switches; the Discord links (CT5)
     // and the AI lines of their commits on demand
+    // an individual debrief: the links of the learner themself (CT5), same as a squad member's
+    const solo = who.startsWith("u:") ? who.slice(2) : null;
+    const linksOut = (rec: any) => (rec?.links ? { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null, ...(solo ? { mine: rec.links.byMember?.[solo] ?? [] } : {}) } : null);
     if (act === "insights" && method === "GET") {
       const r = await getReview(env, id, who);
-      return ok({ members: r?.rec ? await memberInsights(env, g, b, r.rec) : {}, links: r?.rec?.links ? { at: r.rec.links.at, scanned: r.rec.links.scanned, hidden: r.rec.links.hidden, error: r.rec.links.error ?? null } : null });
+      return ok({ members: r?.rec && !solo ? await memberInsights(env, g, b, r.rec) : {}, links: linksOut(r?.rec) });
     }
     if (act === "links" && method === "POST") {
       const r = await getReview(env, id, who);
-      if (!r?.rec?.contrib?.length) bad("Analyze the squad's repo first.");
+      if (!r?.rec) bad("Open the debrief first.");
       const rec = r!.rec;
-      rec.links = await scanLinks(env, g, rec.contrib.map((x: any) => String(x.gid)), b.start - 86400, (b.due || now()) + 86400);
+      if (!solo && !rec.contrib?.length) bad("Analyze the squad's repo first.");
+      rec.links = await scanLinks(env, g, solo ? [solo] : rec.contrib.map((x: any) => String(x.gid)), b.start - 86400, (b.due || now()) + 86400);
       await putReview(env, g, id, who, rec);
-      return ok({ members: await memberInsights(env, g, b, rec), links: { at: rec.links.at, scanned: rec.links.scanned, hidden: rec.links.hidden, error: rec.links.error ?? null } });
+      return ok({ members: solo ? {} : await memberInsights(env, g, b, rec), links: linksOut(rec) });
     }
     // precise oral questions on the notions behind what each member missed (the AI, once; again with force)
     if (act === "probes" && method === "POST") {
@@ -605,7 +623,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
               (SELECT COUNT(*) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'locked') AS locked,
               (SELECT ROUND(AVG(score)) FROM assessment_takers t WHERE t.assessment_id = a.id AND t.status = 'graded') AS avg
          FROM assessments a WHERE a.guild_id = ? ORDER BY a.id DESC LIMIT 100`, g.id);
-    return ok({ items: rows.map(({ questions, ...a }) => ({ ...a, n: (() => { try { return JSON.parse(questions).length; } catch { return 0; } })(), settings: settingsOf(a as any) })) });
+    // a copy (the same questions as an older one, e.g. one per class in the shared library): marked, the library shows the first
+    const sets = rows.map((r) => { try { return promptSet(JSON.parse(r.questions || "[]")); } catch { return new Set<string>(); } });
+    const copyOf = (i: number) => { for (let j = rows.length - 1; j > i; j--) if (sameQuestions(sets[i], sets[j])) return rows[j].id; return null; };   // rows: newest first
+    return ok({ items: rows.map(({ questions, ...a }, i) => ({ ...a, n: (() => { try { return JSON.parse(questions).length; } catch { return 0; } })(), settings: settingsOf(a as any), copyOf: copyOf(i) })) });
   }
   if (path === "/assessments/generate" && method === "POST") {
     const g = await guild();
@@ -628,9 +649,13 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const avoid = [...(Array.isArray(body.existing) ? body.existing.map(String) : []), ...past.flatMap((r) => { try { return (JSON.parse(r.questions) as any[]).map((q) => String(q?.prompt || "")); } catch { return []; } })]
       .map((x) => x.replace(/\s+/g, " ").trim()).filter((x) => x.length > 10).filter((x, i, a) => a.indexOf(x) === i).slice(0, 120);
     const mix = { code: Number(body.mix?.code ?? 50), explain: Number(body.mix?.explain ?? 20), mcq: Number(body.mix?.mcq ?? 30) };
-    const qs = await generateQuestions(env, { topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
+    // the capacities of the Fiche niveaux to cover (5 questions each at least): the ones ticked, else its brief's / topic's
+    const cstore = await getConcepts(env, g.id);
+    const cscope = Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts)
+      : (await suggestScope(env, g, { brief_id: body.brief_id, week: body.week, text: `${body.topic || ""}\n${context}` })).scope;
+    const qs = await generateQuestions(env, { concepts: cscope, conceptStore: cstore, topic: String(body.topic || "").slice(0, 400), count: Number(body.count) || 10, mix, lang: body.lang === "en" ? "en" : "fr",
       codeLang: String(body.codeLang || "javascript"), techs: Array.isArray(body.techs) ? body.techs.map((x: unknown) => String(x).slice(0, 40)).filter(Boolean).slice(0, 8) : [], level: Math.max(1, Math.min(3, Number(body.level) || 1)), comps: comps.map((c) => { const pc = parseComp(c); return pc ? `${compLabel(pc.code)}${pc.level ? "N" + pc.level : ""} (${compName(p, pc.code)})` : c; }), skills, context, referential: p.referential.map((c) => ({ code: c.code, name: c.name })), scope, avoid });
-    return ok({ questions: qs });
+    return ok({ questions: qs, concepts: { scope: cscope, ...coverage(qs, cscope) } });
   }
   if (path === "/assessments/import-pages" && method === "POST") {
     // a quiz uploaded as a PDF (Wayground…): a few pages at a time, as pictures and their text
@@ -650,6 +675,8 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     try {
       const r: any = await importShared(env, g, String(body.url || ""), !!body.import);
       if (r.id) await libAssessment(env, g, r.id);
+      else if (r.questions) r.duplicate = await sameAssessment(env, g.id, r.questions);
+      delete r.questions;
       return ok(r);
     } catch (e) { if (e instanceof ShareError) bad(e.message); throw e; }
   }
@@ -668,18 +695,59 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     const weeks = p.weeks.filter((w) => w.kind === "brief");
     const pick = Number(url.searchParams.get("week")) || weekAt(p, new Date().toISOString().slice(0, 10))?.n || weeks[0]?.n || 0;
     const week = p.weeks.find((w) => w.n === pick) ?? null;
-    return ok({ weeks: weeks.map((w) => ({ n: w.n, title: w.title, sprint: w.sprint, start: w.start })), week: week?.n ?? null,
-      prompt: creationPrompt({ program: p, week, next: week ? nextProgrammeWeek(p, week) : null, techs: week ? techSoFar(p, week) : [] }) });
+    // the capacities of the Fiche niveaux for this week (its sprint), or the ones the teacher ticked
+    const cstore = await getConcepts(env, g.id);
+    const sug = week ? await suggestScope(env, g, { week: week.n }) : null;
+    const pickedC = url.searchParams.get("concepts");
+    const cscope = pickedC != null ? cleanConcepts(cstore, pickedC.split(",")) : sug?.scope ?? [];
+    return ok({ weeks: weeks.map((w) => ({ n: w.n, title: w.title, sprint: w.sprint, start: w.start })), week: week?.n ?? null, concepts: { sprint: sug?.sprint ?? null, caps: sug?.caps ?? [], scope: cscope },
+      prompt: creationPrompt({ program: p, week, next: week ? nextProgrammeWeek(p, week) : null, techs: week ? techSoFar(p, week) : [], concepts: cscope.length ? { block: conceptsPrompt(cstore, cscope), scope: cscope } : undefined }) });
   }
   if (path === "/assessments/claude-import" && method === "POST") {
     const g = await guild();
     const p = await programOf(env, g);
-    const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)) });
+    // the Fiche niveaux: the codes it knows, and the capacities asked (the ones of the prompt, sent back by the page)
+    const cstore = await getConcepts(env, g.id);
+    const knownC = knownConcepts(cstore);
+    const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: Array.isArray(body.concepts) || body.concepts === undefined ? { known: knownC, scope: Array.isArray(body.concepts) ? cleanConcepts(cstore, body.concepts) : [] } : undefined });
     if (r.quiz?.brief_id && !(await one(env, "SELECT 1 AS x FROM briefs WHERE id = ? AND guild_id = ?", r.quiz.brief_id, g.id))) r.problems.push({ where: "quiz", msg: `"brief_id": brief #${r.quiz.brief_id} isn't in this class (or null).` });
-    if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
+    if (r.problems.length || !body.import) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview, duplicate: r.problems.length ? null : await sameAssessment(env, g.id, r.quiz?.questions ?? []) });
     const id = await saveAssessment(env, g, null, r.quiz);
     await libAssessment(env, g, id);
     return ok({ id, problems: [] });
+  }
+  // 📐 an existing assessment brought up to the Fiche niveaux by Claude: the prompt (its questions + the capacities), then its
+  // answer back into the SAME assessment (a draft: questions added; open: only the capacities of the questions it has)
+  if ((m = path.match(/^\/assessments\/(\d+)\/claude-concepts$/))) {
+    const g = await guild();
+    const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", Number(m[1]), g.id);
+    if (!a) throw new ApiError(404, "This assessment doesn't exist anymore.");
+    const cstore = await getConcepts(env, g.id);
+    const st = settingsOf(a);
+    const scope = Array.isArray(body?.concepts) ? cleanConcepts(cstore, body.concepts) : st.concepts.length ? cleanConcepts(cstore, st.concepts) : (await suggestScope(env, g, { brief_id: a.brief_id, text: a.title })).scope;
+    if (!scope.length) bad("Pick the items of the Fiche niveaux it covers first.");
+    if (method === "POST" && !body?.json) {
+      // every other item of the sprint and the ones before: an old assessment often checks others than the ones ticked
+      const sp = Number((scope[0] || "").match(/^S(\d+)\./)?.[1]) || 0;
+      const others = cstore.sprints.filter((x) => x.n <= sp).flatMap((x) => askedConcepts(cstore, x.n)).filter((c) => !scope.includes(c.code)).map((c) => `- ${c.code} [${LEVEL_LABEL[c.level]}] « ${c.text} »`).join("\n");
+      return ok({ prompt: conceptsAuditPrompt(a, questionsOf(a), st, conceptsPrompt(cstore, scope, { only: !others }), scope, { others, locked: a.status !== "draft" }), concepts: scope });
+    }
+    if (method === "POST") {
+      const knownC = knownConcepts(cstore);
+      const p = await programOf(env, g);
+      const r = checkQuiz(body.json, { known: new Set(p.referential.map((c) => c.code)), concepts: { known: knownC, scope } });
+      if (r.problems.length || !body.apply) return ok({ problems: r.problems, preview: r.problems.length ? null : r.preview });
+      const old = questionsOf(a);
+      let qs: any[] = r.quiz!.questions;
+      if (a.status !== "draft") {
+        // students have it: the same questions (matched by their statement) get their capacities; nothing added
+        qs = old.map((q) => { const n = r.quiz!.questions.find((x: any) => String(x.prompt).trim() === q.prompt.trim()); return n?.concepts ? { ...q, concepts: n.concepts } : q; });
+      } else qs = qs.map((x: any) => { const same = old.find((q) => q.prompt.trim() === String(x.prompt).trim()); return same ? { ...x, id: same.id } : x; });
+      // the items it covers: the file's own list (Claude may have found better ones than the ones ticked), else the ones ticked
+      const fileScope = cleanConcepts(cstore, r.quiz!.settings?.concepts ?? []).filter((c) => /^S\d+\.[MB]\d+$/.test(c));   // the class levels: Moyen and Bon
+      await saveAssessment(env, g, a.id, { title: a.title, questions: qs, settings: { ...st, concepts: fileScope.length ? fileScope : scope } });
+      return ok(await assessView(env, g, a.id));
+    }
   }
   if ((m = path.match(/^\/assessments\/(\d+)\/claude-(export|grading|prompt)$/))) {
     const g = await guild();

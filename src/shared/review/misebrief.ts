@@ -43,8 +43,10 @@ export async function briefMises(env: Env, briefId: number, ids: string[]) {
     for (const t of done) {
       const sc = scoreMise(c, { answers: parse(t.answers, {}), checks: parse(t.checks, {}), grades: parse(t.grades, {}) });
       const ok = new Set<string>(), ko = new Set<string>();
-      for (const s of c.situations) for (const n of s.notions) ((sc.items[s.id]?.score ?? 0) >= 60 ? ok : ko).add(n);
-      for (const q of c.qcm) ((sc.items[q.id]?.score ?? 0) >= 60 ? ok : ko).add(q.notion);
+      // mastered: well done (80 % and more); missed: under 60 %; in between, neither (never said as mastered)
+      const put = (n: string, sco: number) => { if (sco >= 80) ok.add(n); else if (sco < 60) ko.add(n); };
+      for (const s of c.situations) for (const n of s.notions) put(n, sc.items[s.id]?.score ?? 0);
+      for (const q of c.qcm) put(q.notion, sc.items[q.id]?.score ?? 0);
       for (const n of ko) { ok.delete(n); missedBy.set(n, (missedBy.get(n) ?? 0) + 1); }
       members[t.discord_id] = { score: t.score ?? sc.total, ok: [...ok].slice(0, 12), ko: [...ko].slice(0, 12), summary: String(t.comment || "").trim().slice(0, 700),
         comps: rows.filter((r) => r.discord_id === t.discord_id && r.ok).map((r) => r.code), compsKo: rows.filter((r) => r.discord_id === t.discord_id && !r.ok).map((r) => r.code) };

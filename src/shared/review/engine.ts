@@ -169,7 +169,8 @@ export function reviewStates(rec) {
   const ck = {};
   for (const x of (rec && rec.checks) || []) if (!x.info && (x.ok === true || x.ok === false)) ck[x.id] = typeof (saved.ck || {})[x.id] === 'boolean' ? saved.ck[x.id] : x.ok;
   // a requirement proved by a check starts as the check says; the teacher's switch wins
-  const ex = (r.exigences || []).map((e, i) => (typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : isBound(e) && e.check in ck ? ck[e.check] : itemValid(e)));
+  // a bonus starts not validated: the teacher switches it on when they see it (it never counts against the learner)
+  const ex = (r.exigences || []).map((e, i) => (typeof (saved.ex || [])[i] === 'boolean' ? saved.ex[i] : e.type === 'bonus' ? false : isBound(e) && e.check in ck ? ck[e.check] : itemValid(e)));
   const co = {};
   // the assessment linked to the brief comes first: a competency it tested starts as the assessment says (validated
   // only if every assessment validated it), whatever the project shows; the others start as the project shows
@@ -182,7 +183,10 @@ export function reviewStates(rec) {
   const mes = { r: (saved.mes && CH_RESULTS.includes(saved.mes.r) ? saved.mes.r : ch && ch.result) || '', note: String((saved.mes && typeof saved.mes.note === 'string' ? saved.mes.note : ch && ch.note) || '') };
   // oral questions: each one starts Not valid, the teacher switches it after the answer
   const oral = ((rec && rec.oral) || []).map((q, i) => typeof (saved.oral || [])[i] === 'boolean' ? saved.oral[i] : false);
-  return { ck, ex, co, mes, oral };
+  // a step the teacher skipped (the project's requirements, or the live check: mise en situation and oral questions)
+  // counts for nothing: not in the level, the comment or the Fiche
+  const skip = { project: !!(saved.skip && saved.skip.project), live: !!(saved.skip && saved.skip.live) };
+  return { ck, ex, co, mes, oral, skip };
 }
 export const CH_RESULTS = ['valide', 'partiel', 'non_valide'];
 // C3N2 / CT5 / T5 → C3 / T5: how the assessments' competency results are keyed
@@ -206,21 +210,27 @@ export const DEBRIEF_LEVELS = ['excellent', 'bon', 'moyen', 'faible', 'critique'
 // and the brief's requirements (20 %), only the parts that were evaluated. Never more than one level above the
 // assessment. The teacher chooses the level, and can change it.
 export function debriefLevel(rec, st) {
-  const ex = ((rec && rec.result) || {}).exigences || [];
+  const sk = (st && st.skip) || reviewStates(rec).skip;
+  const ex = sk.project ? [] : ((rec && rec.result) || {}).exigences || [];
   const main = ex.map((e, i) => i).filter((i) => ex[i].type !== 'bonus' && ex[i].type !== 'critere' && ex[i].type !== 'oral');
   const parts = [];
   const as = ((rec && rec.assess) || []).filter((a) => a.score != null);
   if (as.length) parts.push([0.5, as.reduce((t, a) => t + a.score, 0) / as.length / 100]);
   const talk = [];
-  const or = st.oral || [];
+  const or = sk.live ? [] : st.oral || [];
   if (or.length) talk.push(or.filter(Boolean).length / or.length);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
+  const m = sk.live ? undefined : { valide: 1, partiel: 0.5, non_valide: 0 }[(st.mes || {}).r];
   if (m !== undefined) talk.push(m);
   if (talk.length) parts.push([0.3, talk.reduce((t, x) => t + x, 0) / talk.length]);
   if (main.length) parts.push([0.2, main.filter((i) => st.ex[i]).length / main.length]);
   if (!parts.length) return '';
   const sc = parts.reduce((a, p) => a + p[0] * p[1], 0) / parts.reduce((a, p) => a + p[0], 0);
-  return capByAssess(rec, sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique');
+  return capByFiche(rec, capByAssess(rec, sc >= 0.9 ? 'excellent' : sc >= 0.75 ? 'bon' : sc >= 0.55 ? 'moyen' : sc >= 0.35 ? 'faible' : 'critique'));
+}
+/** The Fiche niveaux is the official reference: the proposal never goes above the level it gives (saved by the page). */
+export function capByFiche(rec, lvl) {
+  const f = rec && rec.level && rec.level.fiche;
+  return f && DEBRIEF_LEVELS.includes(f) && DEBRIEF_LEVELS.indexOf(lvl) < DEBRIEF_LEVELS.indexOf(f) ? f : lvl;
 }
 /** The best level the assessment allows: one step above its own (critique → faible at most, faible → moyen…), since
  *  the assessment, done in class without help, is the surest proof of what the learner masters. '' without one. */
@@ -245,10 +255,10 @@ const CONCEPTS: [RegExp, string][] = [
   [/feuille de style|stylesheet|<\s*link\b|styles?\.css/i, 'le lien entre une page HTML et sa feuille CSS (<link>)'],
   [/<\s*(form|input|label|button|select|textarea)\b|formulaire|submit/i, 'les formulaires HTML (form, input, label, button)'],
   [/<\s*img\b|\bimage|\balt\b|texte alternatif/i, 'les images et le texte alternatif (img, alt)'],
-  [/<\s*a\b|lien hypertexte|\bhref\b|target|nouvel onglet/i, 'les liens hypertextes (a, href, target)'],
+  [/<\s*a\b|lien hypertexte|\bhref\b|target|nouvel onglet|\bliens? (?:du|d['’]un|vers|entre|de navigation)\b/i, 'les liens hypertextes (a, href, target)'],
   [/<\s*(ul|ol|li|table|tr|td)\b|\bliste/i, 'les listes et les tableaux HTML'],
   [/\b(header|nav|main|footer|section|article)\b|s[ée]mantique/i, 'les balises sémantiques'],
-  [/s[ée]lecteur|\b(classe|class|id)\b[^.]{0,40}\bCSS|\bCSS\b[^.]{0,60}\b(classe|class|id)\b|\.[a-z][\w-]*\s*\{/i, 'les sélecteurs CSS (balise, classe, id)'],
+  [/s[ée]lecteurs?(?![^.]{0,30}\b(?:JavaScript|JS|DOM|querySelector))|\b(classe|class|id)\b[^.]{0,40}\bCSS|\bCSS\b[^.]{0,60}\b(classe|class|id)\b|\.[a-z][\w-]*\s*\{/i, 'les sélecteurs CSS (balise, classe, id)'],
   [/\bmargin\b|\bpadding\b|\bborder\b|centr|mod[èe]le de bo[iî]te|box[- ]?model|box-sizing/i, 'le modèle de boîte et le centrage (margin, padding)'],
   [/\bdisplay\b|\binline\b|\bblock\b/i, 'la propriété display (block, inline)'],
   [/flex|justify-content|align-items/i, 'Flexbox'],
@@ -257,16 +267,17 @@ const CONCEPTS: [RegExp, string][] = [
   [/\bcolor\b|couleur|background|\bfond\b|font|gras|bold|police|text-align|taille du texte/i, 'la mise en forme du texte et des couleurs en CSS'],
   [/position\s*:|\babsolute\b|\brelative\b|\bfixed\b|z-index/i, 'le positionnement en CSS'],
   [/transition|animation|@keyframes|transform/i, 'les transitions et les animations CSS'],
-  [/addEventListener|[ée]v[ée]nement|\bclick\b|onclick/i, 'les événements JavaScript (addEventListener)'],
+  [/addEventListener|[ée]v[ée]nement|\bclick\b|onclick|[ée]couteur/i, 'les événements JavaScript (addEventListener)'],
   [/querySelector|getElementById|\bDOM\b|innerHTML|textContent|createElement/i, 'la manipulation du DOM'],
-  [/\bfetch\b|async|await|promesse|promise|\bAPI\b/i, 'les appels d’API (fetch, async / await)'],
+  [/\bfetch\s*\(|\bfetch\b[^.]{0,40}\b(api|url|données|json)|\baxios\b|appels? (d['’] ?|à une |vers une )API|requ[êe]te HTTP/i, 'les appels d’API (fetch)'],
+  [/\basync\b|\bawait\b|\bpromesses?\b|\bpromise\b|\.then\(/i, 'l’asynchrone (promesses, async / await)'],
   [/\b(for|while)\s*\(|boucle|\bloop\b/i, 'les boucles'],
   [/\bif\s*\(|condition|else\b|switch/i, 'les conditions'],
   [/tableau|array|\.map\(|\.filter\(|\.push\(/i, 'les tableaux et leurs méthodes'],
   [/fonction|function|=>|return\b/i, 'les fonctions'],
   [/\b(let|const|var)\b|variable/i, 'les variables'],
   [/localStorage|sessionStorage/i, 'le localStorage'],
-  [/\bSELECT\b|\bINSERT\b|\bJOIN\b|\bSQL\b|requ[êe]te/i, 'les requêtes SQL'],
+  [/\b(?:SELECT|INSERT|UPDATE|DELETE|JOIN|WHERE)\b|\b(?:SQL|sql)\b|[Rr]equ[êe]tes? (?:SQL|sql|préparées?)|[Bb]ase de données/, 'les requêtes SQL'],
   [/\bclass\s+\w+\s*(\{|extends)|\bobjets?\b|constructeur|h[ée]ritage|\bextends\b|\bPOO\b/i, 'la programmation orientée objet'],
   [/\bgit\b|commit|branche|merge/i, 'Git (commit, branches)'],
 ];

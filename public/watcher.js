@@ -377,11 +377,12 @@ function renderSprint() {
     </section>
     <section class="panel"><div class="table-wrap"><table class="grid-table sp-table">
       <thead><tr><th>Student</th>${tech.map((c) => `<th class="ctr" title="${esc(D.names[parseC(c).code] || "")}">${esc(cText(c))}</th>`).join("")}${soft.length ? `<th class="ctr" title="${esc(soft.map(cText).join(", "))}">CT</th>` : ""}
-        <th class="num">Briefs</th><th class="num">Grid</th><th>Level</th><th>Decision</th></tr></thead>
+        <th class="num">Briefs</th><th class="num">Grid</th>${D.fiche ? `<th title="Fiche niveaux: items known (5 proofs at least, more than half right) and the level they give">📐 Fiche</th>` : ""}<th>Level</th><th>Decision</th></tr></thead>
       <tbody>${rows.map((r) => `<tr data-sid="${esc(r.discord_id)}">
         <td>${avatar(r.name, r.discord_id)} <a href="#/student/${esc(r.discord_id)}">${esc(r.name)}</a></td>
         ${tech.map((c) => spCell(r.cells[c])).join("")}${soft.length ? ctCell(r) : ""}
         <td class="num">${r.evald}/${D.briefs.length}</td><td class="num">${r.pct == null ? "—" : r.pct + "%"}</td>
+        ${D.fiche ? (() => { const f = D.fiche[r.discord_id]; return `<td><button type="button" class="cn-fiche" data-fiche="${esc(r.discord_id)}" title="See each item">${f && f.reached ? `<span class="lvl" style="background:${SP_LVL_C[f.reached]};color:#fff">${esc(SP_LVL_NAME[f.reached] || f.reached)}</span>` : `<span class="muted small">not enough yet</span>`}<span class="small muted"> ${f ? `${f.ok}/${f.total}` : ""}</span></button></td>`; })() : ""}
         <td><div class="sp-lv" style="--c:${SP_LVL_C[lvlOf(r)] || "var(--line-strong)"}"><select data-lvl class="${lvlOf(r) ? "has" : ""}" title="${esc(r.plevel ? `${spFrom(r)}: ${SP_LVL_NAME[r.plevel]}${r.why ? " · " + r.why : ""}` : "No debrief in this sprint yet")}">
             <option value="">${r.plevel ? `${SP_LVL_NAME[r.plevel]}` : "No level yet"}</option>${SP_LVL.map(([v, l]) => `<option value="${v}" ${r.level === v ? "selected" : ""}>${l}</option>`).join("")}</select>
           <span class="sp-lsrc">${r.level ? "👤 yours" : r.plevel ? `${r.ddraft && spFrom(r).startsWith("Last") ? "⏳ " : ""}${esc(spFrom(r).replace(" (in progress)", ""))}${r.dfrom && spFrom(r).startsWith("Last") ? ` · ${esc(r.dfrom)}` : ""}` : ""}</span></div>
@@ -411,6 +412,7 @@ function wireSprint() {
     $("[data-lvl]", tr).onchange = (e) => save(sid, { level: e.target.value }).then(() => renderSprint()).catch((x) => toast(x.message, true));
     $$("[data-dec]", tr).forEach((b) => b.onclick = () => save(sid, { decision: r.decision === b.dataset.dec ? "" : b.dataset.dec }).then(() => renderSprint()).catch((x) => toast(x.message, true)));
     $("[data-note]", tr).onclick = () => { const i = $("[data-notein]", tr); i.hidden = !i.hidden; if (!i.hidden) i.focus(); };
+    if ($("[data-fiche]", tr)) $("[data-fiche]", tr).onclick = () => masteryDialog(sid, r.name, { sprint: n });
     $("[data-notein]", tr).onchange = (e) => save(sid, { note: e.target.value.trim() }).then(() => toast("Note saved")).catch((x) => toast(x.message, true));
   });
   $("#sp-prop").onclick = (e) => busy(e.currentTarget, async () => {
@@ -860,7 +862,7 @@ function wPropLevel() {
   const ex = DB.R.review?.result?.exigences || [];
   const s = currentStates();
   const exOn = (i) => (typeof s.ex[i] === "boolean" ? s.ex[i] : !!(DB.R.states?.ex || [])[i]);
-  const main = ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
+  const main = (s.skip || {}).project ? [] : ex.map((e, i) => i).filter((i) => ex[i].type !== "bonus" && ex[i].type !== "critere" && ex[i].type !== "oral");
   const LV = ["excellent", "bon", "moyen", "faible", "critique"];
   const toLv = (sc) => (sc >= 0.9 ? "excellent" : sc >= 0.75 ? "bon" : sc >= 0.55 ? "moyen" : sc >= 0.35 ? "faible" : "critique");
   const parts = [];
@@ -868,15 +870,19 @@ function wPropLevel() {
   const asAvg = as.length ? as.reduce((x, a) => x + a.score, 0) / as.length / 100 : null;
   if (asAvg != null) parts.push([0.5, asAvg]);
   const talk = [];
-  const or = s.oral || DB.R.states?.oral || [];
+  const sk = s.skip || {};
+  const or = sk.live ? [] : s.oral || DB.R.states?.oral || [];
   if (or.length) talk.push(or.filter(Boolean).length / or.length);
-  const m = { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
+  const m = sk.live ? undefined : { valide: 1, partiel: 0.5, non_valide: 0 }[s.mes.r];
   if (m !== undefined) talk.push(m);
   if (talk.length) parts.push([0.3, talk.reduce((x, v) => x + v, 0) / talk.length]);
   if (main.length) parts.push([0.2, main.filter(exOn).length / main.length]);
   if (!parts.length) return "";
   let lv = toLv(parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[0], 0));
   if (asAvg != null) { const cap = LV[Math.max(0, LV.indexOf(toLv(asAvg)) - 1)]; if (LV.indexOf(lv) < LV.indexOf(cap)) lv = cap; }
+  // the Fiche niveaux (official): never above the level it gives
+  const f = DB.ficheLv !== undefined ? DB.ficheLv : DB.R.review?.level?.fiche;
+  if (f && LV.includes(f) && LV.indexOf(lv) < LV.indexOf(f)) lv = f;
   return lv;
 }
 
@@ -911,12 +917,12 @@ function wDebriefExtras() {
   const head = () => `Oral questions${qs.length ? ` <span class="muted">${$$("[data-or]:checked", box).length}/${qs.length}</span>` : ""}`;
   box.innerHTML = `<div class="panel-head" style="margin:0"><h2 id="db-orh"></h2>
       ${final ? "" : `<button class="btn small" id="db-ornew">${qs.length ? "✨ 5 more questions" : "✨ Propose 5 questions"}</button>`}</div>
-    <p class="muted small" style="margin:6px 0 0">From their lacunes first: the assessment questions missed or not attempted, then the points of the project not reached. Switch on each question they answered well.</p>
+    <p class="muted small" style="margin:6px 0 0">From their lacunes first: the assessment questions missed or not attempted, then the points of the project not reached, and the Fiche items the learner must show next (under Moyen: the Faible ones) (📐: its ✓ / ✗ counts for that capacity). Switch on each question they answered well.</p>
     ${qs.length ? `<div class="db-rows">${qs.map((q, i) => `<div class="db-row w-or-row">${sw(`data-or="${i}"`, !!st[i], final)}
-      <div><b>${i + 1}. ${esc(q.q)}</b> ${q.src === "evaluation" && q.unlinked ? `<span class="tag" title="Written from an assessment that is no longer linked to this brief: keep it, or remove it">📝 assessment no longer linked</span>` : q.src === "evaluation" ? `<span class="tag" title="A lacune of the assessment">📝 assessment</span>` : q.src === "projet" ? `<span class="tag" title="A point of the project not reached">📁 project</span>` : ""}<div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}</div>` : ""}</div>
+      <div><b>${i + 1}. ${esc(q.q)}</b> ${q.src === "evaluation" && q.unlinked ? `<span class="tag" title="Written from an assessment that is no longer linked to this brief: keep it, or remove it">📝 assessment no longer linked</span>` : q.src === "evaluation" ? `<span class="tag" title="A lacune of the assessment">📝 assessment</span>` : q.src === "projet" ? `<span class="tag" title="A point of the project not reached">📁 project</span>` : ""}<div class="small"><span class="muted">Expected:</span> ${esc(q.a)}</div>${q.notion ? `<div class="small muted">${esc(q.notion)}${(q.concepts || []).map((c) => ` <span class="cn-code" title="Fiche niveaux: its ✓ / ✗ counts for this item">📐 ${esc(c)}</span>`).join("")}</div>` : (q.concepts || []).length ? `<div class="small">${q.concepts.map((c) => `<span class="cn-code">📐 ${esc(c)}</span>`).join(" ")}</div>` : ""}</div>
       ${final ? "<span></span>" : `<button class="btn small" data-ordel="${i}" title="Remove" aria-label="Remove question ${i + 1}">✕</button>`}</div>`).join("")}</div>` : ""}`;
   $("#db-orh", box).innerHTML = head();
-  $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); });
+  $$("[data-or]", box).forEach((c) => c.onchange = () => { $("#db-orh", box).innerHTML = head(); saveStatesSoon(); DB.lvDraw?.(); DB.ficheStale = true; if (DB.step === 2) { clearTimeout(DB.ficheT); DB.ficheT = setTimeout(() => { DB.ficheStale = false; DB.ficheLoad?.(); }, 2500); } });
   if ($("#db-ornew", box)) $("#db-ornew", box).onclick = (e) => {
     const btn = e.currentTarget;
     const go = () => busy(btn, async () => {
@@ -929,7 +935,7 @@ function wDebriefExtras() {
     go();   // more questions are added after the ones there (their switches stay)
   };
   // the first 5 questions are written by themselves when the debrief is opened
-  if (!final && !qs.length && !DB.oralAuto) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
+  if (!final && !qs.length && !DB.oralAuto && !(DB.skip || DB.R.states?.skip || {}).live) { DB.oralAuto = true; setTimeout(() => $("#db-ornew", box)?.click(), 300); }
   $$("[data-ordel]", box).forEach((b) => b.onclick = () => busy(b, async () => {
     const R = await api(`/briefs/${DB.bid}/review/oral`, { method: "POST", body: { who: DB.who, del: Number(b.dataset.ordel), states: { oral: currentStates().oral } } });
     DB.R = { ...DB.R, ...R };

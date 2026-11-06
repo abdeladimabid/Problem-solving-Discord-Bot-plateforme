@@ -19,6 +19,7 @@ import {
 } from "./mises.ts";
 import { chat, extractJson } from "./ai.ts";
 import { netFlags } from "./identity.ts";
+import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope } from "./concepts.ts";
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
@@ -28,12 +29,15 @@ export class MiseError extends Error { status: number; constructor(msg: string, 
 
 export interface MiseRow { id: number; guild_id: string; title: string; week: number | null; sprint: number | null; comps: string | null; target: string | null; settings: string | null; content: string; status: string; starts_at: number | null; ends_at: number | null; created_at: number; opened_at: number | null; closed_at: number | null }
 export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; discord_id: string; status: string; answers: string | null; spent: string | null; checks: string | null; ai: string | null; logs: string | null; events: string | null;
-  cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null }
+  cur_item: string | null; item_since: number | null; last_seen: number | null; grades: string | null; score: number | null; comment: string | null; invited_at: number | null; started_at: number | null; submitted_at: number | null; sent_at: number | null;
+  minutes?: number | null; ends_at?: number | null }
 // testers: staff who take it to try it (never "the class") · lockScreen: in full screen, leaving it stops the session until
 // the teacher lets them back (like an assessment) · brief: the brief it was written for
 // oneDevice: the browser that signed in with Discord is the paper's device (another one stops it) · netAlerts: the
 // teacher sees papers opened outside the class's network, or from several networks
-export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean }
+export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean;
+  /** its scope in the Fiche niveaux: the capacities it covers (5 items each at least) */
+  concepts: string[] }
 
 const parse = <T>(s: string | null | undefined, d: T): T => { try { const v = s ? JSON.parse(s) : d; return v ?? d; } catch { return d; } };
 const str = (v: unknown, n: number) => String(v ?? "").replace(/\r\n/g, "\n").trim().slice(0, n);
@@ -41,8 +45,22 @@ export const contentOf = (m: Pick<MiseRow, "content">) => parse<MiseContent>(m.c
 export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
   return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
-    lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false };
+    lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false,
+    concepts: (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30) };
 };
+/**
+ * The Fiche niveaux for a request: the codes the class knows, and the capacities to cover: the ones ticked (b.concepts),
+ * else the file's own list, else (when asked) the ones of its brief or week.
+ */
+async function conceptOpts(env: Env, g: GuildRow, b: any, o: { week?: number | null; brief?: number | null; suggest: boolean; file?: unknown }) {
+  const store = await getConcepts(env, g.id);
+  const known = knownConcepts(store);
+  let scope: string[] = Array.isArray(b?.concepts) ? cleanConcepts(store, b.concepts) : [];
+  if (!scope.length && !Array.isArray(b?.concepts) && o.file && typeof o.file === "object" && Array.isArray((o.file as any).concepts)) scope = cleanConcepts(store, (o.file as any).concepts);
+  // 10 items (5 situations, 5 QCM): 6 items of the Fiche at most, each in 5 of them
+  if (!scope.length && !Array.isArray(b?.concepts) && o.suggest) scope = (await suggestScope(env, g, { brief_id: o.brief, week: o.week, limit: 6 })).scope;
+  return { store, known, scope };
+}
 /** draft · scheduled (launched, starts later) · live · closed (closed by the teacher, or its time is up). */
 export function statusOf(m: Pick<MiseRow, "status" | "starts_at" | "ends_at">, t = now()): "draft" | "scheduled" | "live" | "closed" {
   if (m.status === "draft") return "draft";
@@ -128,7 +146,9 @@ export async function promptFor(env: Env, g: GuildRow, b: any) {
   const { br, w, comps } = await scopeOf(env, g, p, b);
   if (!w) throw new MiseError("Pick a week of the programme.");
   if (!comps.length) throw new MiseError("Choose at least one competency.");
-  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) }), techs: techSoFar(p, w) };
+  const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true });
+  return { prompt: buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs: techSoFar(p, w), comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+    concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined }), techs: techSoFar(p, w), concepts: cn.scope };
 }
 
 /** What the AI needs to write or fix a mise en situation for a request (the week, the competencies, the brief). */
@@ -140,12 +160,14 @@ async function aiContext(env: Env, g: GuildRow, b: any) {
   if (!(await aiBudgetOk(env, 4))) throw new MiseError("ClassBot's free AI is used up for this class today: add your own AI key in Settings → AI, or try again tomorrow.");
   await aiBudgetUse(env, 4);
   const techs = techSoFar(p, w);
-  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500) });
+  const cn = await conceptOpts(env, g, b, { week: w.n, brief: br?.id ?? null, suggest: true, file: b.json ? readJson(b.json).data : undefined });
+  const prompt = buildPrompt({ program: p, week: w, next: nextProgrammeWeek(p, w), techs, comps, metier: str(b.metier, 120), brief: br ? { title: br.title, text: br.text } : null, wishes: str(b.wishes, 1500),
+    concepts: cn.scope.length ? { block: conceptsPrompt(cn.store, cn.scope, { per: "élément" }), scope: cn.scope } : undefined });
   const ask = (extra: string) => chat(env, [
     { role: "system", content: "Tu es formateur en développement web. Tu réponds UNIQUEMENT avec un objet JSON valide, complet, sans texte avant ni après." },
     { role: "user", content: prompt + extra },
   ], { maxTokens: 16000, temperature: 0.5, timeoutMs: 170000, json: true });
-  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n } };
+  return { p, w, br, comps, techs, ask, opts: { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs, week: w.n, concepts: { known: cn.known, scope: cn.scope } } };
 }
 const readAi = (raw: string) => { try { return extractJson(raw); } catch { return null; } };
 
@@ -205,7 +227,7 @@ async function perfectMise(env: Env, data: any, x: Awaited<ReturnType<typeof aiC
   return {
     json: JSON.stringify(data, null, 2), problems: [...r.problems, ...review], preview: r.problems.length ? null : r.preview,
     checks: r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: br?.title }) : [],
-    detected: { week: w.n, sprint: w.sprint ?? null, comps }, brief: br?.id ? { id: br.id, title: br.title } : null,
+    detected: { week: w.n, sprint: w.sprint ?? null, comps, concepts: opts.concepts?.scope ?? [] }, brief: br?.id ? { id: br.id, title: br.title } : null,
   };
 }
 
@@ -332,15 +354,17 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   const p = await programOf(env, g);
   const det = detectMise(b.json);
   const { br, w, comps } = await scopeOf(env, g, p, b, det);
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
-  const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title };
+  // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
+  const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope } });
+  const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
   const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title }) : [];
   if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
     g.id, str(b.title, 120) || c.title, w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps.length ? comps : c.competencies), JSON.stringify(ids(b.target)),
-    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief }), JSON.stringify(c), now());
+    JSON.stringify({ minutes: 0, noPaste: false, channel: false, testers: ids(b.testers).slice(0, 10), lockScreen: true, brief, concepts: c.concepts ?? cn.scope }), JSON.stringify(c), now());
   return { id: Number(res.meta.last_row_id), problems: [], checks, detected, brief };
 }
 
@@ -363,7 +387,8 @@ export async function saveMise(env: Env, g: GuildRow, id: number, b: any) {
     if (m.status !== "draft") throw new MiseError("The learners already have it: its content can't change anymore.");
     const p = await programOf(env, g);
     const w = week ? weekOf(p, week) : null;
-    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null });
+    const cn = await conceptOpts(env, g, b, { suggest: false, file: b.json ? readJson(b.json).data : contentOf(m) });
+    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts } });
     if (r.problems.length) return { problems: r.problems };
     sets.push("content = ?", "week = ?", "sprint = ?", "comps = ?"); args.push(JSON.stringify(r.content), w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps));
   }
@@ -380,6 +405,7 @@ const pickSettings = (s: any) => {
   if (s && "brief" in s) o.brief = briefRef(s.brief);
   if (s && "oneDevice" in s) o.oneDevice = !!s.oneDevice;
   if (s && "netAlerts" in s) o.netAlerts = !!s.netAlerts;
+  if (s && "concepts" in s) o.concepts = (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30);
   return o;
 };
 
@@ -406,16 +432,28 @@ export async function readTakerToken(env: Env, token: string): Promise<number | 
   return (await signText(env, `mes:${m[1]}.${m[2]}`)) === m[3] ? Number(m[1]) : null;
 }
 const linkExp = (m: Pick<MiseRow, "ends_at">) => (m.ends_at ? m.ends_at + 2 * 86400 : now() + 60 * 86400);
+/**
+ * A learner given it later (absent when it was launched): their own time, counted from when they open it, and their own
+ * end; the session stays closed for the others. Their paper follows that window instead of the session's.
+ */
+const isLate = (t: Pick<MiseTakerRow, "minutes">) => !!t.minutes;
+function forTaker(m: MiseRow, t: Pick<MiseTakerRow, "minutes" | "ends_at">): MiseRow {
+  if (!isLate(t)) return m;
+  return { ...m, status: "live", starts_at: null, ends_at: t.ends_at ?? null };
+}
+const LATE_DAYS = 14;   // a late learner's link: valid two weeks (they open it when they're back)
 export const miseUrl = (env: Env, token: string) => `${(env.PUBLIC_URL || "").replace(/\/$/, "")}/mes/${token}`;
 
-async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: string }) {
-  const url = miseUrl(env, await takerToken(env, tk.id, linkExp(m)));
+async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: string; minutes?: number | null }) {
+  const late = !!tk.minutes;
+  const url = miseUrl(env, await takerToken(env, tk.id, late ? now() + LATE_DAYS * 86400 : linkExp(m)));
   const c = contentOf(m), st = settingsOf(m);
-  const when = m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
+  const when = late ? `Ton temps (${tk.minutes} minutes) commence quand tu l’ouvres : ouvre-la quand ton formateur te le dit.`
+    : m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
   return dm(env, tk.discord_id, {
     embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
       description: [`${c.situations.length} mises en situation avec du code et ${c.qcm.length} QCM, dans ton navigateur.`, when,
-        m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
+        late ? "" : m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
     components: [row(linkBtn("Ouvrir ma mise en situation", url, "🧪"))],
   });
 }
@@ -458,32 +496,105 @@ export async function addTakers(env: Env, g: GuildRow, id: number, students: str
   if (sendDm && m.status !== "draft") for (const tk of takers.slice(0, 60)) if (tk.status !== "submitted" && (await sendLink(env, m, tk))) sent++;
   return { invited: takers.length, sent };
 }
+/**
+ * Learners who were absent: they get it now, with their own time (counted from when they open it), the session staying
+ * closed for the others. Only learners who don't have it yet (a paper already there: reset it first).
+ */
+export async function addLate(env: Env, g: GuildRow, id: number, students: string[], minutes: unknown, sendDm = true) {
+  const m = await getMise(env, g, id);
+  if (m.status === "draft") throw new MiseError("Launch it first.");
+  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  const st = settingsOf(m);
+  // their time: asked, else the session's (its minutes, or how long it was open), else an hour
+  const was = m.ends_at && (m.starts_at ?? m.opened_at) ? Math.round((m.ends_at - (m.starts_at ?? m.opened_at)!) / 60) : 0;
+  const min = Math.max(5, Math.min(600, Math.round(Number(minutes)) || st.minutes || was || 60));
+  const who = ids(students);
+  if (!who.length) throw new MiseError("Choose at least one learner.");
+  const valid = new Set([...(await classIds(env, g)), ...(await staffPlayers(env, g)).map((x) => x.discord_id)]);
+  const has = new Set((await all<{ discord_id: string }>(env, "SELECT discord_id FROM mise_takers WHERE mise_id = ?", id)).map((x) => x.discord_id));
+  const keep = who.filter((x) => valid.has(x) && !has.has(x));
+  if (!keep.length) throw new MiseError("These learners already have it (or aren't in the class).");
+  await env.DB.batch(keep.map((uid) => env.DB.prepare("INSERT OR IGNORE INTO mise_takers (mise_id, guild_id, discord_id, invited_at, minutes) VALUES (?, ?, ?, ?, ?)").bind(id, g.id, uid, now(), min)));
+  const takers = await all<{ id: number; discord_id: string; minutes: number }>(env, `SELECT id, discord_id, minutes FROM mise_takers WHERE mise_id = ? AND discord_id IN (${keep.map(() => "?").join(",")})`, id, ...keep);
+  let sent = 0;
+  if (sendDm) for (const tk of takers.slice(0, 60)) if (await sendLink(env, m, tk)) sent++;
+  return { invited: takers.length, sent, minutes: min };
+}
 export async function resend(env: Env, g: GuildRow, id: number, takerId: number) {
   const m = await getMise(env, g, id);
-  const tk = await one<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  const tk = await one<{ id: number; discord_id: string; minutes: number | null; ends_at: number | null }>(env, "SELECT id, discord_id, minutes, ends_at FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
   if (!tk) throw new MiseError("Unknown learner.", 404);
-  if (statusOf(m) === "closed") throw new MiseError("This mise en situation is closed.");
+  if (statusOf(forTaker(m, tk)) === "closed") throw new MiseError("This mise en situation is closed.");
   return { sent: (await sendLink(env, m, tk)) ? 1 : 0 };
 }
 /** The links, to copy when a DM didn't arrive. */
 export async function links(env: Env, g: GuildRow, id: number) {
   const m = await getMise(env, g, id);
   const takers = await all<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE mise_id = ?", id);
-  return Object.fromEntries(await Promise.all(takers.map(async (t) => [t.discord_id, miseUrl(env, await takerToken(env, t.id, linkExp(m)))] as [string, string])));
+  const late = new Set((await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND minutes IS NOT NULL", id)).map((x) => x.id));
+  return Object.fromEntries(await Promise.all(takers.map(async (t) => [t.discord_id, miseUrl(env, await takerToken(env, t.id, late.has(t.id) ? now() + LATE_DAYS * 86400 : linkExp(m)))] as [string, string])));
 }
 /** More time for everyone (a session without an end gets one only when asked). */
-export async function extend(env: Env, g: GuildRow, id: number, minutes: number) {
+export async function extend(env: Env, g: GuildRow, id: number, minutes: number, cont: unknown = null) {
   const m = await getMise(env, g, id);
   const add = Math.max(1, Math.min(600, Math.round(minutes) || 0));
   if (m.status === "draft") throw new MiseError("Launch it first.");
   const base = Math.max(m.ends_at ?? now(), now());
   await run(env, "UPDATE mises SET ends_at = ?, status = 'live', closed_at = NULL WHERE id = ?", base + add * 60, id);
+  // papers handed in (often by the closing, or the time running out) that the teacher lets continue: where they were
+  return { continued: await continueTakers(env, g.id, id, cont) };
+}
+/** Papers handed in that go on where they were (handed in by mistake, or by the closing): their results wait. */
+async function continueTakers(env: Env, gid: string, id: number, takers: unknown) {
+  const want = (Array.isArray(takers) ? takers : []).map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  if (!want.length) return 0;
+  let continued = 0;
+  const list = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM mise_takers WHERE mise_id = ? AND status = 'submitted' AND id IN (${want.map(() => "?").join(",")})`, id, ...want);
+  for (const t of list) {
+    const r = await run(env, "UPDATE mise_takers SET status = 'resume', submitted_at = NULL WHERE id = ? AND status = 'submitted'", t.id);
+    if (!r.meta.changes) continue;
+    // their results come back when they hand it in again
+    await clearResults(env, gid, id, t.discord_id);
+    await pushEvent(env, t.id, [now(), "reopen", "", 0]);
+    continued++;
+  }
+  return continued;
+}
+/** One learner handed in by mistake: their paper opens again (the mise must be open: else reopen it with more time). */
+export async function reopenTaker(env: Env, g: GuildRow, id: number, takerId: number) {
+  const m = await getMise(env, g, id);
+  if (statusOf(m) === "closed") throw new MiseError("It's closed: use « Reopen with more time » and tick them.");
+  const t = await one<{ status: string }>(env, "SELECT status FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  if (!t) throw new MiseError("Unknown learner.", 404);
+  if (t.status !== "submitted") throw new MiseError("Their paper isn't handed in.");
+  return { continued: await continueTakers(env, g.id, id, [takerId]) };
+}
+async function clearResults(env: Env, gid: string, miseId: number, uid: string) {
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM competency_results WHERE guild_id = ? AND discord_id = ? AND source = 'mise' AND ref = ?").bind(gid, uid, miseId),
+    env.DB.prepare("DELETE FROM skill_evidence WHERE guild_id = ? AND discord_id = ? AND source = ?").bind(gid, uid, `mise:${miseId}`),
+  ]);
+}
+/** Delete a learner's paper (their work, events and results): they can be invited again, with a new paper. */
+export async function resetTaker(env: Env, g: GuildRow, id: number, takerId: number, invite = false) {
+  const m = await getMise(env, g, id);
+  const t = await one<{ id: number; discord_id: string }>(env, "SELECT id, discord_id FROM mise_takers WHERE id = ? AND mise_id = ?", takerId, id);
+  if (!t) throw new MiseError("Unknown learner.", 404);
+  await clearResults(env, g.id, id, t.discord_id);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM mise_takers WHERE id = ?").bind(t.id),
+    env.DB.prepare("DELETE FROM app_settings WHERE k = ?").bind(`ident:mes:${t.id}`),
+  ]);
+  if (!invite) return { removed: 1, invited: 0, sent: 0 };
+  const live = statusOf(m) !== "closed";
+  const r = await addTakers(env, g, id, [t.discord_id], live);
+  return { removed: 1, invited: r.invited, sent: r.sent };
 }
 /** Close it for everyone: the papers still open are handed in as they are. */
 export async function closeMise(env: Env, g: GuildRow, id: number) {
   await getMise(env, g, id);
   await run(env, "UPDATE mises SET status = 'closed', closed_at = ?, ends_at = COALESCE(MIN(ends_at, ?), ?) WHERE id = ?", now(), now(), now(), id);
-  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", id);
+  const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume') AND minutes IS NULL", id);
   for (const t of open) await submitTaker(env, t.id, null, true);
 }
 export async function removeTaker(env: Env, g: GuildRow, id: number, takerId: number) {
@@ -513,8 +624,9 @@ export async function learnerInfo(env: Env, takerId: number) {
   if (!x) return null;
   const { t, m } = x, c = contentOf(m), st = settingsOf(m);
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", t.guild_id, t.discord_id);
-  return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(m), taker: t.status, name: p?.name ?? null,
-    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: m.starts_at, endsAt: m.ends_at, now: now(), noPaste: st.noPaste,
+  const mt = forTaker(m, t);
+  return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(mt), taker: t.status, name: p?.name ?? null,
+    n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: mt.starts_at, endsAt: mt.ends_at, minutes: t.minutes ?? null, now: now(), noPaste: st.noPaste,
     lockScreen: st.lockScreen, lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null };
 }
 /** Why their session stopped (the last "lock" event): fullscreen, hidden, blur, reload. */
@@ -523,6 +635,8 @@ const lockWhy = (t: Pick<MiseTakerRow, "events">) => String(parse<MiseEvent[]>(t
 async function writable(env: Env, takerId: number) {
   const x = await loadTaker(env, takerId);
   if (!x) throw new MiseError("unknown", 404);
+  // a late learner: their own window
+  x.m = forTaker(x.m, x.t);
   const s = statusOf(x.m);
   if (x.t.status === "submitted") throw new MiseError("submitted", 409);
   if (x.t.status === "locked" || x.t.status === "resume") throw new MiseError("locked", 409);
@@ -538,8 +652,11 @@ export async function startTaker(env: Env, takerId: number) {
   const back = await run(env, "UPDATE mise_takers SET status = 'active', last_seen = ? WHERE id = ? AND status = 'resume'", now(), takerId);
   const { t, m } = await writable(env, takerId);
   const c = contentOf(m), t0 = now();
+  let ends = m.ends_at;
   if (t.status === "invited") {
     await run(env, "UPDATE mise_takers SET status = 'active', started_at = ?, last_seen = ?, cur_item = ?, item_since = ? WHERE id = ? AND status = 'invited'", t0, t0, c.situations[0]?.id ?? "q1", t0, t.id);
+    // a late learner: their time starts now
+    if (isLate(t)) { ends = t0 + (t.minutes as number) * 60; await run(env, "UPDATE mise_takers SET ends_at = ? WHERE id = ?", ends, t.id); }
     await pushEvent(env, t.id, [t0, "start", "", 0]);
   } else if (settingsOf(m).lockScreen && !back.meta.changes) {
     // full screen rule: opening the page again (a reload, another tab or device) while working stops the session too
@@ -553,7 +670,7 @@ export async function startTaker(env: Env, takerId: number) {
     // the last automatic checks and AI categories of each situation (labels only)
     checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, (v.results ?? []).map((r) => ({ id: r.id, ok: r.ok }))])),
     ai: Object.fromEntries(Object.entries(ai).map(([k, v]) => [k, { left: Math.max(0, AI_CHECKS_PER_ITEM - v.filter((x: any) => !x.submit).length), last: (v.filter((x: any) => !x.submit).at(-1)?.categories ?? []).map((id) => ({ id, label: categoryLabel(id) })) }])),
-    endsAt: m.ends_at, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
+    endsAt: ends, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
   };
 }
 
@@ -810,12 +927,14 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
     return {
       id: t.id, discord_id: t.discord_id, name: names.get(t.discord_id) ?? null, test: staff.has(t.discord_id), status: t.status, live: liveStatus(t, st, t0),
       lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null, locks: ev.filter((e) => e[1] === "lock").length, net: net[t.id] ?? null,
+      autoSub: t.status === "submitted" && ev.filter((e) => e[1] === "submit").at(-1)?.[3] === 1,
       // right so far: a QCM answered right, a situation whose last run passed every check
       correct: itemIds(c).filter((k) => sc.items[k]?.attempted && sc.items[k]?.score === 100).length,
       item: t.cur_item, itemSince: t.item_since, answered: itemIds(c).filter((k) => attempted(c, k, d.answers[k])).length,
       timeSec: t.started_at ? Math.max(0, (t.submitted_at ?? t0) - t.started_at) : 0, workSec: Math.round(Object.values(spent).reduce((a, b) => a + (Number(b) || 0), 0) / 1000),
       runs: st.runs, checks: st.checks, leaves: st.leaves, awaySec: st.awaySec, away: st.away, pastes: st.pastes, pasteChars: st.pasteChars, blockedPastes: st.blockedPastes,
       lastAt: Math.max(t.last_seen ?? 0, st.lastAt ?? 0) || null, started_at: t.started_at, submitted_at: t.submitted_at,
+      late: t.minutes ? { minutes: t.minutes, endsAt: t.ends_at ?? null } : null,
       score: t.status === "submitted" ? sc.total : null, toGrade: t.status === "submitted" ? sc.toGrade : 0, items: sc.items, sent_at: t.sent_at, comment: t.comment,
     };
   });
@@ -859,8 +978,10 @@ export async function setGrade(env: Env, g: GuildRow, id: number, b: any) {
   const item = itemOf(contentOf(m), b.item);
   if (!item) throw new MiseError("Unknown item.");
   const grades = parse<Record<string, any>>(t.grades, {});
-  if (b.score === null || b.score === "") delete grades[item];
-  else grades[item] = { score: Math.max(0, Math.min(100, Math.round(Number(b.score) || 0))), comment: str(b.comment, 600), teacher: true };
+  const note = str(b.comment, 600);
+  // no score: back to the automatic one (a comment alone stays, for the learner)
+  if (b.score === null || b.score === "") { if (note) grades[item] = { comment: note }; else delete grades[item]; }
+  else grades[item] = { score: Math.max(0, Math.min(100, Math.round(Number(b.score) || 0))), comment: note, teacher: true };
   await run(env, "UPDATE mise_takers SET grades = ? WHERE id = ?", JSON.stringify(grades), t.id);
   await refreshScore(env, t.id);
 }
@@ -880,10 +1001,20 @@ export async function sendResults(env: Env, g: GuildRow, id: number, b: any) {
     const sc = scoreMise(c, dataOf(t));
     if (sc.toGrade) { skipped++; continue; }
     const icon = (v: number | null, done: boolean) => (!done ? "⚪" : (v ?? 0) >= 85 ? "✅" : (v ?? 0) > 0 ? "🟡" : "❌");
-    const lines = [...c.situations.map((s, i) => `${icon(sc.items[s.id].score, sc.items[s.id].attempted)} **Situation ${i + 1}** · ${s.title} — ${sc.items[s.id].score ?? 0} %`),
-      ...c.qcm.map((q, i) => `${icon(sc.items[q.id].score, sc.items[q.id].attempted)} **QCM ${i + 1}** · ${q.notion}`)];
+    const d = dataOf(t);
+    // each item with what was wrong and what to study again: the teacher's (or Claude's) comment; else what we know
+    const note = (id: string, fallback: string) => str(d.grades[id]?.comment, 400) || fallback;
+    const fields = [
+      ...c.situations.map((s, i) => { const it = sc.items[s.id]; return { name: `${icon(it.score, it.attempted)} Situation ${i + 1} · ${s.title} — ${it.score ?? 0} %`.slice(0, 250),
+        value: note(s.id, !it.attempted ? `Pas faite. À travailler : ${s.notions.join(", ") || s.title}.` : (it.score ?? 0) >= 85 ? "Réussie." : `À revoir : ${s.notions.join(", ") || s.title}.`).slice(0, 1000) }; }),
+      ...c.qcm.map((q, i) => { const it = sc.items[q.id], ch = d.answers[q.id]?.choice; return { name: `${icon(it.score, it.attempted)} QCM ${i + 1} · ${q.notion}`.slice(0, 250),
+        value: note(q.id, ch === q.correct ? "Bonne réponse." : `${ch == null ? "Pas de réponse." : "Mauvaise réponse."} La bonne réponse : ${q.choices[q.correct]}. À revoir : ${q.notion}.`).slice(0, 1000) }; }),
+    ].slice(0, 25);
     const comment = str(t.comment, 1000) || defaultComment(sc.total, weakNotions(c, sc));
-    const ok = await dm(env, t.discord_id, { embeds: [{ title: `🧪 ${m.title} : ${sc.total} %`, color: sc.total >= 60 ? 0x16a34a : 0xd97706, description: [comment, "", ...lines].join("\n").slice(0, 4000) }] });
+    // an embed holds 6000 characters at most: the item comments are cut to fit
+    let room = 5600 - comment.length - m.title.length;
+    for (const f of fields) { const n = f.name.length + f.value.length; if (n > room) f.value = f.value.slice(0, Math.max(20, room - f.name.length - 1)) + "…"; room -= f.name.length + f.value.length; }
+    const ok = await dm(env, t.discord_id, { embeds: [{ title: `🧪 ${m.title} : ${sc.total} %`.slice(0, 250), color: sc.total >= 60 ? 0x16a34a : 0xd97706, description: comment.slice(0, 4000), fields: fields.filter((f) => f.value) }] });
     if (ok) { sent++; await run(env, "UPDATE mise_takers SET sent_at = ? WHERE id = ?", now(), t.id); }
   }
   return { sent, skipped };
@@ -908,13 +1039,124 @@ export async function resultsCsv(env: Env, g: GuildRow, id: number) {
     ...v.takers.filter((t) => t.status === "submitted").map((t) => [t.name || t.discord_id, t.score, ...items.map((x) => t.items[x.id]?.score ?? ""), t.toGrade])]);
 }
 
+// ------------------------------------------------------------------ correction by Claude (claude.ai): out, then back in
+/** What the teacher gives Claude to grade with: the instructions, the paper with what's expected, then each learner's work. */
+export const GRADE_FORMAT = "classbot-mise-grades@1";
+const GRADE_PROMPT = [
+  "Tu es formateur en développement web et tu corriges une mise en situation passée en classe.",
+  "Ce fichier contient : les éléments de l'épreuve (« items » : les mises en situation avec la consigne, le résultat attendu, une solution modèle et les vérifications automatiques ; les QCM avec la bonne réponse), puis le travail de chaque apprenant (« learners »).",
+  "Pour CHAQUE apprenant et CHAQUE mise en situation (kind « situation ») qu'il a remise, donne une note de 0 à 100 :",
+  "- d'après ce que la consigne demande et le résultat attendu ; une autre façon de faire qui marche est juste (la solution modèle n'est qu'un exemple) ;",
+  "- les vérifications automatiques (auto_checks) sont des indices, pas la note : vérifie le code toi-même ;",
+  "- une étape faite en partie vaut une partie des points ; un code vide ou seulement le code de départ vaut 0 ;",
+  "- le commentaire (1 à 3 phrases, en français, en tutoyant l'apprenant) dit ce qui est juste, ce qui manque ou est faux et pourquoi (la ligne ou l'instruction en cause), et la notion précise à revoir ; ne donne pas la solution complète.",
+  "Écris aussi un commentaire SANS note (pas de « score ») pour :",
+  "- chaque mise en situation non faite (attempted: false) : ce qu'elle demandait et la notion à étudier ;",
+  "- chaque QCM (ils sont déjà notés automatiquement) : si la réponse est juste, une phrase qui confirme pourquoi ; sinon, pourquoi son choix est faux, ce qui est juste, et la notion à revoir.",
+  "Chaque apprenant doit donc avoir un commentaire pour CHAQUE item.",
+  "Tout commentaire d'un item qui n'est pas entièrement réussi (score < 100, situation non faite, QCM faux ou sans réponse) se termine par une phrase « À revoir : … » qui nomme les notions précises à retravailler, tirées de SES erreurs (par exemple « À revoir : l'événement submit d'un formulaire ; e.preventDefault() »).",
+  "Puis, pour chaque apprenant, un commentaire général (2 à 4 phrases, tutoiement) : ses points forts, ce qu'il doit retravailler.",
+  "Garde exactement les identifiants donnés (« learner » et « item »).",
+  "Réponds UNIQUEMENT avec un JSON au format de « output_format », sans texte autour (je l'importerai dans ClassBot).",
+].join("\n");
+export async function answersExport(env: Env, g: GuildRow, id: number) {
+  const m = await getMise(env, g, id);
+  const c = contentOf(m);
+  const takers = await all<MiseTakerRow>(env, "SELECT * FROM mise_takers WHERE mise_id = ? AND status != 'invited' ORDER BY id", id);
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, p.name || ""] as const));
+  const staff = await staffIds(env, g.id);
+  const items = [
+    ...c.situations.map((s, i) => ({ item: s.id, kind: "situation", label: `Mise en situation ${i + 1}`, title: s.title, points: s.points, competencies: s.competencies, notions: s.notions,
+      context: s.context, questions: s.questions, expected: s.expected, starter_files: s.files.map((f) => ({ name: f.name, content: f.starter })),
+      model_solution: s.solution, auto_checks: s.checks.map((k) => k.label) })),
+    ...c.qcm.map((q, i) => ({ item: q.id, kind: "qcm", label: `QCM ${i + 1}`, points: q.points, notion: q.notion, question: q.question, ...(q.code ? { code: q.code } : {}), choices: q.choices, correct: q.correct, correct_text: q.choices[q.correct] })),
+  ];
+  const learners = takers.map((t) => {
+    const d = dataOf(t), sc = scoreMise(c, d), spent = parse<Record<string, number>>(t.spent, {});
+    const work: Record<string, any> = {};
+    for (const s of c.situations) {
+      const a = d.answers[s.id] || {};
+      const res = d.checks[s.id]?.results ?? [];
+      work[s.id] = { attempted: !!sc.items[s.id]?.attempted, files: a.files || {}, auto_checks: res.map((r) => ({ check: s.checks.find((k) => k.id === r.id)?.label ?? r.id, ok: !!r.ok })),
+        auto_score: sc.items[s.id]?.auto ?? null, minutes: Math.round((spent[s.id] || 0) / 60000) };
+    }
+    for (const q of c.qcm) {
+      const ch = d.answers[q.id]?.choice;
+      work[q.id] = { choice: Number.isInteger(ch) ? ch : null, choice_text: Number.isInteger(ch) ? q.choices[ch] ?? null : null, right: ch === q.correct };
+    }
+    const ev = parse<MiseEvent[]>(t.events, []);
+    return { learner: String(t.id), name: names.get(t.discord_id) || t.discord_id, status: t.status, ...(staff.has(t.discord_id) ? { test: true } : {}),
+      auto_score: sc.total, pastes: ev.filter((e) => e[1] === "paste").length, work };
+  });
+  return {
+    format: "classbot-mise-answers@1", exported_at: new Date(now() * 1000).toISOString(),
+    mise: { id: m.id, title: c.title || m.title, metier: c.metier, week: m.week, competencies: c.competencies },
+    instructions: GRADE_PROMPT,
+    output_format: {
+      format: GRADE_FORMAT,
+      grades: [{ learner: "<learner>", item: "<item d'une mise en situation faite>", score: "<0 à 100>", comment: "<1 à 3 phrases>" }, { learner: "<learner>", item: "<item d'un QCM ou d'une situation non faite>", comment: "<1 à 3 phrases, sans score>" }],
+      comments: [{ learner: "<learner>", comment: "<2 à 4 phrases>" }],
+    },
+    items, learners,
+  };
+}
+/** Claude's correction back: each grade becomes the teacher's grade of that item (still editable), each comment theirs. */
+export async function importGrades(env: Env, g: GuildRow, id: number, text: unknown) {
+  const m = await getMise(env, g, id);
+  const c = contentOf(m);
+  let j: any;
+  try { j = typeof text === "string" ? extractJson(text) : text; } catch { j = null; }
+  if (!j || typeof j !== "object" || (!Array.isArray(j.grades) && !Array.isArray(j.comments))) throw new MiseError("This isn't Claude's correction: paste the JSON it answered (with « grades » and « comments »).");
+  const takers = await all<MiseTakerRow>(env, "SELECT * FROM mise_takers WHERE mise_id = ? AND status != 'invited'", id);
+  const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", g.id)).map((p) => [p.discord_id, (p.name || "").toLowerCase()] as const));
+  const who = (v: unknown) => { const k = String(v ?? "").trim(); return takers.find((t) => String(t.id) === k) || takers.find((t) => t.discord_id === k) || takers.find((t) => k && names.get(t.discord_id) === k.toLowerCase()) || null; };
+  const ids = new Set([...c.situations.map((s) => s.id), ...c.qcm.map((q) => q.id)]);
+  // every comment of an item not fully right ends with what to study again: when Claude forgot, the item's notions
+  const notionsOf = (item: string) => { const s = c.situations.find((x) => x.id === item); if (s) return s.notions.length ? s.notions.join(", ") : s.title; const q = c.qcm.find((x) => x.id === item); return q ? q.notion : ""; };
+  const restudy = (t: MiseTakerRow, item: string, note: string, score: number | null) => {
+    if (!note || /à (revoir|étudier|retravailler)\s*:/i.test(note)) return note;
+    const q = c.qcm.find((x) => x.id === item);
+    const ok = q ? dataOf(t).answers[item]?.choice === q.correct : score != null && score >= 100;
+    const n = notionsOf(item);
+    return ok || !n ? note : `${note.replace(/\s*$/, "")}${/[.!?…]$/.test(note.trim()) ? "" : "."} À revoir : ${n}.`.slice(0, 600);
+  };
+  const skipped: string[] = [];
+  const byTaker = new Map<number, Record<string, any>>();
+  let grades = 0, comments = 0;
+  for (const x of (Array.isArray(j.grades) ? j.grades : []).slice(0, 2000)) {
+    const t = who(x?.learner), item = String(x?.item ?? "");
+    const sc = Number(x?.score);
+    if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
+    if (!ids.has(item)) { skipped.push(`unknown item « ${item.slice(0, 20)} »`); continue; }
+    const noScore = x?.score === null || x?.score === undefined || x?.score === "";
+    const note = restudy(t, item, str(x?.comment, 560), noScore ? (c.qcm.some((q) => q.id === item) ? null : 0) : Math.round(sc));
+    if (noScore && !note) { skipped.push(`nothing for ${item}`); continue; }
+    if (!noScore && !Number.isFinite(sc)) { skipped.push(`no score for ${item}`); continue; }
+    const gr = byTaker.get(t.id) ?? parse<Record<string, any>>(t.grades, {});
+    // no score (a QCM, an item not done): only the comment; the score stays (automatic, or the one already given)
+    gr[item] = noScore ? { ...(gr[item] || {}), comment: note } : { score: Math.max(0, Math.min(100, Math.round(sc))), comment: note, teacher: true, by: "claude" };
+    byTaker.set(t.id, gr); grades++;
+  }
+  for (const [tid, gr] of byTaker) { await run(env, "UPDATE mise_takers SET grades = ? WHERE id = ?", JSON.stringify(gr), tid); await refreshScore(env, tid); }
+  for (const x of (Array.isArray(j.comments) ? j.comments : []).slice(0, 500)) {
+    const t = who(x?.learner), txt = str(x?.comment, 1000);
+    if (!t) { skipped.push(`unknown learner « ${String(x?.learner ?? "").slice(0, 40)} »`); continue; }
+    if (!txt) continue;
+    await run(env, "UPDATE mise_takers SET comment = ? WHERE id = ?", txt, t.id); comments++;
+  }
+  return { grades, comments, learners: byTaker.size, skipped: [...new Set(skipped)].slice(0, 20) };
+}
+
 // ------------------------------------------------------------------ cron
 /** Time is up: the session closes, the papers still open are handed in as they are. */
 export async function miseCron(env: Env) {
   const late = await all<{ id: number }>(env, "SELECT id FROM mises WHERE status = 'live' AND ends_at IS NOT NULL AND ends_at < ? LIMIT 3", now() - 60).catch(() => []);
   for (const m of late) {
     await run(env, "UPDATE mises SET status = 'closed', closed_at = ? WHERE id = ?", now(), m.id);
-    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume')", m.id);
+    const open = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE mise_id = ? AND status IN ('active', 'locked', 'resume') AND minutes IS NULL", m.id);
     for (const t of open) await submitTaker(env, t.id, null, true).catch((e) => console.error("mise auto submit", e));
   }
+  // learners given it later: their own time is up
+  const lateOpen = await all<{ id: number }>(env, "SELECT id FROM mise_takers WHERE ends_at IS NOT NULL AND ends_at < ? AND status IN ('active', 'locked', 'resume') LIMIT 20", now() - 60).catch(() => []);
+  for (const t of lateOpen) await submitTaker(env, t.id, null, true).catch((e) => console.error("mise late auto submit", e));
 }
