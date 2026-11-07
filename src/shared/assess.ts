@@ -12,6 +12,7 @@ import { dm, linkBtn, row } from "./discord.ts";
 import { signText } from "./integrity.ts";
 import { t } from "./i18n.ts";
 import { askReview, refreshAssessLevels } from "./review/debrief.ts";
+import { forgetIdent, identOf } from "./identity.ts";
 import { readImagesJson, VisionError } from "./vision.ts";
 import { conceptsOf } from "./review/engine.ts";
 import { extractJson } from "./ai.ts";
@@ -48,6 +49,8 @@ export interface TakerRow {
   started_at: number | null; deadline: number | null; submitted_at: number | null; locked_at: number | null; lock_reason: string | null; resume_ok: number; unlocks: number;
   events: string | null; grades: string | null; score: number | null; summary: string | null; invited_at: number | null;
   open_until: number | null;   // a retake: their own link stays open until then, even when the assessment is closed
+  attempt?: number;            // 1, then 2… after « Réassigner » (in the link's signature: an earlier link is refused)
+  sent_at?: number | null; sent_hash?: string | null;   // the results sent by DM, and what they said
 }
 export class AssessError extends Error {}
 
@@ -132,14 +135,18 @@ export async function saveAssessment(env: Env, g: GuildRow, id: number | null, b
   return Number(r.meta.last_row_id);
 }
 
+// the attempt is signed in the link from the 2nd one on: after « Réassigner », the link of the earlier attempt is refused
+// (the 1st attempt's links stay what they always were)
+const signedPart = (body: string, attempt: number) => `quiz:${body}${attempt > 1 ? `:a${attempt}` : ""}`;
+const attemptOf = async (env: Env, takerId: number) => (await one<{ attempt: number | null }>(env, "SELECT attempt FROM assessment_takers WHERE id = ?", takerId).catch(() => null))?.attempt || 1;
 export async function takerToken(env: Env, takerId: number, exp: number) {
   const body = `${takerId}.${exp}`;
-  return `${body}.${await signText(env, "quiz:" + body)}`;
+  return `${body}.${await signText(env, signedPart(body, await attemptOf(env, takerId)))}`;
 }
 export async function readTakerToken(env: Env, token: string): Promise<number | null> {
   const m = String(token).match(/^(\d+)\.(\d+)\.([A-Za-z0-9_-]{32})$/);
   if (!m || Number(m[2]) < now()) return null;
-  return (await signText(env, `quiz:${m[1]}.${m[2]}`)) === m[3] ? Number(m[1]) : null;
+  return (await signText(env, signedPart(`${m[1]}.${m[2]}`, await attemptOf(env, Number(m[1]))))) === m[3] ? Number(m[1]) : null;
 }
 export const quizUrl = (env: Env, token: string) => `${(env.PUBLIC_URL || "").replace(/\/$/, "")}/quiz/${token}`;
 
@@ -240,6 +247,71 @@ export async function retake(env: Env, g: GuildRow, id: number, students: unknow
   }
   const names = kept.length ? await all<{ discord_id: string; name: string | null }>(env, `SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id IN (${kept.map(() => "?").join(",")})`, g.id, ...kept) : [];
   return { retake: out.length, sent, until, kept: kept.map((k) => names.find((n) => n.discord_id === k)?.name || k) };
+}
+
+/**
+ * « Réassigner »: learners who already took the assessment get a new attempt. The current attempt is archived (the
+ * teacher reads it as « Tentative 1 » in their paper), what it gave their record goes, and the paper starts again: only
+ * the new attempt counts (score, competencies, skills, points, the debrief, exports). Leaving, pastes and the sign-in
+ * belong to each attempt. The link carries the attempt, so the old link stops working; the new one goes by DM and stays
+ * open for some days, even when the assessment is closed. A learner who never started just gets their link again.
+ */
+export async function reassign(env: Env, g: GuildRow, id: number, students: unknown, o: { days?: number; send?: boolean } = {}) {
+  const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!a) throw new AssessError("This assessment doesn't exist anymore.");
+  const qs = questionsOf(a);
+  if (a.status === "draft") throw new AssessError("Invite the class first: there is nothing to reassign yet.");
+  const ids = [...new Set((Array.isArray(students) ? students : []).map(String))].filter((s) => /^\d{1,25}$/.test(s));
+  if (!ids.length) throw new AssessError("Choose at least one student.");
+  if (ids.length > 40) throw new AssessError("40 students at most at once.");
+  const t0 = now(), until = t0 + Math.max(1, Math.min(30, Math.round(o.days || 3))) * 86400;
+  const out: number[] = [];
+  let archived = 0;
+  for (const uid of ids) {
+    const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", id, uid);
+    if (!tk) continue;   // never invited: « Invite » is for them
+    if (tk.status !== "invited") {
+      const ident = await identOf(env, "quiz", tk.id).catch(() => null);
+      await run(env, `INSERT INTO assessment_attempts (taker_id, assessment_id, guild_id, discord_id, n, status, seed, answers, grades, score, summary, events, ident, started_at, submitted_at, sent_at, archived_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tk.id, id, tk.guild_id, uid, tk.attempt || 1, tk.status, tk.seed, tk.answers, tk.grades, tk.score, tk.summary, tk.events,
+        ident ? JSON.stringify(ident) : null, tk.started_at, tk.submitted_at, tk.sent_at ?? null, t0);
+      await clearResults(env, a, tk);
+      await run(env, `UPDATE assessment_takers SET status = 'invited', attempt = COALESCE(attempt, 1) + 1, seed = ?, sid = NULL, answers = NULL, pos = 0, started_at = NULL, deadline = NULL,
+        submitted_at = NULL, locked_at = NULL, lock_reason = NULL, resume_ok = 0, unlocks = 0, grades = NULL, score = NULL, summary = NULL, sent_at = NULL, sent_hash = NULL,
+        invited_at = ?, open_until = ?, events = ? WHERE id = ?`, Math.floor(Math.random() * 2 ** 31), t0, until, JSON.stringify([[t0, "reassign"]]), tk.id);
+      await forgetIdent(env, "quiz", tk.id);
+      archived++;
+    } else await run(env, "UPDATE assessment_takers SET open_until = ? WHERE id = ?", until, tk.id);
+    out.push(tk.id);
+  }
+  let sent = 0;
+  if (o.send !== false && out.length) {
+    const st = settingsOf(a), L = g.lang;
+    const takers = await all<{ id: number; discord_id: string }>(env, `SELECT id, discord_id FROM assessment_takers WHERE id IN (${out.map(() => "?").join(",")})`, ...out);
+    for (const tk of takers) {
+      const url = quizUrl(env, await takerToken(env, tk.id, until + 86400));
+      const ok = await dm(env, tk.discord_id, {
+        embeds: [{ title: t(L, "assess.dm_title", { title: a.title }), color: 0x2563eb,
+          description: t(L, "assess.dm_body", { n: qs.length, time: st.minutes ? t(L, "assess.dm_time", { m: st.minutes }) : "", until: `<t:${until}:F>` }) }],
+        components: [row(linkBtn(t(L, "assess.dm_btn"), url, "📝"))],
+      });
+      if (ok) sent++;
+    }
+  }
+  return { reassigned: out.length, archived, sent, until };
+}
+/** The earlier attempts of the papers of an assessment (« Tentative 1 »…), for the teacher. */
+export async function attemptsOf(env: Env, assessmentId: number) {
+  return all<{ taker_id: number; n: number; status: string | null; seed: number | null; answers: string | null; grades: string | null; score: number | null; summary: string | null; events: string | null; started_at: number | null; submitted_at: number | null; sent_at: number | null; archived_at: number }>(env,
+    "SELECT taker_id, n, status, seed, answers, grades, score, summary, events, started_at, submitted_at, sent_at, archived_at FROM assessment_attempts WHERE assessment_id = ? ORDER BY taker_id, n", assessmentId).catch(() => []);
+}
+/** What a learner's results say (score, each grade, the summary), short: « changed since it was sent » when it differs. */
+export function resultPrint(tk: Pick<TakerRow, "score" | "grades" | "summary">): string {
+  const g = parse<Record<string, Grade>>(tk.grades, {});
+  const txt = `${tk.score ?? ""}|${Object.keys(g).sort().map((k) => `${k}:${g[k]?.verdict ?? ""}:${g[k]?.score ?? ""}:${g[k]?.comment ?? ""}`).join(";")}|${tk.summary ?? ""}`;
+  let h = 5381;
+  for (let i = 0; i < txt.length; i++) h = ((h * 33) ^ txt.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }
 
 /** An empty paper taken back: what it gave the student's record goes (skills, competencies, points, the debrief's level). */
@@ -706,13 +778,13 @@ export async function applyResults(env: Env, a: AssessRow, takerId: number) {
 
 /** Send each graded student their score and the comments (when the teacher is happy with the grades). onlyNew: only the
  * papers not sent yet (a retake graded after the others). */
-export async function sendResults(env: Env, g: GuildRow, a: AssessRow, onlyNew = false) {
+export async function sendResults(env: Env, g: GuildRow, a: AssessRow, onlyNew = false, only: number[] | null = null) {
   const qs = questionsOf(a), st = settingsOf(a);
   const takers = await all<TakerRow>(env, "SELECT * FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", a.id);
   const L = g.lang;
   let sent = 0;
   const released = await releasedOf(env, a.id);
-  for (const tk of takers.filter((x) => !needsGrading(x) && !(onlyNew && released.has(x.id))).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
+  for (const tk of takers.filter((x) => !needsGrading(x) && !(onlyNew && (x.sent_at || released.has(x.id))) && (!only || only.includes(x.id))).slice(0, 40)) {   // a paper the AI couldn't fully grade isn't sent yet
     const grades = parse<Record<string, Grade>>(tk.grades, {});
     const order = paperFor(qs, tk.seed, st.shuffle);
     const fr = L === "fr";
@@ -726,7 +798,7 @@ export async function sendResults(env: Env, g: GuildRow, a: AssessRow, onlyNew =
     const ok = await dm(env, tk.discord_id, { embeds: [{ title: t(L, "assess.result_title", { title: a.title, score: tk.score ?? 0 }), color: (tk.score ?? 0) >= 60 ? 0x16a34a : 0xd97706,
       description: [tk.summary ?? "", "", tally, "", ...lines].join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000) }],
       ...(url ? { components: [row(linkBtn(fr ? "Voir ma correction" : "See my correction", url, "📄"))] } : {}) });
-    if (ok) { sent++; released.add(tk.id); }
+    if (ok) { sent++; released.add(tk.id); await run(env, "UPDATE assessment_takers SET sent_at = ?, sent_hash = ? WHERE id = ?", now(), resultPrint(tk), tk.id); }
   }
   if (st.showResults) await setReleased(env, a.id, [...released]);
   return sent;

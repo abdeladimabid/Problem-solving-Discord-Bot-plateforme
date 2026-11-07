@@ -25,6 +25,7 @@ import { SprintError, proposeLevels, saveDecision, saveSprintComment, sprintComm
 import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/gh.ts";
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { aiLines, makeProbes, memberInsights, scanLinks } from "../shared/review/insights.ts";
+import { attemptsOf, reassign, resultPrint } from "../shared/assess.ts";
 import { AssessError, generateQuestions, gradeTaker, promptSet, sameAssessment, sameQuestions, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
@@ -765,7 +766,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, papers: undefined, ...(await assessView(env, g, a.id)) });
     }
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|unlock|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|reassign|unlock|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -800,6 +801,10 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     if (act === "retake" && method === "POST") {
       // students who missed it (absent, never started, handed in empty): their own link, open some days, even closed
       const r = await retake(env, g, id, body.students, { days: Number(body.days) || 3, send: body.send !== false });
+      return ok({ ...r, ...(await assessView(env, g, id)) });
+    }
+    if (act === "reassign" && method === "POST") {
+      const r = await reassign(env, g, id, body.students, { days: Number(body.days) || 3, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });
     }
     if (act === "options" && method === "POST") { await saveOptions(env, g, id, body); await libAssessment(env, g, id); return ok(await assessView(env, g, id)); }
@@ -851,7 +856,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
     }
     if (act === "close") { await run(env, "UPDATE assessments SET status = 'closed' WHERE id = ?", id); return ok(await assessView(env, g, id)); }
     if (act === "reopen") { await run(env, "UPDATE assessments SET status = 'open', closes_at = MAX(COALESCE(closes_at, 0), ?) WHERE id = ?", now() + 86400, id); return ok(await assessView(env, g, id)); }
-    if (act === "results") return ok({ sent: await sendResults(env, g, a, body?.only === "new") });
+    if (act === "results") return ok({ sent: await sendResults(env, g, a, body?.only === "new", Array.isArray(body?.takers) ? body.takers.map(Number).filter(Number.isInteger) : null) });
     if (act === "links") return ok({ links: await takerLinks(env, a) });
     if (act === "share") return ok({ url: method === "DELETE" ? await renewShareLink(env, id) : await shareLink(env, id) });
   }
@@ -944,6 +949,9 @@ async function assessView(env: Env, g: GuildRow, id: number) {
   const released = await releasedOf(env, id);
   // network alerts (an option): opened outside the class's network, or from several networks
   const net = settingsOf(a).netAlerts ? await netFlags(env, "quiz", takers.map((t) => t.id)) : {};
+  // the earlier attempts (« Réassigner »): read-only, for the paper's history
+  const history = await attemptsOf(env, id);
+  const pj = (s: string | null, d: any) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
   return {
     assessment: { ...a, questions: qs, settings: settingsOf(a) }, students,
     takers: takers.map((tk) => {
@@ -954,7 +962,12 @@ async function assessView(env: Env, g: GuildRow, id: number) {
       // a paper with a question not graded yet (old ones: "Correction automatique indisponible") shows as "to grade"
       return { id: tk.id, discord_id: tk.discord_id, name: tk.name, status: tk.status === "graded" && needsGrading(tk) ? "submitted" : tk.status, pos: tk.pos, answered: Object.values(answers).filter((v: any) => (Array.isArray(v) ? v.length : String(v ?? "").trim())).length,
         started_at: tk.started_at, deadline: tk.deadline, submitted_at: tk.submitted_at, locked_at: tk.locked_at, lock_reason: tk.lock_reason, resume_ok: tk.resume_ok, unlocks: tk.unlocks,
-        score: tk.score, summary: tk.summary, answers, grades, events, open_until: tk.open_until ?? null, sent: released.has(tk.id), order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id), net: net[tk.id] ?? null };
+        score: tk.score, summary: tk.summary, answers, grades, events, open_until: tk.open_until ?? null, net: net[tk.id] ?? null,
+        order: paperFor(qs, tk.seed, settingsOf(a).shuffle).map((q: any) => q.id),
+        // results sent: when, and whether the grades changed since
+        sent: !!tk.sent_at || released.has(tk.id), sent_at: tk.sent_at ?? null, sent_changed: !!tk.sent_hash && tk.sent_hash !== resultPrint(tk), attempt: tk.attempt || 1,
+        attempts: history.filter((h) => h.taker_id === tk.id).map((h) => ({ n: h.n, status: h.status, score: h.score, summary: h.summary, started_at: h.started_at, submitted_at: h.submitted_at, sent_at: h.sent_at, archived_at: h.archived_at,
+          answers: pj(h.answers, {}), grades: pj(h.grades, {}), events: pj(h.events, []), order: paperFor(qs, h.seed ?? 0, settingsOf(a).shuffle).map((q: any) => q.id) })) };
     }),
   };
 }
