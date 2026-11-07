@@ -14,7 +14,7 @@ import type { SqlVerdict } from "./sqlrx.ts";
 import { aiJudge, codeFeedback, codeReview, explainQuestions, generateHints, gradeExplanation, modelSolution } from "./ai.ts";
 import { recordCodeEvidence, recordSqlEvidence, skillChoices } from "./codeskills.ts";
 import type { GeneratedQuick, GeneratedWrite, QuickExample } from "./ai.ts";
-import { HackerRankError, recentSolves } from "./hackerrank.ts";
+import { HackerRankError, challengeInfo, recentSolves, trackScores } from "./hackerrank.ts";
 import { LANGS, QUICK_LANGS, RunnerUnavailable, STARTER, isCodeLang, judge } from "./runner.ts";
 import type { CodeLang, Judgement, TestCase } from "./runner.ts";
 import { arenaChannel } from "./arena.ts";
@@ -333,6 +333,7 @@ export async function renderFor(env: Env, guild: GuildRow, c: ChallengeRow, a: A
     extra.codeLang = o.codeLang ?? codeLangFor(guild, p, a);
   }
   if (c.kind === "code") extra.hrState = !p?.hr_username ? "none" : p.hr_verified ? "ok" : "unverified";
+  if (c.kind === "code" && a.status === "pending" && !a.hr_base && p?.hr_verified) await hrSnapshot(env, a, c, p);
   const ig = integrityOf(guild);
   if (c.kind === "write" && a.status === "pending" && (ig.editor !== "off" || a.origin === "session" || a.origin === "exam") && env.PUBLIC_URL) {
     extra.editorUrl = editorUrl(env, await editorToken(env, a.id, a.discord_id));
@@ -739,25 +740,64 @@ export async function feedbackFor(env: Env, guild: GuildRow, a: AttemptRow, c: C
 }
 
 // --------------------------------------------------------- HackerRank checks
-export type CodingCheck = Outcome | "not_yet" | "unavailable" | "too_old" | "unverified";
+// HackerRank's "recent challenges" lists every SUBMISSION, wrong answers too, so it can't prove a solve. The proof is
+// the student's practice score in the challenge's track: all tests passed adds the challenge's full points, a wrong
+// answer adds 0. So when the challenge is opened we keep that score (attempts.hr_base), and ✅ Verify asks for the
+// full points on top of it (minus what other challenges submitted meanwhile in the same track can explain).
+export type CodingCheck = Outcome | "not_yet" | "unavailable" | "too_old" | "unverified" | "failing" | "no_proof";
+
+interface HrBase { t: string; s: number; m: number; at?: number }
+const hrBaseOf = (a: AttemptRow): HrBase | null => { try { const b = JSON.parse(a.hr_base || "null"); return b && typeof b.s === "number" ? b : null; } catch { return null; } };
+
+/** Keep the student's track score when they open a HackerRank challenge (not if they already submitted it since:
+ *  then the score may already hold the solve). HackerRank unreachable → no proof: ✅ Verify offers the self-report. */
+export async function hrSnapshot(env: Env, a: AttemptRow, c: ChallengeRow, p: PlayerRow): Promise<void> {
+  if (!c.hr_slug || !p.hr_username || a.hr_base) return;
+  try {
+    const slug = c.hr_slug.toLowerCase();
+    const [recent, info, scores] = await Promise.all([recentSolves(p.hr_username), challengeInfo(slug), trackScores(p.hr_username)]);
+    const when = recent.get(slug);
+    if (when !== undefined && (!when || when >= a.started_at - 120)) return;
+    const base: HrBase = { t: info.track, s: scores.get(info.track) ?? 0, m: info.max, at: now() };
+    await run(env, "UPDATE attempts SET hr_base = ? WHERE id = ? AND hr_base IS NULL", JSON.stringify(base), a.id);
+    a.hr_base = JSON.stringify(base);
+  } catch (e) {
+    if (!(e instanceof HackerRankError)) throw e;
+  }
+}
 
 export async function verifyCoding(env: Env, guild: GuildRow, a: AttemptRow, c: ChallengeRow, p: PlayerRow | null): Promise<CodingCheck> {
   if (!p?.hr_username || !c.hr_slug) return "unavailable";
   if (!p.hr_verified) return "unverified";
-  let solves: Map<string, number>;
+  const slug = c.hr_slug.toLowerCase();
+  const base = hrBaseOf(a);
+  let solves: Map<string, number>, scores: Map<string, number>;
   try {
-    solves = await recentSolves(p.hr_username);
+    [solves, scores] = await Promise.all([recentSolves(p.hr_username), trackScores(p.hr_username)]);
   } catch (e) {
     if (e instanceof HackerRankError) return "unavailable";
     throw e;
   }
-  const when = solves.get(c.hr_slug.toLowerCase());
+  const when = solves.get(slug);
   if (when === undefined) return "not_yet";
-  // only a solve made AFTER the challenge was given counts (2 min grace for clock differences)
+  // a submission made before the challenge was given doesn't count (2 min grace for clock differences)
   if (when && when < a.started_at - 120) {
     await run(env, "UPDATE attempts SET status = 'expired', finished_at = ? WHERE id = ? AND status = 'pending'", now(), a.id);
     return "too_old";
   }
+  if (!base) return "no_proof";
+  // what the student's other submissions since the score was kept can add to the same track: never counted as this solve
+  let others = 0;
+  try {
+    const from = base.at ?? a.started_at;
+    const since = [...solves].filter(([s, t]) => s !== slug && (!t || t > from)).slice(0, 8);
+    for (const [s] of since) { const i = await challengeInfo(s); if (i.track === base.t) others += i.max; }
+  } catch (e) {
+    if (e instanceof HackerRankError) return "unavailable";
+    throw e;
+  }
+  const gained = (scores.get(base.t) ?? 0) - base.s - others;
+  if (gained < base.m - 0.01) return "failing";
   return finish(env, guild, a, c, true, { verified: 1 });
 }
 

@@ -64,7 +64,10 @@ export const discordCalls: { method: string; path: string; body: any }[] = [];
 export const hr = {
   contests: {} as Record<string, { name: string; start: number | null; end: number | null }>,
   boards: {} as Record<string, { username: string; rank: number; score: number; time_taken: number }[]>,
-  solves: {} as Record<string, { slug: string; at: number }[]>,
+  // submissions on HackerRank: ok false = a wrong answer (listed, but adds nothing to the score), score = part of the points
+  solves: {} as Record<string, { slug: string; at: number; ok?: boolean; score?: number }[]>,
+  maxScore: {} as Record<string, number>,      // slug -> full points (default 20); slugs starting with java- are in the Java track
+  scoresDown: false,
   profiles: {} as Record<string, string>,      // username (lowercase) -> bio
   down: false,
 };
@@ -227,15 +230,30 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
       const off = Number(url.searchParams.get("offset") ?? 0), lim = Number(url.searchParams.get("limit") ?? 100);
       return Response.json({ models: all.slice(off, off + lim).map((e) => ({ hacker: e.username, rank: e.rank, score: e.score, time_taken: e.time_taken })), total: all.length });
     }
+    const trackOf = (slug: string) => (slug.startsWith("java-") ? "java" : "algorithms");
+    const maxOf = (slug: string) => hr.maxScore[slug] ?? 20;
     m = url.pathname.match(/^\/rest\/contests\/master\/challenges\/([^/]+)$/);
-    if (m) return Response.json({ model: { slug: m[1], name: "Imported " + m[1], difficulty_name: "Medium" } });
+    if (m) return Response.json({ model: { slug: m[1], name: "Imported " + m[1], difficulty_name: "Medium", max_score: maxOf(m[1]), track: { slug: "x", track_slug: trackOf(m[1]) } } });
+    m = url.pathname.match(/^\/rest\/hackers\/([^/]+)\/scores_elo$/);
+    if (m) {
+      if (hr.scoresDown) return new Response("oops", { status: 503 });
+      const best = new Map<string, number>();
+      for (const x of hr.solves[m[1].toLowerCase()] ?? []) best.set(x.slug, Math.max(best.get(x.slug) ?? 0, x.ok === false ? 0 : x.score ?? maxOf(x.slug)));
+      const tr: Record<string, number> = { algorithms: 0, java: 0 };
+      for (const [slug, v] of best) tr[trackOf(slug)] += v;
+      return Response.json(Object.entries(tr).map(([slug, score]) => ({ slug, name: slug, practice: { score } })));
+    }
     m = url.pathname.match(/^\/rest\/contests\/([^/]+)$/);
     if (m) {
       const c = hr.contests[m[1]];
       return c ? Response.json({ model: { slug: m[1], name: c.name, epoch_starttime: c.start, epoch_endtime: c.end } }) : new Response("nope", { status: 404 });
     }
     m = url.pathname.match(/^\/rest\/hackers\/([^/]+)\/recent_challenges$/);
-    if (m) return Response.json({ models: (hr.solves[m[1].toLowerCase()] ?? []).map((s) => ({ ch_slug: s.slug, name: s.slug, created_at: new Date(s.at * 1000).toISOString() })) });
+    if (m) {
+      const last = new Map<string, number>();
+      for (const x of hr.solves[m[1].toLowerCase()] ?? []) last.set(x.slug, Math.max(last.get(x.slug) ?? 0, x.at));
+      return Response.json({ models: [...last].map(([slug, at]) => ({ ch_slug: slug, name: slug, created_at: new Date(at * 1000).toISOString() })) });
+    }
     return new Response("unknown", { status: 404 });
   }
   if (url.hostname === "raw.githubusercontent.com") {

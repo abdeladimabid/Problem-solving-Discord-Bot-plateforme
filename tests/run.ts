@@ -412,13 +412,27 @@ section("HackerRank problems: only verified solves count");
   const c = solveAnswer(q1("SELECT challenge_id FROM attempts WHERE id = ?", aid).challenge_id);
   await click(U.alice, chk!);
   check(text(lastPatch()).includes("don't see"), "not solved yet → asks to submit first");
-  hr.solves["alice_hr"] = [{ slug: c.hr_slug, at: clock.now() }];
+  check(!!q1("SELECT hr_base FROM attempts WHERE id = ?", aid).hr_base, "opening a HackerRank challenge keeps the student's track score (the proof)");
+  // the starter code submitted as is: HackerRank lists the submission, but the score doesn't move
+  hr.solves["alice_hr"] = [{ slug: c.hr_slug, at: clock.now(), ok: false }];
   await click(U.alice, chk!);
-  check(text(lastPatch()).includes("confirms"), "solve verified via HackerRank");
+  check(/not all its tests pass/.test(text(lastPatch())) && q1("SELECT status, points FROM attempts WHERE id = ?", aid).status === "pending", "a wrong answer on HackerRank is NOT a solve");
+  // some tests pass: part of the points → still not solved
+  hr.solves["alice_hr"].push({ slug: c.hr_slug, at: clock.now(), score: 5 });
+  await click(U.alice, chk!);
+  check(/not all its tests pass/.test(text(lastPatch())), "some tests passing is not a solve either");
+  // another easy problem solved meanwhile can't stand in for this one
+  hr.solves["alice_hr"].push({ slug: "solve-me-first-x", at: clock.now() + 5 });
+  await click(U.alice, chk!);
+  check(/not all its tests pass/.test(text(lastPatch())), "points won on another challenge meanwhile don't count for this one");
+  hr.solves["alice_hr"].push({ slug: c.hr_slug, at: clock.now() });
+  await click(U.alice, chk!);
+  check(text(lastPatch()).includes("confirms"), "solve verified via HackerRank (all tests passed: the full points)");
   check(q1("SELECT verified, status FROM attempts WHERE id = ?", aid).verified === 1, "attempt marked verified");
 
   // 📋 the challenge message was lost (Discord dropped it): /practice type:pending opens it again, with ✅ Verify
   {
+    clock.advance(10);
     await slash(U.alice, "practice", { difficulty: "easy", type: "coding" });
     const lost = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);
     check(/Message gone before you verified/.test(text(lastPatch())), "the HackerRank challenge says how to get it back");
@@ -446,6 +460,19 @@ section("HackerRank problems: only verified solves count");
   await click(U.carol, `chk:${aidC}`);
   check(text(lastPatch()).includes("before"), "a solve older than the challenge is refused");
   check(q1("SELECT status, points FROM attempts WHERE id = ?", aidC).points === 0, "no points for an old solve");
+
+  // the score couldn't be read when the challenge was opened: no automatic proof → self-report for the teacher
+  {
+    hr.scoresDown = true;
+    await slash(U.carol, "practice", { difficulty: "easy", type: "coding" });
+    hr.scoresDown = false;
+    const aidN = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);
+    const cN = solveAnswer(q1("SELECT challenge_id FROM attempts WHERE id = ?", aidN).challenge_id);
+    hr.solves["carol_hr"] = [...(hr.solves["carol_hr"] || []), { slug: cN.hr_slug, at: clock.now() }];
+    await click(U.carol, `chk:${aidN}`);
+    check(/can't prove/.test(text(lastPatch())) && ids(lastPatch()).includes(`claim:${aidN}`) && q1("SELECT status FROM attempts WHERE id = ?", aidN).status === "pending",
+      "no score kept at the start → no automatic solve, the self-report for the teacher");
+  }
 
   // HackerRank down → self-report, which needs the teacher's approval
   await slash(U.bob, "practice", { difficulty: "easy", type: "coding" });
@@ -557,7 +584,7 @@ section("daily challenge: posted in #arena by cron, solved, bonus & streak");
   const first = ids(pl).find((i) => /^(ans|ansm|sub|chk):/.test(i))!;
   const aid = Number(first.split(":")[1]);
   if (c.kind === "code") {
-    hr.solves["carol_hr"] = [{ slug: c.hr_slug, at: clock.now() }];
+    hr.solves["carol_hr"] = [...(hr.solves["carol_hr"] || []), { slug: c.hr_slug, at: clock.now() }];
     await click(U.carol, `chk:${aid}`);
   } else if (c.kind === "write") await submit(U.carol, `msub:${aid}`, c.solution);
   else if (first.startsWith("ans:")) await click(U.carol, `ans:${aid}:${c.answer}`);
