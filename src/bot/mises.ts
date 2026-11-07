@@ -12,8 +12,9 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
-import { identOk, noteIp, signInUrl } from "../shared/identity.ts";
+import { identOk, noteIp, signInUrl, staffPaper } from "../shared/identity.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
+import { CODE_EDITOR_JS } from "./codeeditor.ts";
 import { MiseError, aiCheck, learnerEvent, learnerInfo, readTakerToken, runItem, saveItem, startTaker, submitTaker } from "../shared/misesdb.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -25,8 +26,9 @@ export async function handleMise(request: Request, env: Env, ctx: Ctx, token: st
   const tk = await env.DB.prepare("SELECT guild_id FROM mise_takers WHERE id = ?").bind(takerId).first<{ guild_id: string }>().catch(() => null);
   if (!tk) return json({ error: "expired" }, 404);
   env = forClass(env, tk.guild_id);   // the AI check uses this class's keys
-  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title
-  if (!(await identOk(env, "mes", takerId, request))) {
+  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title.
+  // A teacher's own test paper opens without it.
+  if (!(await identOk(env, "mes", takerId, request)) && !(await staffPaper(env, "mes", takerId))) {
     if (request.method === "GET" && action === "info") { const i = await learnerInfo(env, takerId); return json({ ident: false, signIn: signInUrl(env, "mes", token), title: i?.title ?? "", metier: i?.metier ?? "", status: i?.status ?? "closed" }); }
     return json({ error: "identify" }, 401);
   }
@@ -125,6 +127,10 @@ h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .CodeMirror { font: 14px/1.55 "JetBrains Mono", ui-monospace, monospace; height: auto; }
 .starter .CodeMirror { background: var(--code); } .starter .CodeMirror-cursors { display: none; }
 .editor .CodeMirror { height: 380px; }
+.cb-monaco { height: 420px; } .edload { height: 420px; display: grid; place-items: center; color: var(--faint); font-size: 13px; background: var(--code); }
+.ftab.own { display: inline-flex; align-items: center; gap: 6px; padding-right: 6px; } .ftab .fx { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0 3px; font: 13px system-ui; border-radius: 5px; }
+.ftab .fx:hover, .ftab .fx:focus-visible { color: var(--ink); background: var(--line); } .ftab.add { font-family: system-ui; color: var(--blue-ink); }
+#dlg input[type=text] { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink); font: 14px "JetBrains Mono", monospace; margin-top: 4px; }
 .cm-s-default .CodeMirror-gutters { background: var(--code); border-right: 1px solid var(--line); }
 .empty-file { padding: 12px 14px; color: var(--faint); font-size: 13px; background: var(--code); }
 .etop { display: flex; align-items: flex-end; gap: 8px; } .spacer { flex: 1; }
@@ -162,7 +168,7 @@ dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--c
 dialog::backdrop { background: #0b122299; }
 dialog h2 { margin: 0 0 8px; font-size: 19px; } dialog ul { margin: 8px 0 14px; padding-left: 20px; } .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-@media (max-width: 1050px) { .sit { grid-template-columns: 1fr; } .editor .CodeMirror { height: 320px; } .prog { top: 57px; } .prog-legend { display: none; } }
+@media (max-width: 1050px) { .sit { grid-template-columns: 1fr; } .editor .CodeMirror { height: 320px; } .cb-monaco, .edload { height: 360px; } .prog { top: 57px; } .prog-legend { display: none; } }
 @media (max-width: 560px) { .top { gap: 8px; padding: 8px 12px; } .saved { display: none; } main { padding: 12px; } .pi { min-width: 40px; padding: 0 7px; } #finish span { display: none; } }
 </style>
 </head>
@@ -189,6 +195,7 @@ dialog h2 { margin: 0 0 8px; font-size: 19px; } dialog ul { margin: 8px 0 14px; 
 <script src="` + CM + String.raw`/mode/sql/sql.min.js"></script>
 <script src="` + CM + String.raw`/addon/edit/matchbrackets.min.js"></script>
 <script src="` + CM + String.raw`/addon/edit/closebrackets.min.js"></script>
+<script>` + CODE_EDITOR_JS + String.raw`</script>
 <script>
 (function () {
 "use strict";
@@ -208,6 +215,7 @@ function dark() { var t = store.get("cb-mes-theme"); return t ? t === "dark" : !
 function applyTheme() {
   document.documentElement.dataset.theme = dark() ? "dark" : "light";
   CMS.forEach(function (c) { c.setOption("theme", dark() ? "material-darker" : "default"); });
+  if (ED) ED.theme(dark());
 }
 var CMS = [];
 $("#theme").onclick = function () { store.set("cb-mes-theme", dark() ? "light" : "dark"); applyTheme(); };
@@ -244,14 +252,17 @@ var FS_OK = !!(document.fullscreenEnabled && document.documentElement.requestFul
 var LOGS = {}, DIRTY = {}, RAN = {}, LASTERR = {}, CONSOLE = {}, OUTTAB = {}, FILE = {}, SFILE = {}, DOCS = {}, VISITED = {};
 // the starter code shown or folded (remembered on this device)
 var STARTOPEN = store.get("cb-mes-start") !== "closed";
-var ed = null, startEd = null, saveTimer = null, logTimer = null;
+// ED: the code editor (Monaco, else CodeMirror: codeeditor.ts) · FILESET: the rules of the learner's own files
+var ED = null, startEd = null, saveTimer = null, logTimer = null, FILESET = { allow: false, max: 8, kb: 20, exts: {} };
+var fkey = function (sid, name) { return sid + "/" + name; };
 try { VISITED = JSON.parse(store.get(KEY + ":visited") || "{}") || {}; } catch (e) { VISITED = {}; }
 var sit = function (id) { return P.situations.filter(function (s) { return s.id === id; })[0] || null; };
 var qcm = function (id) { return P.qcm.filter(function (q) { return q.id === id; })[0] || null; };
 var squash = function (s) { return String(s || "").replace(/\s+/g, ""); };
 function changed(id) {
   var s = sit(id);
-  if (s) return s.files.some(function (f) { var a = A[id] && A[id].files && A[id].files[f.name]; return a != null && squash(a) !== squash(f.starter); });
+  if (s) return s.files.some(function (f) { var a = A[id] && A[id].files && A[id].files[f.name]; return a != null && squash(a) !== squash(f.starter); })
+    || ownFiles(s).some(function (n) { return squash(A[id].files[n]) !== ""; });
   return !!(A[id] && A[id].choice != null);
 }
 function stateOf(id) {
@@ -312,6 +323,7 @@ function start() {
     }
     LOCKED = false; LOCK = !!r.lockScreen;
     P = r.paper; A = r.answers || {}; SPENT = r.spent || {}; ENDS = r.endsAt; OFFSET = Date.now() / 1000 - r.now; NOPASTE = !!r.noPaste;
+    if (r.files) FILESET = r.files;
     Object.keys(r.checks || {}).forEach(function (k) { CHECKS[k] = r.checks[k]; });
     Object.keys(r.ai || {}).forEach(function (k) { AI[k] = r.ai[k]; });
     ORDER = P.situations.map(function (s) { return s.id; }).concat(P.qcm.map(function (q) { return q.id; }));
@@ -367,7 +379,7 @@ document.addEventListener("keydown", function (e) {
 });
 
 // ---------------------------------------------------------------- a QCM
-function release() { if (ed) { ed.swapDoc(CodeMirror.Doc("")); ed = null; } }
+function release() { if (ED) { ED.dispose(); ED = null; } }
 function drawQcm(q) {
   release();
   var i = P.qcm.indexOf(q), mine = A[q.id] && A[q.id].choice;
@@ -434,6 +446,7 @@ function drawSituation(s) {
   SFILE[s.id] = SFILE[s.id] || FILE[s.id];
   // two sets of tabs: the starter code and the editor each show their own file
   var tabs = function (pfx) { var cur = pfx === "sf" ? SFILE[s.id] : FILE[s.id]; return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-' + pfx + '="' + esc(f.name) + '" aria-selected="' + (f.name === cur) + '">' + esc(f.name) + "</button>"; }).join("") + "</div>"; };
+  var etabs = '<div id="etabs">' + editorTabs(s) + "</div>";
   var left = AI[s.id] ? AI[s.id].left : 3;
   var hasPreview = s.runtime === "web" || s.runtime === "php";
   OUTTAB[s.id] = OUTTAB[s.id] || (hasPreview ? "preview" : "console");
@@ -444,8 +457,8 @@ function drawSituation(s) {
     + '<div class="card"><h2>Ce que tu dois faire</h2><ol class="qs" translate="no">' + qs + '</ol><div id="trq"></div></div>'
     + (s.checks.length ? '<div class="card"><h2>Vérifications automatiques</h2><ul class="checks" id="cklist"></ul><p class="muted small" style="margin:8px 0 0">Elles se lancent à chaque exécution.</p></div>' : "")
     + '</div><div class="col">'
-    + '<div class="card editor"><div class="etop">' + tabs("ef") + '<span class="spacer"></span><button class="btn icon" type="button" id="reset" title="Repartir du code de départ (ce fichier)" aria-label="Repartir du code de départ pour ce fichier">↺</button></div>'
-    + '<div class="cmbox" id="editor"></div>'
+    + '<div class="card editor"><div class="etop">' + etabs + '<span class="spacer"></span><button class="btn icon" type="button" id="reset" title="Repartir du code de départ (ce fichier)" aria-label="Repartir du code de départ pour ce fichier">↺</button></div>'
+    + '<div class="cmbox" id="editor"><div class="edload">Chargement de l’éditeur…</div></div>'
     + '<div class="actions"><button class="btn primary" type="button" id="run">▶ Exécuter <kbd>Ctrl+Entrée</kbd></button>'
     + '<button class="btn" type="button" id="aicheck"' + (left <= 0 ? " disabled" : "") + '>Vérifier mon code <span class="left-n" id="aileft">' + left + "</span></button>"
     + '<span class="muted small" id="runinfo"></span></div></div>'
@@ -461,39 +474,128 @@ function drawSituation(s) {
   startEd = CodeMirror($("#starter"), { value: "", readOnly: true, lineNumbers: true, theme: dark() ? "material-darker" : "default", tabSize: 2 });
   CMS.push(startEd);
   if (s.schema) CMS.push(CodeMirror($("#schema"), { value: s.schema, readOnly: true, lineNumbers: true, mode: "text/x-sql", theme: dark() ? "material-darker" : "default" }));
-  ed = CodeMirror($("#editor"), { value: "", lineNumbers: true, indentUnit: 2, tabSize: 2, indentWithTabs: false, matchBrackets: true, autoCloseBrackets: true, dragDrop: !NOPASTE, theme: dark() ? "material-darker" : "default",
-    extraKeys: { Tab: function (c) { if (c.somethingSelected()) c.indentSelection("add"); else c.replaceSelection("  "); }, "Shift-Tab": function (c) { c.indentSelection("subtract"); } } });
-  CMS.push(ed);
-  DOCS[s.id] = DOCS[s.id] || {};
   showStarter(s, SFILE[s.id]);
-  showFile(s, FILE[s.id]);
+  mountEditor(s);
   $("#sdet").addEventListener("toggle", function () { STARTOPEN = $("#sdet").open; store.set("cb-mes-start", STARTOPEN ? "open" : "closed"); $(".sdet-h").textContent = STARTOPEN ? "masquer" : "afficher"; if (STARTOPEN) setTimeout(function () { startEd.refresh(); }, 0); });
-  ed.on("beforeChange", function (c, ch) {
-    if (ch.origin === "paste" || ch.origin === "drop") {
-      var txt = ch.text.join("\n");
-      if (NOPASTE) { ch.cancel(); toast("Le copier-coller est désactivé pour cette mise en situation."); logOf(s.id, FILE[s.id]).pastes++; call("/event", { kind: "paste-blocked", item: s.id, n: txt.length, text: txt.slice(0, 400) }); }
-      else if (txt.length >= 2) call("/event", { kind: "paste", item: s.id, n: txt.length, text: txt.slice(0, 400) });
-    }
-  });
-  ed.on("change", function (c, ch) {
-    if (ch.origin === "setValue") return;
-    logOf(s.id, FILE[s.id]).changes.push([ms(), c.indexFromPos(ch.from), ch.removed.join("\n").length, ch.text.join("\n"), ch.origin || ""]);
-    A[s.id].files[FILE[s.id]] = c.getValue();
-    DIRTY[s.id] = true; RAN[s.id] = false;
-    queueSave(s.id);
-  });
   $$("[data-sf]").forEach(function (b) { b.onclick = function () { showStarter(s, b.dataset.sf); }; });
-  $$("[data-ef]").forEach(function (b) { b.onclick = function () { showFile(s, b.dataset.ef); }; });
   $("#reset").onclick = function () {
     var f = s.files.filter(function (x) { return x.name === FILE[s.id]; })[0];
-    if (f && confirm("Remettre le code de départ dans " + f.name + " ? Ton code actuel de ce fichier sera remplacé.")) { ed.setValue(f.starter); A[s.id].files[f.name] = f.starter; logOf(s.id, f.name).changes.push([ms(), 0, 0, f.starter, "setValue"]); DIRTY[s.id] = true; queueSave(s.id); }
+    if (!f || !ED) return;
+    askDialog("Repartir du code de départ ?", "Ton code actuel de " + f.name + " sera remplacé par le code de départ.", "Remettre le code de départ", function () {
+      ED.reset(fkey(s.id, f.name), f.starter); A[s.id].files[f.name] = f.starter; logOf(s.id, f.name).changes.push([ms(), 0, 0, f.starter, "setValue"]); DIRTY[s.id] = true; RAN[s.id] = false; queueSave(s.id);
+    });
   };
   $("#run").onclick = runCode;
   $("#aicheck").onclick = aiCheck;
   $$("[data-ot]").forEach(function (b) { b.onclick = function () { OUTTAB[s.id] = b.dataset.ot; showOut(); }; });
   showOut(); drawChecks(); drawFeedback(); drawConsole();
   wireNav(); wireTr(s);
-  setTimeout(function () { ed.refresh(); startEd.refresh(); }, 0);
+  setTimeout(function () { startEd.refresh(); }, 0);
+}
+/** The code editor of the situation (Monaco when it loaded, else CodeMirror), on the learner's current file. */
+function mountEditor(s) {
+  var box = $("#editor");
+  CBEditor.load().then(function () {
+    if (CUR !== s.id || !document.body.contains(box) || ED) return;
+    box.innerHTML = "";
+    ED = CBEditor.create(box, {
+      dark: dark(), noPaste: NOPASTE, now: ms,
+      onChange: function (key, entries, value) {
+        var i = key.indexOf("/"), sid = key.slice(0, i), name = key.slice(i + 1);
+        if (!A[sid] || !A[sid].files || !(name in A[sid].files)) return;
+        var lg = logOf(sid, name); entries.forEach(function (e) { lg.changes.push(e); });
+        A[sid].files[name] = value; DIRTY[sid] = true; RAN[sid] = false; queueSave(sid);
+      },
+      onPaste: function (t) { if (t.length >= 2) call("/event", { kind: "paste", item: s.id, n: t.length, text: t.slice(0, 400) }); },
+      onBlocked: function (t) { toast("Le copier-coller est désactivé pour cette mise en situation."); logOf(s.id, FILE[s.id]).pastes++; call("/event", { kind: "paste-blocked", item: s.id, n: t.length, text: t.slice(0, 400) }); },
+      onRun: function () { runCode(); },
+      onSave: function () { saveNow(s.id); }
+    });
+    showFile(s, FILE[s.id]);
+  });
+}
+/** The learner's own files (not the starter ones), in the order they made them. */
+function ownFiles(s) { var st = s.files.map(function (f) { return f.name; }); return Object.keys((A[s.id] && A[s.id].files) || {}).filter(function (n) { return st.indexOf(n) < 0; }); }
+function rulesFor(s) { var ex = FILESET.exts || {}; return { allow: !!FILESET.allow && (ex[s.runtime] || []).length > 0, max: Math.max(FILESET.max || 8, s.files.length), kb: FILESET.kb || 20, exts: ex[s.runtime] || [] }; }
+function extOf(n) { n = String(n).toLowerCase(); if (/\.blade\.php$/.test(n)) return ".blade.php"; var i = n.lastIndexOf("."); return i > 0 ? n.slice(i) : ""; }
+/** Why a file name is refused (the server checks the same rules: mises.ts fileNameProblem). */
+function nameProblem(s, n, renaming) {
+  var R = rulesFor(s), names = Object.keys(A[s.id].files), st = s.files.map(function (f) { return f.name; });
+  if (!R.allow) return "La création de fichiers n’est pas autorisée pour cet exercice.";
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,39}$/.test(n) || n.indexOf("..") >= 0) return "Nom invalide : lettres, chiffres, - _ et . seulement (40 caractères au plus).";
+  if (R.exts.indexOf(extOf(n)) < 0) return "Extension non autorisée. Autorisées : " + R.exts.join(" ");
+  if (names.some(function (f) { return f.toLowerCase() === n.toLowerCase() && f !== renaming; })) return "Un fichier porte déjà ce nom.";
+  if (renaming == null && names.length >= R.max) return R.max + " fichiers au plus.";
+  if (renaming != null && st.indexOf(renaming) >= 0) return "Un fichier de départ ne peut pas être renommé.";
+  return "";
+}
+function editorTabs(s) {
+  var R = rulesFor(s), own = ownFiles(s), cur = FILE[s.id];
+  return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-ef="' + esc(f.name) + '" aria-selected="' + (f.name === cur) + '" title="Fichier de départ (ne peut pas être supprimé)">' + esc(f.name) + "</button>"; }).join("")
+    + own.map(function (n) { return '<span class="ftab own" role="tab" data-ef="' + esc(n) + '" aria-selected="' + (n === cur) + '" tabindex="0">' + esc(n) + '<button type="button" class="fx" data-fren="' + esc(n) + '" aria-label="Renommer ' + esc(n) + '" title="Renommer">✎</button><button type="button" class="fx" data-fdel="' + esc(n) + '" aria-label="Supprimer ' + esc(n) + '" title="Supprimer">✕</button></span>'; }).join("")
+    + (R.allow && s.files.length + own.length < R.max ? '<button type="button" class="ftab add" id="fnew" title="Nouveau fichier (' + esc(R.exts.join(" ")) + ')" aria-label="Nouveau fichier">＋ Fichier</button>' : "") + "</div>";
+}
+function wireTabs(s) {
+  $$("[data-ef]", $("#etabs")).forEach(function (b) {
+    b.onclick = function (e) { if (e.target.closest("[data-fren],[data-fdel]")) return; showFile(s, b.dataset.ef); };
+    b.onkeydown = function (e) { if ((e.key === "Enter" || e.key === " ") && e.target === b) { e.preventDefault(); showFile(s, b.dataset.ef); } };
+  });
+  $$("[data-fren]", $("#etabs")).forEach(function (b) { b.onclick = function () { fileDialog(s, b.dataset.fren); }; });
+  $$("[data-fdel]", $("#etabs")).forEach(function (b) { b.onclick = function () { var n = b.dataset.fdel; askDialog("Supprimer " + n + " ?", "Son contenu sera perdu.", "Supprimer", function () { deleteFile(s, n); }); }; });
+  if ($("#fnew")) $("#fnew").onclick = function () { fileDialog(s, null); };
+}
+function redrawTabs(s) { if ($("#etabs")) { $("#etabs").innerHTML = editorTabs(s); wireTabs(s); } }
+/** A small question in the page's dialog (not confirm(): a native box could stop a full-screen session). */
+function askDialog(title, text, ok, fn) {
+  var d = $("#dlg");
+  d.innerHTML = "<h2>" + esc(title) + '</h2><p class="muted">' + esc(text) + '</p><div class="dlg-foot"><button class="btn" type="button" id="ano">Annuler</button><button class="btn primary" type="button" id="ayes">' + esc(ok) + "</button></div>";
+  d.showModal();
+  $("#ano", d).onclick = function () { d.close(); };
+  $("#ayes", d).onclick = function () { d.close(); fn(); };
+  $("#ano", d).focus();
+}
+function fileDialog(s, renaming) {
+  var d = $("#dlg"), R = rulesFor(s), n0 = renaming || "";
+  d.innerHTML = "<h2>" + (renaming ? "Renommer " + esc(renaming) : "Nouveau fichier") + '</h2><form id="ff" novalidate><label for="fname" class="small">Nom du fichier</label><input type="text" id="fname" value="' + esc(n0) + '" autocomplete="off" spellcheck="false" placeholder="ex. ' + esc(R.exts[R.exts.length - 1] === ".js" ? "app.js" : "fichier" + (R.exts[0] || "")) + '">'
+    + '<p class="muted small">Extensions : ' + esc(R.exts.join(" ")) + (renaming ? "" : " · " + Object.keys(A[s.id].files).length + "/" + R.max + " fichiers") + '</p><p class="small" id="ferr" role="alert" style="color:var(--bad);min-height:1em;margin:0"></p>'
+    + '<div class="dlg-foot"><button class="btn" type="button" id="fno">Annuler</button><button class="btn primary" type="submit">' + (renaming ? "Renommer" : "Créer") + "</button></div></form>";
+  d.showModal();
+  var inp = $("#fname", d); inp.focus(); if (renaming) inp.setSelectionRange(0, Math.max(0, renaming.length - extOf(renaming).length));
+  $("#fno", d).onclick = function () { d.close(); };
+  $("#ff", d).onsubmit = function (e) {
+    e.preventDefault();
+    var n = inp.value.trim(), err = renaming === n ? "" : nameProblem(s, n, renaming);
+    if (err) { $("#ferr", d).textContent = err; inp.focus(); return; }
+    d.close();
+    if (renaming === n) return;
+    if (renaming) renameFile(s, renaming, n); else newFile(s, n);
+  };
+}
+function fileSaved(s, what) { call("/event", { kind: "file", item: s.id, text: what }); DIRTY[s.id] = true; RAN[s.id] = false; saveNow(s.id, true); redrawTabs(s); drawProgSoon(); }
+function newFile(s, n) {
+  A[s.id].files[n] = "";
+  logOf(s.id, n).changes.push([ms(), 0, 0, "", "setValue"]);
+  FILE[s.id] = n;
+  fileSaved(s, "new:" + n);
+  showFile(s, n);
+  if (ED) ED.focus();
+}
+function renameFile(s, a, b) {
+  var files = {}, v = A[s.id].files[a];
+  Object.keys(A[s.id].files).forEach(function (k) { files[k === a ? b : k] = A[s.id].files[k]; });
+  A[s.id].files = files;
+  if (ED) ED.rename(fkey(s.id, a), fkey(s.id, b), b);
+  logOf(s.id, b).changes.push([ms(), 0, 0, v, "setValue"]);
+  if (FILE[s.id] === a) FILE[s.id] = b;
+  fileSaved(s, "rename:" + a + ">" + b);
+  showFile(s, FILE[s.id]);
+}
+function deleteFile(s, n) {
+  delete A[s.id].files[n];
+  if (ED) ED.drop(fkey(s.id, n));
+  if (FILE[s.id] === n) FILE[s.id] = s.files[0].name;
+  fileSaved(s, "delete:" + n);
+  showFile(s, FILE[s.id]);
 }
 /** The starter code panel: its own file (independent of the editor's). */
 function showStarter(s, name) {
@@ -510,15 +612,15 @@ function showStarter(s, name) {
 }
 /** The editor: the learner's file. */
 function showFile(s, name) {
+  if (!A[s.id] || !(name in A[s.id].files)) name = s.files[0].name;
   FILE[s.id] = name;
-  var f = s.files.filter(function (x) { return x.name === name; })[0];
-  if (!f) return;
-  $$("[data-ef]").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.ef === name)); });
-  var doc = DOCS[s.id][name];
-  if (!doc) { doc = DOCS[s.id][name] = CodeMirror.Doc(A[s.id].files[name] != null ? A[s.id].files[name] : f.starter, MODES[f.lang]); var lg = logOf(s.id, name); if (!lg.changes.length) lg.changes.push([ms(), 0, 0, doc.getValue(), "setValue"]); }
-  ed.swapDoc(doc);
-  ed.setOption("mode", MODES[f.lang]);
-  setTimeout(function () { ed.refresh(); }, 0);
+  redrawTabs(s);
+  if ($("#reset")) $("#reset").hidden = !s.files.some(function (f) { return f.name === name; });
+  if (!ED) return;
+  var key = fkey(s.id, name), first = !ED.has(key);
+  ED.open(key, name, A[s.id].files[name]);
+  // the typing record of a file starts with its text (a reload: what was saved)
+  if (first) { var lg = logOf(s.id, name); if (!lg.changes.length) lg.changes.push([ms(), 0, 0, A[s.id].files[name], "setValue"]); }
 }
 function showOut() {
   var t = OUTTAB[CUR];
@@ -637,6 +739,12 @@ function buildDoc(s, files, runId) {
   var safeJs = function (t) { return String(t || "").replace(/<\/script/gi, "<\\/script"); };
   // each file put in the page is first a mark (\u0001n\u0001), replaced at the end while counting the lines
   var blocks = [], mark = function (name, open, text, close) { blocks.push({ name: name, open: open, text: String(text || ""), close: close }); return "\u0001" + (blocks.length - 1) + "\u0001"; };
+  // their own files: only when the page links them (<link href="mon.css">, <script src="app.js">)
+  Object.keys(files).filter(function (n) { return !s.files.some(function (f) { return f.name === n; }); }).forEach(function (n) {
+    var lang = /\.css$/i.test(n) ? "css" : /\.m?js$/i.test(n) ? "javascript" : "";
+    var linked = new RegExp((lang === "css" ? "<link[^>]*href=" : "<script[^>]*src=") + "[\"']\\.?/?" + n.replace(/[.]/g, "\\.") + "[\"']", "i").test(doc);
+    if (lang && linked) (lang === "css" ? css : js).push({ name: n, lang: lang });
+  });
   css.forEach(function (f) {
     var re = new RegExp("<link[^>]*href=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>", "i");
     var b = mark(f.name, "<style>\n", files[f.name], "\n</style>");
@@ -717,8 +825,9 @@ function loadSql() {
   if (SQLJS) return SQLJS;
   SQLJS = new Promise(function (res, rej) {
     var sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js";
-    sc.onload = function () { initSqlJs({ locateFile: function (f) { return "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/" + f; } }).then(res, rej); };
-    sc.onerror = rej; document.head.appendChild(sc);
+    var amd = window.define; window.define = undefined;
+    sc.onload = function () { window.define = amd; initSqlJs({ locateFile: function (f) { return "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/" + f; } }).then(res, rej); };
+    sc.onerror = function (e) { window.define = amd; rej(e); }; document.head.appendChild(sc);
   });
   SQLJS.catch(function () { SQLJS = null; });
   return SQLJS;
@@ -875,6 +984,8 @@ function finish(timeUp) {
 }
 $("#finish").onclick = confirmFinish;
 
+// the code editor loads while they read the rules
+CBEditor.load();
 call("/info").then(function (i) { if (i && i.ident === false) return signInScreen(i); if (!i || i.error) { if (i && i.error === "identify") return; return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); } intro(i); });
 })();
 </script>

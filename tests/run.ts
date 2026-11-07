@@ -51,6 +51,7 @@ import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, wor
 import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
 import { matchNames as sheetMatch, findTabs, sheetIdOf, weekKey, sheetCron } from "../src/shared/gsheet.ts";
 import * as M from "../src/shared/mises.ts";
+import { MONACO_VERSION, changeEntries } from "../src/bot/codeeditor.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -7590,10 +7591,11 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   const page = await mes(U.alice.id);
   check(page.status === 200 && page.headers.get("cache-control") === "no-store" && page.headers.get("x-frame-options") === "DENY", "the learner page (not cached, not framable)");
   const h = String(page.data);
-  const js = h.slice(h.indexOf("(function () {"), h.lastIndexOf("</script>"));
-  let parsed = true;
-  try { new Function(js); } catch (e) { parsed = false; console.log(e); }
-  check(parsed && !js.includes("</script"), "its script is valid JavaScript (and never closes its own tag)");
+  // the editor's script and the page's: each one valid on its own (one that closed its own tag would be cut here)
+  const blocks = [...h.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((x) => x[1]);
+  let parsed = blocks.length === 2;
+  for (const js of blocks) { try { new Function(js); } catch (e) { parsed = false; console.log(e); } }
+  check(parsed, "its scripts (the editor's, the page's) are valid JavaScript (and never close their own tag)");
   check(h.includes('sandbox", "allow-scripts allow-modals"') && h.includes("connect-src 'none'") && !h.includes("allow-same-origin"), "the code runs in a sandboxed frame: scripts only, no same origin, no network");
   check((await bot.fetch(new Request("https://bot.example.workers.dev/mes/1.99999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/info"), env, makeCtx())).status === 404, "a forged link is refused");
   const info = await mes(U.alice.id, "info");
@@ -7891,6 +7893,10 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     const i0 = await raw(`/mes/${tk4}/info`);
     check(i0.status === 200 && i0.data.ident === false && i0.data.title && !i0.data.n && String(i0.data.signIn).startsWith("https://discord.com/oauth2/authorize?") && String(i0.data.signIn).includes("scope=identify") && String(i0.data.signIn).includes(encodeURIComponent("mes~" + tk4)) && String(i0.data.signIn).includes(encodeURIComponent("/auth/discord")), "not signed in: only the title and the « Sign in with Discord » address");
     check((await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}" })).data.error === "identify" && (await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).status === 401, "…nothing else opens (not even with a made-up device)");
+    // the teacher's own test paper: no Discord sign-in
+    const tkP = (await api("GET", `/api/mises/${sv3.data.id}/links?g=${G}`)).data.links[U.prof.id].split("/mes/")[1];
+    const iP = await raw(`/mes/${tkP}/info`);
+    check(iP.status === 200 && iP.data.ident === undefined && iP.data.status === "live" && !!(await raw(`/mes/${tkP}/start`, { method: "POST", body: "{}" })).data.paper, "a teacher's test paper opens without the Discord sign-in");
     const ap = await raw("/auth/discord");
     check(ap.status === 200 && String(ap.data).includes("access_token") && String(ap.data).includes("cb-dev"), "/auth/discord: the page Discord sends back to");
     const auth = (token: string, dev: string, ip = "10.1.1.5", state = "mes~" + tk4) => raw("/auth/discord", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": ip }, body: JSON.stringify({ state, token, dev }) });
@@ -8030,6 +8036,153 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     await api("DELETE", `/api/mises/${M7}?g=${G}`);
   }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
+}
+
+section("mises en situation: a VS Code–like editor (Monaco) and the learner's own files");
+{
+  // the rules of their files (pure)
+  const R = M.fileRules("web", {});
+  check(R.allow && R.max === 8 && R.kb === 20 && R.exts.join(" ") === ".html .css .js" && !M.fileRules("node", {}).allow && !M.fileRules("sql", {}).allow && !M.fileRules("web", { files: false }).allow && M.fileRules("php", {}).exts.includes(".blade.php"),
+    "file rules: by runtime (none for Node.js and SQL: one file runs), on by default, the teacher can turn them off");
+  check(M.extOf("welcome.blade.php") === ".blade.php" && M.extOf("app.JS") === ".js" && M.extOf("Makefile") === "", "extensions (a Blade view is .blade.php)");
+  const st = ["index.html", "style.css", "script.js"];
+  check(M.fileNameProblem("app.js", st, st, R) === "" && /Extension/.test(M.fileNameProblem("notes.txt", st, st, R)) && /invalide/.test(M.fileNameProblem("../x.js", st, st, R))
+    && /invalide/.test(M.fileNameProblem("a b.js", st, st, R)) && /déjà/.test(M.fileNameProblem("Script.js", st, st, R)), "a new file: an allowed extension, a clean name, never the same name twice");
+  check(/au plus/.test(M.fileNameProblem("x.js", [...st, "a.js", "b.js", "c.js", "d.js", "e.js"], st, R)) && /départ/.test(M.fileNameProblem("main.js", st, st, R, "script.js"))
+    && M.fileNameProblem("app2.js", [...st, "app.js"], st, R, "app.js") === "" && /autorisée/.test(M.fileNameProblem("x.js", st, st, M.fileRules("web", { files: false }))),
+    "8 files at most (the starter ones count), a starter file can't be renamed (their own can), nothing when the teacher turned it off");
+  const sw = { files: st.map((name) => ({ name, lang: "html" as const, starter: "S:" + name })) };
+  const ws = M.workspaceOf(sw, { "index.html": "<p>moi</p>", "app.js": "let a = 1;", "notes.txt": "x", "../hack.js": "x", "big.js": "y".repeat(30 * 1024) }, R);
+  check(Object.keys(ws).join(",") === "index.html,style.css,script.js,app.js,big.js" && ws["style.css"] === "S:style.css" && ws["app.js"] === "let a = 1;" && ws["big.js"].length === 20 * 1024,
+    "their workspace: every starter file (never removed), then their own files that follow the rules, each one capped");
+  const many: Record<string, string> = {}; for (let i = 0; i < 10; i++) many[`f${i}.js`] = "x";
+  check(Object.keys(M.workspaceOf(sw, { "app.js": "x" }, M.fileRules("web", { files: false }))).length === 3 && Object.keys(M.workspaceOf(sw, many, R)).length === 8, "…none of their own when it's off, and never more files than allowed");
+  // PHP: their included files run with the main one
+  const php = M.phpWithIncludes({ "index.php": "<?php\nrequire_once 'fonctions.php';\nrequire_once './fonctions.php';\ninclude('vue.php');\nrequire 'absent.php';\necho total(2);",
+    "fonctions.php": "<?php\nrequire 'outils.php';\nfunction total($n) { return double($n) + 1; }\n", "outils.php": "<?php function double($n) { return $n * 2; }", "vue.php": "<h1>Titre</h1>", "page.blade.php": "x" }, "index.php");
+  check(php.includes("function total") && php.includes("function double") && (php.match(/function total/g) || []).length === 1 && php.includes("?><h1>Titre</h1><?php") && php.includes("require 'absent.php';") && !php.includes("require_once"),
+    "PHP with several files: require / include of their files put in place (nested, _once only once, HTML kept), the others left as they are");
+  // the editor's changes → the typing record
+  check(JSON.stringify(changeEntries([{ rangeOffset: 2, rangeLength: 0, text: "a" }, { rangeOffset: 9, rangeLength: 3, text: "" }], 7, "")) === JSON.stringify([[7, 9, 3, "", "+delete"], [7, 2, 0, "a", "+input"]])
+    && changeEntries([{ rangeOffset: 0, rangeLength: 0, text: "addEventListener('click', (e) => {\n  \n})" }], 9, "complete")[0][4] === "complete",
+    "the editor's changes → typing-record entries (multi-cursor: the last one first, so the replay applies them in order; a suggestion says it is one)");
+  let doc = "0123456789ab";
+  for (const [, from, removed, text] of changeEntries([{ rangeOffset: 1, rangeLength: 1, text: "X" }, { rangeOffset: 5, rangeLength: 2, text: "YY" }, { rangeOffset: 10, rangeLength: 0, text: "Z" }], 1, "")) doc = doc.slice(0, from) + text + doc.slice(from + removed);
+  check(doc === "0X234YY789Zab", "…replayed like the teacher's replay does, they give the text after the edit");
+  // a paper: their own file saved, run with the others, its typing record kept, shown to the teacher
+  const fw = { format: M.MISE_FORMAT, title: "Les fichiers", week: 3, metier: "Coopérative", competencies: ["C3N1"], qcm: [],
+    situations: [{ title: "Le message", context: "Fatima gère la page de la coopérative Tifawin à Agadir. Elle veut un message dans la console.", difficulty: 1, competencies: ["C3N1"], notions: ["console.log"], runtime: "web",
+      files: [{ name: "index.html", lang: "html", starter: "<h1>Bienvenue</h1>\n<script src=\"script.js\"></script>" }, { name: "script.js", lang: "javascript", starter: "// ici\n" }],
+      questions: ["1. Écris un message dans la console."], expected: "Le message s'affiche.", solution: [{ name: "script.js", content: "console.log('ok');" }],
+      checks: [{ type: "source", pattern: "console\\.log", label: "Un message est écrit" }], errorHints: ["syntax"] }] };
+  const ckF = M.checkMise(JSON.stringify(fw), {});
+  check(!ckF.problems.length, "a one-situation mise for the files " + JSON.stringify(ckF.problems).slice(0, 300));
+  const t0 = clock.now();
+  run1("INSERT INTO mises (guild_id, title, week, comps, target, settings, content, status, starts_at, ends_at, created_at) VALUES (?, 'Les fichiers', 3, '[\"C3N1\"]', '[]', ?, ?, 'live', ?, ?, ?)", G, JSON.stringify({ minutes: 60, maxFiles: 4 }), JSON.stringify(ckF.content), t0, t0 + 3600, t0);
+  const fid = q1("SELECT MAX(id) AS id FROM mises").id as number;
+  run1("INSERT INTO mise_takers (mise_id, guild_id, discord_id, invited_at) VALUES (?, ?, ?, ?)", fid, G, U.alice.id, t0);
+  const sidF = ckF.content!.situations[0].id;
+  const tkF = (await api("GET", `/api/mises/${fid}/links?g=${G}`)).data.links[U.alice.id].split("/mes/")[1];
+  // the learner page
+  const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}`), env, makeCtx())).text();
+  check(pg.includes("window.CBEditor") && pg.includes(`monaco-editor/${MONACO_VERSION}/min`) && pg.includes("emmet-monaco-es@5.5.0") && pg.includes("Nouveau fichier") && pg.includes("CodeMirror"), "the learner page: the editor (Monaco pinned, Emmet, CodeMirror if it can't load) and their files");
+  const mesF = async (a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as Promise<any>;
+  const stF = await mesF("start", {});
+  check(stF.files?.allow === true && stF.files.max === 4 && stF.files.exts.web.includes(".js") && !stF.files.exts.node.length, "the page is told the rules of their files");
+  await mesF("save", { item: sidF, answer: { files: { "index.html": "<h1>Bienvenue</h1>\n<script src=\"app.js\"></script>", "script.js": "// ici\n", "app.js": "console.log('ok');", "evil.php": "x", "../x.js": "y" } },
+    visit: "abcdef12", log: { files: { "app.js": { changes: [[10, 0, 0, "", "setValue"], [12, 0, 0, "console.log('ok');", "complete"]], pastes: 0 } }, focus: [], openMs: 100 } });
+  const ansF = () => JSON.parse(q1("SELECT answers FROM mise_takers WHERE mise_id = ?", fid).answers)[sidF].files;
+  check(Object.keys(ansF()).join(",") === "index.html,script.js,app.js" && ansF()["app.js"] === "console.log('ok');", "saved: their new file with the starter ones (a wrong extension or name is dropped)");
+  const logF = JSON.parse(q1("SELECT logs FROM mise_takers WHERE mise_id = ?", fid).logs)[`${sidF}_abcdef12`];
+  check(logF?.files["app.js"]?.changes.length === 2 && logF.files["app.js"].changes[1][4] === "complete", "…its typing record too (the teacher's replay)");
+  await mesF("event", { kind: "file", item: sidF, text: "new:app.js" });
+  check(JSON.parse(q1("SELECT events FROM mise_takers WHERE mise_id = ?", fid).events).some((e: any) => e[1] === "file" && e[4] === "new:app.js"), "creating a file is written down for the teacher");
+  const runF = await mesF("run", { item: sidF, files: ansF(), measured: {} });
+  check(runF.checks?.[0]?.ok === true, "run: the checks read their own files too (console.log is in app.js)");
+  const five: Record<string, string> = { "index.html": "x", "script.js": "y" }; for (const n of ["a.js", "b.js", "c.js"]) five[n] = "z";
+  await mesF("save", { item: sidF, answer: { files: five } });
+  check(Object.keys(ansF()).length === 4, "the teacher's maximum (4 files with the starter ones) is kept on the server");
+  const detF = await api("GET", `/api/mises/${fid}/taker/${q1("SELECT id FROM mise_takers WHERE mise_id = ?", fid).id}?g=${G}`);
+  check(Object.keys(detF.data.answers[sidF].files).includes("a.js") && detF.data.items[sidF].attempted, "the teacher sees their files; a file of their own counts as attempted");
+  await api("PUT", `/api/mises/${fid}`, { g: G, settings: { files: false } });
+  await mesF("save", { item: sidF, answer: { files: { "index.html": "x", "script.js": "y", "app.js": "z" } } });
+  check(Object.keys(ansF()).join(",") === "index.html,script.js", "files turned off by the teacher: only the starter files are kept");
+  await api("DELETE", `/api/mises/${fid}?g=${G}`);
+}
+
+section("assessments: Reassign (a new attempt replaces the paper, the earlier one archived), results sent per student");
+{
+  // multiple choice only: graded at once, no AI needed
+  const QS0 = [
+    { type: "mcq", prompt: "Quelle propriété aligne les éléments sur l’axe principal ?", choices: ["align-items", "justify-content", "gap"], answer: [1], points: 1, comps: [{ code: "C3", level: 1 }] },
+    { type: "mcq", prompt: "Quelle balise pour le titre principal d’une page ?", choices: ["<p>", "<div>", "<h1>"], answer: [2], points: 1, comps: [{ code: "C3", level: 1 }] },
+  ];
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox (réassigner)", questions: QS0, settings: { minutes: 30, passAt: 60, nav: "free", lockScreen: false } });
+  const aid = mk.data.assessment.id, QS = mk.data.assessment.questions;
+  check((await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id] })).status === 400, "a draft has nothing to reassign");
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.alice.id, U.bob.id], send: false });
+  const linkOf = async (u: string) => (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[u].split("/quiz/")[1];
+  const quiz = async (tok: string, action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const explQ = QS[0];
+  // a paper: every answer right, or every answer the first (wrong) choice
+  const take = async (tok: string, sid: string, good: boolean) => {
+    await quiz(tok, "start", { sid });
+    for (const [i, q] of QS.entries()) await quiz(tok, "answer", { sid, qid: q.id, answer: good ? q.answer : [0], pos: i + 1 });
+    await quiz(tok, "submit", { sid });
+  };
+  const tokA1 = await linkOf(U.alice.id);
+  await take(tokA1, "sessionREASSIGNAAAAAAA1", false);
+  await take(await linkOf(U.bob.id), "sessionREASSIGNBBBBBBB1", true);
+  const rowA = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  const rowB = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  const scoreA1 = rowA().score;
+  const compsA = () => q("SELECT * FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id = ?", aid, U.alice.id);
+  check(rowA().status === "graded" && rowB().status === "graded" && scoreA1 < rowB().score && rowA().attempt === 1, "two papers graded (Alice's low, Bob's high), first attempt");
+  const compsBefore = compsA().length;
+  // results sent to one student only, with when
+  const r1 = await api("POST", `/api/assessments/${aid}/results`, { g: G, takers: [rowB().id] });
+  check(r1.data.sent === 1 && rowB().sent_at > 0 && !rowA().sent_at, "« Send » on one row: only that student gets their result");
+  let vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent === true && vB.sent_at === rowB().sent_at && vB.sent_changed === false, "…the row says when it was sent");
+  await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: rowB().id, qid: explQ.id, verdict: "partial", score: 50, comment: "À préciser" });
+  vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent_changed === true, "a grade changed after sending: « changed since it was sent »");
+  await api("POST", `/api/assessments/${aid}/results`, { g: G, takers: [rowB().id] });
+  vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent_changed === false, "…sent again, it's up to date");
+  // Reassign Alice: her paper archived, a new attempt, the old link refused
+  const dm0 = discordCalls.length;
+  const ra = await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id], days: 2 });
+  check(ra.status === 200 && ra.data.reassigned === 1 && ra.data.archived === 1 && ra.data.sent === 1 && discordCalls.slice(dm0).some((c) => JSON.stringify(c.body ?? {}).includes("/quiz/")), "« Réassigner »: a new attempt, its link by DM");
+  const arch = q("SELECT * FROM assessment_attempts WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  check(arch.length === 1 && arch[0].n === 1 && arch[0].score === scoreA1 && arch[0].answers && JSON.parse(arch[0].events).length > 0, "the earlier attempt is archived (answers, grades, score, its events)");
+  check(rowA().attempt === 2 && rowA().status === "invited" && rowA().score == null && rowA().answers == null && JSON.parse(rowA().events).length === 1, "the paper starts again (attempt 2, its own events)");
+  check(compsBefore > 0 && compsA().length === 0, "what the old attempt gave her record is removed");
+  check((await quiz(tokA1, "info")).status === 404, "the old link is refused");
+  const tokA2 = await linkOf(U.alice.id);
+  check(tokA2 !== tokA1 && (await quiz(tokA2, "info")).data.status === "invited", "the new link opens the new attempt");
+  let vA = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+  check(vA.attempt === 2 && vA.attempts.length === 1 && vA.attempts[0].n === 1 && vA.attempts[0].score === scoreA1 && Object.keys(vA.attempts[0].answers).length > 0, "the teacher reads « Attempt 1 » in her paper");
+  // the new attempt: it's the one that counts
+  await take(tokA2, "sessionREASSIGNAAAAAAA2", true);
+  vA = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+  check(rowA().status === "graded" && rowA().score > scoreA1 && vA.score === rowA().score, "her new paper is graded: its score replaces the old one");
+  check(compsA().length > 0 && compsA().every((c: any) => c.note.includes(`(${rowA().score}%)`) || /\(\d+%\)/.test(c.note)) && compsA().length === compsBefore, "her competencies come from the new attempt only");
+  // the grading export: two papers (Alice's is her new attempt: her code answer is there, her old wrong choice isn't)
+  const exp = await api("POST", `/api/assessments/${aid}/claude-export`, { g: G });
+  const papers = exp.data.file?.papers ?? [];
+  check(exp.status === 200 && papers.length === 2 && papers.every((p: any) => JSON.stringify(p.answers).includes("justify-content")) && !papers.some((p: any) => JSON.stringify(p.answers).includes("align-items")),
+    "exports carry the attempt that counts (one paper per student, not her old wrong answers)");
+  check(q("SELECT * FROM assessment_attempts WHERE assessment_id = ?", aid).length === 1, "…and the archive keeps the earlier one");
+  // several at once
+  const ra2 = await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id, U.bob.id], send: false });
+  check(ra2.data.reassigned === 2 && ra2.data.archived === 2 && q("SELECT * FROM assessment_attempts WHERE assessment_id = ?", aid).length === 3 && rowA().attempt === 3 && rowB().attempt === 2 && !rowB().sent_at, "« Réassigner » several students at once");
+  await api("DELETE", `/api/assessments/${aid}?g=${G}`).catch(() => null);
 }
 
 section("papers: Sign in with Discord, one device per paper, network alerts");

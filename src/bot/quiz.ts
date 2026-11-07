@@ -10,7 +10,7 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
-import { identOk, noteIp, signInUrl } from "../shared/identity.ts";
+import { identOk, noteIp, signInUrl, staffPaper } from "../shared/identity.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
 import { AssessError, leaveEvent, lockState, readTakerToken, resultsView, saveAnswer, sessionInfo, startSession, submit } from "../shared/assess.ts";
 
@@ -24,8 +24,9 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
     if (tk?.guild_id) env = forClass(env, tk.guild_id);
   }
   if (!action && request.method === "GET") return new Response(PAGE(token), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-robots-tag": "noindex" } });
-  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title
-  if (!(await identOk(env, "quiz", takerId, request))) {
+  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title.
+  // A teacher's own test paper opens without it.
+  if (!(await identOk(env, "quiz", takerId, request)) && !(await staffPaper(env, "quiz", takerId))) {
     if (request.method === "GET" && action === "info") { const i = await sessionInfo(env, takerId); return json({ ident: false, signIn: signInUrl(env, "quiz", token), title: i?.title ?? "", lang: i?.lang ?? "fr" }); }
     return json({ error: "identify" }, 401);
   }

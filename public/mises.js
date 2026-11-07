@@ -602,7 +602,15 @@ function mesGradeDialog(d, item, after) {
 }
 
 // ---------------------------------------------------------------- one learner: everything they did
-const MES_EV = { lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in", reopen: "⏱ Reopened: continues their paper" };
+/** « new:app.js » → Created app.js · « rename:a.js>b.js » → Renamed a.js → b.js · « delete:x.css » → Deleted x.css */
+function mesFileEvent(x) {
+  const [what, rest = ""] = [x.slice(0, x.indexOf(":")), x.slice(x.indexOf(":") + 1)];
+  if (what === "new") return `Created <code>${esc(rest)}</code>`;
+  if (what === "rename") { const [a, b] = rest.split(">"); return `Renamed <code>${esc(a)}</code> → <code>${esc(b || "")}</code>`; }
+  if (what === "delete") return `Deleted <code>${esc(rest)}</code>`;
+  return esc(x);
+}
+const MES_EV = { file: "📄", lock: "🔒 Session stopped", unlock: "🔓 Let back in", start: "▶ Started", item: "→ Moved to", leave: "🚪 Left the page", back: "↩ Came back", paste: "📋 Pasted", "paste-blocked": "✋ Paste blocked", run: "▶ Ran", check: "🔎 AI check", submit: "✅ Handed in", reopen: "⏱ Reopened: continues their paper" };
 async function mesLearner(takerId) {
   const m = MSIT.d.mise, c = m.content;
   const d = await api(`/mises/${m.id}/taker/${takerId}`);
@@ -613,7 +621,8 @@ async function mesLearner(takerId) {
       : k === "paste" || k === "paste-blocked" ? `${MES_EV[k]} <b>${n}</b> chars${item ? ` in ${mesItemLabel(c, item)}` : ""}${extra ? `<pre class="code-view mes-paste">${esc(extra)}${n > String(extra).length ? "…" : ""}</pre>` : ""}`
       : k === "run" ? `${MES_EV[k]} ${mesItemLabel(c, item)}${extra ? ` <span class="muted">· ${esc(extra)} checks${n ? " · on the server" : ""}</span>` : ""}`
       : k === "check" ? `${MES_EV[k]} ${mesItemLabel(c, item)} <span class="muted">· ${esc(String(extra || "").split(",").map((x) => MES_CAT[x] || x).join(", "))}</span>`
-      : k === "item" ? `${MES_EV[k]} ${mesItemLabel(c, item)}` : esc(MES_EV[k] || k);
+      : k === "item" ? `${MES_EV[k]} ${mesItemLabel(c, item)}`
+      : k === "file" ? `${MES_EV.file} ${mesFileEvent(String(extra || ""))} <span class="muted">· ${mesItemLabel(c, item)}</span>` : esc(MES_EV[k] || k);
     return `<li class="ev-${esc(k)}"><span class="muted">${new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span> ${what}</li>`;
   }).reverse();
   const sitHtml = (s, i) => {
@@ -621,6 +630,7 @@ async function mesLearner(takerId) {
     const visits = Object.keys(d.logs).filter((k) => k.startsWith(s.id + "_"));
     return `<details class="mes-ans" ${i === 0 ? "open" : ""}><summary><b>S${i + 1} · ${esc(s.title)}</b> <span class="small">${it.attempted ? (it.score == null ? `<span class="lvl warn">to grade</span>` : `<b style="color:${masteryInk(it.score)}">${it.score}%</b>`) : `<span class="lvl none">not attempted</span>`}${it.teacher ? " ✎" : ""} · ${mesDur(Math.round((d.spent[s.id] || 0) / 1000))}</span></summary>
       ${s.files.map((f) => `<p class="small muted" style="margin:8px 0 2px">${esc(f.name)}${ans[f.name] != null && ans[f.name] === f.starter ? " (unchanged)" : ""}</p><pre class="code-view">${esc(ans[f.name] ?? f.starter ?? "")}</pre>`).join("")}
+      ${Object.keys(ans).filter((n) => !s.files.some((f) => f.name === n)).map((n) => `<p class="small muted" style="margin:8px 0 2px">${esc(n)} <span class="tag">their file</span></p><pre class="code-view">${esc(ans[n] || "")}</pre>`).join("")}
       <p class="small" style="margin:8px 0 4px"><b>Checks</b> ${ck ? `<span class="muted">(last run ${fmtDateTime(ck.at)})</span>` : `<span class="muted">· never run</span>`}</p>
       ${ck ? `<ul class="small mes-ck">${ck.results.map((r) => `<li class="${r.ok ? "ok" : "ko"}">${r.ok ? "✓" : "✗"} ${esc(r.label)}</li>`).join("")}</ul>` : ""}
       <p class="small" style="margin:8px 0 4px"><b>AI categories</b> ${ai.length ? "" : `<span class="muted">· none asked</span>`}</p>
@@ -694,6 +704,8 @@ async function mesLaunchDialog(pre = []) {
     <label class="check"><input type="checkbox" id="ml-net" ${m.settings.netAlerts !== false ? "checked" : ""}> <span><b>Network alerts</b> <span class="muted small">(the Live tab flags a paper opened outside the class's network, or from several networks; nothing is blocked)</span></span></label>
     <label class="check"><input type="checkbox" id="ml-fs" ${m.settings.lockScreen !== false ? "checked" : ""}> <span><b>Full screen, like an assessment</b> <span class="muted small">(leaving full screen, the tab or the window stops their session until you let them back in from the Live tab)</span></span></label>
     <label class="check"><input type="checkbox" id="ml-np" ${m.settings.noPaste ? "checked" : ""}> <span><b>Block copy-paste</b> in the editor <span class="muted small">(off: pastes are allowed and recorded, with what was pasted)</span></span></label>
+    <div class="seg-row" style="margin:4px 0"><label class="check" style="margin:0"><input type="checkbox" id="ml-files" ${m.settings.files !== false ? "checked" : ""}> <span><b>Allow creating files</b> <span class="muted small">(HTML/CSS/JS and PHP situations: new files, renamed or deleted; starter files can't be deleted)</span></span></label>
+      <label class="small" for="ml-maxf">Files at most</label><input type="number" id="ml-maxf" min="1" max="20" value="${m.settings.maxFiles || 8}" style="width:72px"></div>
     <label class="check"><input type="checkbox" id="ml-ch" ${m.settings.channel ? "checked" : ""}> <span>Post a short message in the class channel</span></label>
     <label class="check"><input type="checkbox" id="ml-dm" checked> <span>Send each learner their link by DM</span></label>`,
   [{ label: "Launch", primary: true, action: async () => {
@@ -707,7 +719,7 @@ async function mesLaunchDialog(pre = []) {
     const at = $("#ml-when").value === "at" ? Math.round(new Date($("#ml-at").value).getTime() / 1000) : 0;
     if ($("#ml-when").value === "at" && !(at > 0)) throw new Error("Pick the start time.");
     const r = await api(`/mises/${m.id}/launch`, { method: "POST", body: { students, only: who === "test", testers, startsAt: at || null, minutes: Number($("#ml-min").value) || 0,
-      lockScreen: $("#ml-fs").checked, oneDevice: $("#ml-od").checked, netAlerts: $("#ml-net").checked, noPaste: $("#ml-np").checked, channel: $("#ml-ch").checked, send: $("#ml-dm").checked } });
+      lockScreen: $("#ml-fs").checked, oneDevice: $("#ml-od").checked, netAlerts: $("#ml-net").checked, noPaste: $("#ml-np").checked, files: $("#ml-files").checked, maxFiles: Number($("#ml-maxf").value) || 8, channel: $("#ml-ch").checked, send: $("#ml-dm").checked } });
     dlg.close(); MSIT.d = r; MSIT.tab = "live";
     toast(`${r.invited} learner(s) · ${r.sent} DM sent${r.sent < r.invited ? " · copy the links of the others in Live" : ""}`);
     mesRender();
