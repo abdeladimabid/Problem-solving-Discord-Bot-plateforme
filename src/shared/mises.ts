@@ -542,7 +542,75 @@ export function attempted(c: MiseContent, id: string, ans: any): boolean {
   if (id.startsWith("q")) return picked(ans) != null;
   const s = c.situations.find((x) => x.id === id);
   if (!s || !ans?.files) return false;
-  return s.files.some((f) => ans.files[f.name] != null && squash(ans.files[f.name]) !== squash(f.starter));
+  // a starter file changed, or a file of their own with something in it
+  return s.files.some((f) => ans.files[f.name] != null && squash(ans.files[f.name]) !== squash(f.starter))
+    || Object.entries(ans.files).some(([name, v]) => !s.files.some((f) => f.name === name) && squash(String(v ?? "")) !== "");
+}
+
+// ------------------------------------------------------------------ the learner's own files
+// In a situation the learner can add files next to the starter ones (the teacher allows it, on by default): their
+// names follow the runtime's extensions, a number and a size cap. Starter files can be changed, never removed.
+/** The extensions a learner's own file can have, by runtime (node and sql run one file: none). */
+export const FILE_EXTS: Record<Runtime, string[]> = { web: [".html", ".css", ".js"], php: [".php", ".blade.php", ".html", ".css", ".js"], node: [], sql: [] };
+export interface FileRules { allow: boolean; max: number; kb: number; exts: string[] }
+export const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,39}$/;
+/** ".blade.php" for a Blade view, else the last extension (".js"); "" without one. */
+export function extOf(name: string): string {
+  const n = String(name).toLowerCase();
+  if (n.endsWith(".blade.php")) return ".blade.php";
+  const i = n.lastIndexOf(".");
+  return i > 0 ? n.slice(i) : "";
+}
+/** The rules of a situation's files: the teacher's settings and the runtime (max counts the starter files too). */
+export function fileRules(runtime: Runtime, o: { files?: boolean; maxFiles?: number; fileKB?: number }): FileRules {
+  const exts = FILE_EXTS[runtime] ?? [];
+  return { allow: o.files !== false && exts.length > 0, max: Math.max(1, Math.min(20, Math.round(Number(o.maxFiles) || 8))), kb: Math.max(5, Math.min(100, Math.round(Number(o.fileKB) || 20))), exts };
+}
+/** Why a new (or renamed) file name is refused, in the learner's words ("" when it's fine). */
+export function fileNameProblem(name: string, files: string[], starters: string[], r: FileRules, renaming?: string): string {
+  const n = String(name ?? "").trim();
+  if (!r.allow) return "La création de fichiers n’est pas autorisée pour cet exercice.";
+  if (renaming != null && starters.includes(renaming)) return "Un fichier de départ ne peut pas être renommé.";
+  if (!FILE_NAME.test(n) || n.includes("..")) return "Nom invalide : lettres, chiffres, - _ et . seulement (40 caractères au plus).";
+  if (!r.exts.includes(extOf(n))) return `Extension non autorisée. Autorisées : ${r.exts.join(" ")}`;
+  if (files.some((f) => f.toLowerCase() === n.toLowerCase() && f !== renaming)) return "Un fichier porte déjà ce nom.";
+  if (renaming == null && files.length >= Math.max(r.max, starters.length)) return `${Math.max(r.max, starters.length)} fichiers au plus.`;
+  return "";
+}
+/**
+ * The files of a situation as the learner sent them: every starter file (its text, or the starter when missing), then
+ * their own files that follow the rules, in the order sent (each one capped at the size limit).
+ */
+export function workspaceOf(s: Pick<Situation, "files">, raw: unknown, r: FileRules): Record<string, string> {
+  const src = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const cap = r.kb * 1024, out: Record<string, string> = {};
+  for (const f of s.files) { const v = src[f.name]; out[f.name] = typeof v === "string" ? v.slice(0, Math.max(cap, 20000)) : f.starter; }
+  if (!r.allow) return out;
+  const starters = s.files.map((f) => f.name);
+  for (const [name, v] of Object.entries(src)) {
+    if (name in out || typeof v !== "string") continue;
+    if (fileNameProblem(name, Object.keys(out), starters, r)) continue;
+    out[name] = v.slice(0, cap);
+  }
+  return out;
+}
+/**
+ * PHP with several files runs as one script on the runner: each `require` / `include` (`_once`) of one of the learner's
+ * files is replaced by that file (nested ones too, 3 levels; a `_once` file only the first time).
+ */
+export function phpWithIncludes(files: Record<string, string>, main: string): string {
+  const seen = new Set<string>();
+  const body = (name: string) => {
+    const t = String(files[name] ?? "");
+    return /^\s*<\?php/.test(t) ? t.replace(/^\s*<\?php/, "").replace(/\?>\s*$/, "") : `?>${t}<?php `;
+  };
+  const expand = (code: string, depth: number): string => code.replace(/\b(require|include)(_once)?\s*\(?\s*(['"])(?:\.\/)?([\w.-]+)\3\s*\)?\s*;/g, (all, _k, once, _q, name) => {
+    if (!(name in files) || name === main || depth > 3 || !/\.php$/i.test(name) || /\.blade\.php$/i.test(name)) return all;
+    if (once && seen.has(name)) return "";
+    seen.add(name);
+    return `\n${expand(body(name), depth + 1)}\n`;
+  });
+  return expand(String(files[main] ?? ""), 1);
 }
 /** Each item's score (the teacher's when they changed it), and the total in % weighted by the points. */
 export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string, { auto: number | null; score: number | null; teacher: boolean; attempted: boolean }>; total: number; toGrade: number } {
@@ -570,7 +638,7 @@ export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string,
 // ------------------------------------------------------------------ live statistics
 /** An event of the learner page: [t (s), kind, item, n, extra]. */
 export type MiseEvent = [number, string, string, number, unknown?];
-export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock", "reopen"];
+export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock", "reopen", "file"];
 export interface LiveStats { leaves: number; awaySec: number; away: boolean; pastes: number; pasteChars: number; blockedPastes: number; runs: number; checks: number; lastAt: number | null }
 /** Leaving the page (times, total time away), pastes (times, characters), runs and AI checks of one learner. */
 export function liveStats(events: MiseEvent[], nowSec: number): LiveStats {
@@ -791,7 +859,7 @@ export function aiCheckUser(s: Situation, files: Record<string, string>, o: { fa
     o.failed?.length ? `Vérifications automatiques qui échouent : ${o.failed.join(" ; ")}` : s.checks.length ? "Vérifications automatiques : aucune n'échoue (ou pas encore lancées)." : "",
     o.errors ? `Erreurs à l'exécution (données) :\n<<<\n${fence(o.errors).slice(0, 800)}\n>>>` : "",
     `Solution de référence (pour toi seulement) :\n${s.solution.map((f) => `--- ${f.name}\n${f.content.slice(0, 3000)}`).join("\n")}`,
-    `Code de l'apprenant :\n${s.files.map((f) => `--- ${f.name}\n<<<\n${fence(String(files[f.name] ?? "")).slice(0, 5000)}\n>>>`).join("\n")}`,
+    `Code de l'apprenant :\n${Object.keys(files).slice(0, 12).map((name) => `--- ${name}\n<<<\n${fence(String(files[name] ?? "")).slice(0, 5000)}\n>>>`).join("\n")}`,
   ].filter(Boolean).join("\n\n");
 }
 

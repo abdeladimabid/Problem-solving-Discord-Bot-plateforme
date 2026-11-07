@@ -2524,7 +2524,7 @@ function replayShow(d, meta = null) {
       const [t, from, removed, text, origin] = c;
       if (origin === "setValue" || origin === "template") doc = String(text ?? "");
       else doc = doc.slice(0, from) + String(text ?? "") + doc.slice(from + (removed || 0));
-      return { t, doc, from, len: origin === "setValue" ? 0 : String(text ?? "").length, origin, big: String(text ?? "").length >= 40 && origin !== "setValue" && origin !== "undo" && origin !== "redo" };
+      return { t, doc, from, len: origin === "setValue" ? 0 : String(text ?? "").length, origin, big: String(text ?? "").length >= 40 && !["setValue", "undo", "redo", "complete", "format", "auto"].includes(origin) };
     });
     const end = Math.max(1, s.openMs || 0, steps.at(-1)?.t || 0);
     const marks = steps.filter((x) => x.origin !== "setValue").map((x) => `<i class="${x.big ? "big" : ""}" style="left:${(100 * x.t) / end}%"></i>`);

@@ -10,6 +10,7 @@
 // Each paper's record: app_settings `ident:<quiz|mes>:<takerId>` → { uid, devices, ips }.
 import type { Env } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
+import { staffIds } from "./staff.ts";
 
 export type IdentKind = "quiz" | "mes";
 export interface IdentRec { uid: string; devices: string[]; ips: { ip: string; at: number }[]; at: number }
@@ -35,6 +36,18 @@ export async function identOk(env: Env, kind: IdentKind, takerId: number, req: R
   if (!DEV.test(dev)) return false;
   const rec = await identOf(env, kind, takerId);
   return !!rec && rec.devices.includes(dev);
+}
+/**
+ * A paper sent to a teacher (staff) is a test: it opens without the Discord sign-in, one device per paper doesn't
+ * apply. A forwarded link of a teacher's paper opens their test, never a learner's paper.
+ */
+export async function staffPaper(env: Env, kind: IdentKind, takerId: number): Promise<boolean> {
+  const t = await one<{ guild_id: string; discord_id: string }>(env, `SELECT guild_id, discord_id FROM ${kind === "mes" ? "mise_takers" : "assessment_takers"} WHERE id = ?`, takerId).catch(() => null);
+  return !!t && (await staffIds(env, t.guild_id)).has(t.discord_id);
+}
+/** A new attempt of a paper (« Réassigner »): its sign-in starts again (the record is archived with the old attempt). */
+export async function forgetIdent(env: Env, kind: IdentKind, takerId: number) {
+  await run(env, "DELETE FROM app_settings WHERE k = ?", KEY(kind, takerId));
 }
 /** Write down the connection a paper is used from (at most 8, the last ones). */
 export async function noteIp(env: Env, kind: IdentKind, takerId: number, req: Request) {
