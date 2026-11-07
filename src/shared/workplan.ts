@@ -12,6 +12,7 @@ import { askReview } from "./review/debrief.ts";
 import { gapsOf } from "./actionplan.ts";
 import { questionAi } from "./assess.ts";
 import { HandError, raiseHand } from "./hands.ts";
+import { sprintDiagnosis } from "./sprintdiag.ts";
 
 export class WorkPlanError extends Error {}
 
@@ -40,6 +41,8 @@ export interface WorkPlan {
   id: number; gid: string; sid: string; name: string; title: string; message: string; status: "draft" | "sent" | "done";
   due_at: number | null; created_at: number; updated_at: number; sent_at: number | null; done_at: number | null;
   diag: Diagnosis | null; steps: Step[];
+  /** a plan for the whole class (sid "class"): built on a sprint's objectives not reached, then copied to each student */
+  sprint?: number;
   /** the student's questions from their page (✋ the Help queue) */
   asks?: { hand: number; step: string; at: number }[];
   /** their guide: each lacune explained, with resources (wpguide.ts) */
@@ -109,6 +112,36 @@ export async function createPlan(env: Env, g: GuildRow, sid: string): Promise<Wo
     created_at: t0, updated_at: t0, sent_at: null, done_at: null, diag: null, steps: [] };
   await putPlan(env, p);
   return p;
+}
+
+/**
+ * A plan d'action for the whole class: built on a sprint (its objectives not reached, the class's shared lacunes), then
+ * « 👥 Send to the whole class » gives each student their own copy. It is never sent itself.
+ */
+export const CLASS = "class";
+export async function createClassPlan(env: Env, g: GuildRow, sprint: number): Promise<WorkPlan> {
+  const n = Math.round(Number(sprint));
+  if (!(n >= 1)) throw new WorkPlanError("Choose a sprint.");
+  const t0 = now();
+  const p: WorkPlan = { id: Date.now(), gid: g.id, sid: CLASS, name: "la classe", title: `Plan d'action · Sprint ${n}`, message: "", status: "draft", due_at: null,
+    created_at: t0, updated_at: t0, sent_at: null, done_at: null, diag: null, steps: [], sprint: n };
+  await putPlan(env, p);
+  return p;
+}
+/** What the class didn't reach in a sprint (its diagnosis), as text for the AI. */
+async function classFacts(env: Env, g: GuildRow, n: number): Promise<{ text: string; empty: boolean }> {
+  const d: any = await sprintDiagnosis(env, g, n).catch((e) => { throw new WorkPlanError(String((e as Error).message)); });
+  const lines: string[] = [`SPRINT ${d.sprint.n} · ${d.sprint.title || ""}`, d.sprint.objectives ? `Objectifs du sprint : ${d.sprint.objectives}` : "", d.sprint.technologies ? `Technologies : ${d.sprint.technologies}` : "",
+    `Apprenants évalués : ${d.evaluated} sur ${d.students}`];
+  const objs = (d.objectives || []).filter((o: any) => o.missed.length || o.low.length);
+  if (objs.length) lines.push("COMPÉTENCES NON ATTEINTES (part de la classe qui ne l'a pas) :", ...objs.map((o: any) => `- ${o.code} ${o.name || o.label} : ${o.missed.length + o.low.length} apprenant(s) (${o.pct ?? "?"} % l'ont atteinte)`));
+  const goals = (d.goals || []).flatMap((gr: any) => gr.items.filter((it: any) => it.n > 0).map((it: any) => `- ${gr.group} · ${it.name} : ${it.n}/${it.of} apprenants ne le maîtrisent pas`));
+  if (goals.length) lines.push("OBJECTIFS DU SPRINT NON ATTEINTS :", ...goals);
+  const lac = (d.lacunes || []).slice(0, 25);
+  if (lac.length) lines.push("LACUNES DE LA CLASSE (combien d'apprenants) :", ...lac.map((l: any) => `- ${l.notion} : ${l.n}/${l.of}`));
+  const feats = (d.features || []).slice(0, 10);
+  if (feats.length) lines.push("FONCTIONNALITÉS DES BRIEFS SOUVENT NON FAITES :", ...feats.map((f: any) => `- ${f.text} : ${f.n} apprenant(s)`));
+  return { text: lines.filter(Boolean).join("\n"), empty: !objs.length && !goals.length && !lac.length };
 }
 
 /** The teacher's edits: title, message, due date, the actions (a sent plan keeps the students' work). */
@@ -258,17 +291,19 @@ async function libraryFor(env: Env, g: GuildRow) {
 export async function diagnose(env: Env, g: GuildRow, id: number, wish = ""): Promise<WorkPlan> {
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
-  const facts = await studentFacts(env, g, p.sid);
-  if (facts.empty) throw new WorkPlanError(`${p.name} has no analyzed debrief and no graded assessment yet: nothing to diagnose. Add the actions yourself.`);
+  const forClass = p.sid === CLASS;
+  const facts = forClass ? await classFacts(env, g, p.sprint ?? 0) : await studentFacts(env, g, p.sid);
+  if (facts.empty) throw new WorkPlanError(forClass ? `Nothing found not reached in sprint ${p.sprint} yet (no debrief or assessment evaluated): add the actions yourself.` : `${p.name} has no analyzed debrief and no graded assessment yet: nothing to diagnose. Add the actions yourself.`);
   const lib = await libraryFor(env, g);
   const system = [...BASE,
-    "Fais le DIAGNOSTIC de l'apprenant à partir de ses débriefs, de ses évaluations et de son entraînement :",
+    forClass ? "Ce plan est pour TOUTE LA CLASSE (chaque apprenant le recevra) : fais le DIAGNOSTIC de la classe sur ce sprint, à partir des compétences et des objectifs NON ATTEINTS et des lacunes partagées (les plus répandues d'abord). Les actions doivent servir au plus grand nombre ; les champs ci-dessous parlent de « la classe »."
+      : "Fais le DIAGNOSTIC de l'apprenant à partir de ses débriefs, de ses évaluations et de son entraînement :",
     "- \"resume\" : 3 à 5 phrases pour le formateur : où il en est, ce qu'il ne maîtrise pas vraiment et pourquoi ça le bloque, ce qui va bien ;",
     "- \"lacunes\" : 3 à 6 notions précises qu'il ne maîtrise pas (pas « CSS » mais « axes de Flexbox : justify-content / align-items »), de la plus urgente à la moins urgente, avec \"priorite\" (1 = bloque tout le reste, 2 = important, 3 = à consolider), \"pourquoi\" (1 ou 2 phrases : ce qu'il fait de travers), \"preuves\" (où on le voit : « B2 : exigence non faite … », « Évaluation Flexbox Q3 fausse ») et \"competences\" (codes C1…, CT1…) ;",
     "- \"actions\" : 4 à 7 actions proposées pour combler ces lacunes, des bases vers le plus difficile, dont au moins une question ou un code, et au plus un \"brief\".",
     ...STEP_RULES, TEACHER_FIRST,
     `Réponds UNIQUEMENT avec ce JSON : {"resume":"…","lacunes":[{"notion":"…","priorite":1,"pourquoi":"…","preuves":["…"],"competences":["C3"]}],"actions":[${STEP_JSON}]}`].join("\n");
-  const user = (compact: boolean) => [`APPRENANT : ${p.name}`, teacherAsk(wish), `CE QU'ON SAIT :\n<<<\n${fence(compact ? facts.text.slice(0, 3500) : facts.text.slice(0, 9000))}\n>>>`,
+  const user = (compact: boolean) => [forClass ? `LA CLASSE · sprint ${p.sprint}` : `APPRENANT : ${p.name}`, teacherAsk(wish), `CE QU'ON SAIT :\n<<<\n${fence(compact ? facts.text.slice(0, 3500) : facts.text.slice(0, 9000))}\n>>>`,
     lib.length ? `DÉFIS DE LA BIBLIOTHÈQUE (id · titre · difficulté · type) :\n${lib.slice(0, compact ? 50 : 120).map((c) => `${c.id} · ${c.title} · ${c.difficulty} · ${c.kind}`).join("\n")}` : "Pas de défi dans la bibliothèque : n'utilise pas le type challenge."].join("\n\n");
   const ask = await askReview(env, system, user, 2, { maxTokens: 7000 });
   if (!ask.ok) throw new WorkPlanError(ask.msg);
@@ -377,6 +412,7 @@ export async function sendPlan(env: Env, g: GuildRow, id: number, o: { dm: (sid:
   const p = await getPlan(env, g.id, id);
   if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
   if (p.status !== "draft") throw new WorkPlanError("This plan was already sent.");
+  if (p.sid === CLASS) throw new WorkPlanError("This plan is for the whole class: « 👥 Send to the whole class » gives each student their copy.");
   if (!p.steps.length) throw new WorkPlanError("Add at least one action first.");
   for (const [i, s] of p.steps.entries()) {
     const n = `Action ${i + 1}`;

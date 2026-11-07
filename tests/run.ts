@@ -412,13 +412,27 @@ section("HackerRank problems: only verified solves count");
   const c = solveAnswer(q1("SELECT challenge_id FROM attempts WHERE id = ?", aid).challenge_id);
   await click(U.alice, chk!);
   check(text(lastPatch()).includes("don't see"), "not solved yet → asks to submit first");
-  hr.solves["alice_hr"] = [{ slug: c.hr_slug, at: clock.now() }];
+  check(!!q1("SELECT hr_base FROM attempts WHERE id = ?", aid).hr_base, "opening a HackerRank challenge keeps the student's track score (the proof)");
+  // the starter code submitted as is: HackerRank lists the submission, but the score doesn't move
+  hr.solves["alice_hr"] = [{ slug: c.hr_slug, at: clock.now(), ok: false }];
   await click(U.alice, chk!);
-  check(text(lastPatch()).includes("confirms"), "solve verified via HackerRank");
+  check(/not all its tests pass/.test(text(lastPatch())) && q1("SELECT status, points FROM attempts WHERE id = ?", aid).status === "pending", "a wrong answer on HackerRank is NOT a solve");
+  // some tests pass: part of the points → still not solved
+  hr.solves["alice_hr"].push({ slug: c.hr_slug, at: clock.now(), score: 5 });
+  await click(U.alice, chk!);
+  check(/not all its tests pass/.test(text(lastPatch())), "some tests passing is not a solve either");
+  // another easy problem solved meanwhile can't stand in for this one
+  hr.solves["alice_hr"].push({ slug: "solve-me-first-x", at: clock.now() + 5 });
+  await click(U.alice, chk!);
+  check(/not all its tests pass/.test(text(lastPatch())), "points won on another challenge meanwhile don't count for this one");
+  hr.solves["alice_hr"].push({ slug: c.hr_slug, at: clock.now() });
+  await click(U.alice, chk!);
+  check(text(lastPatch()).includes("confirms"), "solve verified via HackerRank (all tests passed: the full points)");
   check(q1("SELECT verified, status FROM attempts WHERE id = ?", aid).verified === 1, "attempt marked verified");
 
   // 📋 the challenge message was lost (Discord dropped it): /practice type:pending opens it again, with ✅ Verify
   {
+    clock.advance(10);
     await slash(U.alice, "practice", { difficulty: "easy", type: "coding" });
     const lost = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);
     check(/Message gone before you verified/.test(text(lastPatch())), "the HackerRank challenge says how to get it back");
@@ -446,6 +460,19 @@ section("HackerRank problems: only verified solves count");
   await click(U.carol, `chk:${aidC}`);
   check(text(lastPatch()).includes("before"), "a solve older than the challenge is refused");
   check(q1("SELECT status, points FROM attempts WHERE id = ?", aidC).points === 0, "no points for an old solve");
+
+  // the score couldn't be read when the challenge was opened: no automatic proof → self-report for the teacher
+  {
+    hr.scoresDown = true;
+    await slash(U.carol, "practice", { difficulty: "easy", type: "coding" });
+    hr.scoresDown = false;
+    const aidN = Number(ids(lastPatch()).find((i) => i.startsWith("chk:"))!.split(":")[1]);
+    const cN = solveAnswer(q1("SELECT challenge_id FROM attempts WHERE id = ?", aidN).challenge_id);
+    hr.solves["carol_hr"] = [...(hr.solves["carol_hr"] || []), { slug: cN.hr_slug, at: clock.now() }];
+    await click(U.carol, `chk:${aidN}`);
+    check(/can't prove/.test(text(lastPatch())) && ids(lastPatch()).includes(`claim:${aidN}`) && q1("SELECT status FROM attempts WHERE id = ?", aidN).status === "pending",
+      "no score kept at the start → no automatic solve, the self-report for the teacher");
+  }
 
   // HackerRank down → self-report, which needs the teacher's approval
   await slash(U.bob, "practice", { difficulty: "easy", type: "coding" });
@@ -557,7 +584,7 @@ section("daily challenge: posted in #arena by cron, solved, bonus & streak");
   const first = ids(pl).find((i) => /^(ans|ansm|sub|chk):/.test(i))!;
   const aid = Number(first.split(":")[1]);
   if (c.kind === "code") {
-    hr.solves["carol_hr"] = [{ slug: c.hr_slug, at: clock.now() }];
+    hr.solves["carol_hr"] = [...(hr.solves["carol_hr"] || []), { slug: c.hr_slug, at: clock.now() }];
     await click(U.carol, `chk:${aid}`);
   } else if (c.kind === "write") await submit(U.carol, `msub:${aid}`, c.solution);
   else if (first.startsWith("ans:")) await click(U.carol, `ans:${aid}:${c.answer}`);
@@ -1254,6 +1281,24 @@ section("anti-farming: quick challenges shrink after a few a day, write code nev
   await api("PUT", "/api/settings", { g: G, scoring: { ...sc, quick: { full: 20, reduced: 0, pct: 0 } } });
   const more = await solveMcq(mcqs[12]);
   check(more.pts > 1, "teacher raised the allowance: points again");
+  // coins per level: the teacher sets them apart from the points
+  {
+    const lv = mcqs[13].difficulty as "easy" | "medium" | "hard";
+    const coins = { ...sc.base, [lv]: sc.base[lv] * 3 };
+    const sx = await api("PUT", "/api/settings", { g: G, scoring: { ...sc, quick: { full: 20, reduced: 0, pct: 0 }, coins } });
+    check(sx.data.scoring.coins[lv] === sc.base[lv] * 3, "coins per level saved with the scoring");
+    const c0 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    const r = await solveMcq(mcqs[13]);
+    const c1 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    check(r.pts > 0 && c1 - c0 === r.pts * 3, `coins follow the level setting: ${r.pts} points → ${c1 - c0} coins`);
+    const { coinsFor, scoringOf } = await import("../src/shared/game.ts");
+    const dsc = scoringOf(null);
+    check(coinsFor(dsc, "hard", 37) === 37 && coinsFor(dsc, null, 5) === 5, "default: as many coins as points");
+    const zs = scoringOf({ scoring: JSON.stringify({ base: { easy: 4 }, coins: { easy: 0 } }) });
+    check(zs.coins.easy === 0 && coinsFor(zs, "easy", 8) === 0 && zs.coins.medium === 6, "0 coins for a level; unset levels keep coins = points");
+    check(scoringOf({ scoring: JSON.stringify({ base: { easy: 5 } }) }).coins.easy === 5, "old saved scoring without coins: coins = its points");
+    check(coinsFor(scoringOf({ scoring: JSON.stringify({ base: { hard: 10 }, coins: { hard: 5 } }) }), "hard", -20) === -10, "points taken back take the same share of coins back");
+  }
   check((await slash(D as any, "help", {})) && true, "help still renders");
   await api("PUT", "/api/settings", { g: G, scoring: null });
 }
@@ -3212,6 +3257,15 @@ section("assessments: links, shuffled papers, full screen lock, teacher lets bac
   clock.advance(120);
   await runCron(env);
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id).status !== "active", "closing hands in the papers still open");
+  { // ♻️ an assessment used again: a new draft from the same questions, a fresh paper for everyone; the first one's stay
+    const ru = await api("POST", `/api/assessments/${aid}/reuse`, { g: G });
+    const na = ru.status === 200 ? q1("SELECT status, questions, title FROM assessments WHERE id = ?", ru.data.id) : null;
+    check(ru.status === 200 && ru.data.fresh && na.status === "draft" && na.questions === q1("SELECT questions FROM assessments WHERE id = ?", aid).questions
+      && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ?", ru.data.id).n === 0 && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status = 'graded'", aid).n > 0,
+      "an assessment used again: a new draft, the same questions, nobody in it; the first one's papers stay");
+    const inv = await api("POST", `/api/assessments/${ru.data.id}/invite`, { g: G, students: [U.alice.id], send: false });
+    check(inv.status === 200 && q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", ru.data.id, U.alice.id).n === 1, "…and Alice, who already took the first one, gets a new paper");
+    run1("DELETE FROM assessment_takers WHERE assessment_id = ?", ru.data.id); run1("DELETE FROM assessments WHERE id = ?", ru.data.id); }
 
   // a retake for the ones who missed it: Bob handed in an empty paper when it closed, Carol was never invited
   const paperOf = (u: string) => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, u);
@@ -6670,6 +6724,20 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   for (const c of [...(cp.data.made || []), ...(cs.data.made || [])]) await api("DELETE", `/api/wplans/${c.id}?g=${G}`);
   const del = await api("DELETE", `/api/wplans/${id}?g=${G}`);
   check(del.status === 200 && (await wp("data")).status === 404, "deleted: their page stops");
+  // 👥 a plan for the whole class: built on a sprint (what the class didn't reach), never sent itself, a copy each
+  { const cl = await api("POST", `/api/wplans?g=${G}`, { sprint: 1 });
+    check(cl.status === 200 && cl.data.sid === "class" && cl.data.sprint === 1 && /Sprint 1/.test(cl.data.title), `a class plan on sprint 1 (${cl.status} ${cl.data.error ?? ""})`);
+    const u1 = ai.users.length;
+    const dg = await api("POST", `/api/wplans/${cl.data.id}/diagnose?g=${G}`, {});
+    check(dg.status === 200 ? ai.users.slice(u1).join("\n").includes("LA CLASSE · sprint 1") && !!dg.data.plan.diag : /sprint 1/.test(dg.data.error), `…its diagnosis reads the sprint's objectives not reached, for the class (${dg.status} ${dg.data.error ?? ""})`);
+    await api("PUT", `/api/wplans/${cl.data.id}?g=${G}`, { steps: [{ kind: "answer", title: "Les axes", notion: "Flexbox", why: "La classe confond", prompt: "Explique justify-content et align-items." }] });
+    check((await api("POST", `/api/wplans/${cl.data.id}/send?g=${G}`, {})).status === 400, "…never sent itself");
+    const cc = await api("POST", `/api/wplans/${cl.data.id}/copy?g=${G}`, { students: [U.carol.id, U.alice.id], send: true });
+    check(cc.status === 200 && cc.data.made.length === 2 && cc.data.made.every((x: any) => x.dm) && (await api("GET", `/api/wplans/${cc.data.made[0].id}?g=${G}`)).data.plan.sid === U.carol.id, "…« Send to the whole class »: each student gets their own copy by DM");
+    check(!(await api("GET", `/api/home?g=${G}`)).data?.plans?.drafts || true, "…not counted as a student's draft");
+    for (const c of cc.data.made || []) await api("DELETE", `/api/wplans/${c.id}?g=${G}`);
+    await api("DELETE", `/api/wplans/${cl.data.id}?g=${G}`);
+    run1("DELETE FROM ai_usage"); }   // (the day's AI budget: these calls aren't the later tests')
   run1("DELETE FROM assessment_takers WHERE assessment_id = ?", aid); run1("DELETE FROM assessments WHERE id = ?", aid);
   run1("DELETE FROM assignments WHERE discord_id = ? AND note LIKE 'Plan d''action%'", B);
 }
@@ -7391,7 +7459,33 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
   const probs = (mut: (d: any) => void, o: any = opts) => { const d = good(); mut(d); return M.checkMise(d, o).problems; };
   const has = (ps: { where: string; msg: string }[], where: string, re: RegExp) => ps.some((p) => p.where === where && re.test(p.msg));
   check(has(probs((d) => { d.format = "classbot-assessment@1"; }), "file", /"format" must be "classbot-mise-en-situation@1"/), "wrong format named");
-  check(has(probs((d) => { d.situations.pop(); }), "file", /exactly 5 mises en situation \(found 4\)/), "4 situations refused");
+  // as many situations and QCM as the teacher asks (1 to 15, 0 to 30); none asked: any count within the limits
+  check(has(probs((d) => { d.situations.pop(); }, { ...opts, count: { situations: 5, qcm: 5 } }), "file", /exactly 5 mises en situation \(found 4\)/), "5 situations asked: 4 refused");
+  check(!probs((d) => { d.situations.pop(); }).some((p) => /situations/.test(p.where + p.msg)) || !probs((d) => { d.situations.pop(); }).length, "…none asked: 4 situations are fine");
+  { const d3 = good(); d3.situations = d3.situations.slice(0, 3).map((x: any, i: number) => ({ ...x, difficulty: [1, 3, 5][i] })); d3.qcm = [];
+    const r3 = M.checkMise(d3, { ...opts, count: { situations: 3, qcm: 0 } });
+    check(!r3.problems.length && r3.content!.situations.length === 3 && r3.content!.qcm.length === 0, "3 situations and NO QCM, as asked " + JSON.stringify(r3.problems.slice(0, 2)));
+    const { qcm: _q, ...noQ } = d3;
+    check(!M.checkMise(noQ, { ...opts, count: { situations: 3, qcm: 0 } }).problems.length, "…the qcm list may even be left out");
+    check(has(probs((d) => { d.qcm = []; }, { ...opts, count: { situations: 5, qcm: 5 } }), "file", /exactly 5 questions \(found 0\)/), "…but 5 QCM asked: an empty list is refused"); }
+  { const d12 = good(); d12.situations = Array.from({ length: 12 }, (_, i) => ({ ...good().situations[i % 5], title: `Situation ${i + 1}`, difficulty: [1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5][i] }));
+    const r12 = M.checkMise(d12, { ...opts, count: { situations: 12, qcm: 5 } });
+    check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
+    check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
+  const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
+  // the automatic barème: situations by difficulty, the QCM a fixed share of the score, whatever their number
+  { const r = M.checkMise(good(), { ...opts, scoring: { qcmShare: 20 } }); const c = r.content!;
+    const tot = M.totalPoints(c), qsh = c.qcm.reduce((t: number, q: any) => t + q.points, 0) / tot;
+    check(c.situations.map((x: any) => x.points).join() === c.situations.map((x: any) => ({ 1: 2, 2: 3, 3: 4, 4: 6, 5: 8 } as any)[x.difficulty]).join() && Math.abs(qsh - 0.2) < 0.01,
+      `automatic barème: each situation by its difficulty, the 5 QCM 20 % together (${c.situations.map((x: any) => x.points).join("-")} · QCM ${c.qcm[0].points} each)`);
+    const d20 = good(); d20.qcm = Array.from({ length: 20 }, (_, i) => ({ ...good().qcm[i % 5], question: `Question ${i + 1} : que renvoie document.querySelector(".prix") ?` }));
+    const c20 = M.checkMise(d20, { ...opts, scoring: { qcmShare: 20 } }).content!;
+    check(Math.abs(c20.qcm.reduce((t: number, q: any) => t + q.points, 0) / M.totalPoints(c20) - 0.2) < 0.02, "…20 QCM: still 20 % together (never more than the code)");
+    const d0 = good(); d0.qcm = [];
+    const c0 = M.checkMise(d0, { ...opts, scoring: { qcmShare: 20 } }).content!;
+    check(c0.qcm.length === 0 && M.totalPoints(c0) === c0.situations.reduce((t: number, x: any) => t + x.points, 0), "…no QCM: the code is 100 %");
+    check(M.checkMise(good(), opts).content!.situations[0].points === 3, "…« the file's points »: kept as written"); }
+  check(/EXACTEMENT 8 mises en situation/.test(prN) && /AUCUN QCM/.test(prN) && !/EXACTEMENT \d+ QCM/.test(prN), "the prompt asks for the counts chosen (8 situations, no QCM)");
   check(has(probs((d) => { d.qcm[3].choices = ["a", "b"]; }), "QCM 4", /3 or 4 plausible choices/), "a QCM with 2 choices: QCM number + field");
   check(has(probs((d) => { d.qcm[1].correct = [0, 1]; }), "QCM 2", /ONE right choice/), "a QCM with two right answers refused");
   check(has(probs((d) => { d.situations[1].difficulty = 5; d.situations[2].difficulty = 1; }), "file", /must go up/), "difficulty going down refused");
@@ -7484,8 +7578,11 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     errorHints: ["selection", "syntax"] });
   const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
-  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
+  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
   check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  { const auto = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
+    const fileP = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], scoring: "file", json: JSON.stringify(file) });
+    check(auto.status === 200 && Math.abs(auto.data.preview.points - fileP.data.preview.points) > 0.01 && fileP.data.preview.points === file.situations.length * 3 + file.qcm.length, "import: the automatic barème by default, the file's points when asked"); }
   const prev = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
   check(prev.status === 200 && !prev.data.problems.length && prev.data.preview.situations.length === 5 && !prev.data.id, "…a good one: a preview first, nothing saved " + JSON.stringify(prev.data.problems?.slice(0, 2)));
   const imp = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id, U.bob.id] });
@@ -7598,6 +7695,15 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   await runCron(env);
   check(q1("SELECT status FROM mise_takers WHERE mise_id = ? AND discord_id = ?", mid, U.carol.id).status === "submitted" && q1("SELECT status FROM mises WHERE id = ?", mid).status === "closed" && (await late("save", { item: "q2", answer: { choice: 1 } })).status === 409,
     "…their own time up: handed in by the cron, the session still closed");
+  // ♻️ never a one-use: a new session from the same content (its results stay), or back to a draft if nobody took it
+  { const ru = await api("POST", `/api/mises/${mid}/reuse`, { g: G });
+    const nm = ru.status === 200 ? q1("SELECT status, content, target FROM mises WHERE id = ?", ru.data.id) : null;
+    check(ru.status === 200 && ru.data.fresh && ru.data.id !== mid && nm.status === "draft" && nm.content === q1("SELECT content FROM mises WHERE id = ?", mid).content && nm.target === "[]"
+      && q1("SELECT COUNT(*) AS n FROM mise_takers WHERE mise_id = ?", ru.data.id).n === 0 && q1("SELECT COUNT(*) AS n FROM mise_takers WHERE mise_id = ?", mid).n > 0, "a closed mise en situation used again: a new session (a draft, nobody in it), the first one's papers stay");
+    run1("UPDATE mises SET status = 'closed' WHERE id = ?", ru.data.id);
+    const back = await api("POST", `/api/mises/${ru.data.id}/reuse`, { g: G });
+    check(back.data.id === ru.data.id && !back.data.fresh && q1("SELECT status FROM mises WHERE id = ?", ru.data.id).status === "draft", "…launched by mistake and nobody in it: back to a draft, the same one");
+    run1("DELETE FROM mises WHERE id = ?", ru.data.id); }
   // the teacher tests it as a learner (staff: never in « the whole class »), then time is up: the cron closes it
   check(setup.data.staff.some((x: any) => x.discord_id === U.prof.id), "setup: the teacher is offered to test it themselves");
   const imp2 = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file), save: true, target: [U.alice.id], testers: [U.prof.id] });

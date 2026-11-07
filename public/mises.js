@@ -37,7 +37,7 @@ async function viewMises() {
   MSIT.list = r.items;
   const live = r.items.filter((m) => m.status === "live");
   view.innerHTML = `
-    <div class="page-head"><div><h1>Mises en situation</h1><p class="sub">Live practical tests for the class: 5 situations with real code (increasing difficulty) and 5 QCM, for the week's programme or a brief. Upload a JSON, or let the AI write it. Learners code in their browser, in full screen; you follow each one live.</p></div>
+    <div class="page-head"><div><h1>Mises en situation</h1><p class="sub">Live practical tests for the class: as many situations with real code as you want (increasing difficulty) and QCM (or none), for the week's programme or a brief. Upload a JSON, or let the AI write it. Learners code in their browser, in full screen; you follow each one live.</p></div>
       <div class="toolbar" style="margin:0"><button class="btn primary" id="mes-new">＋ New mise en situation</button></div></div>
     <div class="figures cs-figs">
       <div class="figure"><span class="ico">🧪</span><div><b>${live.length}</b><span>live now</span></div></div>
@@ -76,7 +76,7 @@ async function mesWizard(opts = {}) {
         <div class="seg-row">${segHtml("mw-src", MES_SRC, "json")}</div>
         <div data-ms="json"><p class="small muted" style="margin:8px 0">The week, the sprint and the competencies are read from the file: check them below.</p></div>
         <div data-ms="brief" hidden>
-          <p class="small muted" style="margin:8px 0">The AI writes 5 situations and 5 QCM inside the brief's project (same client, same data), on the notions the learners need for it.</p>
+          <p class="small muted" style="margin:8px 0">The AI writes the situations and QCM inside the brief's project (same client, same data), on the notions the learners need for it.</p>
           ${segHtml("mw-bsrc", [["ours", "One of our briefs"], ["file", "A brief page (.html)"]], "ours")}
           <div data-bs="ours" style="margin-top:8px"><select id="mw-brief" aria-label="The brief"><option value="">Loading the briefs…</option></select></div>
           <div data-bs="file" hidden style="margin-top:8px"><label class="drop" id="mw-bdrop"><input type="file" id="mw-bfile" accept=".html,.htm,text/html" hidden><span>📄 <b>Choose the brief page (.html)</b> or drop it here</span></label></div>
@@ -94,6 +94,14 @@ async function mesWizard(opts = {}) {
         <div class="field-row" id="mw-ai-f">
           <div><label for="mw-met">Job / theme <span class="muted">(optional)</span></label><input type="text" id="mw-met" placeholder="e.g. a cooperative of argan oil, a riad in Fès, a pharmacy"></div>
           <div><label for="mw-wish">Your wishes <span class="muted">(optional)</span></label><input type="text" id="mw-wish" maxlength="1500" placeholder="e.g. a SQL situation, no regex, S5 on objects"></div></div>
+        <div class="field-row" id="mw-cnt-f">
+          <div><label for="mw-ns">Coding situations</label><input type="number" id="mw-ns" min="1" max="15" value="5" style="width:110px"></div>
+          <div><label for="mw-nq">QCM <span class="muted">(0 = none)</span></label><input type="number" id="mw-nq" min="0" max="30" value="5" style="width:110px"></div></div>
+        <div class="field-row" id="mw-sc-f">
+          <div><label for="mw-sc">Barème</label><select id="mw-sc"><option value="auto">Automatic: by difficulty, QCM a fixed share</option><option value="file">The points written in the file</option></select></div>
+          <div id="mw-qs-f"><label for="mw-qs">The QCM's share of the score (%)</label><input type="number" id="mw-qs" min="0" max="50" value="20" style="width:110px"></div></div>
+        <p class="small muted" style="margin:4px 0 0" id="mw-sc-i">Situations by difficulty: 1 → 2 points, 2 → 3, 3 → 4, 4 → 6, 5 → 8; the QCM share the rest. You can still change any item's points afterwards (Edit).</p>
+        <p class="small muted" id="mw-cnt-i" style="margin:4px 0 0"></p>
         <div class="toolbar" style="margin:8px 0 0"><button class="btn primary" id="mw-gen" type="button">✨ Generate</button><button class="btn" id="mw-cp" type="button" hidden>📋 Copy</button><span class="small muted" id="mw-st"></span></div>
         <textarea id="mw-prompt" class="cj-json" readonly hidden aria-label="The prompt for Claude"></textarea>
         <div id="mw-jbox">${jsonBox("mw-json", '{ "format": "classbot-mise-en-situation@1", "title": "…", "week": 3, "competencies": ["C4N1"], "situations": [ … ], "qcm": [ … ] }')}</div></li>
@@ -147,6 +155,7 @@ async function mesWizard(opts = {}) {
     const ai = v === "brief" || v === "sprint";
     $("#mw-mk-t").textContent = ai ? "Generate with the AI" : v === "claude" ? "The prompt, then Claude's JSON" : "The JSON";
     $("#mw-ai-f").hidden = v === "json";
+    $("#mw-cnt-f").hidden = $("#mw-cnt-i").hidden = v === "json";
     $("#mw-gen").hidden = v === "json";
     $("#mw-gen").textContent = v === "claude" ? "✨ Generate the prompt for Claude" : "✨ Generate the mise en situation";
     $("#mw-cp").hidden = true; $("#mw-prompt").hidden = true;
@@ -199,7 +208,14 @@ async function mesWizard(opts = {}) {
   loadCnLater = loadCn;
   loadCn();
   cnBox.addEventListener("cnchange", () => { const was = (W.cn || []).join(); W.cn = pickedConcepts(cnBox); if (was && was !== W.cn.join()) stale(); });
-  const scope = () => ({ week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
+  // how many situations and QCM (an uploaded file: as many as it has)
+  const counts = () => ({ ...(W.src === "json" ? {} : { nSituations: Math.max(1, Math.min(15, Number($("#mw-ns").value) || 5)), nQcm: Math.max(0, Math.min(30, Math.round(Number($("#mw-nq").value) || 0))) }),
+    scoring: $("#mw-sc").value, qcmShare: Math.max(0, Math.min(50, Math.round(Number($("#mw-qs").value) || 0))) });
+  const cntInfo = () => { const c = counts(); $("#mw-qs-f").hidden = c.scoring === "file" || c.nQcm === 0; $("#mw-sc-i").hidden = c.scoring === "file"; if (!c.nSituations) return; const min = c.nSituations * 15 + c.nQcm * 2;
+    $("#mw-cnt-i").textContent = `${c.nSituations} coding situation${c.nSituations > 1 ? "s" : ""} (difficulty going up)${c.nQcm ? ` + ${c.nQcm} QCM on their code` : ", no QCM"} · about ${min} minutes for the learners${c.nSituations > 8 && W.src !== "claude" ? " · the AI may take several rounds for that many" : ""}`; };
+  ["#mw-ns", "#mw-nq", "#mw-sc", "#mw-qs"].forEach((x) => $(x).oninput = $(x).onchange = () => { cntInfo(); stale(); });
+  setTimeout(cntInfo);
+  const scope = () => ({ ...counts(), week: W.manual || !["json", "claude"].includes(W.src) ? W.week : null, comps: W.manual ? W.comps : [], brief: W.src === "brief" ? W.brief : null, ...(W.src === "brief" && W.briefSrc ? W.briefSrc : {}),
     ...($("[data-cncap]", cnBox) ? { concepts: pickedConcepts(cnBox) } : {}) });
   const show = (r, auto) => {
     W.res = r;
@@ -237,7 +253,7 @@ async function mesWizard(opts = {}) {
       copyText(r.prompt, "Prompt copied: paste it in Claude, then paste its JSON below");
       return;
     }
-    $("#mw-st").textContent = "⏳ The AI writes 5 situations with their solution and checks, and 5 QCM, then rewrites whatever doesn’t match the requirements (1 to 4 minutes)…";
+    { const c = counts(); $("#mw-st").textContent = `⏳ The AI writes ${c.nSituations} situation${c.nSituations > 1 ? "s" : ""} with their solution and checks${c.nQcm ? `, and ${c.nQcm} QCM` : ""}, then rewrites whatever doesn’t match the requirements (1 to ${Math.max(4, Math.ceil(c.nSituations * 0.8))} minutes)…`; }
     try {
       const r = await api("/mises/generate", { method: "POST", body });
       $("#mw-json").value = r.json; W.json = r.json; $("#mw-jbox").hidden = false;
@@ -267,6 +283,13 @@ async function mesWizard(opts = {}) {
   $("#mw-x").onclick = () => { box.innerHTML = ""; };
   showSrc("json");
   // from a brief's page (« Make one for this brief »): the AI writes it for that brief, linked to it when saved
+  // from a plan d'action for the class: the AI writes it from the sprint, on the class's lacunes
+  if (opts.wishes || opts.sprint) {
+    $('[data-seg="mw-src"] [data-v="sprint"]', box)?.click();
+    const wk = opts.sprint ? st.weeks.filter((w) => w.sprint === opts.sprint).pop() : null;
+    if (wk) { setWeek(wk.n, `sprint ${opts.sprint}`); W.manual = true; }
+    if (opts.wishes) $("#mw-wish").value = String(opts.wishes).slice(0, 1500);
+  }
   if (opts.brief) {
     $('[data-seg="mw-src"] [data-v="brief"]', box)?.click();
     await loadBriefs();
@@ -304,6 +327,7 @@ function mesRender() {
         ${m.status === "draft" ? `<button class="btn primary" id="me-launch">Launch · choose who takes it</button>` : ""}
         ${m.status === "live" && takers.some((t) => t.status === "locked") ? `<button class="btn primary" id="me-unall">Let everyone stopped back in (${takers.filter((t) => t.status === "locked").length})</button>` : ""}
         ${m.status === "live" || m.status === "scheduled" ? `<button class="btn" id="me-add">＋ Add learners</button><button class="btn" id="me-ext">⏱ More time</button><button class="btn danger" id="me-close">Close for everyone</button>` : ""}
+        ${m.status !== "draft" ? `<button class="btn" id="me-reuse" title="The same content again: a new session (a draft to launch) — or back to a draft if nobody took it">♻️ Use it again</button>` : ""}
         ${m.status === "closed" ? `<button class="btn primary" id="me-late" title="Learners who were absent: they get it now with their own time, the session stays closed for the others">＋ Give it to absent learners</button><button class="btn" id="me-ext">⏱ Reopen with more time</button>` : ""}
         <button class="btn danger" id="me-del">Delete</button></div></div>
     <div class="tabs" role="tablist">
@@ -325,6 +349,7 @@ function mesRender() {
   if ($("#me-unall")) $("#me-unall").onclick = (e) => busy(e.currentTarget, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: {} }); toast("They can come back: their page asks for full screen again"); mesRender(); });
   if ($("#me-add")) $("#me-add").onclick = (e) => busy(e.currentTarget, () => mesAddDialog());
   if ($("#me-ext")) $("#me-ext").onclick = () => mesExtendDialog();
+  if ($("#me-reuse")) $("#me-reuse").onclick = (e) => busy(e.currentTarget, () => mesReuse(m.id));
   if ($("#me-late")) $("#me-late").onclick = (e) => busy(e.currentTarget, () => mesLateDialog());
   if ($("#me-close")) $("#me-close").onclick = () => confirmDialog("Close it for everyone?", "Every paper still open is handed in as it is now (the work saved so far). Their links stop working.", "Close", async () => { MSIT.d = await api(`/mises/${m.id}/close`, { method: "POST", body: {} }); mesRender(); });
   $("#me-del").onclick = () => confirmDialog("Delete this mise en situation?", "Its papers and the results it put in the learners' records are deleted. This can't be undone.", "Delete", async () => { await api(`/mises/${m.id}`, { method: "DELETE", confirmed: true }); location.hash = "#/mises-en-situation"; }, true);
@@ -384,7 +409,7 @@ async function mesEditor(root) {
     <label>Context <span class="muted">(the job, the character, the need)</span></label>${ta(`s.${i}.context`, x.context, 80)}
     <div class="field-row">
       <div><label>Difficulty</label><select data-e="s.${i}.difficulty">${[1, 2, 3, 4, 5].map((d) => `<option ${d === x.difficulty ? "selected" : ""}>${d}</option>`).join("")}</select></div>
-      <div><label>Points</label><input type="number" min="1" max="10" data-e="s.${i}.points" value="${x.points}"></div>
+      <div><label>Points</label><input type="number" min="0.05" max="10" step="0.05" data-e="s.${i}.points" value="${x.points}"></div>
       <div style="flex:2"><label>Notions <span class="muted">(comma separated)</span></label>${inp(`s.${i}.notions`, x.notions.join(", "))}</div>
       <div><label>Competencies</label>${inp(`s.${i}.competencies`, x.competencies.join(", "), "C4N1")}</div></div>
     <label>Sub-questions <span class="muted">(one per line)</span></label>${ta(`s.${i}.questions`, x.questions.join("\n"), 110)}
@@ -397,7 +422,7 @@ async function mesEditor(root) {
     <label>Code <span class="muted">(optional)</span></label><textarea data-e="q.${i}.code" class="code-ta" spellcheck="false" style="min-height:50px">${esc(q.code || "")}</textarea>
     <label>Choices <span class="muted">(tick the right one)</span></label>
     ${[0, 1, 2, 3].map((k) => `<div class="mes-ed-ch"><input type="radio" name="qc${i}" value="${k}" data-e="q.${i}.correct" ${q.correct === k ? "checked" : ""} aria-label="Right answer ${"ABCD"[k]}"><b>${"ABCD"[k]}</b>${inp(`q.${i}.c.${k}`, q.choices[k] || "", k >= 3 ? "(optional 4th choice)" : "")}</div>`).join("")}
-    <div class="field-row"><div style="flex:2"><label>Notion</label>${inp(`q.${i}.notion`, q.notion)}</div><div><label>Points</label><input type="number" min="1" max="5" data-e="q.${i}.points" value="${q.points}"></div><div><label>Competencies</label>${inp(`q.${i}.competencies`, q.competencies.join(", "))}</div></div></div>`;
+    <div class="field-row"><div style="flex:2"><label>Notion</label>${inp(`q.${i}.notion`, q.notion)}</div><div><label>Points</label><input type="number" min="0.05" max="10" step="0.05" data-e="q.${i}.points" value="${q.points}"></div><div><label>Competencies</label>${inp(`q.${i}.competencies`, q.competencies.join(", "))}</div></div></div>`;
   const weeks = st.weeks;
   root.innerHTML = `<div class="toolbar" style="margin:0 0 12px"><button class="btn primary" id="me-save">Save</button><button class="btn" id="me-cancel">Cancel</button><span class="small muted">Saved, it's checked again like an import. The automatic checks: <b>Edit the JSON</b>.</span></div>
     <div id="me-prob"></div>
@@ -782,23 +807,36 @@ function mesResetDialog(t) {
     toast(invite ? (r.sent ? "Deleted · invited again, new link sent by DM" : closed ? "Deleted · invited again: reopen it so they can take it" : "Deleted · invited again (the DM didn't go through: copy their link)") : "Their paper is deleted"); mesRender(); } }]);
 }
 
+/** ♻️ Use a mise en situation again: a new session from its content (or back to a draft if nobody took it), then its page. */
+async function mesReuse(id, pre = null) {
+  const r = await api(`/mises/${id}/reuse`, { method: "POST", body: {} });
+  toast(r.fresh ? "A new session from the same content: launch it for whom you want" : "Back to a draft: launch it again");
+  if (pre) MSIT.pendingLaunch = pre;
+  if (location.hash === `#/mise/${r.id}`) viewMise(r.id); else location.hash = `#/mise/${r.id}`;
+}
 // « Give work » (the students' page, a plan d'action): one of the mises en situation, for the students chosen.
 // Saved and not launched → its launch window with them already ticked; already live → they're added (link by DM).
-async function mesGiveDialog(pre = [], students = []) {
-  const items = (await api("/mises")).items.filter((m) => m.status !== "closed");
+async function mesGiveDialog(pre = [], students = [], o = {}) {
+  // every one of them: a closed one is used again (a new session from its content)
+  const items = (await api("/mises")).items;
   const names = new Map(students.map((s) => [s.discord_id, s.name]));
   openDialog("🧪 Give a mise en situation", `
-    ${items.length ? `<p class="small muted" style="margin-top:0">For ${pre.length ? pre.map((id) => `<b>${esc(names.get(id) || id)}</b>`).join(", ") : "the students you'll pick"}.</p>
-      <div class="mes-give">${items.map((m, i) => `<label class="check mes-give-it"><input type="radio" name="mg" value="${m.id}" ${i ? "" : "checked"}> <span><b>${esc(m.title)}</b> ${mesStatus(m.status)}${m.week ? ` <span class="small muted">· week ${m.week}</span>` : ""}<br>${m.comps.map((c) => compChip(c)).join(" ")} <span class="small muted">${m.takers ? `· ${m.done}/${m.takers} handed in` : ""}</span></span></label>`).join("")}</div>`
+    ${items.length ? `<p class="small muted" style="margin-top:0">For ${o.everyone ? `<b>the whole class</b> (${pre.length} students)` : pre.length ? pre.map((id) => `<b>${esc(names.get(id) || id)}</b>`).join(", ") : "the students you'll pick"}.</p>
+      <div class="mes-give">${items.map((m, i) => `<label class="check mes-give-it"><input type="radio" name="mg" value="${m.id}" ${i ? "" : "checked"}> <span><b>${esc(m.title)}</b> ${mesStatus(m.status)}${m.status === "closed" ? ` <span class="small muted">· ♻️ given again as a new session</span>` : ""}${m.week ? ` <span class="small muted">· week ${m.week}</span>` : ""}<br>${m.comps.map((c) => compChip(c)).join(" ")} <span class="small muted">${m.takers ? `· ${m.done}/${m.takers} handed in` : ""}</span></span></label>`).join("")}</div>`
       : `<p class="muted">No mise en situation yet.</p>`}
     <p class="small"><a href="#/mises-en-situation" id="mg-new">＋ Create a new one</a> <span class="muted">(upload a JSON, or the AI writes it for a brief or the sprint)</span></p>`,
   items.length ? [{ label: "Give it", primary: true, action: async () => {
     const id = Number($('input[name="mg"]:checked', dlg)?.value);
     const m = items.find((x) => x.id === id);
     if (!m) throw new Error("Choose a mise en situation.");
+    if (m.status === "closed") { dlg.close(); return mesReuse(id, pre); }
     if (m.status === "draft" || !pre.length) { dlg.close(); MSIT.pendingLaunch = pre; location.hash = `#/mise/${id}`; return; }
-    const r = await api(`/mises/${id}/add`, { method: "POST", body: { students: pre } });
-    dlg.close(); toast(`${pre.length} added · ${r.sent} DM sent`); location.hash = `#/mise/${id}`;
+    // live already: the ones who don't have it yet are added (the whole class: everyone missing)
+    const has = new Set((await api(`/mises/${id}`)).takers.map((t) => t.discord_id));
+    const add = pre.filter((x) => !has.has(x));
+    if (!add.length) { dlg.close(); toast("They all have it already"); location.hash = `#/mise/${id}`; return; }
+    const r = await api(`/mises/${id}/add`, { method: "POST", body: { students: add } });
+    dlg.close(); toast(`${add.length} added · ${r.sent} DM sent`); location.hash = `#/mise/${id}`;
   } }] : []);
   $("#mg-new", dlg).onclick = () => { dlg.close(); MSIT.openNew = true; };
 }

@@ -24,7 +24,7 @@ async function giveWorkDialog(preStudents = [], rows = []) {
   const draft = one ? plans.find((p) => p.status === "draft") : null;
   const pickList = one ? "" : `<label for="gw-s" class="small">For</label><select id="gw-s" style="width:100%">${students.map((s) => `<option value="${esc(s.discord_id)}" ${preStudents[0] === s.discord_id ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select>`;
   openDialog("Give work", `<div class="gw">
-      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation (5 situations with code + 5 QCM), for ${one ? esc(one.name) : "one or more students"}. Taken in their browser, followed live.</span><span class="btn">Choose a mise en situation →</span></button>
+      <button class="gw-opt" id="gw-ch"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation (situations with code, and QCM if you want), for ${one ? esc(one.name) : "one or more students"}. Taken in their browser, followed live.</span><span class="btn">Choose a mise en situation →</span></button>
       <div class="gw-opt gw-plan" role="group"><span class="gw-ico">🧭</span><b>A plan d'action</b><span class="muted small">A series of actions built for ${one ? esc(one.name) : "one student"}: the AI first explains their lacunes and proposes challenges, code to write, questions, a QCM or a mini brief. You choose, edit, then send.</span>
         ${pickList}<button class="btn primary" id="gw-pl">${draft ? "Continue the draft" : "Build the plan"} →</button></div>
     </div>`);
@@ -42,6 +42,46 @@ async function giveWorkDialog(preStudents = [], rows = []) {
   });
 }
 
+// ------------------------------------------------------------------ 👥 a plan d'action for the whole class
+// A plan is built on one student's page (their diagnosis helps choose the actions), then « 👥 Send to the whole class »
+// gives each student their own copy. Start from a plan already made, or a new draft.
+async function classPlanDialog() {
+  const [plans, sp, studs] = await Promise.all([api("/wplans").catch(() => []), api("/sprints").catch(() => ({ sprints: [], current: null })), loadStudents()]);
+  const all = studs.map((s) => ({ discord_id: s.discord_id, name: s.name || s.discord_id }));
+  const withSteps = plans.filter((p) => p.steps > 0).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, 30);
+  const spOpts = (sp.sprints || []).map((x) => `<option value="${x.n}" ${x.n === sp.current ? "selected" : ""}>Sprint ${x.n}${x.title ? ` · ${esc(x.title)}` : ""}${x.n === sp.current ? " (now)" : ""}</option>`).join("");
+  openDialog("👥 Give work to the whole class", `<div class="gw">
+      <div class="gw-opt" role="group"><span class="gw-ico">🧪</span><b>A mise en situation</b><span class="muted small">One of your mises en situation for all ${all.length} students (code in their browser, followed live), or a new one: written by the AI from a sprint (on what the class didn't reach) or a brief.</span>
+        <button class="btn primary" id="cp-mes">Choose a mise en situation →</button>
+        <label class="small" for="cp-msp" style="margin-top:6px">or a new one on</label><select id="cp-msp" style="width:100%">${spOpts}</select>
+        <button class="btn" id="cp-mnew">＋ Create it on this sprint →</button></div>
+      <div class="gw-opt" role="group"><span class="gw-ico">🧭</span><b>A plan d'action</b><span class="muted small">Actions for everyone (mini brief, code, questions, QCM, challenges): each student gets their own copy by DM.</span>
+        <label class="small" for="cp-sp">A new plan on</label><select id="cp-sp" style="width:100%">${spOpts}</select>
+        <button class="btn primary" id="cp-new">Build it → <span class="muted small">(the AI reads what the class didn't reach)</span></button>
+        ${withSteps.length ? `<label class="small" for="cp-from" style="margin-top:6px">or one already made</label><select id="cp-from" style="width:100%">${withSteps.map((p) => `<option value="${p.id}">${esc(p.title)} · ${p.sid === "class" ? "👥 class" : esc(p.name)} · ${p.steps} action${p.steps > 1 ? "s" : ""}</option>`).join("")}</select>
+        <button class="btn" id="cp-open">Open it → 👥 Send to the whole class</button>` : ""}</div>
+    </div>`);
+  dlg.classList.add("wide");
+  // a mise en situation: one already made (for everyone), or the wizard on the sprint
+  $("#cp-mes", dlg).onclick = (e) => busy(e.currentTarget, () => mesGiveDialog(all.map((s) => s.discord_id), all, { everyone: true }));
+  $("#cp-mnew", dlg).onclick = () => { const n = Number($("#cp-msp", dlg).value) || null; dlg.close();
+    MSIT.openNew = n ? { sprint: n, wishes: `Pour toute la classe, sur ce qu'elle n'a pas atteint au sprint ${n}` } : true; location.hash = "#/mises-en-situation"; };
+  if ($("#cp-open", dlg)) $("#cp-open", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    const id = $("#cp-from", dlg).value; dlg.close();
+    location.hash = `#/wplan/${id}`;
+    // once the plan is on screen: the whole class dialog
+    setTimeout(async () => { for (let i = 0; i < 30 && String(WPS.plan?.id) !== String(id); i++) await new Promise((r) => setTimeout(r, 100)); if (String(WPS.plan?.id) === String(id)) wpCopyDialog({ all: true }); }, 50);
+  });
+  $("#cp-new", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    const n = Number($("#cp-sp", dlg).value);
+    if (!n) throw new Error("No sprint in the programme yet.");
+    // a draft already on this sprint: continued
+    const mine = plans.find((p) => p.sid === "class" && p.title === `Plan d'action · Sprint ${n}` && !p.steps);
+    const id = mine?.id || (await api("/wplans", { method: "POST", body: { sprint: n } })).id;
+    dlg.close(); location.hash = `#/wplan/${id}`;
+  });
+}
+
 // ------------------------------------------------------------------ the builder
 async function viewWorkPlan(id) {
   const r = await api(`/wplans/${id}`);
@@ -50,7 +90,9 @@ async function viewWorkPlan(id) {
   drawWorkPlan();
 }
 const wpDraft = () => WPS.plan?.status === "draft";
-const wpFirst = () => esc(String(WPS.plan?.name || "").split(/\s+/)[0] || "the student");
+// a plan for the whole class (built on a sprint, then a copy for each student)
+const wpClass = () => WPS.plan?.sid === "class";
+const wpFirst = () => (wpClass() ? "the class" : esc(String(WPS.plan?.name || "").split(/\s+/)[0] || "the student"));
 
 function drawWorkPlan() {
   const p = WPS.plan, draft = wpDraft();
@@ -59,9 +101,10 @@ function drawWorkPlan() {
   view.innerHTML = `
     <div class="page-head"><div><p class="crumb"><a href="#/assignments">Plan d'action</a> › ${esc(p.name)}</p>
         <h1>🧭 ${esc(p.title)}</h1>
-        <p class="sub">${draft ? `A draft for ${esc(p.name)}: understand their lacunes, choose the actions, then send. Nothing is sent before you press Send.`
+        <p class="sub">${wpClass() ? `👥 For the whole class, on sprint ${p.sprint}: the AI reads what the class didn't reach (competencies, objectives, shared lacunes) and proposes actions. Then « 👥 Send to the whole class » gives each student their own copy.`
+          : draft ? `A draft for ${esc(p.name)}: understand their lacunes, choose the actions, then send. Nothing is sent before you press Send.`
           : `Sent to <b>${esc(p.name)}</b> ${fmtAgo(p.sent_at)}${p.due_at ? ` · due ${fmtDateTime(p.due_at)}` : ""}. Follow each action below.`}</p></div>
-      <div class="actions">${draft ? "" : `<button class="btn primary" id="wp-give">${icon("clipboard")}Give work</button>`}<button class="btn" id="wp-dup" title="The same actions for other students: a plan each">📋 Same plan for others</button><button class="btn" id="wp-gaps">🔎 Weak points</button>${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
+      <div class="actions">${draft ? "" : `<button class="btn primary" id="wp-give">${icon("clipboard")}Give work</button>`}<button class="btn" id="wp-dup" title="The same actions for other students: a plan each">📋 Same plan for others</button>${wpClass() ? `<button class="btn" id="wp-mise" title="A mise en situation for the class on these lacunes (the AI writes it from the sprint)">🧪 A mise en situation on it</button>` : `<button class="btn" id="wp-gaps">🔎 Weak points</button>`}${WPS.url ? `<a class="btn" href="${esc(WPS.url)}" target="_blank" rel="noopener">Their page ↗</a>` : ""}<button class="btn danger" id="wp-del">${draft ? "Delete the draft" : "Delete the plan"}</button></div></div>
     <div class="wp-grid">
       <div class="stack">
         ${draft ? `<section class="panel wp-diag" id="wp-diag">${diagHtml()}</section>`
@@ -79,9 +122,9 @@ function drawWorkPlan() {
 
 function diagHtml() {
   const p = WPS.plan, d = p.diag, name = wpFirst();
-  if (WPS.busy.has("diag")) return `<div class="wp-diag-load"><div class="wp-spin"></div><div><b>The AI reads ${name}'s debriefs, assessments and practice…</b><p class="muted small">About 20 seconds. It explains their lacunes, then proposes actions.</p></div></div>`;
-  if (!d) return `<div class="wp-diag-empty"><div class="wp-diag-ico">🔎</div><div><h2>Understand ${name}'s lacunes first</h2>
-      <p class="muted">The AI reads their debriefs (requirements missed, competencies not validated, oral questions), their assessments (the questions missed and why) and their practice, then explains what they don't master and proposes actions for it.</p>
+  if (WPS.busy.has("diag")) return `<div class="wp-diag-load"><div class="wp-spin"></div><div><b>${wpClass() ? `The AI reads what the class didn't reach in sprint ${p.sprint}…` : `The AI reads ${name}'s debriefs, assessments and practice…`}</b><p class="muted small">About 20 seconds. It explains their lacunes, then proposes actions.</p></div></div>`;
+  if (!d) return `<div class="wp-diag-empty"><div class="wp-diag-ico">🔎</div><div><h2>${wpClass() ? `What the class didn't reach in sprint ${p.sprint}` : `Understand ${name}'s lacunes first`}</h2>
+      <p class="muted">${wpClass() ? "The AI reads the sprint's diagnosis (the competencies and objectives not reached, the lacunes shared by the class, the features not done), then explains them and proposes actions for the whole class: a mini brief, code, questions, a QCM, challenges. You keep, change or add what you want." : `The AI reads their debriefs (requirements missed, competencies not validated, oral questions), their assessments (the questions missed and why) and their practice, then explains what they don't master and proposes actions for it.`}</p>
       <label class="wp-f wide wp-wish"><span>What do you want in this plan? <span class="muted">(optional: the AI follows it first)</span></span><textarea id="wp-ask" rows="2" placeholder="e.g. A mini brief: a portfolio page in HTML/CSS with a flex navbar and a CSS Grid gallery, plus 2 questions on Flexbox. 4 hours max.">${esc(WPS.wish || "")}</textarea></label>
       <p class="toolbar" style="margin:12px 0 0"><button class="btn primary" id="wp-diagnose">✨ Diagnose ${name}</button></p></div></div>`;
   const added = new Set(p.steps.map((s) => s.kind + "|" + (s.prompt || s.title)));
@@ -217,7 +260,8 @@ function sendPanelHtml(count) {
     <label class="wp-f wide"><span>Message <span class="muted">(at the top of their page)</span></span><textarea id="wp-msg" rows="4" placeholder="e.g. On reprend les bases de Flexbox ensemble : fais les actions dans l'ordre.">${esc(p.message)}</textarea></label>
     <label class="wp-f wide"><span>Due <span class="muted">(optional)</span></span><input type="datetime-local" id="wp-due" value="${due}"></label>
     <div class="wp-sumk">${count.length ? count.map(([k, n]) => `<span class="wp-chip k-${k}">${WK[k].ico} ${n} ${esc(WK[k].label)}</span>`).join("") : `<span class="muted small">No action yet</span>`}</div>
-    <button class="btn primary wp-go" id="wp-send" ${p.steps.length ? "" : "disabled"}>🧭 Send the plan</button>
+    ${wpClass() ? "" : `<button class="btn primary wp-go" id="wp-send" ${p.steps.length ? "" : "disabled"}>🧭 Send the plan</button>`}
+    <button class="btn wp-go ${wpClass() ? "primary" : ""}" id="wp-class" ${p.steps.length ? "" : "disabled"} title="This plan for every student of the class: a plan each, sent by DM">👥 Send to the whole class</button>
     <p class="muted small">${wpFirst()} gets a private page by DM. They answer there and the AI corrects at once (they can try again); the challenges are done in Discord (/assignments); the mini brief is handed in as a link that you validate.</p></section>`;
 }
 function progressPanelHtml(st) {
@@ -322,7 +366,13 @@ function wireWorkPlan() {
   });
   $("#wp-dup").onclick = (e) => busy(e.currentTarget, wpCopyDialog);
   if ($("#wp-give")) $("#wp-give").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog([p.sid]));
-  $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
+  if ($("#wp-gaps")) $("#wp-gaps").onclick = (e) => busy(e.currentTarget, () => gapsDialog({ discord_id: p.sid, name: p.name }));
+  // 👥 the class: a mise en situation on the same lacunes (the wizard, from the sprint, with them as wishes)
+  if ($("#wp-mise")) $("#wp-mise").onclick = () => {
+    const lac = (p.diag?.lacunes || []).map((l) => l.notion);
+    MSIT.openNew = { sprint: p.sprint, wishes: lac.length ? `Sur les lacunes de la classe : ${lac.join(" ; ")}` : `Sur les objectifs non atteints du sprint ${p.sprint}` };
+    location.hash = "#/mises-en-situation";
+  };
   $("#wp-del").onclick = () => confirmDialog(draft ? "Delete this draft?" : `Delete ${p.name}'s plan?`, draft ? "Its diagnosis and actions are lost." : "Their page stops working and its open challenges are cancelled. What they did stays in their history.", "Delete",
     async () => { await api(`/wplans/${p.id}`, { method: "DELETE", confirmed: true }); toast("Plan deleted"); location.hash = "#/assignments"; }, true);
   $$("[data-toggle]").forEach((b) => b.onclick = () => { const id = b.dataset.toggle; WPS.open.has(id) ? WPS.open.delete(id) : WPS.open.add(id); drawWorkPlan(); });
@@ -433,7 +483,8 @@ function wireWorkPlan() {
     }
   }
   ["#wp-title", "#wp-msg", "#wp-due"].forEach((sel) => { const el = $(sel); if (el) el.addEventListener("input", () => { p.title = $("#wp-title").value; p.message = $("#wp-msg").value; p.due_at = wpDueValue(); wpSaveSoon(); }); });
-  $("#wp-send").onclick = (e) => busy(e.currentTarget, async () => {
+  if ($("#wp-class")) $("#wp-class").onclick = (e) => busy(e.currentTarget, () => wpCopyDialog({ all: true }));
+  if ($("#wp-send")) $("#wp-send").onclick = (e) => busy(e.currentTarget, async () => {
     const go = await new Promise((res) => {
       openDialog(`Send the plan to ${p.name}?`, `<p>${p.steps.length} action${p.steps.length > 1 ? "s" : ""}. ${wpFirst()} gets their page by DM. The actions can't be changed afterwards (you can still validate and comment).</p>`,
         [{ label: "Cancel", action: async () => { dlg.close(); res(false); } }, { label: "🧭 Send", primary: true, action: async () => { dlg.close(); res(true); } }]);
@@ -449,22 +500,34 @@ function wireWorkPlan() {
 }
 
 // ------------------------------------------------------------------ the same plan for other students, actions from JSON
-async function wpCopyDialog() {
+// the same plan for others: chosen ones, or the whole class (o.all: everyone ticked, sent now, this plan too)
+async function wpCopyDialog(o = {}) {
   const p = WPS.plan;
   if (!p.steps.length) return toast("Add at least one action first.", true);
   if (wpDraft()) { clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving; await wpSaveNow(); }
   const rows = (await loadStudents()).filter((s) => s.discord_id !== p.sid);
   const low = (s) => s.niveau && (s.niveau.lv === "faible" || s.niveau.lv === "critique");
-  openDialog("Same plan for other students", `<p class="muted small">${p.steps.length} action(s), with the same title, message and due date. Each student gets their own plan: their answers, progress and guide are theirs.</p>
-    <div class="wpc-bar"><input type="search" id="wpc-q" placeholder="Search a student"><button class="btn small" id="wpc-low">Faible & Critique</button><button class="btn small" id="wpc-none">None</button></div>
-    <div class="wpc-list">${rows.map((s) => `<label class="wpc-row" data-n="${esc(String(s.name || s.discord_id).toLowerCase())}"><input type="checkbox" value="${esc(s.discord_id)}" ${low(s) ? "data-low" : ""}><b>${esc(s.name || s.discord_id)}</b>${s.team ? `<span class="muted small">${esc(s.team)}</span>` : ""}${nivPill(s.niveau)}</label>`).join("") || `<p class="muted">No other student.</p>`}</div>
+  openDialog(o.all ? "Send this plan to the whole class" : "Same plan for other students", `<p class="muted small">${p.steps.length} action(s), with the same title, message and due date. Each student gets their own plan: their answers, progress and guide are theirs.${o.all && wpDraft() && !wpClass() ? ` ${esc(p.name)} gets this one.` : ""} Untick the ones who shouldn't have it.</p>
+    <div class="wpc-bar"><input type="search" id="wpc-q" placeholder="Search a student"><button class="btn small" id="wpc-all">Everyone</button><button class="btn small" id="wpc-low">Faible & Critique</button><button class="btn small" id="wpc-none">None</button></div>
+    <div class="wpc-list">${rows.map((s) => `<label class="wpc-row" data-n="${esc(String(s.name || s.discord_id).toLowerCase())}"><input type="checkbox" value="${esc(s.discord_id)}" ${low(s) ? "data-low" : ""} ${o.all ? "checked" : ""}><b>${esc(s.name || s.discord_id)}</b>${s.team ? `<span class="muted small">${esc(s.team)}</span>` : ""}${nivPill(s.niveau)}</label>`).join("") || `<p class="muted">No other student.</p>`}</div>
     <p class="small" id="wpc-n">0 selected</p>
-    <label class="wp-f wide"><span>Then</span><select id="wpc-send"><option value="0">Keep them as drafts: you check, then send each one</option><option value="1">Send them now: each gets their page by DM</option></select></label>`,
-  [{ label: "📋 Copy", primary: true, action: async () => {
+    <label class="wp-f wide"><span>Then</span><select id="wpc-send"><option value="0" ${o.all ? "" : "selected"}>Keep them as drafts: you check, then send each one</option><option value="1" ${o.all ? "selected" : ""}>Send them now: each gets their page by DM</option></select></label>`,
+  [{ label: o.all ? "👥 Send to them" : "📋 Copy", primary: true, action: async () => {
     const students = $$(".wpc-row input:checked", dlg).map((i) => i.value);
-    if (!students.length) throw new Error("Choose at least one student.");
+    if (!students.length && !(o.all && wpDraft() && !wpClass())) throw new Error("Choose at least one student.");
     const send = $("#wpc-send", dlg).value === "1";
-    const r = await api(`/wplans/${p.id}/copy`, { method: "POST", body: { students, send } });
+    // the whole class: this draft goes too (to its student), with what was just typed
+    if (o.all && send && wpDraft() && !wpClass()) {
+      const r0 = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title")?.value ?? p.title, message: $("#wp-msg")?.value ?? p.message, due_at: wpDueValue() } } });
+      Object.assign(WPS, { plan: r0.plan, status: r0.status, url: r0.url });
+      if (!students.length) { dlg.close(); toast(`Sent to ${p.name}`); location.hash = "#/assignments"; return; }
+    }
+    // by groups of 10 (each one: a plan, a DM, a guide written by the AI): a whole class never in one go
+    const r = { made: [] };
+    for (let i = 0; i < students.length; i += 10) {
+      if (students.length > 10) $("#wpc-n", dlg).textContent = `Sending… ${i}/${students.length}`;
+      r.made.push(...(await api(`/wplans/${p.id}/copy`, { method: "POST", body: { students: students.slice(i, i + 10), send } })).made);
+    }
     dlg.close();
     const noDm = send ? r.made.filter((c) => !c.dm).length : 0;
     toast(send ? `Sent to ${r.made.length} student(s)${noDm ? ` · ${noDm} DM(s) couldn't go: copy their link from their plan` : ""}` : `${r.made.length} draft(s) made: open each one below to send it`, noDm > 0);
@@ -473,6 +536,8 @@ async function wpCopyDialog() {
   const count = () => { $("#wpc-n", dlg).textContent = `${$$(".wpc-row input:checked", dlg).length} selected`; };
   $$(".wpc-row input", dlg).forEach((i) => i.onchange = count);
   $("#wpc-q", dlg).oninput = (e) => { const q = e.target.value.trim().toLowerCase(); $$(".wpc-row", dlg).forEach((l) => { l.hidden = !!q && !l.dataset.n.includes(q); }); };
+  $("#wpc-all", dlg).onclick = () => { $$(".wpc-row input", dlg).forEach((i) => { i.checked = true; }); count(); };
+  count();
   $("#wpc-low", dlg).onclick = () => { $$(".wpc-row input[data-low]", dlg).forEach((i) => { i.checked = true; }); count(); };
   $("#wpc-none", dlg).onclick = () => { $$(".wpc-row input", dlg).forEach((i) => { i.checked = false; }); count(); };
 }

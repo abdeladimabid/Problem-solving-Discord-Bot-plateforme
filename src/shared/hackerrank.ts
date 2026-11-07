@@ -84,8 +84,8 @@ export async function fetchChallenge(slug: string) {
 }
 
 /**
- * Recently solved challenges of a user (from their public profile).
- * Returns slug -> unix time of the solve. Throws if HackerRank can't be read.
+ * Challenges a user recently SUBMITTED (their public profile). ⚠️ A wrong answer is listed too: this alone never
+ * proves a solve (trackScores does). Returns slug -> unix time of the last submission. Throws if HackerRank can't be read.
  */
 export async function recentSolves(username: string): Promise<Map<string, number>> {
   const data = await getJson(`${BASE}/hackers/${encodeURIComponent(username)}/recent_challenges?limit=50&response_version=v2`);
@@ -97,6 +97,34 @@ export async function recentSolves(username: string): Promise<Map<string, number
     if (!slug) continue;
     const when = m.created_at ? Math.floor(new Date(m.created_at).getTime() / 1000) : 0;
     out.set(slug.toLowerCase(), Number.isFinite(when) ? when : 0);
+  }
+  return out;
+}
+
+/** A practice challenge's full points and its track ("algorithms", "java"…): solving it fully adds these points to
+ *  the student's score in that track. Kept in memory while the worker lives (they never change). */
+const INFO = new Map<string, { max: number; track: string }>();
+export async function challengeInfo(slug: string): Promise<{ max: number; track: string }> {
+  const k = slug.toLowerCase();
+  const hit = INFO.get(k);
+  if (hit) return hit;
+  const m = (await getJson(`${BASE}/contests/master/challenges/${encodeURIComponent(k)}`))?.model;
+  const max = num(m?.max_score), track = m?.track?.track_slug;
+  if (!m || max === null || max <= 0 || typeof track !== "string" || !track) throw new HackerRankError("challenge points unknown");
+  const out = { max, track: track.toLowerCase() };
+  INFO.set(k, out);
+  return out;
+}
+
+/** The student's practice score per track (slug -> points). Each challenge counts its best score: a wrong answer
+ *  adds 0, some tests passed adds part of the points, all tests passed adds them all. */
+export async function trackScores(username: string): Promise<Map<string, number>> {
+  const data = await getJson(`${BASE}/hackers/${encodeURIComponent(username)}/scores_elo`);
+  if (!Array.isArray(data)) throw new HackerRankError("unexpected scores");
+  const out = new Map<string, number>();
+  for (const t of data) {
+    const sc = num(t?.practice?.score);
+    if (typeof t?.slug === "string" && sc !== null) out.set(t.slug.toLowerCase(), sc);
   }
   return out;
 }

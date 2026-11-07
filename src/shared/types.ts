@@ -185,6 +185,7 @@ export interface AttemptRow {
   fp?: string | null;
   held?: number;
   explain?: string | null;
+  hr_base?: string | null;               // HackerRank: the track score when the challenge was opened (the proof of a solve)
   runs?: number;
   reviewed?: number;
   free_hints?: number;

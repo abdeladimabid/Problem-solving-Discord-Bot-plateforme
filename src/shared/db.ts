@@ -1,7 +1,7 @@
 // Database helpers shared by the bot and the dashboard.
 import { classOf, hasOwnAi } from "./aictx.ts";
 import type { Env, GuildRow, PlayerRow } from "./types.ts";
-import { RULES, levelInfo } from "./game.ts";
+import { RULES, coinsFor, levelInfo, scoringOf } from "./game.ts";
 
 export const now = () => Math.floor(Date.now() / 1000);
 
@@ -98,10 +98,13 @@ export async function addPoints(
   );
 }
 
-/** Challenges give as many coins as points (a solve, a regrade, the held half after the explanation); taking the
- *  points back takes the coins back too, never below 0. */
-export async function challengeCoins(env: Env, guild: GuildRow, discordId: string | null | undefined, amount: number) {
-  if (!discordId || !amount) return;
+/** Challenges give coins with their points (a solve, a regrade, the held half after the explanation): as many as the
+ *  points, or what Settings → Scoring sets per level when `difficulty` is given. Taking the points back takes the
+ *  same coins back, never below 0. */
+export async function challengeCoins(env: Env, guild: GuildRow, discordId: string | null | undefined, points: number, difficulty?: string | null) {
+  if (!discordId || !points) return;
+  const amount = difficulty ? coinsFor(scoringOf(guild), difficulty, points) : points;
+  if (!amount) return;
   await run(env, "UPDATE players SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND discord_id = ?", Math.round(amount), guild.id, discordId);
 }
 

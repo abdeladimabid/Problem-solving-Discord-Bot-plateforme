@@ -1251,7 +1251,7 @@ async function viewAssignments() {
   const COLORS = { done: "var(--up)", late: "var(--warn)", failed: "var(--down)", missed: "var(--down)", open: "var(--line)" };
   view.innerHTML = `
     <div class="page-head"><div><h1>Plan d'action</h1><p class="sub">The students whose last debrief is Faible or Critique (its level: the assessment, the repo analysis and your level), and the ones you add yourself. Their weak points, whether they improve, whether they do the work you give them, and your comment.</p></div>
-      <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
+      <div class="actions"><button class="btn" id="ap-add">${icon("plus")}Add a student</button><button class="btn" id="ap-class" title="A mise en situation or a plan d'action for every student of the class">👥 Give work to the whole class</button><button class="btn primary" id="ap-new">${icon("clipboard")}Give work</button></div></div>
     <div class="ap-stats" role="group" aria-label="Show">${FILTERS.map(([v, l, n, c]) => `<button class="ap-stat ${c} ${n ? "" : "zero"}" data-apf="${v}" aria-pressed="${AP.filter === v}"><b>${n}</b><span>${l}</span></button>`).join("")}</div>
     <section class="panel ap-panel"><div class="panel-head"><h2>${AP.filter === "all" ? "Students who need help" : `${esc(FILTERS.find((f) => f[0] === AP.filter)[1])} <span class="muted">· ${shown.length}</span> <button class="ap-link" data-apf="all">show all</button>`}</h2></div>
       ${P.plan.length ? shown.length ? `<div class="ap-grid">${shown.map((r) => apCard(r, wplans.filter((w) => w.sid === r.discord_id))).join("")}</div>` : `<p class="empty">No student in this filter.</p>`
@@ -1275,6 +1275,7 @@ async function viewAssignments() {
   $$("[data-apf]").forEach((b) => b.onclick = () => { AP.filter = b.dataset.apf; viewAssignments(); });
   const giveRows = [...P.plan, ...P.others].map((r) => ({ discord_id: r.discord_id, name: r.name }));
   $("#ap-new").onclick = (e) => busy(e.currentTarget, () => giveWorkDialog(P.plan.map((r) => r.discord_id), giveRows));
+  $("#ap-class").onclick = (e) => busy(e.currentTarget, () => classPlanDialog());
   $$("[data-ap-give]").forEach((b) => b.onclick = () => busy(b, () => giveWorkDialog([b.dataset.apGive], giveRows)));
   $$("[data-ap-gaps]").forEach((b) => b.onclick = () => busy(b, () => gapsDialog(byId.get(b.dataset.apGaps))));
   $$("[data-ap-more]").forEach((b) => b.onclick = () => {
@@ -1835,6 +1836,9 @@ async function viewSettings(arg) {
         <div class="stack">
           <div class="panel set-card"><h3>Base points per level</h3>
             <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sb-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sb-${d}" value="${sc.base[d]}"></div>`).join("")}</div>
+            <h3>🪙 Coins per level</h3>
+            <p class="muted small" style="margin-top:0">Coins a student wins with a challenge of that level. The type multiplier, hints, tries and bonuses change them like the points. Same number as the points = as many coins as points.</p>
+            <div class="field-row">${["easy", "medium", "hard"].map((d) => `<div><label for="sk-${d}">${DIFF[d]}</label><input type="number" min="0" max="1000" id="sk-${d}" value="${sc.coins?.[d] ?? sc.base[d]}"></div>`).join("")}</div>
             <h3>Multiplier per type</h3>
             <div class="field-row" style="flex-wrap:wrap">${kinds.map((k) => `<div><label for="sm-${k}">${esc(KIND[k] || k)}</label><input type="number" min="0" max="100" step="0.5" id="sm-${k}" value="${sc.mult[k]}"></div>`).join("")}</div>
           </div>
@@ -1977,6 +1981,7 @@ async function viewSettings(arg) {
   if (typeof loadIdle === "function") loadIdle();
   const readScoring = () => ({
     base: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sb-${d}`).value)])),
+    coins: Object.fromEntries(["easy", "medium", "hard"].map((d) => [d, Number($(`#sk-${d}`).value)])),
     mult: Object.fromEntries(kinds.map((k) => [k, Number($(`#sm-${k}`).value)])),
     cap: Number($("#s-cap").value), award: Number($("#s-award").value),
     quick: { full: Number($("#sq-full").value), reduced: Number($("#sq-red").value), pct: Number($("#sq-pct").value), lock: $("#sq-lock").checked },
@@ -1985,9 +1990,10 @@ async function viewSettings(arg) {
   const preview = () => {
     const x = readScoring();
     $("#s-preview").innerHTML = `<div class="table-wrap"><table><thead><tr><th></th>${["easy", "medium", "hard"].map((d) => `<th class="num">${DIFF[d]}</th>`).join("")}</tr></thead><tbody>
-      ${kinds.map((k) => `<tr><td>${esc(KIND[k] || k)}</td>${["easy", "medium", "hard"].map((d) => `<td class="num">${Math.round(x.base[d] * x.mult[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+      ${kinds.map((k) => `<tr><td>${esc(KIND[k] || k)}</td>${["easy", "medium", "hard"].map((d) => `<td class="num">${Math.round(x.base[d] * x.mult[k])} <span class="muted small">· 🪙 ${Math.round(x.coins[d] * x.mult[k])}</span></td>`).join("")}</tr>`).join("")}</tbody></table></div>
+      <p class="muted small">Points · 🪙 coins for a first try without hints.</p>`;
   };
-  $$("[id^=sb-],[id^=sm-]").forEach((i) => (i.oninput = preview));
+  $$("[id^=sb-],[id^=sm-],[id^=sk-]").forEach((i) => (i.oninput = preview));
   preview();
   const qsum = () => {
     const f = Number($("#sq-full").value), r = Number($("#sq-red").value), p = Number($("#sq-pct").value);

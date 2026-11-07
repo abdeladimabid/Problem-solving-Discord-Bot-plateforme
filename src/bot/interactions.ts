@@ -1046,6 +1046,8 @@ async function component(ix: Ix): Promise<Response> {
         if (out === "unavailable") return renderFor(ix.env, ix.guild, r.c, r.a, { showClaim: true, notice: t(L, "res.verify_unavailable") });
         if (out === "unverified") return renderFor(ix.env, ix.guild, r.c, r.a);
         if (out === "too_old") return { content: t(L, "res.verify_too_old", { title: r.c.title }), embeds: [], components: [] };
+        if (out === "failing") return renderFor(ix.env, ix.guild, r.c, r.a, { notice: t(L, "res.verify_failing", { title: r.c.title }) });
+        if (out === "no_proof") return renderFor(ix.env, ix.guild, r.c, r.a, { showClaim: true, notice: t(L, "res.verify_no_proof", { title: r.c.title }) });
         return out.payload;
       });
       return deferUpdate();
