@@ -697,7 +697,11 @@ var HARNESS = function () {
   var fmt = function (v) { try { if (typeof v === "string") return v; if (v instanceof Element) return v.outerHTML.slice(0, 300); if (typeof v === "function") return "ƒ " + (v.name || "anonymous") + "()"; if (v === undefined) return "undefined"; var s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch (e) { return String(v); } };
   var LOG = [];
   ["log", "info", "warn", "error", "debug", "table"].forEach(function (k) { var o = console[k]; console[k] = function () { var a = Array.prototype.slice.call(arguments).map(fmt).join(" "); LOG.push(a); send({ type: "log", level: k === "debug" || k === "table" ? "log" : k, text: a }); try { o.apply(console, arguments); } catch (e) {} }; });
-  window.addEventListener("error", function (e) { send({ type: "log", level: "error", text: e.message || "Erreur", line: e.lineno || 0 }); });
+  window.addEventListener("error", function (e) {
+    var file = "";
+    try { var fn = String(e.filename || ""); if (fn.indexOf("data:") === 0) { var m = decodeURIComponent(fn.slice(fn.indexOf(",") + 1, fn.indexOf(",") + 200)).match(/^\/\*cbfile:([^*]+)\*\//); if (m) file = m[1]; } } catch (x) {}
+    send({ type: "log", level: "error", text: e.message || "Erreur", line: e.lineno || 0, file: file });
+  });
   window.addEventListener("unhandledrejection", function (e) { send({ type: "log", level: "error", text: "Uncaught (in promise) " + fmt(e.reason && e.reason.message || e.reason) }); });
   document.addEventListener("click", function (e) { var a = e.target && e.target.closest && e.target.closest("a[href]"); if (a && !/^#/.test(a.getAttribute("href") || "")) { e.preventDefault(); send({ type: "log", level: "info", text: "Lien « " + a.getAttribute("href") + " » : la navigation est désactivée dans l’aperçu." }); } }, true);
   document.addEventListener("submit", function (e) { e.preventDefault(); send({ type: "log", level: "info", text: "Formulaire envoyé (l’envoi est désactivé dans l’aperçu)." }); }, true);
@@ -751,13 +755,33 @@ function buildDoc(s, files, runId) {
     if (re.test(doc)) doc = doc.replace(re, function () { return b; });
     else doc = /<\/head>/i.test(doc) ? doc.replace(/<\/head>/i, function () { return b + "</head>"; }) : b + doc;
   });
+  // ES modules (import / export), as a browser does with a server: a <script type="module" src> stays a module, and each
+  // file it imports becomes a module in memory (data:), its own imports rewritten the same way. The frame can't fetch
+  // ./utils.js (no network, no address of its own). Each module starts with /*cbfile:name*/: an error in it says which file.
+  var MODS = {};
+  var modName = function (spec) { var n = String(spec).replace(/^\.\//, ""); return n in files && /\.m?js$/i.test(n) ? n : (n + ".js") in files ? n + ".js" : ""; };
+  var rewrite = function (text, stack) {
+    return String(text || "").replace(/(\bimport\s*(?:[\w$*{}\s,]+?\s*from\s*)?|\bexport\s*(?:\*(?:\s*as\s+[\w$]+)?|\{[^}]*\})\s*from\s*|\bimport\s*\(\s*)(["'])([^"'\n]+)\2/g, function (all, head, q, spec) {
+      var n = modName(spec), url = n ? modUrl(n, stack) : "";
+      return url ? head + q + url + q : all;
+    });
+  };
+  var modUrl = function (n, stack) {
+    if (MODS[n]) return MODS[n];
+    if (stack.indexOf(n) >= 0) return "";   // imports in a circle: left to the browser's own error
+    return (MODS[n] = "data:text/javascript;charset=utf-8," + encodeURIComponent("/*cbfile:" + n + "*/" + rewrite(files[n], stack.concat(n))).replace(/['()*!~]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); }));
+  };
+  var isModule = function (t) { return /(^|\n)\s*(import\s*[\w$*{"']|export\s)/.test(String(t || "")); };
   js.forEach(function (f) {
-    var re = new RegExp("<script[^>]*src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>\\s*<\/script>", "i");
-    var b = mark(f.name, "<script>\n", safeJs(files[f.name]), "\n<\/script>");
-    if (re.test(doc)) doc = doc.replace(re, function () { return b; });
+    var re = new RegExp("<script([^>]*)src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"']([^>]*)>\\s*<\/script>", "i");
+    var tag = doc.match(re), module = !!tag && /type\s*=\s*["']?module/i.test(tag[1] + tag[2]);
+    var b = mark(f.name, module ? '<script type="module">\n' : "<script>\n", safeJs(module ? rewrite(files[f.name], [f.name]) : files[f.name]), "\n<\/script>");
+    if (tag) doc = doc.replace(re, function () { return b; });
+    // a module not on the page is imported by another one (or not used): never put in as a plain script
+    else if (isModule(files[f.name])) return;
     else doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b;
   });
-  var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
+  var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
   var head = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><script>(' + HARNESS.toString().replace("__RUNID__", runId) + ")();</" + "script>";
   // the page, line by line: [file, its line] (ClassBot's helper: null)
   var map = [], out = head, lines = function (t) { return t.split("\n").length - 1; };
@@ -783,6 +807,12 @@ function buildDoc(s, files, runId) {
   LINEMAP[runId] = map;
   return out;
 }
+/** A message that names a module by its address in memory (data:…, see buildDoc): named by its file, « ./utils.js ». */
+function modNames(t) {
+  return t.replace(/data:text\/javascript;charset=utf-8,[^\s'"\x60]+/g, function (u) {
+    try { var m = decodeURIComponent(u.slice(u.indexOf(",") + 1, u.indexOf(",") + 200)).match(/^\/\*cbfile:([^*]+)\*\//); return m ? "./" + m[1] : "(module)"; } catch (e) { return "(module)"; }
+  });
+}
 /** « (panier.js, ligne 3) » for a line of the frame's page; nothing when it's ClassBot's helper. */
 function whereLine(runId, line) {
   var w = line > 0 && LINEMAP[runId] ? LINEMAP[runId][line - 1] : null;
@@ -807,7 +837,7 @@ function runWeb(s, files, visible) {
     };
     var onMsg = function (e) {
       if (e.source !== fr.contentWindow || !e.data || e.data.__mes !== runId) return;
-      if (e.data.type === "log") { logs.push({ level: e.data.level, text: (String(e.data.text) + (e.data.line ? whereLine(runId, Number(e.data.line)) : "")).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (e.data.type === "log") { logs.push({ level: e.data.level, text: (modNames(String(e.data.text)) + (e.data.line ? (e.data.file ? " (" + String(e.data.file).slice(0, 40) + ", ligne " + Number(e.data.line) + ")" : whereLine(runId, Number(e.data.line))) : "")).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
       if (e.data.type === "ready") { if (probes.length) fr.contentWindow.postMessage({ __mes: runId, type: "probe", probes: probes.map(function (k) { return { id: k.id, probe: k.probe }; }) }, "*"); else end({}); }
       if (e.data.type === "probes") end(e.data.values);
     };
