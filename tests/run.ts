@@ -8085,6 +8085,7 @@ section("mises en situation: a VS Code–like editor (Monaco) and the learner's 
   const tkF = (await api("GET", `/api/mises/${fid}/links?g=${G}`)).data.links[U.alice.id].split("/mes/")[1];
   // the learner page
   const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}`), env, makeCtx())).text();
+  check(pg.includes("script-src 'unsafe-inline' 'unsafe-eval' data:") && pg.includes("/*cbfile:") && pg.includes('<script type="module">'), "the preview runs ES modules (import / export between their files), an error says its file");
   check(pg.includes("window.CBEditor") && pg.includes(`monaco-editor/${MONACO_VERSION}/min`) && pg.includes("emmet-monaco-es@5.5.0") && pg.includes("Nouveau fichier") && pg.includes("CodeMirror"), "the learner page: the editor (Monaco pinned, Emmet, CodeMirror if it can't load) and their files");
   const mesF = async (a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as Promise<any>;
   const stF = await mesF("start", {});
