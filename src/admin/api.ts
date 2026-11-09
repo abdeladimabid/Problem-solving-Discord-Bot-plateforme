@@ -1,7 +1,7 @@
 // JSON API behind the teacher dashboard.
 import { pendingProposals } from "../shared/actpropose.ts";
 import { ConceptError, briefSprint, conceptsView, decideConcept, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
-import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
+import { BlockError, blockDmVars, blockVars, classBlocks, getBlocks, removeBlock, setBlocks, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
@@ -399,12 +399,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild(), id = m[1];
       if (method === "GET") return ok({ blocks: await getBlocks(env, g.id, id) });
       if (method === "PUT") {
+        // one type (`type`) or several (`types`): one DM for all of them
+        const types: string[] = Array.isArray(body.types) ? body.types : [body.type];
         let list;
-        try { list = await setBlock(env, g.id, id, body); } catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
+        try { list = await setBlocks(env, g.id, id, { ...body, types }); } catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
         let dmSent: boolean | null = null;
         if (body.notify) {
-          const b = list.find((x) => x.type === body.type)!;
-          dmSent = await dm(env, id, { content: t(g.lang, "blk.dm", blockVars(g.lang, b)) }).catch(() => false);
+          const set = list.filter((x) => types.includes(x.type));
+          dmSent = await dm(env, id, { content: t(g.lang, "blk.dm", set.length > 1 ? blockDmVars(g.lang, set) : blockVars(g.lang, set[0])) }).catch(() => false);
         }
         return ok({ blocks: list, dm: dmSent });
       }
@@ -417,6 +419,35 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       }
     }
     if (path === "/practice-blocks" && method === "GET") return ok({ students: await classBlocks(env, (await guild()).id) });
+    // the same block for several students at once (`students`: their ids, or "all" = every student of the class)
+    if (path === "/practice-blocks" && method === "POST") {
+      const g = await guild();
+      const types: string[] = Array.isArray(body.types) ? body.types : [body.type];
+      const cls = (await students(env, g)).map((x: any) => String(x.discord_id));
+      const who: string[] = body.students === "all" ? cls : (Array.isArray(body.students) ? body.students.map(String).filter((x: string) => cls.includes(x)) : []);
+      if (!who.length) throw new HttpError(400, "Choose at least one student of the class.");
+      let n = 0;
+      const dms: string[] = [];
+      for (const uid of who) {
+        try { await setBlocks(env, g.id, uid, { ...body, types }); n++; if (body.notify) dms.push(uid); }
+        catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
+      }
+      if (dms.length) ctx.waitUntil((async () => {
+        for (const uid of dms) {
+          const set = (await getBlocks(env, g.id, uid)).filter((x) => types.includes(x.type));
+          if (set.length) await dm(env, uid, { content: t(g.lang, "blk.dm", set.length > 1 ? blockDmVars(g.lang, set) : blockVars(g.lang, set[0])) }).catch(() => false);
+        }
+      })());
+      return ok({ students: n, types: types.length, dm: dms.length > 0 });
+    }
+    // lift one type for every student of the class (no DM: it's a class-wide change)
+    if (path === "/practice-blocks" && method === "DELETE") {
+      const g = await guild(), type = url.searchParams.get("type");
+      if (!type) throw new HttpError(400, "Which type?");
+      let n = 0;
+      for (const s of await classBlocks(env, g.id)) if (s.blocks.some((b) => b.type === type)) { await removeBlock(env, g.id, s.uid, type); n++; }
+      return ok({ students: n });
+    }
     m = path.match(/^\/students\/(\d+)\/points$/);
     if (m && method === "POST") {
       const g = await guild();

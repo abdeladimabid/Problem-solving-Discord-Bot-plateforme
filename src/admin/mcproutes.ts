@@ -50,6 +50,8 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"ANY","path":"/students/:id/level","note":""},
   {"method":"ANY","path":"/students/:id/blocks","note":""},
   {"method":"GET","path":"/practice-blocks","note":""},
+  {"method":"POST","path":"/practice-blocks","note":"the same block for several students at once (`students`: their ids, or \"all\" = every student of the class)"},
+  {"method":"DELETE","path":"/practice-blocks","note":"lift one type for every student of the class (no DM: it's a class-wide change)"},
   {"method":"ANY","path":"/students/:id/points","note":""},
   {"method":"ANY","path":"/students/:id/workon-note","note":""},
   {"method":"ANY","path":"/students/:id/message","note":""},

@@ -6856,6 +6856,37 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   check(del.status === 200 && !del.data.blocks.some((b: any) => b.type === "output"), "lifting one block from the dashboard");
   check((await api("GET", `/api/students/${D.id}/blocks?g=${G}`)).data.blocks.length === 2, "the student's page reads their blocks");
 
+  // several types at once: one DM naming them all
+  {
+    const n0 = discordCalls.length;
+    const pm = await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["git", "complexity"], levels: ["hard"], days: 7, reason: "brief first", notify: true });
+    const dmT = discordCalls.slice(n0).filter((c) => c.path === `/channels/dm-${D.id}/messages`).map((c) => text(c.body));
+    check(pm.status === 200 && ["git", "complexity"].every((k) => pm.data.blocks.find((b: any) => b.type === k)?.levels.join() === "hard") && dmT.length === 1 && /Git/.test(dmT[0]) && /Complexity/i.test(dmT[0]),
+      `several types blocked in one go, one DM for all of them (${dmT.length} DM)`);
+    check((await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: [], notify: false })).status === 400 && (await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["mcq", "nope"] })).status === 400,
+      "…no type, or an unknown one: refused");
+    // 👥 every student of the class at once (not the teacher)
+    const n1 = discordCalls.length;
+    const all = await api("POST", "/api/practice-blocks", { g: G, students: "all", types: ["sql", "regex"], days: 3, reason: "cours SQL demain", notify: true });
+    const cls = (await api("GET", `/api/students?g=${G}`)).data;
+    const blocked = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    const both = blocked.filter((x: any) => ["sql", "regex"].every((k) => x.blocks.some((b: any) => b.type === k)));
+    await new Promise((r) => setTimeout(r, 30));
+    const dmN = discordCalls.slice(n1).filter((c) => /^\/channels\/dm-.*\/messages$/.test(c.path)).length;
+    check(all.status === 200 && all.data.students === cls.length && both.length === cls.length && !both.some((x: any) => x.uid === U.prof.id),
+      `👥 all my students: the same block for every student of the class, not the teacher (${all.data.students}/${cls.length})`);
+    check(dmN <= cls.length, "…at most one DM per student");
+    check((await api("POST", "/api/practice-blocks", { g: G, students: ["999999"], types: ["sql"] })).status === 400, "…nobody of the class chosen: refused");
+    const la = await api("DELETE", `/api/practice-blocks?g=${G}&type=regex`);
+    const after = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    check(la.status === 200 && la.data.students === cls.length && !after.some((x: any) => x.blocks.some((b: any) => b.type === "regex")) && after.some((x: any) => x.blocks.some((b: any) => b.type === "sql")),
+      "lift one type for everyone (the other blocks stay)");
+    await api("DELETE", `/api/practice-blocks?g=${G}&type=sql`);
+    for (const k of ["git", "complexity"]) await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=${k}`);
+    // the sql block of D from the test above comes back as it was
+    await setBlock(env, G, D.id, { type: "sql", days: 3 });
+  }
+
   // it ends by itself
   await setBlock(env, G, D.id, { type: "regex", days: 1 });
   clock.advance(2 * 86400);

@@ -29,9 +29,10 @@ function blkItem(b, uid) {
 /** The form: type, levels, how long, why, DM. `pick` adds a student picker (the class page). */
 function blkForm(pick) {
   return `<div class="blk-form">
-    ${pick ? `<label for="blk-who">Student</label><select id="blk-who"><option value="">Choose a student…</option>${pick.map((s) => `<option value="${esc(s.discord_id)}">${esc(s.name || s.discord_id)}</option>`).join("")}</select>` : ""}
-    <label>Type of challenge</label>
-    <div class="blk-types" role="radiogroup">${BLK_TYPES.map(([k, ic, n], i) => `<label class="blk-type"><input type="radio" name="blk-type" value="${k}" ${i === 0 ? "checked" : ""}><span>${ic} ${esc(n)}</span></label>`).join("")}</div>
+    ${pick ? `<label for="blk-who">Student</label><select id="blk-who"><option value="">Choose a student…</option>${pick.length ? `<option value="all">👥 All my students</option>` : ""}${pick.map((s) => `<option value="${esc(s.discord_id)}">${esc(s.name || s.discord_id)}</option>`).join("")}</select>` : ""}
+    <label>Type of challenge <span class="muted small">(tick one or more)</span></label>
+    <div class="blk-types" role="group">${BLK_TYPES.map(([k, ic, n], i) => `<label class="blk-type"><input type="checkbox" name="blk-type" value="${k}" ${i === 0 ? "checked" : ""}><span>${ic} ${esc(n)}</span></label>`).join("")}</div>
+    <div class="small"><a href="#" data-blk-types="all">Tick every type</a> · <a href="#" data-blk-types="quick">Quick ones only</a> · <a href="#" data-blk-types="none">Untick all</a></div>
     <div class="blk-row">
       <div><label>Levels <span class="muted small">(none ticked = every level)</span></label>
         <div class="blk-levels">${BLK_LEVELS.map(([k, n]) => `<label class="blk-lvl ${k}"><input type="checkbox" value="${k}"><span>${n}</span></label>`).join("")}</div></div>
@@ -44,7 +45,7 @@ function blkForm(pick) {
 }
 function blkRead() {
   return {
-    type: ($("input[name=blk-type]:checked") || {}).value,
+    types: $$("input[name=blk-type]:checked").map((x) => x.value),
     levels: $$(".blk-levels input:checked").map((x) => x.value),
     days: Number($("#blk-days").value), reason: $("#blk-why").value.trim(), notify: $("#blk-dm").checked,
   };
@@ -55,6 +56,19 @@ async function blkLift(uid, type, done) {
   done();
 }
 function blkSaved(r) { toast(r.dm === false ? "Blocked · Discord refused the DM (they block DMs)" : r.dm ? "Blocked · they got a DM" : "Blocked"); }
+/** The shortcuts under the types, and: at least one type ticked before blocking. */
+function blkWire(el) {
+  $$("[data-blk-types]", el).forEach((a) => a.onclick = (e) => {
+    e.preventDefault();
+    const w = a.dataset.blkTypes;
+    $$("input[name=blk-type]", el).forEach((x) => (x.checked = w === "all" || (w === "quick" && ["bug", "output", "mcq", "complexity"].includes(x.value))));
+  });
+}
+function blkCheck(b) {
+  if (b.types.length) return true;
+  toast("Tick at least one type of challenge", true);
+  return false;
+}
 
 // ------------------------------------------------------------------ a student's page
 /** Fills `el` with the student's blocks and the form. */
@@ -72,8 +86,11 @@ async function blockPanel(el, id, name) {
   else if (chip) chip.textContent = `🚫 ${blocks.length} practice block${blocks.length > 1 ? "s" : ""}`;
   $("#blk-open", el).onclick = (e) => { const w = $("#blk-form-wrap", el); w.hidden = !w.hidden; e.currentTarget.setAttribute("aria-expanded", String(!w.hidden)); if (!w.hidden) $("#blk-why", el).focus(); };
   $$("[data-blk-lift]", el).forEach((b) => b.onclick = () => busy(b, () => blkLift(id, b.dataset.blkLift, again)));
+  blkWire(el);
   $("#blk-go", el).onclick = (e) => busy(e.currentTarget, async () => {
-    const r = await api(`/students/${encodeURIComponent(id)}/blocks`, { method: "PUT", body: blkRead() });
+    const b = blkRead();
+    if (!blkCheck(b)) return;
+    const r = await api(`/students/${encodeURIComponent(id)}/blocks`, { method: "PUT", body: b });
     blkSaved(r); again();
   });
 }
@@ -82,20 +99,37 @@ async function blockPanel(el, id, name) {
 async function viewBlocks() {
   const [d, list] = await Promise.all([api("/practice-blocks"), loadStudents()]);
   const n = d.students.reduce((a, s) => a + s.blocks.length, 0);
+  // the types blocked for 2 students or more: one button lifts them for everyone
+  const per = {};
+  d.students.forEach((s) => s.blocks.forEach((b) => (per[b.type] = (per[b.type] || 0) + 1)));
+  const shared = Object.entries(per).filter(([, c]) => c > 1);
   view.innerHTML = `<div class="page-head"><div><h1>🚫 Practice blocks</h1><p class="sub">Stop one student from practicing a type of challenge: e.g. someone farming hard “Find the bug” for points, or who should work on write-code before more multiple choice. They read your reason when they ask for it; every other type stays open. In Discord: <code>/teacher block</code> · <code>/teacher unblock</code>.</p></div></div>
     <div class="blk-two">
       <section class="panel"><div class="panel-head"><h2>Blocked now <span class="muted">${d.students.length} student${d.students.length === 1 ? "" : "s"} · ${n} block${n === 1 ? "" : "s"}</span></h2></div>
+        ${shared.length ? `<div class="blk-all small"><span class="muted">Lift for everyone:</span> ${shared.map(([k, c]) => `<button class="btn small" data-blk-liftall="${esc(k)}" title="Every student can practice it again">${blkType(k)[1]} <span>${esc(blkType(k)[2])}</span> · ${c}</button>`).join(" ")}</div>` : ""}
         ${d.students.length ? d.students.map((s) => `<div class="blk-stu"><a class="blk-who" href="#/student/${esc(s.uid)}?tab=challenges">${avatar(s.name, s.uid)} <b>${esc(s.name)}</b></a>
           <ul class="blk-list">${s.blocks.map((b) => blkItem(b, s.uid)).join("")}</ul></div>`).join("")
           : `<p class="empty">Nobody is blocked: every student can practice every type.</p>`}</section>
       <section class="panel"><div class="panel-head"><h2>Block a student</h2></div>${blkForm(list)}</section>
     </div>`;
   $$("[data-blk-lift]").forEach((b) => b.onclick = () => busy(b, () => blkLift(b.dataset.blkUid, b.dataset.blkLift, viewBlocks)));
+  $$("[data-blk-liftall]").forEach((b) => b.onclick = () => confirm("Lift this block for every student?") && busy(b, async () => {
+    await api(`/practice-blocks?type=${encodeURIComponent(b.dataset.blkLiftall)}`, { method: "DELETE", confirmed: true });
+    toast(`${blkType(b.dataset.blkLiftall)[2]} is open again`);
+    viewBlocks();
+  }));
+  blkWire(view);
   $("#blk-go").onclick = (e) => busy(e.currentTarget, async () => {
     const who = $("#blk-who").value;
     if (!who) { toast("Choose a student first", true); $("#blk-who").focus(); return; }
-    const r = await api(`/students/${encodeURIComponent(who)}/blocks`, { method: "PUT", body: blkRead() });
-    blkSaved(r); viewBlocks();
+    const b = blkRead();
+    if (!blkCheck(b)) return;
+    if (who === "all") {
+      if (!confirm("Block the ticked types for every student of the class?")) return;
+      const r = await api("/practice-blocks", { method: "POST", body: { ...b, students: "all" } });
+      toast(r.dm ? "Blocked for all the students · they get a DM" : "Blocked for all the students");
+    } else blkSaved(await api(`/students/${encodeURIComponent(who)}/blocks`, { method: "PUT", body: b }));
+    viewBlocks();
   });
 }
 
