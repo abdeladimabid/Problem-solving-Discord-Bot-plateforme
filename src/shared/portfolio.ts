@@ -21,7 +21,7 @@ export interface PfProject {
   id: string; url: string; repo: string | null; title: string; desc: string; tags: string[]; lang: string | null;
   stars: number; forks: number; demo: string | null; pushed: string | null; featured: boolean; added_at: number;
 }
-export const SECTIONS = ["projects", "training", "skills", "activity", "hours", "practice", "badges"] as const;
+export const SECTIONS = ["projects", "training", "skills", "activity", "hours", "practice", "badges", "photo"] as const;
 export type Section = (typeof SECTIONS)[number];
 export const OPEN = ["", "stage", "alternance", "emploi", "freelance"] as const;
 export interface Portfolio {
@@ -228,8 +228,10 @@ export async function portfolioData(env: Env, g: GuildRow, uid: string) {
   if (!base) return null;
   const pf = await getPortfolio(env, g.id, uid);
   const pl = await one<{ github_login: string | null }>(env, "SELECT github_login FROM players WHERE guild_id = ? AND discord_id = ?", g.id, uid).catch(() => null);
+  // their intranet photo (the file name: it changes with the photo)
+  const ph = await one<{ photo: string | null }>(env, "SELECT photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", g.id, uid).catch(() => null);
   const training = (await trainingProjects(env, g.id, uid)).filter((x) => !pf.hiddenBriefs.includes(x.id));
-  return { ...base, pf, github: pl?.github_login || null, training, comps: await validatedComps(env, g.id, uid), act: await activity(env, g.id, uid) };
+  return { ...base, pf, github: pl?.github_login || null, photo: ph?.photo || null, training, comps: await validatedComps(env, g.id, uid), act: await activity(env, g.id, uid) };
 }
 
 export const _test = { repoOf, prettyName };

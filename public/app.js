@@ -866,7 +866,7 @@ async function viewStudent(arg) {
         if (!to) { toast("Give the new account first", true); $("#mv-to").focus(); return; }
         if (!confirm("Move all the data to the new account? The old account keeps nothing.")) return;
         const r = await api(`/students/${id}/move`, { method: "POST", body: { to, notify: $("#mv-dm").checked } });
-        dlg.close(); S.students = null;
+        dlg.close(); S.students = null; await loadPhotos();
         toast(r.merged ? "Moved · the new account's own points were added" : "Moved to the new account");
         location.hash = `#/student/${r.to}`;
       } }]);

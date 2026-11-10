@@ -5020,6 +5020,13 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const img = await api("GET", `/api/intranet/photo/${U.carol.id}?g=${G}`);
   check(img.status === 200 && intranetFake.photoCalls === calls0 + 1, `…a photo is fetched from the intranet with the signed access (${img.status})`);
   check((await api("GET", `/api/intranet/photo/${U.bob.id}?g=${G}`)).status === 404 && intranetFake.photoCalls === calls0 + 1, "…no photo: nothing asked, 404");
+  {
+    // a shared portfolio shows it too (bot worker)
+    run1("UPDATE players SET share_key = 'carolpf12345' WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    const ph = await bot.fetch(new Request("https://bot.example.workers.dev/u/carolpf12345/photo"), env, makeCtx());
+    check(ph.status === 200 && /^image\//.test(ph.headers.get("content-type") || ""), `…and on the student's shared portfolio (${ph.status})`);
+    run1("UPDATE players SET share_key = NULL WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  }
   // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
   run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
     JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
@@ -6763,6 +6770,21 @@ section("💼 portfolio: /portfolio (projects from GitHub or links, about me, co
   check(page.includes("Développeur web junior") && page.includes("Rabat") && page.includes("opengraph.githubassets.com/1/bob-gh/portfolio-site") && page.includes("https://bob-gh.github.io/portfolio-site")
     && page.includes("Mon blog") && page.includes("mailto:bob@example.com") && page.includes("linkedin.com/in/bob") && page.includes("avatars.githubusercontent.com/bob-gh"), "the portfolio: headline, city, projects with their image and demo, contacts, GitHub avatar");
   check(/internship|stage/.test(page) && !page.includes('class="badges"'), "…what they look for; a hidden part isn't there");
+  // the intranet photo first (the student can hide it: /portfolio show photo)
+  {
+    const lk = q1("SELECT learner_id, photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    run1("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, at, photo) VALUES (?, ?, ?, 'Bob', 0, ?)", G, B, lk?.learner_id ?? 501, lk?.photo ?? "501-1700000000.jpg");
+    const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    const ph = await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx());
+    check(pg.includes(`/u/${key}/photo?v=`) && !pg.includes('class="ava" src="https://avatars.githubusercontent.com') && ph.status === 404,
+      "the portfolio shows the intranet photo (here the intranet is disconnected: the link answers nothing, the initials show)");
+    await pf("show", { part: "photo", visible: false });
+    const pg2 = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    check(!pg2.includes("/photo?v=") && pg2.includes("avatars.githubusercontent.com/bob-gh") && (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx())).status === 404,
+      "…hidden by the student: the GitHub photo again, and the photo link answers nothing");
+    await pf("show", { part: "photo", visible: true });
+    run1("DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, B);
+  }
   check(!/<script/i.test(page), "no script on the page");
   const rm = P.projects.find((x) => !x.repo)!;
   await pf("remove", { project: rm.id });
@@ -8541,6 +8563,11 @@ section("🔁 a student changes Discord account (hacked, deleted): everything mo
   ex("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'S1', ?, 0, ?, ?)", G, JSON.stringify([{ name: "A", members: [OTHER, OLD] }]), t0, t0);
   const qz = Number(ex("INSERT INTO quizzes (guild_id, title, questions, created_at) VALUES (?, 'q', '[]', ?)", G, t0).lastInsertRowid);
   ex("INSERT INTO quiz_answers (quiz_id, q_idx, discord_id, answer, correct, ms, score) VALUES (?, 0, ?, 'A', 1, 100, 10)", qz, OLD);
+  // what the app keeps per student under a key: practice blocks, the teacher's level, plans d'action…
+  const { setBlock: setBl, getBlocks: getBl } = await import("../src/shared/practiceblock.ts");
+  await setBl(env, G, OLD, { type: "bug" });
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${OLD}`, JSON.stringify({ level: "moyen", by: OLD }), t0);
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${NEW}`, JSON.stringify({ level: "faible" }), t0);
   // the same account in another class is not this teacher's: it stays
   ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('other-guild', ?, 'S', 9, 'practice', ?)", OLD, t0);
 
@@ -8557,6 +8584,9 @@ section("🔁 a student changes Discord account (hacked, deleted): everything mo
   check(q1("SELECT winner_id, opponent_id FROM duels WHERE guild_id = ? AND challenger_id = ?", G, OTHER).winner_id === NEW && JSON.parse(q1("SELECT squads FROM squad_sets WHERE guild_id = ? AND name = 'S1'", G).squads)[0].members.join() === `${OTHER},${NEW}`,
     "…in every column (a duel won) and inside texts (the squads)");
   check(q1("SELECT discord_id FROM quiz_answers WHERE quiz_id = ?", qz).discord_id === NEW, "…also in the tables that belong to the class through another (quiz answers)");
+  check((await getBl(env, G, NEW)).some((b) => b.type === "bug") && !(await getBl(env, G, OLD)).length, "…the practice blocks too");
+  check(JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `stulevel:${G}:${NEW}`).v).level === "moyen" && !q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `stulevel:${G}:${OLD}`),
+    "…and the teacher's level (the old account's wins over the new one's)");
   // nothing of the class still names the old account; another class's data is untouched
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r: any) => r.name);
   const leftIn = tables.filter((tb: string) => db.prepare(`PRAGMA table_info("${tb}")`).all().some((c: any) => c.name === "guild_id")
@@ -8569,8 +8599,14 @@ section("🔁 a student changes Discord account (hacked, deleted): everything mo
   const NEW2 = "177972381424858731";
   const mv2 = await api("POST", `/api/students/${NEW}/move`, { g: G, to: `<@${NEW2}>`, notify: false });
   check(mv2.status === 200 && !mv2.data.merged && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57, "by Discord ID (or mention), to an account that never used ClassBot");
+  // a move done before the settings moved: run again from the old id, it finishes (the profile stays as it is)
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, '[]', ?)", `pf:${G}:${OLD}`, t0);
+  const again = await api("POST", `/api/students/${OLD}/move`, { g: G, to: NEW2, notify: false });
+  check(again.status === 200 && !again.data.merged && q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `pf:${G}:${NEW2}`) && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57,
+    "run again on an account already moved: the rest of its settings follow");
   for (const tb of ["players", "ledger", "badges", "duels", "squad_sets"]) ex(`DELETE FROM ${tb} WHERE guild_id = ? AND ${tb === "duels" ? "challenger_id" : tb === "squad_sets" ? "name" : "discord_id"} IN (?, ?, ?)`, G, ...(tb === "squad_sets" ? ["S1", "S1", "S1"] : [NEW2, OTHER, NEW]));
   ex("DELETE FROM ledger WHERE guild_id = 'other-guild'");
+  ex("DELETE FROM app_settings WHERE k LIKE ?", `%${NEW2}%`);
 }
 
 section("the assistant knows the app: its pages and how to set up");

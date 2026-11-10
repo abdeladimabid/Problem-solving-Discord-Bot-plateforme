@@ -203,7 +203,7 @@ export const COMMANDS: any[] = [
               { name: "My projects", name_localizations: fr("Mes projets"), value: "projects" }, { name: "Training projects (briefs)", name_localizations: fr("Projets de formation (briefs)"), value: "training" },
               { name: "Validated competencies", name_localizations: fr("Compétences validées"), value: "skills" }, { name: "GitHub activity", name_localizations: fr("Activité GitHub"), value: "activity" },
               { name: "Coding hours (VS Code)", name_localizations: fr("Heures de code (VS Code)"), value: "hours" }, { name: "Challenges and practice", name_localizations: fr("Défis et entraînement"), value: "practice" },
-              { name: "Badges", name_localizations: fr("Badges"), value: "badges" },
+              { name: "Badges", name_localizations: fr("Badges"), value: "badges" }, { name: "My photo (intranet)", name_localizations: fr("Ma photo (intranet)"), value: "photo" },
             ],
           },
           { type: BOOLEAN, name: "visible", description: "Shown on your portfolio", description_localizations: fr("Affichée sur ton portfolio"), required: true },

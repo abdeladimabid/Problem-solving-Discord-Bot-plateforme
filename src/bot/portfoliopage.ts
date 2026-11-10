@@ -163,8 +163,9 @@ export function portfolioHtml(d: Data, g: GuildRow, url: string) {
   const L = (d.L === "en" ? "en" : "fr") as "fr" | "en", X = T[L], pf = d.pf;
   const show = (k: string) => !pf.hide.includes(k as never);
   const gh = d.github;
-  // the GitHub photo; their initials when it doesn't load
-  const avatar = gh ? `<img class="ava" src="https://avatars.githubusercontent.com/${encodeURIComponent(gh)}?s=520" alt="${esc(d.name)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ava',textContent:'${esc(initials(d.name))}'}))">` : `<div class="ava" aria-hidden="true">${esc(initials(d.name))}</div>`;
+  // their intranet photo (unless hidden), else the GitHub one; their initials when it doesn't load
+  const pic = d.photo && show("photo") ? `${url}/photo?v=${encodeURIComponent(d.photo)}` : gh ? `https://avatars.githubusercontent.com/${encodeURIComponent(gh)}?s=520` : null;
+  const avatar = pic ? `<img class="ava" src="${esc(pic)}" alt="${esc(d.name)}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ava',textContent:'${esc(initials(d.name))}'}))">` : `<div class="ava" aria-hidden="true">${esc(initials(d.name))}</div>`;
   const projects = show("projects") ? pf.projects : [];
   const training = show("training") ? d.training : [];
   const hours = show("hours") ? d.act.hours : 0;
@@ -191,7 +192,7 @@ export function portfolioHtml(d: Data, g: GuildRow, url: string) {
   return `<!doctype html><html lang="${L}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><title>${esc(d.name)} · ${esc(pf.headline || X.noAbout)}</title><meta name="description" content="${esc(og)}">
 <meta property="og:type" content="profile"><meta property="og:title" content="${esc(d.name)} · ${esc(pf.headline || X.noAbout)}"><meta property="og:description" content="${esc(pf.bio || og).slice(0, 200)}"><meta property="og:url" content="${esc(url)}">
-${gh ? `<meta property="og:image" content="https://avatars.githubusercontent.com/${encodeURIComponent(gh)}?s=400">` : ""}<meta name="twitter:card" content="summary">
+${pic ? `<meta property="og:image" content="${esc(pic.replace("?s=520", "?s=400"))}">` : ""}<meta name="twitter:card" content="summary">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;550;650;750;800&display=swap" rel="stylesheet">
 <style>${CSS}${d.look.theme ? `:root{--acc:${esc(d.look.theme.color)};--acc2:${esc(d.look.theme.to)}}` : ""}${d.look.frame ? `.ava{border-color:${esc(d.look.frame.css)};box-shadow:0 0 0 4px ${esc(d.look.frame.css)},0 24px 60px color-mix(in srgb,${esc(d.look.frame.css)} 45%,transparent)}` : ""}</style></head><body>
 <header class="nav"><div class="wrap"><a class="brand" href="#top"><i>${esc(initials(d.name))}</i>${esc(d.name)}</a>

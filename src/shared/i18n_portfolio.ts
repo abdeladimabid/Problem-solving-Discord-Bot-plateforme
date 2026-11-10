@@ -43,7 +43,7 @@ export const EN_PF: Record<string, string> = {
   "pf.err_unknown": "I can't find this project on your portfolio.",
   "pf.open_stage": "an internship", "pf.open_alternance": "a work-study contract", "pf.open_emploi": "a job", "pf.open_freelance": "freelance missions",
   "pf.part_projects": "My projects", "pf.part_training": "Training projects", "pf.part_skills": "Validated competencies", "pf.part_activity": "GitHub activity",
-  "pf.part_hours": "Coding hours", "pf.part_practice": "Challenges and practice", "pf.part_badges": "Badges",
+  "pf.part_hours": "Coding hours", "pf.part_practice": "Challenges and practice", "pf.part_badges": "Badges", "pf.part_photo": "My photo (intranet)",
 };
 export const FR_PF: Record<string, string> = {
   "pf.title": "💼 Ton portfolio",
@@ -89,5 +89,5 @@ export const FR_PF: Record<string, string> = {
   "pf.err_unknown": "Je ne trouve pas ce projet sur ton portfolio.",
   "pf.open_stage": "un stage", "pf.open_alternance": "une alternance", "pf.open_emploi": "un emploi", "pf.open_freelance": "des missions freelance",
   "pf.part_projects": "Mes projets", "pf.part_training": "Projets de formation", "pf.part_skills": "Compétences validées", "pf.part_activity": "Activité GitHub",
-  "pf.part_hours": "Heures de code", "pf.part_practice": "Défis et entraînement", "pf.part_badges": "Badges",
+  "pf.part_hours": "Heures de code", "pf.part_practice": "Défis et entraînement", "pf.part_badges": "Badges", "pf.part_photo": "Ma photo (intranet)",
 };

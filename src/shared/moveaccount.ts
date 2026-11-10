@@ -22,7 +22,7 @@ const VIA: Record<string, [string, string]> = {
   game_players: ["game_id", "games"],
   attempt_logs: ["attempt_id", "attempts"],
 };
-// never touched: the app's own settings, caches, keys and the shared library
+// never touched like the others: caches, keys and the shared library (app_settings: only the class's keys, below)
 const SKIP = /^(sqlite_|_cf_|d1_)|^(app_settings|ai_usage|tr_cache|mcp_keys|mcp_log|gh_tokens|gh_apps|gh_manifest_states|library_items|library_teams|library_cache|library_outbox|league_remote|challenge_tests)$/;
 
 const SNOWFLAKE = /^\d{15,21}$/;
@@ -36,12 +36,14 @@ export async function moveAccount(env: Env, gid: string, from: string, to: strin
   if (!SNOWFLAKE.test(from) || !SNOWFLAKE.test(to)) throw new MoveError("Both accounts must be Discord user ids (17 to 20 digits).");
   if (from === to) throw new MoveError("The old and the new account are the same.");
   const old = await one<any>(env, "SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", gid, from);
-  if (!old) throw new MoveError("The old account has no data in this class.");
+  // no profile left: a move made before the app's settings moved too can be run again to finish it
+  if (!old && !(await one(env, "SELECT 1 AS x FROM app_settings WHERE instr(k, ?) > 0 AND instr(k, ?) > 0 LIMIT 1", gid, from)))
+    throw new MoveError("The old account has no data in this class.");
   const neu = await one<any>(env, "SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", gid, to);
 
   // the new account's own little start (it played a bit before the move): added to the old one, then its row goes
   const pre: any[] = [];
-  if (neu) {
+  if (neu && old) {
     pre.push(env.DB.prepare(`UPDATE players SET coins = coins + ?, hint_tokens = COALESCE(hint_tokens, 0) + ?, streak_freezes = COALESCE(streak_freezes, 0) + ?,
       last_active = MAX(COALESCE(last_active, 0), ?), name = COALESCE(?, name) WHERE guild_id = ? AND discord_id = ?`)
       .bind(neu.coins || 0, neu.hint_tokens || 0, neu.streak_freezes || 0, neu.last_active || 0, neu.name || null, gid, from));
@@ -73,8 +75,14 @@ export async function moveAccount(env: Env, gid: string, from: string, to: strin
   for (const p of plan) for (const c of p.cols) {
     ups.push({ t: p.t, s: env.DB.prepare(`UPDATE OR IGNORE ${q(p.t)} SET ${q(c)} = REPLACE(${q(c)}, ?, ?) WHERE ${p.where} AND typeof(${q(c)}) = 'text' AND instr(${q(c)}, ?) > 0`).bind(from, to, ...p.args, from) });
   }
+  // the app's settings kept per student (practice blocks, the teacher's level, plans d'action, portfolio…): their key
+  // names the class and the student ("pblock:<class>:<student>"); the old account's copy wins over the new one's
+  pre.push(env.DB.prepare("DELETE FROM app_settings WHERE instr(k, ?) > 0 AND k IN (SELECT REPLACE(k, ?, ?) FROM app_settings WHERE instr(k, ?) > 0 AND instr(k, ?) > 0)")
+    .bind(gid, from, to, gid, from));
+  ups.push({ t: "app_settings", s: env.DB.prepare("UPDATE OR IGNORE app_settings SET k = REPLACE(k, ?, ?), v = REPLACE(v, ?, ?) WHERE instr(k, ?) > 0 AND (instr(k, ?) > 0 OR instr(v, ?) > 0)")
+    .bind(from, to, from, to, gid, from, from) });
   const res = await env.DB.batch([...pre, ...ups.map((u) => u.s)]);
-  const out: MoveReport = { rows: 0, tables: {}, merged: !!neu };
+  const out: MoveReport = { rows: 0, tables: {}, merged: !!(neu && old) };
   ups.forEach((u, i) => {
     const n = Number(res[pre.length + i]?.meta?.changes || 0);
     if (n) { out.tables[u.t] = (out.tables[u.t] || 0) + n; out.rows += n; }
