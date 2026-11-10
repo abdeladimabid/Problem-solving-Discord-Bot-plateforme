@@ -241,7 +241,7 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"POST","path":"/assessments/claude-import","note":""},
   {"method":"ANY","path":"/assessments/:id/claude-concepts","note":"📐 an existing assessment brought up to the Fiche niveaux by Claude: the prompt (its questions + the capacities), then its answer back into the SAME assessment (a draft: questions added; open: only the capacities of the "},
   {"method":"ANY","path":"/assessments/:id/claude-(export|grading|prompt)","note":""},
-  {"method":"ANY","path":"/assessments/:id(?:/(invite|retake|reassign|unlock|grade|close|reopen|results|links|remove|share|link|options|reuse))?","note":""},
+  {"method":"ANY","path":"/assessments/:id(?:/(invite|retake|reassign|unlock|complete|grade|close|reopen|results|links|remove|share|link|options|reuse))?","note":""},
   {"method":"GET","path":"/mises","note":""},
   {"method":"GET","path":"/mises/setup","note":""},
   {"method":"POST","path":"/mises/prompt","note":""},

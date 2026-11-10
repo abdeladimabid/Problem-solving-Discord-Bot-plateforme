@@ -4918,6 +4918,58 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
 }
 
+section("assessments, no going back: a question passed without an answer comes back after a stop; « finish the missing » after sending");
+{
+  const qs = [1, 2, 3, 4].map((i) => ({ type: "explain", prompt: `Retour ${i}`, expected: "x", points: 1 }));
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Retour", questions: qs, settings: { minutes: 40 } });
+  const aid = mk.data.assessment.id;
+  await api("POST", `/api/assessments/${aid}/options`, { g: G, shuffle: true, nav: "forward" });
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id], send: false });
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[U.bob.id].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
+  const tkOf = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  const s1 = "sessionRETOURRETOUR0001";
+  const st = (await quiz("start", { sid: s1 })).d;
+  const P = st.paper.map((p: any) => p.id);
+  // q1 answered and validated, q2 passed empty, q3 answered (being typed)
+  await quiz("answer", { sid: s1, qid: P[0], answer: "réponse un", pos: 1, close: true });
+  await quiz("answer", { sid: s1, qid: P[1], answer: "", pos: 2, close: true });
+  await quiz("answer", { sid: s1, qid: P[2], answer: "réponse trois", pos: 2 });
+  check((await quiz("answer", { sid: s1, qid: P[0], answer: "changé", pos: 2 })).d.error === "passed", "a question validated with an answer: closed");
+  // out of full screen → stopped; the teacher lets them back in
+  await quiz("event", { sid: s1, what: "fullscreen" });
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkOf().id });
+  const s2 = "sessionRETOURRETOUR0002";
+  const back = (await quiz("start", { sid: s2 })).d;
+  check(back.status === "active" && back.paper.map((p: any) => p.id).join() === P.join() && back.closed.join() === P[0],
+    `back in: the same order, only the question validated with an answer is closed (${JSON.stringify(back.closed)})`);
+  const r2 = await quiz("answer", { sid: s2, qid: P[1], answer: "réponse deux après le retour", pos: 2, close: true });
+  check(r2.status === 200 && JSON.parse(tkOf().answers)[P[1]] === "réponse deux après le retour", "…the question passed without an answer can be answered now");
+  // a paper from before (no list): what was answered before their position stays closed, the rest is open
+  run1("UPDATE assessment_takers SET closed = NULL, pos = 3 WHERE id = ?", tkOf().id);
+  const { closedOf, questionsOf, settingsOf } = await import("../src/shared/assess.ts");
+  const ar = q1("SELECT * FROM assessments WHERE id = ?", aid);
+  check(closedOf({ ...tkOf(), answers: JSON.stringify({ [P[0]]: "a", [P[2]]: "c" }) }, questionsOf(ar), settingsOf(ar)).sort().join() === [P[0], P[2]].sort().join(), "a paper from before: only the answered questions before their position are closed");
+  // sent with a question not attempted
+  await quiz("submit", { sid: s2 });
+  check(["submitted", "graded"].includes(tkOf().status), "sent with question 4 not attempted");
+  const n0 = discordCalls.length;
+  const cm = await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id], minutes: "", days: 2 });
+  const tk2 = tkOf();
+  check(cm.status === 200 && cm.data.complete.opened === 1 && tk2.status === "locked" && tk2.lock_reason === "complete" && tk2.resume_ok === 1 && tk2.extra_min === 10 && !tk2.deadline
+    && discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${U.bob.id}/messages` && /didn't answer|non tentées|tentées/.test(text(c.body))),
+    `↩️ finish the missing: their link opens again, 10 min for 1 question of 4 (40 min), a DM (${JSON.stringify(cm.data.complete)})`);
+  const s3 = "sessionRETOURRETOUR0003";
+  const again = (await quiz("start", { sid: s3 })).d;
+  const miss = P.filter((id: string) => !again.closed.includes(id));
+  check(again.status === "active" && miss.length === 1 && again.deadline > clock.now() + 9 * 60, `…only the question not attempted is open, the time starts now (${miss.length} open)`);
+  check((await quiz("answer", { sid: s3, qid: P[0], answer: "changé", pos: 0 })).d.error === "passed", "…the others can't change");
+  await quiz("answer", { sid: s3, qid: miss[0], answer: "la dernière", pos: 3 });
+  await quiz("submit", { sid: s3 });
+  check(["submitted", "graded"].includes(tkOf().status) && Object.keys(JSON.parse(tkOf().answers)).length === 4, "…sent again: every question answered, graded again");
+  check((await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id] })).data.complete.none === 1, "nothing missing any more: nothing to reopen");
+}
+
 section("AI limits: grading in small requests, waiting out a per-minute limit");
 {
   const { perMinuteWait } = await import("../src/shared/aikeys.ts");

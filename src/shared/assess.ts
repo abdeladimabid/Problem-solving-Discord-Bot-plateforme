@@ -51,6 +51,8 @@ export interface TakerRow {
   open_until: number | null;   // a retake: their own link stays open until then, even when the assessment is closed
   attempt?: number;            // 1, then 2… after « Réassigner » (in the link's signature: an earlier link is refused)
   sent_at?: number | null; sent_hash?: string | null;   // the results sent by DM, and what they said
+  closed?: string | null;      // JSON list of question ids they can't come back to (null: from pos, the older way)
+  extra_min?: number | null;   // « finish what you didn't attempt »: the minutes they get when they come back
 }
 export class AssessError extends Error {}
 
@@ -360,7 +362,19 @@ export function paperFor(qs: Question[], seed: number, shuffle = true) {
   });
 }
 
-export interface SessionView { lang?: string; rules?: { noPaste: boolean; lockScreen: boolean; nav: "free" | "forward" }; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null }
+/**
+ * The questions a student can't answer any more. Only a question VALIDATED WITH AN ANSWER closes (« no going back »);
+ * one they passed without answering stays open: when the teacher lets them back in, they find it again. Papers from
+ * before: the questions answered before their position.
+ */
+export function closedOf(tk: Pick<TakerRow, "closed" | "pos" | "seed" | "answers">, qs: Question[], st: { nav: string; shuffle: boolean }): string[] {
+  if (tk.closed != null) return parse<string[]>(tk.closed, []).map(String);
+  if (st.nav !== "forward") return [];
+  const ans = parse<Record<string, unknown>>(tk.answers, {});
+  return paperFor(qs, tk.seed, st.shuffle).filter((p: any, i: number) => i < (tk.pos || 0) && !notAttempted(qs.find((q) => q.id === p.id)!, ans[p.id])).map((p: any) => String(p.id));
+}
+
+export interface SessionView { closed?: string[]; lang?: string; rules?: { noPaste: boolean; lockScreen: boolean; nav: "free" | "forward" }; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null }
 async function loadTaker(env: Env, takerId: number) {
   const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE id = ?", takerId);
   if (!tk) return null;
@@ -413,14 +427,16 @@ export async function startSession(env: Env, takerId: number, sid: string): Prom
     return view("active", { deadline, paper: paperFor(qs, tk.seed, st.shuffle), answers: {} });
   }
   const resume = tk.resume_ok === 1;
-  if (tk.sid === sid && tk.status === "active") return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}) });
+  if (tk.sid === sid && tk.status === "active") return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}), closed: closedOf(tk, qs, st) });
   if (!resume) {
     // a reload or another device while the session runs: it stops
     if (tk.status === "active") await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = 'reload', events = ? WHERE id = ?", t0, pushEvent(tk, "reload"), tk.id);
     return view("locked", { reason: tk.status === "active" ? "reload" : tk.lock_reason });
   }
-  await run(env, "UPDATE assessment_takers SET status = 'active', sid = ?, resume_ok = 0, lock_reason = NULL, events = ? WHERE id = ?", sid, pushEvent(tk, "resume"), tk.id);
-  return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}), reason: null });
+  // back to finish the questions not attempted (reopened after sending): their time starts now
+  const deadline = tk.lock_reason === "complete" ? (tk.extra_min ? t0 + tk.extra_min * 60 : null) : tk.deadline;
+  await run(env, "UPDATE assessment_takers SET status = 'active', sid = ?, resume_ok = 0, lock_reason = NULL, deadline = ?, events = ? WHERE id = ?", sid, deadline, pushEvent(tk, tk.lock_reason === "complete" ? "complete" : "resume"), tk.id);
+  return view("active", { deadline, paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}), closed: closedOf(tk, qs, st), reason: null });
 }
 
 async function activeTaker(env: Env, takerId: number, sid: string) {
@@ -432,21 +448,59 @@ async function activeTaker(env: Env, takerId: number, sid: string) {
 }
 
 /** Save one answer (autosave as they type, and when they move on). */
-export async function saveAnswer(env: Env, takerId: number, sid: string, qid: string, answer: unknown, pos: number) {
+export async function saveAnswer(env: Env, takerId: number, sid: string, qid: string, answer: unknown, pos: number, close = false) {
   const { tk, a } = await activeTaker(env, takerId, sid);
   const qs = questionsOf(a), st = settingsOf(a);
   const q = qs.find((x) => x.id === qid);
   if (!q) throw new AssessError("unknown question");
   let newPos = Math.max(0, Math.min(200, Math.round(pos) || 0));
-  if (st.nav === "forward") {
-    // one question at a time: a question already passed can't be answered again, and the position never goes back
-    const idx = paperFor(qs, tk.seed, st.shuffle).findIndex((x: any) => x.id === qid);
-    if (idx < (tk.pos || 0)) throw new AssessError("passed");
-    newPos = Math.max(tk.pos || 0, newPos);
-  }
+  // a question validated with an answer can't be answered again (« no going back », or a reopened paper)
+  const closed = closedOf(tk, qs, st);
+  if (closed.includes(qid)) throw new AssessError("passed");
+  if (st.nav === "forward") newPos = Math.max(tk.pos || 0, newPos);
   const answers = parse<Record<string, unknown>>(tk.answers, {});
   answers[qid] = q.type === "mcq" ? (Array.isArray(answer) ? answer : [answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < 6).slice(0, 6) : str(answer, 8000);
-  await run(env, "UPDATE assessment_takers SET answers = ?, pos = ? WHERE id = ? AND sid = ?", JSON.stringify(answers), newPos, tk.id, sid);
+  // moving on from it (« no going back »): it closes only if they answered it; passed empty, it stays open for later
+  const shut = close && st.nav === "forward" && !notAttempted(q, answers[qid]);
+  const list = shut ? [...closed, qid] : closed;
+  await run(env, "UPDATE assessment_takers SET answers = ?, pos = ?, closed = ? WHERE id = ? AND sid = ?", JSON.stringify(answers), newPos,
+    tk.closed != null || shut ? JSON.stringify(list) : null, tk.id, sid);
+}
+
+/**
+ * Sent too early, or stopped by a problem: the teacher invites them back to answer ONLY the questions they didn't
+ * attempt (the others stay as they are, closed). Their own link opens again; the time starts when they come back.
+ */
+export async function completeMissing(env: Env, g: GuildRow, id: number, takerIds: number[], o: { minutes?: number; days?: number; send?: boolean } = {}) {
+  const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
+  if (!a) throw new AssessError("Unknown assessment.");
+  const qs = questionsOf(a), st = settingsOf(a), t0 = now();
+  const until = t0 + Math.max(1, Math.min(30, Math.round(o.days || 2))) * 86400;
+  const mins = o.minutes == null ? null : Math.max(0, Math.min(600, Math.round(o.minutes)));
+  let opened = 0, sent = 0, none = 0;
+  for (const tid of takerIds.slice(0, 60)) {
+    const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE id = ? AND assessment_id = ?", tid, id);
+    if (!tk || !["submitted", "graded"].includes(tk.status)) continue;
+    const ans = parse<Record<string, unknown>>(tk.answers, {});
+    const done = qs.filter((q) => !notAttempted(q, ans[q.id])).map((q) => q.id);
+    const missing = qs.length - done.length;
+    if (!missing) { none++; continue; }
+    // their time: what the teacher gave, else the assessment's time for that share of the questions (5 min at least)
+    const m = mins ?? (st.minutes ? Math.max(5, Math.ceil((st.minutes * missing) / qs.length)) : 0);
+    await run(env, `UPDATE assessment_takers SET status = 'locked', resume_ok = 1, lock_reason = 'complete', locked_at = ?, sid = NULL, closed = ?, extra_min = ?, deadline = NULL,
+      open_until = MAX(COALESCE(open_until, 0), ?), events = ? WHERE id = ?`, t0, JSON.stringify(done), m || null, until, pushEvent(tk, "reopened"), tk.id);
+    opened++;
+    if (o.send !== false) {
+      const url = quizUrl(env, await takerToken(env, tk.id, until + 86400));
+      const ok = await dm(env, tk.discord_id, {
+        embeds: [{ title: t(g.lang, "assess.complete_title", { title: a.title }), color: 0x2563eb,
+          description: t(g.lang, "assess.complete_body", { n: missing, time: m ? t(g.lang, "assess.dm_time", { m }) : "", until: `<t:${until}:F>` }) }],
+        components: [row(linkBtn(t(g.lang, "assess.dm_btn"), url, "📝"))],
+      }).catch(() => false);
+      if (ok) sent++;
+    }
+  }
+  return { opened, sent, none };
 }
 
 /** The page saw them leave (full screen closed, other tab, other window): the session stops. */

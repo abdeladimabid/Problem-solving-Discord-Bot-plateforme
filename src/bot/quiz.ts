@@ -43,7 +43,7 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
       return json({ texts: await translateTexts(env, b.texts.map(String), to) });
     }
     if (action === "start") { await noteIp(env, "quiz", takerId, request).catch(() => null); return json(await startSession(env, takerId, String(b.sid ?? ""))); }
-    if (action === "answer") { await saveAnswer(env, takerId, String(b.sid ?? ""), String(b.qid ?? ""), b.answer, Number(b.pos) || 0); return json({ ok: true }); }
+    if (action === "answer") { await saveAnswer(env, takerId, String(b.sid ?? ""), String(b.qid ?? ""), b.answer, Number(b.pos) || 0, b.close === true); return json({ ok: true }); }
     if (action === "event") { await leaveEvent(env, takerId, String(b.sid ?? ""), String(b.what ?? "")); return json({ ok: true }); }
     if (action === "submit") { await submit(env, takerId, String(b.sid ?? ""), ctx); return json({ ok: true }); }
   } catch (e) {
@@ -143,7 +143,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   let sid = ""; try { sid = sessionStorage.getItem("cbq:" + TOKEN) || ""; } catch {}
   if (!sid) { sid = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, "0")).join(""); try { sessionStorage.setItem("cbq:" + TOKEN, sid); } catch {} }
   let R = { noPaste: true, lockScreen: true, nav: "free" };   // the assessment's options (set by the teacher)
-  let S = null, paper = [], answers = {}, cur = 0, running = false, leaving = false, graceUntil = 0, timer = null, saveT = null, offset = 0;
+  let S = null, paper = [], answers = {}, closed = new Set(), cur = 0, running = false, leaving = false, graceUntil = 0, timer = null, saveT = null, offset = 0;
   // this browser's id, given when signing in with Discord: every call says which device it comes from
   let DEV = ""; try { DEV = localStorage.getItem("cb-dev") || ""; } catch (e) {}
   let identing = false;
@@ -175,7 +175,9 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     const v = await post("/start", {});
     if (v.rules) R = v.rules;
     if (v.status !== "active") { running = false; return show(v); }
-    S = v; paper = v.paper || []; answers = v.answers || {}; cur = Math.min(v.pos || 0, paper.length - 1); offset = Date.now() / 1000 - v.now;
+    S = v; paper = v.paper || []; answers = v.answers || {}; closed = new Set(v.closed || []); offset = Date.now() / 1000 - v.now;
+    // where they start: the first question still open (one passed without an answer comes back after a stop)
+    cur = limited() ? Math.max(0, paper.findIndex((p) => !closed.has(p.id))) : Math.min(v.pos || 0, paper.length - 1);
     running = true; draw(); tick();
   }
   function show(v) {
@@ -247,13 +249,18 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       if (r <= 0 && running) { running = false; clearInterval(timer); finish(true); }
     }, 500);
   }
+  // « no going back » or a reopened paper: only the questions still open can be shown
+  const limited = () => R.nav === "forward" || closed.size > 0;
+  const isOpen = (i) => i >= 0 && i < paper.length && !closed.has(paper[i].id);
+  const nextOpen = (i) => { for (let k = i + 1; k < paper.length; k++) if (isOpen(k)) return k; return -1; };
+  const prevOpen = (i) => { for (let k = i - 1; k >= 0; k--) if (isOpen(k)) return k; return -1; };
   const answered = (q) => { const a = answers[q.id]; return Array.isArray(a) ? a.length > 0 : !!String(a ?? "").trim(); };
   function draw() {
     const q = paper[cur];
     app.className = "";
     const fwd = R.nav === "forward";
     // one question at a time: the dots only show where they are (not clickable), the passed ones are greyed
-    const head = '<div class="wrap"><div class="top"><div class="dots">' + paper.map((p, i) => (fwd ? '<span class="dot nolink' + (i < cur ? " past" : "") : '<button class="dot') + (answered(p) ? " done" : "") + (i === cur ? " cur" : "") + '" data-i="' + i + '" title="' + (i + 1) + '">' + (i + 1) + (fwd ? "</span>" : "</button>")).join("") + "</div>"
+    const head = '<div class="wrap"><div class="top"><div class="dots">' + paper.map((p, i) => (fwd || !isOpen(i) ? '<span class="dot nolink' + (!isOpen(i) || (fwd && i < cur) ? " past" : "") : '<button class="dot') + (answered(p) ? " done" : "") + (i === cur ? " cur" : "") + '" data-i="' + i + '" title="' + (i + 1) + '">' + (i + 1) + (fwd || !isOpen(i) ? "</span>" : "</button>")).join("") + "</div>"
       + (S.deadline ? '<span class="timer" id="timer">…</span>' : "") + "</div>";
     const TRL = [["ar", "العربية"], ["fr", "FR"], ["en", "EN"]];
     let body = '<div class="card"><div class="qhead"><span class="tag">' + tr(q.type) + '</span><span class="trbar" title="Google Translate">🌐 ' + TRL.map(([k, l]) => '<button type="button" data-tr="' + k + '" class="' + (trTo === k ? "on" : "") + '">' + l + "</button>").join("") + '</span><span class="muted small">' + (cur + 1) + " / " + paper.length + " · " + q.points + " " + tr("pts") + "</span></div>"
@@ -265,15 +272,16 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       const val = answers[q.id] != null ? answers[q.id] : (q.starter || "");
       body += '<textarea id="ans" class="' + (q.type === "explain" ? "prose" : "") + '" spellcheck="' + (q.type === "explain") + '" placeholder="' + (q.type === "code" ? tr("typecode") : tr("typetext")) + '">' + esc(val) + "</textarea>";
     }
-    body += '<div class="nav">' + (fwd ? '<span></span>' : '<button class="btn ghost" id="prev"' + (cur === 0 ? " disabled" : "") + ">" + tr("prev") + "</button>") + '<span class="saved" id="saved"></span>'
-      + (cur < paper.length - 1 ? '<button class="btn" id="next">' + (fwd ? (answered(q) ? tr("validate") : tr("pass")) : tr("next")) + "</button>" : '<button class="btn" id="fin">' + tr("finish") + "</button>") + "</div>"
-      + (fwd && cur < paper.length - 1 ? '<p class="muted small" style="margin:10px 0 0;text-align:right">' + tr("nogoback") + "</p>" : "") + "</div></div>";
+    const nx = limited() ? nextOpen(cur) : (cur < paper.length - 1 ? cur + 1 : -1), pvI = limited() ? prevOpen(cur) : cur - 1;
+    body += '<div class="nav">' + (fwd ? '<span></span>' : '<button class="btn ghost" id="prev"' + (pvI < 0 ? " disabled" : "") + ">" + tr("prev") + "</button>") + '<span class="saved" id="saved"></span>'
+      + (nx >= 0 ? '<button class="btn" id="next">' + (fwd ? (answered(q) ? tr("validate") : tr("pass")) : tr("next")) + "</button>" : '<button class="btn" id="fin">' + tr("finish") + "</button>") + "</div>"
+      + (fwd && nx >= 0 ? '<p class="muted small" style="margin:10px 0 0;text-align:right">' + tr("nogoback") + "</p>" : "") + "</div></div>";
     app.innerHTML = head + body;
     app.querySelectorAll("[data-tr]").forEach((b) => (b.onclick = () => { trTo = trTo === b.dataset.tr ? "" : b.dataset.tr; app.querySelectorAll("[data-tr]").forEach((x) => x.classList.toggle("on", x.dataset.tr === trTo)); translateQ(q); }));
     if (trTo) translateQ(q);
-    if (!fwd) app.querySelectorAll(".dot").forEach((b) => (b.onclick = () => go(Number(b.dataset.i))));
-    const pv = document.getElementById("prev"); if (pv) pv.onclick = () => go(cur - 1);
-    const nx = document.getElementById("next"); if (nx) nx.onclick = () => go(cur + 1);
+    if (!fwd) app.querySelectorAll("button.dot").forEach((b) => (b.onclick = () => go(Number(b.dataset.i))));
+    const pv = document.getElementById("prev"); if (pv) pv.onclick = () => go(pvI);
+    const nb = document.getElementById("next"); if (nb) nb.onclick = () => go(nx);
     const fin = document.getElementById("fin"); if (fin) fin.onclick = () => confirmFinish();
     const ta = document.getElementById("ans");
     if (ta) {
@@ -329,13 +337,16 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   async function go(i) {
     const q = paper[cur];
     if (R.nav === "forward") {
-      // only forward, one step; the position is saved at once (the server refuses going back)
-      if (i !== cur + 1 || i >= paper.length) return;
+      // only forward, to the next open question; saved at once: answered, it closes (the server refuses going back);
+      // passed without an answer, it stays open (they find it again if they come back after a stop)
+      if (i !== nextOpen(cur)) return;
       cur = i;
-      await post("/answer", { qid: q.id, answer: answers[q.id] != null ? answers[q.id] : (q.type === "mcq" ? [] : ""), pos: cur }).catch(() => null);
+      await post("/answer", { qid: q.id, answer: answers[q.id] != null ? answers[q.id] : (q.type === "mcq" ? [] : ""), pos: cur, close: true }).catch(() => null);
+      if (answered(q)) closed.add(q.id);
       draw();
       return;
     }
+    if (!isOpen(i) && closed.size) return;
     if (q && q.type !== "mcq" && answers[q.id] != null) await saveNow(q);
     cur = Math.max(0, Math.min(paper.length - 1, i));
     draw();

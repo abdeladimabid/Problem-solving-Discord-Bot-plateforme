@@ -2879,11 +2879,12 @@ function assessLiveTab(root) {
   const lastEv = (t) => { const e = t.events[t.events.length - 1]; return e ? `${esc(LOCK[e[1]] || e[1])} · ${fmtAgo(e[0])}` : ""; };
   root.innerHTML = `<section class="panel">
     <div class="panel-head"><h2>Students <span class="muted">${A.takers.length} invited</span></h2><span class="toolbar" style="margin:0"><span class="muted small">Refreshes every 5 s</span>
+      ${A.takers.filter((t) => ["submitted", "graded"].includes(t.status) && t.answered < n).length > 1 ? `<button class="btn small" id="lv-cmall" title="Everyone who sent their paper with questions not attempted">↩️ Finish the missing · ${A.takers.filter((t) => ["submitted", "graded"].includes(t.status) && t.answered < n).length}</button>` : ""}
       ${A.takers.some((t) => t.status === "invited") ? `<button class="btn small" id="lv-rmall">Remove those who haven't started</button>` : ""}<button class="btn small" id="lv-links">Copy all the links</button></span></div>
     ${table([
       { label: "Student", sort: "name", html: (t) => `<a href="#/student/${t.discord_id}">${avatar(t.name, t.discord_id)} ${esc(t.name || t.discord_id)}</a>` },
       { label: "Status", sort: "status", html: (t) => `${status(t.status === "locked" ? "failed" : t.status === "active" ? "active" : t.status === "graded" || t.status === "submitted" ? "solved" : "pending", STATUS[t.status] || t.status)}${t.attempt > 1 ? ` <span class="tag" title="Reassigned: the earlier attempts are in their paper">attempt ${t.attempt}</span>` : ""}
-          ${t.status === "locked" ? `<div class="small">${esc(LOCK[t.lock_reason] || t.lock_reason || "")}${t.resume_ok ? " · <b>allowed back in</b>" : ""}</div>` : ""}
+          ${t.status === "locked" ? `<div class="small">${t.lock_reason === "complete" ? "↩️ reopened: to answer the questions they didn't attempt" : esc(LOCK[t.lock_reason] || t.lock_reason || "")}${t.resume_ok && t.lock_reason !== "complete" ? " · <b>allowed back in</b>" : ""}</div>` : ""}
           ${t.open_until && t.open_until > nowS && !["submitted", "graded"].includes(t.status) ? `<div class="small">🔁 Retake until ${fmtDateTime(t.open_until)}</div>` : ""}` },
       { label: "Progress", html: (t) => `${meter(n ? (100 * t.answered) / n : 0)}<span class="small muted">${t.answered}/${n} answered ${left(t)}</span>` },
       { label: "Stops", num: true, html: (t) => `${t.events.filter((e) => LOCK[e[1]] && e[1] !== "paste").length}${t.events.some((e) => e[1] === "paste") ? ` <span class="lvl warn" title="Tried to paste">paste</span>` : ""}` },
@@ -2891,6 +2892,7 @@ function assessLiveTab(root) {
       ...(optsOf(a.settings).netAlerts ? [{ label: "Network", html: (t) => (!t.net ? `<span class="muted">—</span>` : t.net.outside ? `<span class="lvl warn" title="Its last connection isn't the class's network (where most of the class is)">⚠ outside the class</span>${t.net.nets > 1 ? `<div class="small muted">${t.net.nets} networks</div>` : ""}` : t.net.nets > 1 ? `<span class="lvl warn">${t.net.nets} networks</span>` : `<span class="small muted">class network</span>`) }] : []),
       { label: "", html: (t) => `${t.status === "locked" && !t.resume_ok ? `<button class="btn small primary" data-unlock="${t.id}">Let back in</button>` : ""}
           <button class="btn small" data-ev="${t.id}">Events</button> <button class="btn small" data-link="${esc(t.discord_id)}">Link</button>
+          ${["submitted", "graded"].includes(t.status) && t.answered < n ? `<button class="btn small" data-complete="${t.id}" title="Sent too early or stopped by a problem: their link opens again for the ${n - t.answered} question(s) they didn't attempt only">↩️ Finish the missing</button>` : ""}
           ${t.status !== "invited" ? `<button class="btn small" data-reassign="${esc(t.discord_id)}" title="A new attempt replaces their paper">Reassign</button>` : ""}
           ${["invited", "active", "locked"].includes(t.status) ? `<button class="btn small danger" data-rm="${t.id}" title="Take back the invitation: their link stops working">Remove</button>` : ""}` },
     ], A.takers, { empty: "Nobody invited yet: use “Invite students”." })}</section>`;
@@ -2901,6 +2903,20 @@ function assessLiveTab(root) {
   if ($("#lv-rmall")) $("#lv-rmall").onclick = () => { const ids = A.takers.filter((t) => t.status === "invited").map((t) => t.id); remove(ids, `Remove the ${ids.length} student(s) who haven't started?`); };
   $$("[data-link]", root).forEach((b) => b.onclick = () => busy(b, async () => copyText((await links())[b.dataset.link], "Link copied")));
   $$("[data-reassign]", root).forEach((b) => b.onclick = () => reassignDialog([b.dataset.reassign]));
+  // sent too early or stopped by a problem: their link opens again, only for the questions they didn't attempt
+  const completeDlg = (ids) => openDialog(ids.length > 1 ? `Reopen ${ids.length} papers for the missing questions?` : "Reopen this paper for the missing questions?", `
+      <p class="small">They get <b>only the questions they didn't attempt</b>; their other answers are kept and can't change. Their link opens again (even if the assessment is closed) and they get a Discord DM. Once they send, the new answers are graded: send the results again then.</p>
+      <label for="cm-m">Minutes <span class="muted">(empty: the assessment's time for that share of the questions · 0: no limit)</span></label><input type="number" id="cm-m" min="0" max="600" placeholder="auto" style="width:110px">
+      <label for="cm-d">Open for</label><select id="cm-d"><option value="1">1 day</option><option value="2" selected>2 days</option><option value="7">1 week</option></select>
+      <label class="check"><input type="checkbox" id="cm-dm" checked> Send them the link by Discord DM</label>`,
+    [{ label: "↩️ Reopen", primary: true, action: async () => {
+      const r = await api(`/assessments/${a.id}/complete`, { method: "POST", body: { takers: ids, minutes: $("#cm-m").value, days: Number($("#cm-d").value), send: $("#cm-dm").checked } });
+      AS.A = r; dlg.close();
+      toast(`Reopened: ${r.complete.opened}${r.complete.sent ? ` · ${r.complete.sent} DM` : ""}`);
+      renderAssessment(); refreshPills();
+    } }]);
+  $$("[data-complete]", root).forEach((b) => b.onclick = () => completeDlg([Number(b.dataset.complete)]));
+  if ($("#lv-cmall")) $("#lv-cmall").onclick = () => completeDlg(A.takers.filter((t) => ["submitted", "graded"].includes(t.status) && t.answered < n).map((t) => t.id));
   $$("[data-unlock]", root).forEach((b) => b.onclick = () => openDialog("Let this student back in?", `<p class="small">They continue where they stopped, in full screen. The timer kept running while they were out: you can give them some time back.</p>
       <label for="ul-m">Extra minutes</label><input type="number" id="ul-m" value="0" min="0" max="120" style="width:100px">`,
     [{ label: "Let back in", primary: true, action: async () => { AS.A = await api(`/assessments/${a.id}/unlock`, { method: "POST", body: { taker: Number(b.dataset.unlock), minutes: $("#ul-m").value } }); dlg.close(); toast("Done: a Continue button appears on their page"); renderAssessment(); refreshPills(); } }]));
