@@ -724,6 +724,7 @@ async function viewStudent(arg) {
           <button class="btn small" id="assign">🎯 Assign a challenge</button><button class="btn small" id="give">🎁 Give points</button>
           <button class="btn small" id="st-name">✏️ Edit name</button>
           ${p.hr_display ? `${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button>` : ""}
+          <button class="btn small" id="st-move" title="Hacked or deleted account: everything moves to the new one">🔁 New Discord account</button>
           <button class="btn small danger" id="st-del">Remove from class</button></div></details>
       </div>
     </div>
@@ -849,6 +850,28 @@ async function viewStudent(arg) {
         dlg.close(); S.students = null; toast(r.name ? "Name saved" : "Back to the Discord name"); viewStudent(id);
       } }]);
     setTimeout(() => $("#st-nm")?.focus(), 0);
+  };
+  $("#st-move").onclick = () => {
+    // the newest accounts of the class first: the new one has often used ClassBot once already
+    const fresh = list.filter((r) => r.discord_id !== id).sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 6);
+    openDialog(`${p.name || "This student"} has a new Discord account`, `
+      <p class="small muted">Hacked, lost or deleted account: everything moves to the new account (points, coins, challenges, briefs, assessments, mises en situation, squads, competencies, GitHub, HackerRank, VS Code, notes). The old account keeps nothing. The new account must be on the server.</p>
+      <label for="mv-to">New account <span class="muted">(Discord name or Discord ID)</span></label>
+      <input type="text" id="mv-to" placeholder="e.g. ayoub_boussih2 or 123456789012345678" style="width:100%" autocomplete="off">
+      ${fresh.length ? `<div class="small muted" style="margin-top:6px">Newest in the class: ${fresh.map((r) => `<a href="#" data-mv="${esc(r.discord_id)}">${esc(r.name || r.discord_id)}</a>`).join(" · ")}</div>` : ""}
+      <p class="small muted">Discord ID: in Discord, Settings → Advanced → Developer mode, then right-click on the account → Copy User ID.</p>
+      <label class="check"><input type="checkbox" id="mv-dm" checked> Tell the student on the new account by Discord DM</label>`,
+      [{ label: "🔁 Move everything", primary: true, action: async () => {
+        const to = $("#mv-to").value.trim();
+        if (!to) { toast("Give the new account first", true); $("#mv-to").focus(); return; }
+        if (!confirm("Move all the data to the new account? The old account keeps nothing.")) return;
+        const r = await api(`/students/${id}/move`, { method: "POST", body: { to, notify: $("#mv-dm").checked } });
+        dlg.close(); S.students = null;
+        toast(r.merged ? "Moved · the new account's own points were added" : "Moved to the new account");
+        location.hash = `#/student/${r.to}`;
+      } }]);
+    $$("[data-mv]").forEach((a) => a.onclick = (e) => { e.preventDefault(); $("#mv-to").value = a.dataset.mv; });
+    setTimeout(() => $("#mv-to")?.focus(), 0);
   };
   $("#st-del").onclick = () => confirmDialog(`Remove ${p.name || "this student"} from the class?`,
     "Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. Their points stay in the history but no longer count in the leaderboards, the certificates or the league. If they use ClassBot again, they start a new profile. This can't be undone.",

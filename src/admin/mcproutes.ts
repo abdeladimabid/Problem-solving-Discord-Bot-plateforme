@@ -54,6 +54,7 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"DELETE","path":"/practice-blocks","note":"lift one type for every student of the class (no DM: it's a class-wide change)"},
   {"method":"ANY","path":"/students/:id/points","note":""},
   {"method":"ANY","path":"/students/:id/workon-note","note":""},
+  {"method":"ANY","path":"/students/:id/move","note":"🔁 the student changed Discord account (hacked, deleted…): move everything to the new one"},
   {"method":"ANY","path":"/students/:id/message","note":""},
   {"method":"ANY","path":"/students/:id/hackerrank","note":""},
   {"method":"ANY","path":"/attempts/:id/review","note":""},

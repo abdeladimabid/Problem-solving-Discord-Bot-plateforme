@@ -51,7 +51,8 @@ export function makeD1(): D1 & { raw: DatabaseSync } {
       try {
         const out = [];
         d1.queries++;
-        for (const s of stmts) out.push(await (s as any).run(true));
+        // like D1: a statement that reads (SELECT, PRAGMA) gives its rows in the batch too
+        for (const s of stmts) out.push(/^\s*(SELECT|PRAGMA)\b/i.test((s as any).sql) ? { results: (s as any).db.prepare((s as any).sql).all(...(s as any).params()), meta: {} } : await (s as any).run(true));
         db.exec("COMMIT");
         return out;
       } catch (e) { db.exec("ROLLBACK"); throw e; }

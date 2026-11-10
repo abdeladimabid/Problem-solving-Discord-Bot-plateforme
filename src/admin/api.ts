@@ -8,6 +8,7 @@ import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow }
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
+import { MoveError, moveAccount } from "../shared/moveaccount.ts";
 import { btn, dapi, dm, linkBtn, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
 import { SearchKeyError, addSearchProvider, removeSearchProvider, searchView } from "../shared/websearch.ts";
@@ -464,6 +465,16 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const text = await workOnNote(env, g, m[1], String(body.skill ?? ""), p?.name ?? "");
       if (!text) throw new HttpError(503, "The AI couldn't write the note right now (the AI is used up or unavailable: see Settings → AI; or nothing to say on this skill). Write it yourself below.");
       return ok({ text });
+    }
+    // 🔁 the student changed Discord account (hacked, deleted…): move everything to the new one
+    m = path.match(/^\/students\/(\d+)\/move$/);
+    if (m && method === "POST") {
+      const g = await guild();
+      const to = await resolveAccount(env, g.id, String(body.to ?? ""), m[1]);
+      let rep;
+      try { rep = await moveAccount(env, g.id, m[1], to); } catch (e) { if (e instanceof MoveError) throw new HttpError(400, e.message); throw e; }
+      if (body.notify !== false) await dm(env, to, { content: t(g.lang, "move.dm") }).catch(() => false);
+      return ok({ to, ...rep });
     }
     m = path.match(/^\/students\/(\d+)\/message$/);
     if (m && method === "POST") {
@@ -2154,4 +2165,23 @@ async function coinsView(env: Env, g: GuildRow) {
     purchases: purchases.map((r) => ({ ...withName(r), label: label(r.item) })),
     log: log.map(withName),
   };
+}
+
+/** The new account of a student who changed: a Discord id, a mention <@id>, or the name of someone of the class (the
+ *  new account used ClassBot once), else a member of the server found by Discord (username or display name). */
+async function resolveAccount(env: Env, gid: string, raw: string, from: string): Promise<string> {
+  const v = raw.trim().replace(/^<@!?(\d+)>$/, "$1").replace(/^@/, "");
+  if (!v) throw new HttpError(400, "Give the new account: its Discord name or its Discord ID.");
+  if (/^\d{15,21}$/.test(v)) return v;
+  const low = v.toLowerCase();
+  const mine = (await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id != ?", gid, from))
+    .filter((p) => (p.name || "").toLowerCase() === low);
+  if (mine.length === 1) return mine[0].discord_id;
+  try {
+    const found = await dapi<any[]>(env, "GET", `/guilds/${gid}/members/search?query=${encodeURIComponent(v)}&limit=10`);
+    const hit = (found || []).filter((x) => x?.user && x.user.id !== from && [x.user.username, x.user.global_name, x.nick].some((n) => (n || "").toLowerCase() === low));
+    if (hit.length === 1) return String(hit[0].user.id);
+    if (hit.length > 1) throw new HttpError(400, `Several members are called “${v}”: paste the Discord ID of the new account.`);
+  } catch (e) { if (e instanceof HttpError) throw e; }
+  throw new HttpError(400, `No member “${v}” found on the server. The new account must join the server first; or paste its Discord ID (right-click on it → Copy User ID).`);
 }

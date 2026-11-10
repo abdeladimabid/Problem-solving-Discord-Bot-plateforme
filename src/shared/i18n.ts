@@ -48,7 +48,7 @@ const en: Dict = {
 
   // ------------------------------------------------------------------ link
   "link.ok": "✅ {user} is **{hr}** on HackerRank. Past contest results under that name now count for you!",
-  "link.taken": "**{hr}** is already linked to another student. Ask your teacher if this is a mistake.",
+  "link.taken": "**{hr}** is already linked to another student. Ask your teacher if this is a mistake. New Discord account (hacked or deleted)? Your teacher can move your whole profile to this one: nothing is lost.",
 
   // ------------------------------------------------------------ challenges
   "diff.easy": "🟢 Easy",
@@ -383,6 +383,7 @@ const en: Dict = {
   "res.verify_not_yet": "I don't see **{title}** in your recent HackerRank solves yet. Submit it with all tests passing, wait a few seconds, then try again.",
   "res.verify_failing": "HackerRank shows your submission of **{title}**, but **not all its tests pass** (your HackerRank score didn't get its points; a problem you had already solved before gives nothing new). Fix your code until every test case is ✅ on HackerRank, press **Submit Code** again, then verify.",
   "res.verify_no_proof": "I can't prove **{title}** automatically (HackerRank couldn't be read when this challenge was opened). Send the link of your accepted submission: your teacher will confirm it.",
+  "move.dm": "🔁 Welcome back! Your teacher moved your ClassBot profile to this new Discord account: your points, coins, challenges, briefs and results are all here. Your HackerRank, GitHub and VS Code links still work.",
   "res.verify_unavailable": "I can't reach HackerRank to verify right now. Try again in a few minutes.",
   "res.claimed": "👍 Recorded as solved (self-reported). Your teacher can see it in the dashboard.",
   "res.claimed_pending": "👍 Recorded! Your teacher will confirm it before the points count.",
@@ -740,7 +741,7 @@ const fr: Dict = {
   "err.unknown": "Ça n'existe plus.",
 
   "link.ok": "✅ {user} est **{hr}** sur HackerRank. Les résultats de concours passés sous ce nom comptent maintenant pour toi !",
-  "link.taken": "**{hr}** est déjà relié à un autre élève. Demande à ton enseignant si c'est une erreur.",
+  "link.taken": "**{hr}** est déjà relié à un autre élève. Demande à ton enseignant si c'est une erreur. Nouveau compte Discord (piraté ou supprimé) ? Ton prof peut déplacer tout ton profil sur celui-ci : rien n'est perdu.",
 
   "diff.easy": "🟢 Facile",
   "diff.medium": "🟡 Moyen",
@@ -1073,6 +1074,7 @@ const fr: Dict = {
   "res.verify_not_yet": "Je ne vois pas encore **{title}** dans tes résolutions HackerRank récentes. Soumets-le avec tous les tests validés, attends quelques secondes, puis réessaie.",
   "res.verify_failing": "HackerRank montre ta soumission de **{title}**, mais **tous les tests ne passent pas** (ton score HackerRank n'a pas reçu ses points ; un problème déjà résolu avant ne rapporte rien de nouveau). Corrige ton code jusqu'à ce que chaque test soit ✅ sur HackerRank, refais **Submit Code**, puis vérifie.",
   "res.verify_no_proof": "Je ne peux pas prouver **{title}** automatiquement (HackerRank n'a pas pu être lu à l'ouverture de ce défi). Envoie le lien de ta soumission acceptée : ton prof la confirmera.",
+  "move.dm": "🔁 Bon retour ! Ton prof a déplacé ton profil ClassBot sur ce nouveau compte Discord : tes points, pièces, défis, briefs et résultats sont tous là. Tes liens HackerRank, GitHub et VS Code fonctionnent toujours.",
   "res.verify_unavailable": "Je n'arrive pas à joindre HackerRank pour vérifier. Réessaie dans quelques minutes.",
   "res.claimed": "👍 Enregistré comme résolu (déclaré par toi). Ton enseignant le verra dans le tableau de bord.",
   "res.claimed_pending": "👍 Enregistré ! Ton enseignant le confirmera avant que les points comptent.",

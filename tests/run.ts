@@ -8527,6 +8527,52 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
 }
 
+section("🔁 a student changes Discord account (hacked, deleted): everything moves to the new one");
+{
+  const OLD = "154972381424858728", NEW = "155972381424858729", OTHER = "166972381424858720", t0 = clock.now();
+  const ex = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at, hr_username, hr_display, hr_verified) VALUES (?, ?, 'Ayoub', 50, 1000, ?, 'ayoubhr', 'ayoubhr', 1)", G, OLD, t0 - 9e5);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Ayoub2', 7, 1000, ?)", G, NEW, t0);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Other', 1, 1000, ?)", G, OTHER, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 120, 'practice', ?)", G, OLD, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 5, 'daily', ?)", G, NEW, t0);
+  ex("INSERT INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, ?, 'first_solve', ?), (?, ?, 'streak7', ?), (?, ?, 'first_solve', ?)", G, OLD, t0, G, OLD, t0, G, NEW, t0);
+  ex("INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, mode, difficulty, created_at, winner_id) VALUES (?, 'c', ?, ?, 'quick', 'easy', ?, ?)", G, OTHER, OLD, t0, OLD);
+  ex("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'S1', ?, 0, ?, ?)", G, JSON.stringify([{ name: "A", members: [OTHER, OLD] }]), t0, t0);
+  const qz = Number(ex("INSERT INTO quizzes (guild_id, title, questions, created_at) VALUES (?, 'q', '[]', ?)", G, t0).lastInsertRowid);
+  ex("INSERT INTO quiz_answers (quiz_id, q_idx, discord_id, answer, correct, ms, score) VALUES (?, 0, ?, 'A', 1, 100, 10)", qz, OLD);
+  // the same account in another class is not this teacher's: it stays
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('other-guild', ?, 'S', 9, 'practice', ?)", OLD, t0);
+
+  check((await api("POST", `/api/students/${OLD}/move`, { g: G, to: OLD })).status === 400 && (await api("POST", `/api/students/${OLD}/move`, { g: G, to: "nobody_here" })).status === 400,
+    "the same account, or a name nobody has: refused");
+  const n0 = discordCalls.length;
+  const mv = await api("POST", `/api/students/${OLD}/move`, { g: G, to: "Ayoub2" });
+  check(mv.status === 200 && mv.data.to === NEW && mv.data.merged, `found by the new account's name (${mv.status} ${JSON.stringify(mv.data).slice(0, 120)})`);
+  const pl = q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW);
+  check(!q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", G, OLD) && pl.coins === 57 && pl.hr_username === "ayoubhr" && pl.hr_verified === 1 && pl.name === "Ayoub2",
+    "one profile left, on the new account: the old one's links (HackerRank), coins added together, the new Discord name");
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, NEW).s === 125, "every point is on the new account (old and new)");
+  check(db.prepare("SELECT badge FROM badges WHERE guild_id = ? AND discord_id = ? ORDER BY badge").all(G, NEW).map((r: any) => r.badge).join() === "first_solve,streak7", "badges: all kept, a badge both had only once");
+  check(q1("SELECT winner_id, opponent_id FROM duels WHERE guild_id = ? AND challenger_id = ?", G, OTHER).winner_id === NEW && JSON.parse(q1("SELECT squads FROM squad_sets WHERE guild_id = ? AND name = 'S1'", G).squads)[0].members.join() === `${OTHER},${NEW}`,
+    "…in every column (a duel won) and inside texts (the squads)");
+  check(q1("SELECT discord_id FROM quiz_answers WHERE quiz_id = ?", qz).discord_id === NEW, "…also in the tables that belong to the class through another (quiz answers)");
+  // nothing of the class still names the old account; another class's data is untouched
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r: any) => r.name);
+  const leftIn = tables.filter((tb: string) => db.prepare(`PRAGMA table_info("${tb}")`).all().some((c: any) => c.name === "guild_id")
+    && (db.prepare(`SELECT COUNT(*) AS n FROM "${tb}" WHERE guild_id = ? AND instr(${db.prepare(`PRAGMA table_info("${tb}")`).all().map((c: any) => `COALESCE(CAST("${c.name}" AS TEXT), '')`).join(" || '|' || ")}, ?) > 0`).get(G, OLD) as any).n > 0);
+  check(!leftIn.length && q1("SELECT discord_id FROM ledger WHERE guild_id = 'other-guild'").discord_id === OLD, `nothing of the class names the old account any more (${leftIn.join(", ")}); another class's data untouched`);
+  check(discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${NEW}/messages` && /moved your ClassBot profile/.test(text(c.body))), "the student gets a DM on the new account");
+  const st = (await api("GET", `/api/students/${NEW}?g=${G}`)).data;
+  check(st.player.discord_id === NEW && st.badges.length === 2, "the new account's page shows everything");
+  // by Discord ID too, with no profile yet on the new account
+  const NEW2 = "177972381424858731";
+  const mv2 = await api("POST", `/api/students/${NEW}/move`, { g: G, to: `<@${NEW2}>`, notify: false });
+  check(mv2.status === 200 && !mv2.data.merged && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57, "by Discord ID (or mention), to an account that never used ClassBot");
+  for (const tb of ["players", "ledger", "badges", "duels", "squad_sets"]) ex(`DELETE FROM ${tb} WHERE guild_id = ? AND ${tb === "duels" ? "challenger_id" : tb === "squad_sets" ? "name" : "discord_id"} IN (?, ?, ?)`, G, ...(tb === "squad_sets" ? ["S1", "S1", "S1"] : [NEW2, OTHER, NEW]));
+  ex("DELETE FROM ledger WHERE guild_id = 'other-guild'");
+}
+
 section("the assistant knows the app: its pages and how to set up");
 {
   const { APP_GUIDE } = await import("../src/shared/classchat.ts");
