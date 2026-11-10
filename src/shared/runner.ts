@@ -24,16 +24,27 @@ export const LANGS: Record<CodeLang, LangInfo> = {
 /** Languages quick challenges ("predict the output", "find the bug"…) can be written in. */
 /** What the submit form starts with: how to read the input in each language. */
 export const STARTER: Record<CodeLang, string> = {
-  javascript: `const lines = require("fs").readFileSync(0, "utf8").trim().split("\\n");
-const n = Number(lines[0]);
-const a = lines[1].split(" ").map(Number);
+  // read word by word (not line by line): works whatever the spaces and line breaks, and when a line is missing
+  // (n = 0, an empty list). Adapt it to the challenge's Input section.
+  javascript: `// every value of the input, one by one (spaces and line breaks don't matter)
+const data = require("fs").readFileSync(0, "utf8").split(/\\s+/).filter(Boolean);
+let pos = 0;
+const next = () => data[pos++];
+
+const n = Number(next() ?? 0);
+const a = [];
+for (let i = 0; i < n; i++) a.push(Number(next()));
 
 console.log(n);
 `,
   php: `<?php
-$lines = explode("\\n", trim(stream_get_contents(STDIN)));
-$n = (int)$lines[0];
-$a = array_map("intval", explode(" ", $lines[1]));
+// every value of the input, one by one (spaces and line breaks don't matter)
+$data = preg_split('/\\s+/', trim(stream_get_contents(STDIN)), -1, PREG_SPLIT_NO_EMPTY);
+$pos = 0;
+
+$n = (int)($data[$pos++] ?? 0);
+$a = [];
+for ($i = 0; $i < $n; $i++) $a[] = (int)$data[$pos++];
 
 echo $n, "\\n";
 `,
