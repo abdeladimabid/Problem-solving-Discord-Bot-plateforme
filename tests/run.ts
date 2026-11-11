@@ -6961,6 +6961,25 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
     await setBlock(env, G, D.id, { type: "sql", days: 3 });
   }
 
+  // solved anyway through /today, the path or the daily: no points, no coins
+  {
+    await setBlock(env, G, D.id, { type: "mcq", levels: ["easy"], reason: "projet d'abord" });
+    const cm = q1("SELECT * FROM challenges WHERE guild_id = ? AND kind = 'mcq' AND difficulty = 'easy' AND status = 'active' LIMIT 1", G)
+      || q1("SELECT * FROM challenges WHERE kind = 'mcq' AND difficulty = 'easy' LIMIT 1");
+    const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+    const p0 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    const l0 = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s;
+    for (const origin of ["path", "daily"]) {
+      const id = Number(db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, started_at, tries) VALUES (?, ?, ?, ?, 'pending', ?, 1)").run(G, D.id, cm.id, origin, clock.now() - 30).lastInsertRowid);
+      const out = await finish(env, gRow, q1("SELECT * FROM attempts WHERE id = ?", id), cm, true, { verified: 1 });
+      check(out.solved && q1("SELECT points FROM attempts WHERE id = ?", id).points === 0 && /paused for you|en pause pour toi/.test(JSON.stringify(out.payload)),
+        `a blocked type solved through ${origin}: counted as solved, 0 points, the student is told why`);
+    }
+    check(q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins === p0 && q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s === l0,
+      "…no point and no coin at all (not even the daily's bonus)");
+    await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=mcq`);
+  }
+
   // it ends by itself
   await setBlock(env, G, D.id, { type: "regex", days: 1 });
   clock.advance(2 * 86400);
@@ -8599,6 +8618,53 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
   await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
+}
+
+section("GitHub: the whole repo in one request (an archive), not file by file (Cloudflare's 50 calls per request)");
+{
+  const { gzipSync } = await import("node:zlib");
+  // a small .tar.gz like GitHub's: everything inside "<owner>-<repo>-<sha>/", a long name through a pax header
+  const enc = new TextEncoder();
+  const block = (name: string, size: number, type = "0") => {
+    const h = new Uint8Array(512);
+    h.set(enc.encode(name).slice(0, 100), 0);
+    h.set(enc.encode("0000644\0"), 100);
+    h.set(enc.encode(size.toString(8).padStart(11, "0") + "\0"), 124);
+    h[156] = type.charCodeAt(0);
+    h.set(enc.encode("ustar\0"), 257);
+    h.set(enc.encode("        "), 148);
+    let sum = 0; for (const x of h) sum += x;
+    h.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+    return h;
+  };
+  const parts: Uint8Array[] = [];
+  const add = (name: string, body: string, type = "0") => { const b = enc.encode(body); parts.push(block(name, b.length, type), b, new Uint8Array((512 - (b.length % 512)) % 512)); };
+  const long = "src/" + "dossier-très-profond/".repeat(6) + "page.html";
+  add("pax_global_header", "52 comment=0123456789abcdef0123456789abcdef01234567\n", "g");
+  parts.push(block("stu-proj-abc123/", 0, "5"));
+  add("stu-proj-abc123/index.html", "<!doctype html><title>Accueil</title>");
+  add("stu-proj-abc123/css/style.css", "body { color: red }");
+  add("stu-proj-abc123/img/logo.png", "PNGDATA");
+  const rec = ` path=stu-proj-abc123/${long}\n`;
+  const ln = Buffer.byteLength(rec) + 4;
+  add("PaxHeader", `${ln}${rec}`, "x");
+  add("stu-proj-abc123/" + long.slice(0, 90), "<p>tout au fond</p>");
+  parts.push(new Uint8Array(1024));
+  github.tarballs["stu/proj"] = gzipSync(Buffer.concat(parts));
+  const { repoFiles, githubText } = await import("../src/shared/review/gh.ts");
+  const c0 = github.calls;
+  const files: any = await repoFiles("tok", "stu/proj");
+  const idx = await githubText("/repos/stu/proj/contents/index.html", "tok", "application/vnd.github.raw");
+  const deep = await githubText(`/repos/stu/proj/contents/${long.split("/").map(encodeURIComponent).join("/")}`, "tok", "application/vnd.github.raw");
+  const css = await githubText("/repos/stu/proj/contents/css/style.css", "tok", "application/vnd.github.raw", 5);
+  check(files.map((f: any) => f.path).sort().join() === ["css/style.css", "index.html", long].sort().join() && files.media.join() === "img/logo.png",
+    `the files of the repo from the archive (the long name too; the picture as a deliverable) (${files.map((f: any) => f.path).join(", ")})`);
+  check(idx.includes("Accueil") && deep === "<p>tout au fond</p>" && css === "body " && github.calls - c0 === 1, `…and their text, all in ONE call to GitHub (${github.calls - c0})`);
+  // no archive (too big, refused): file by file as before
+  const c1 = github.calls;
+  github.files["stu/other/HEAD/index.html"] = "<h1>Autre</h1>";
+  check((await githubText("/repos/stu/other/contents/index.html", "tok", "application/vnd.github.raw")) === "<h1>Autre</h1>" && github.calls - c1 === 1, "no archive for a repo: its file is read from GitHub as before");
+  delete github.tarballs["stu/proj"];
 }
 
 section("🔁 a student changes Discord account (hacked, deleted): everything moves to the new one");

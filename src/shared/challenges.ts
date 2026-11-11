@@ -22,7 +22,7 @@ import { CODE_BOOST_KINDS, DOUBLE_ORIGINS, boostsOf, contractStep, cosmeticsOf, 
 import type { Boosts } from "./shop.ts";
 import { analyzeLog, editorToken, editorUrl, fingerprint, integrityOf, similarity } from "./integrity.ts";
 import type { EditorLog, IntegrityReport } from "./integrity.ts";
-import { type Block, blockSql } from "./practiceblock.ts";
+import { type Block, blockFor, blockSql, blockVars, getBlocks, typeOf } from "./practiceblock.ts";
 import { makeStarter, parseSignature, sampleCall, signatureLine } from "./starter.ts";
 
 const LETTERS = ["A", "B", "C", "D"];
@@ -564,8 +564,13 @@ export async function finish(
     duelWon = !!res.meta.changes;
   }
 
+  // 🚫 a type the teacher paused for them (practiceblock.ts): wherever it comes from (/today, the path, the daily…),
+  // solving it gives no points and no coins
+  const blocked = solved && !o.claimed ? blockFor(await getBlocks(env, guild.id, a.discord_id).catch(() => []), typeOf(c), c.difficulty) : null;
   // self-reported solves never count until a teacher approves them in the dashboard
-  if (solved && !o.claimed) {
+  if (solved && !o.claimed && blocked) {
+    quickNote = t(L, "blk.nopoints", blockVars(L, blocked));
+  } else if (solved && !o.claimed) {
     points = a.origin === "duel" && duelWon === false
       ? RULES.duelLoserPoints
       : pointsFor(sc, { kind: c.kind, difficulty: c.difficulty, origin: a.origin, usedHint: Math.max(0, (a.used_hint || 0) - (a.free_hints || 0)), tries: a.tries || 1, seconds: t0 - a.started_at, onTime: assignmentOnTime });
@@ -634,8 +639,8 @@ export async function finish(
   }
 
   // --- origin hooks
-  if (a.origin === "daily" && solved && !o.claimed) extra.push(...(await onDailySolved(env, guild, a)));
-  if (a.origin === "bounty" && a.ref && solved && !o.claimed) { const m = await claimBounty(env, guild, a.ref, a.discord_id); if (m) extra.push(m); }
+  if (a.origin === "daily" && solved && !o.claimed && !blocked) extra.push(...(await onDailySolved(env, guild, a)));
+  if (a.origin === "bounty" && a.ref && solved && !o.claimed && !blocked) { const m = await claimBounty(env, guild, a.ref, a.discord_id); if (m) extra.push(m); }
   if (solved && !o.claimed && c.source === "student") await rewardAuthor(env, guild, c, a.discord_id).catch((e) => console.error("author", e));
   if (a.origin === "plan" && !o.claimed) extra.push(...(await onPlanItemDone(env, guild, a.discord_id, a.id, a.ref, solved, points + held)));
   if (a.origin === "assignment" && a.ref) {
