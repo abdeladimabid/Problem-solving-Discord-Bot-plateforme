@@ -8,7 +8,7 @@
 //   GET  /game/<id>.<tv>/codes      relay: every squad's code + the tests (run on the TV)
 //                                                                                  GET  /play/<id>.<code>/case      sql: the story, the database, the clues
 import type { Env } from "../shared/types.ts";
-import { COUNTDOWN_MS, GameError, isHost, NEXT_MS, bumpGame, cheatRelay, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
+import { COUNTDOWN_MS, GameError, isHost, NEXT_MS, bumpGame, cheatRelay, draftBug, submitBug, accuseSql, answerRoyale, pleaRoyale, caseForPlayers, gameCase, relayStarter, tryRelay, checkSql, getGame, hintSql, hostAction, joinGame, joinUrl, liveGame, noiseRelay, playerByKey, playerView, postJoin, readGamePass, reviveRoyale, saveRelayCode, teamsOf, tvView } from "../shared/games.ts";
 import type { GAction, Game, Player } from "../shared/games.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { now, run } from "../shared/db.ts";
@@ -87,6 +87,8 @@ export async function handleGame(request: Request, env: Env, who: "tv" | "play",
       case "cheat": return json(await cheatRelay(env, gm, p, String(b.what || "")));
       case "noise": return json(await noiseRelay(env, gm, p, Date.now(), b.why === "muted" ? "muted" : "voice", b.rel == null ? null : Number(b.rel)));
       case "try": return json(await tryRelay(env, gm, p, String(b.code ?? "")));
+      case "fix": return json(await submitBug(env, gm, p, Number(b.idx), String(b.code ?? "")));
+      case "draft": return json(await draftBug(env, gm, p, Number(b.idx), String(b.code ?? "")));
       case "mic": {
         const v = b.state === "muted" ? 2 : b.on ? 1 : 0;
         if (p.mic !== v) { await run(env, "UPDATE game_players SET mic = ? WHERE game_id = ? AND pid = ?", v, gm.id, p.pid); if (gm.kind === "relay") await bumpGame(env, gm); }
@@ -170,6 +172,18 @@ h1.big{font-size:3.6vw;margin:0 0 1vh}h2{font-size:1.8vw;margin:0 0 1vh}
 .win .trophy{font-size:9vw;animation:bob 2s ease-in-out infinite}.win h1{font-size:4.4vw;margin:0}.win p{font-size:1.6vw;color:var(--soft);max-width:70vw;margin:0 auto}
 /* sql */
 .race{display:grid;grid-template-columns:1fr 26vw;gap:2vw;min-height:0}
+/* 🐞 bug hunt */
+.bh{display:grid;grid-template-columns:1fr 24vw;gap:2vw;min-height:0}
+.bh-board{display:flex;flex-direction:column;gap:1vh;overflow:hidden}
+.bh-row{display:grid;grid-template-columns:4vw 16vw 1fr 7vw;gap:1vw;align-items:center;padding:1.1vh 1vw;border-radius:16px;background:var(--card);border:1px solid var(--line);animation:rise .4s both}
+.bh-row.t1{background:linear-gradient(90deg,rgba(250,204,21,.22),rgba(255,255,255,.04));border-color:rgba(250,204,21,.6)}.bh-row.t2{background:linear-gradient(90deg,rgba(203,213,225,.18),rgba(255,255,255,.04))}.bh-row.t3{background:linear-gradient(90deg,rgba(217,119,6,.2),rgba(255,255,255,.04))}
+.bh-row .rk{font-size:2vw;font-weight:900;text-align:center}.bh-row .nm{font-size:1.4vw;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bh-row .n{font-size:1.6vw;font-weight:900;text-align:right;font-variant-numeric:tabular-nums}
+.bh-bar{display:flex;gap:.35vw}.bh-bar i{flex:1;height:1.6vh;border-radius:6px;background:rgba(255,255,255,.1)}.bh-bar i.ok{background:linear-gradient(90deg,#22c55e,#06b6d4);box-shadow:0 0 10px rgba(34,197,94,.5)}.bh-bar i.now{background:rgba(245,158,11,.5);animation:pulse 1.2s infinite}
+.bh-side{display:flex;flex-direction:column;gap:1.4vh;min-height:0}
+.bh-items{display:flex;flex-direction:column;gap:.6vh}.bh-it{display:flex;gap:.7vw;align-items:center;font-size:1.05vw;padding:.7vh .8vw;border-radius:12px;background:rgba(255,255,255,.05)}
+.lv{padding:.2vh .6vw;border-radius:999px;font-weight:800;font-size:.85vw}.lv.easy{background:rgba(34,197,94,.25)}.lv.medium{background:rgba(245,158,11,.28)}.lv.hard{background:rgba(239,68,68,.3)}
+.bh-feed{display:flex;flex-direction:column;gap:.6vh;font-size:1.05vw}.bh-feed div{padding:.6vh .8vw;border-radius:10px;background:rgba(34,197,94,.12);animation:rise .4s both}
 .rrow{display:grid;grid-template-columns:16vw 1fr 9vw;gap:1vw;align-items:center;padding:1.4vh 1vw;border-radius:18px;background:var(--card);margin-bottom:1.2vh;border-left:8px solid var(--c)}
 .rrow .nm{font-size:1.5vw;font-weight:900}.dots{display:flex;gap:.6vw;align-items:center}
 .dot{width:3vw;height:3vw;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);font-size:1.4vw;font-weight:900}
@@ -387,6 +401,7 @@ function bannedLine() {
 }
 function lobby(extra) {
   const head = S.kind === "sql" ? '<h1 class="big">🕵️ ' + e(S.case.title) + '</h1><p class="story">' + e(S.case.story) + '</p><p class="muted">' + T("Notions : ", "Notions: ") + S.case.notions.map(e).join(" · ") + "</p>"
+    : S.kind === "bugs" ? '<h1 class="big">🐞 ' + T("Chasse aux bugs", "Bug Hunt") + ' <span class="chip" style="font-size:1.2vw;vertical-align:middle">' + e(S.langName || "JavaScript") + '</span></h1><p class="story">' + S.items.length + T(" codes qui ne marchent pas, un par un : trouve les bugs, corrige-les, les tests décident. ", " broken codes, one by one: find the bugs, fix them, the tests decide. ") + "<b>" + T("Le premier à tout corriger gagne !", "The first to fix them all wins!") + '</b></p><p class="muted">⏱ ' + mmss(S.bugTime * 1000) + (S.lockScreen ? " · 🖥️ " + T("plein écran", "full screen") : "") + (S.noPaste ? " · 🚫 " + T("pas de copier-coller", "no copy-paste") : "") + ' · <span>' + S.items.map((x) => '<span class="lv ' + x.level + '">' + "🐞".repeat(x.bugs) + "</span>").join(" ") + "</span></p>"
     : S.kind === "relay" ? '<h1 class="big">🏃 ' + T("Relais de code", "Code Relay") + " · " + e(S.task.title) + ' <span class="chip" style="font-size:1.2vw;vertical-align:middle">' + e(S.langName || "JavaScript") + '</span></h1><p class="story">' + e(S.task.text) + '</p><p class="muted">' + T("Chacun écrit à son tour : ", "Each one writes in turn: ") + mmss(S.totalMs) + T(" ÷ la taille du squad. ", " ÷ the squad size. ") + (S.noise ? T("Interdit de parler : les micros écoutent (", "No talking: the mics are listening (") + S.strikesMax + T(" avertissements = éliminés).", " strikes = out).") : T("Interdit de parler : le formateur donne les avertissements (", "No talking: the teacher gives the strikes (") + S.strikesMax + T(" = éliminés).", " = out).")) + "</p>"
     : '<div class="crown">👑</div><h1 class="ptitle">Battle Royale</h1><p class="story">' + T("Une mauvaise réponse et tu es éliminé. Le dernier debout gagne !", "One wrong answer and you're out. The last one standing wins!") + (S.mode !== "solo" ? T(" En squad, vos bonnes réponses donnent des points pour ramener un coéquipier. Un squad dont tous les membres tombent est éliminé.", " In squads, your right answers earn points to bring a teammate back. A squad whose members all fall is wiped out.") : "") + "</p>";
   const bySquad = S.mode === "squads" ? '<div class="sqrow">' + S.squads.map((q, i) => {
@@ -540,7 +555,7 @@ const CHEAT = { fullscreen: ["🚪", T("a quitté le plein écran", "left full s
 function relayAlerts() {
   const box = $("#alerts");
   if (!box) return;   // the slot between the squads and the challenge (Code Relay, while playing)
-  if (S.kind !== "relay" || S.phase !== "playing") { box.innerHTML = ""; return; }
+  if ((S.kind !== "relay" && S.kind !== "bugs") || S.phase !== "playing") { box.innerHTML = ""; return; }
   const nameOf = (pid) => (S.players.find((p) => p.pid === pid) || { name: "?" }).name;
   const locks = [];
   for (const t of S.teams || []) for (const [pid, why] of Object.entries(t.locks || {})) locks.push({ pid, why, squad: t.squad });
@@ -559,6 +574,25 @@ function relayAlerts() {
     const st = $("#alts"); st.append(d); while (st.children.length > 3) st.firstChild.remove();
     setTimeout(() => { d.classList.add("bye"); setTimeout(() => d.remove(), 500); }, 6000);
   }
+}
+// ---------------------------------------------------------------- 🐞 bug hunt
+let bugFeedSeen = null;
+function bugsView() {
+  $("#info").innerHTML = S.phase === "playing" ? '<span class="clock" id="clk"></span>' : "";
+  if (S.phase === "lobby") return lobby();
+  const N = S.items.length, b = S.board || [];
+  const row = (x, k) => {
+    const t = (S.teams || []).find((y) => y.squad === x.squad) || {}, lock = Object.keys(t.locks || {}).length;
+    return '<div class="bh-row' + (k < 3 && x.solved ? " t" + (k + 1) : "") + '"><span class="rk">' + (k < 3 && x.solved ? ["🥇", "🥈", "🥉"][k] : k + 1) + '</span><span class="nm">' + (lock ? "🔒 " : "") + e(x.name) + (x.done ? " 🏁" : "") + '</span><div class="bh-bar">' +
+      Array.from({ length: N }, (_, i) => '<i class="' + (i < x.solved ? "ok" : i === x.solved && S.phase === "playing" ? "now" : "") + '"></i>').join("") + '</div><span class="n">' + x.solved + "/" + N + "</span></div>";
+  };
+  if (S.phase === "over") {
+    const w = S.winSquad != null ? b.find((x) => x.squad === S.winSquad) : null;
+    return '<div><h1 class="big">' + (w ? "🏆 " + e(w.name) + (w.done ? T(" a tout corrigé !", " fixed them all!") : T(" gagne !", " wins!")) : T("Fin de la chasse", "Hunt over")) + '</h1><div class="bh-board">' + b.slice(0, 12).map(row).join("") + "</div></div>";
+  }
+  const feed = (S.feed || []).slice(-7).reverse().map((f) => { const x = b.find((y) => y.squad === f.squad); return "<div>✅ <b>" + e(x ? x.name : "?") + "</b> · " + e(f.text) + "</div>"; }).join("");
+  return '<div class="bh"><div class="bh-board">' + b.slice(0, 14).map(row).join("") + (b.length > 14 ? '<p class="muted" style="font-size:1vw">+' + (b.length - 14) + "</p>" : "") + '</div><div class="bh-side"><div id="alerts"></div><div class="glass" style="padding:1.4vh 1vw;border-radius:18px"><h2>🐞 ' + N + T(" codes", " codes") + ' <span class="chip" style="font-size:.9vw">' + e(S.langName) + '</span></h2><div class="bh-items">' +
+    S.items.map((x, i) => '<div class="bh-it"><b>' + (i + 1) + '</b><span class="lv ' + x.level + '">' + "🐞".repeat(x.bugs) + "</span>" + e(x.title) + "</div>").join("") + '</div></div><div class="bh-feed">' + feed + "</div></div></div>";
 }
 let tested = false, noiseSeen = {};
 function relayView() {
@@ -617,9 +651,11 @@ function controls() {
   $("#bar").innerHTML = b.join("");
 }
 function render() {
-  $("#kind").textContent = S.kind === "royale" ? "Battle Royale" : S.kind === "sql" ? T("Détective SQL", "SQL Detective") : T("Relais de code", "Code Relay");
+  $("#kind").textContent = S.kind === "royale" ? "Battle Royale" : S.kind === "sql" ? T("Détective SQL", "SQL Detective") : S.kind === "bugs" ? T("Chasse aux bugs", "Bug Hunt") : T("Relais de code", "Code Relay");
+  // 🐞 someone just fixed one: a little sound
+  if (S.kind === "bugs" && S.feed) { const last = S.feed.length ? S.feed[S.feed.length - 1].at : 0; if (bugFeedSeen !== null && last > bugFeedSeen) beep(880, .18, "triangle"); bugFeedSeen = last; if (S.phase === "over" && shownPhase !== "over") { shownPhase = "over"; [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .25), i * 140)); confetti(); } }
   pre = S.kind === "royale" && S.phase === "question" && nowMs() < S.qAt;
-  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step, t.locks]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive, p.mic])) + "." + (S.banned || []).length;
+  const key = S.seq + "." + S.phase + "." + (S.answered || 0) + "." + (pre ? "cd" : "") + "." + JSON.stringify(S.teams ? S.teams.map((t) => [t.writer, t.strikes, t.lines, t.step, t.locks, t.solved]) : 0) + "." + JSON.stringify(S.players.map((p) => [p.pid, p.alive, p.mic])) + "." + (S.banned || []).length;
   // sounds and animations on what just happened
   if (S.kind === "royale" && (S.step !== shownStep || S.phase !== shownPhase)) {
     if (S.phase === "question" && !pre) beep(660, .15);
@@ -631,7 +667,7 @@ function render() {
     shownStep = S.step; shownPhase = S.phase;
   }
   if (S.kind === "relay" && S.teams) for (const t of S.teams) { const at = t.lastNoise ? t.lastNoise.at : 0; if (noiseSeen["n" + t.squad] !== at) { const first = noiseSeen["n" + t.squad] === undefined; noiseSeen["n" + t.squad] = at; if (!first) { noiseSeen[t.squad] = 1; lastKey = ""; setTimeout(() => { noiseSeen[t.squad] = 0; lastKey = ""; render(); }, 2600); } } }
-  if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : relayView(); controls(); if (panel || manage) drawPanel(); }
+  if (key !== lastKey) { lastKey = key; $("#app").innerHTML = S.kind === "royale" ? royale() : S.kind === "sql" ? sqlView() : S.kind === "bugs" ? bugsView() : relayView(); controls(); if (panel || manage) drawPanel(); }
   relayAlerts();
 }
 document.addEventListener("click", (ev) => {
@@ -670,7 +706,7 @@ setInterval(() => {
   if (nxt && S.kind === "royale" && S.phase === "reveal") nxt.textContent = S.paused ? "⏸ " + T("En pause", "Paused") : S.nextAt ? (S.last && S.last.final ? "🏆 " + T("Résultats dans ", "Results in ") : "⏭ " + T("Suivante dans ", "Next in ")) + Math.max(0, Math.ceil((S.nextAt - nowMs()) / 1000)) + " s" : "";
   const clk = $("#clk");
   if (clk && S.kind === "sql") clk.textContent = "⏱ " + mmss(nowMs() - S.startAt);
-  if (clk && S.kind === "relay" && S.endAt) clk.textContent = "⏱ " + mmss(S.endAt - nowMs());
+  if (clk && (S.kind === "relay" || S.kind === "bugs") && S.endAt) clk.textContent = "⏱ " + mmss(S.endAt - nowMs());
   if (S.kind === "relay" && S.phase === "playing") for (const t of S.teams) { const i = document.querySelector('[data-bar="' + t.squad + '"]'); if (i) i.style.width = Math.max(0, Math.min(100, 100 * (nowMs() - t.turnStart) / (t.turnEnd - t.turnStart))) + "%"; if (nowMs() > t.turnEnd + 400) { lastKey = ""; } }
 }, 250);
 poll();
@@ -797,10 +833,20 @@ const RELAY_CSS = `/* ---- 🏃 relay */
 .ptoast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:70;padding:12px 18px;border-radius:14px;background:#7f1d1d;border:1px solid #ef4444;font-weight:800;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:rise .3s}
 @media(max-width:600px){.hc b{font-size:18px}.tbox b{font-size:30px}.strk .sx{font-size:110px}.kout .kt{font-size:38px}.baton .bt{font-size:40px}#shh{font-size:30px}}
 `;
+const BUGS_CSS = `/* ---- 🐞 bug hunt */
+.top3{position:sticky;top:52px;z-index:4;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;margin-bottom:12px;border-radius:16px;background:rgba(11,18,36,.85);border:1px solid var(--line);backdrop-filter:blur(8px)}
+.top3 .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--soft);font-weight:800;margin-right:4px}
+.top3 .p{display:inline-flex;gap:6px;align-items:center;padding:5px 12px;border-radius:999px;background:rgba(255,255,255,.07);font-weight:800;font-size:14px}
+.top3 .p.me{background:linear-gradient(90deg,rgba(139,92,246,.5),rgba(6,182,212,.4))}.top3 .p b{font-variant-numeric:tabular-nums}
+.top3 .mine{margin-left:auto;color:var(--soft);font-weight:700;font-size:13px}
+.lv{padding:3px 10px;border-radius:999px;font-weight:800;font-size:12px}.lv.easy{background:rgba(34,197,94,.25)}.lv.medium{background:rgba(245,158,11,.28)}.lv.hard{background:rgba(239,68,68,.3)}
+.bprog{display:flex;gap:4px;margin:6px 0 0}.bprog i{flex:1;height:8px;border-radius:5px;background:rgba(255,255,255,.1)}.bprog i.ok{background:linear-gradient(90deg,#22c55e,#06b6d4)}.bprog i.now{background:rgba(245,158,11,.6)}
+.bres .msg{margin-top:6px}
+`;
 const PLAY = (gm: Game) => `<!doctype html><html lang="${gm.settings.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="robots" content="noindex">
 <title>${esc(gm.title)}</title><style>${CSS}
 html{background:radial-gradient(1100px 650px at 10% 0%,rgba(139,92,246,.22),transparent 60%),radial-gradient(1100px 650px at 100% 100%,rgba(6,182,212,.16),transparent 60%),var(--bg);background-attachment:fixed}
-body{background:none;min-height:100vh;padding:14px;max-width:${gm.kind === "sql" ? "1300px" : gm.kind === "relay" ? "1100px" : "640px"};margin:0 auto}
+body{background:none;min-height:100vh;padding:14px;max-width:${gm.kind === "sql" ? "1300px" : gm.kind === "relay" || gm.kind === "bugs" ? "1100px" : "640px"};margin:0 auto}
 header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
 header b{font-size:18px}.me{font-size:14px;color:var(--soft)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:16px;margin-bottom:12px}
@@ -875,7 +921,8 @@ canvas#conf{position:fixed;inset:0;pointer-events:none;z-index:15}
 .pdead{position:fixed;inset:0;z-index:29;display:grid;place-items:center;align-content:center;gap:8px;text-align:center;background:radial-gradient(circle,rgba(127,29,29,.9),#000 75%);animation:shake .45s 2}
 .pdead .s{font-size:120px;animation:stampp .5s cubic-bezier(.2,1.6,.4,1)}.pdead h1{margin:0;font-size:38px;letter-spacing:.08em;color:#fecaca}
 @keyframes stampp{0%{transform:scale(2.6);opacity:0}100%{transform:scale(1);opacity:1}}
-${gm.kind === "relay" ? RELAY_CSS : ""}
+${gm.kind === "relay" || gm.kind === "bugs" ? RELAY_CSS : ""}
+${gm.kind === "bugs" ? BUGS_CSS : ""}
 </style></head><body>
 <header><b>${esc(gm.title)}</b><span class="me" id="me"></span></header>
 ${gm.kind === "relay" ? `<div id="vig"></div><div id="shh">🤫 ${gm.settings.lang === "en" ? "SHH!" : "CHUT !"}</div>` : ""}
@@ -1231,31 +1278,32 @@ function mwarnHtml() {
 // student until the teacher lets them back in; copy, cut and paste are blocked; the TV is told each time
 const FS_OK = !!(document.fullscreenEnabled && document.documentElement.requestFullscreen);
 let fsArmed = false, fsGrace = 0;
-const needFs = () => !!S && KIND === "relay" && S.lockScreen && FS_OK && S.phase === "playing" && !S.out;
+const needFs = () => !!S && (KIND === "relay" || KIND === "bugs") && S.lockScreen && FS_OK && S.phase === "playing" && !S.out;
 function goFs() { document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {}); }
-function cheat(what) { if (!S || KIND !== "relay" || S.phase !== "playing" || S.out) return; call("cheat", { what }).then(poke).catch(() => {}); }
+function cheat(what) { if (!S || (KIND !== "relay" && KIND !== "bugs") || S.phase !== "playing" || S.out) return; call("cheat", { what }).then(poke).catch(() => {}); }
 function ptoast(t) { const d = document.createElement("div"); d.className = "ptoast"; d.textContent = t; document.body.append(d); setTimeout(() => d.remove(), 2600); }
 document.addEventListener("fullscreenchange", () => {
   if (document.fullscreenElement) { fsArmed = true; fsGrace = Date.now() + 1500; }
   else if (fsArmed) { fsArmed = false; if (needFs() && !S.locked) cheat("fullscreen"); }
-  if (!S || KIND !== "relay") return;
+  if (!S || (KIND !== "relay" && KIND !== "bugs")) return;
   const go = () => { lastKey = ""; draw(); };
+  if (KIND === "bugs") { if (!document.fullscreenElement && needFs()) { bugEdited = true; bugDraft().finally(go); } else go(); return; }
   if ($("#code") && !document.fullscreenElement && needFs()) save().finally(go); else if (!$("#code")) go();
 });
 document.addEventListener("visibilitychange", () => { if (document.hidden && fsArmed && needFs() && !S.locked) cheat("hidden"); });
 window.addEventListener("blur", () => { if (fsArmed && needFs() && !S.locked && Date.now() > fsGrace) cheat("blur"); });
 for (const ev of ["copy", "cut", "paste", "drop"]) document.addEventListener(ev, (e) => {
-  if (!S || KIND !== "relay" || !S.noPaste || S.phase !== "playing") return;
+  if (!S || (KIND !== "relay" && KIND !== "bugs") || !S.noPaste || S.phase !== "playing") return;
   e.preventDefault(); cheat(ev);
-  ptoast("🚫 " + T("Copier-coller interdit pendant le relais : ton formateur est prévenu.", "No copy-paste during the relay: your teacher is told."));
+  ptoast("🚫 " + (KIND === "bugs" ? T("Copier-coller interdit pendant la chasse : ton formateur est prévenu.", "No copy-paste during the hunt: your teacher is told.") : T("Copier-coller interdit pendant le relais : ton formateur est prévenu.", "No copy-paste during the relay: your teacher is told.")));
 }, true);
-document.addEventListener("contextmenu", (e) => { if (S && KIND === "relay" && S.noPaste && S.phase === "playing") e.preventDefault(); }, true);
+document.addEventListener("contextmenu", (e) => { if (S && (KIND === "relay" || KIND === "bugs") && S.noPaste && S.phase === "playing") e.preventDefault(); }, true);
 const LOCKWHY = { fullscreen: T("Tu as quitté le plein écran.", "You left full screen."), hidden: T("Tu as changé d'onglet ou réduit la fenêtre.", "You switched tab or minimized the window."), blur: T("Tu as changé de fenêtre.", "You switched window.") };
 function lockView() {
   return '<div class="card bigc lockc"><div class="trophy">⏸️</div><h2>' + T("Session arrêtée", "Session stopped") + '</h2><p><b>' + e(LOCKWHY[S.locked] || LOCKWHY.fullscreen) + '</b></p><p class="muted">' + T("Demande à ton formateur de te laisser revenir : il voit ton nom sur la TV. Cette page se met à jour toute seule.", "Ask your teacher to let you back in: they see your name on the TV. This page updates by itself.") + "</p></div>";
 }
 function fsGate() {
-  return '<div class="card bigc fsc"><div class="trophy">🖥️</div><h2>' + T("Le relais se joue en plein écran", "The relay is played in full screen") + '</h2><p class="muted">' + T("Quitter le plein écran, changer d'onglet ou de fenêtre arrête ta session jusqu'à ce que ton formateur te laisse revenir.", "Leaving full screen, switching tab or window stops your session until your teacher lets you back in.") + (S.noPaste ? " " + T("Copier-coller interdit.", "No copy-paste.") : "") + '</p><button class="btn primary big" id="fsgo">🖥️ ' + T("Passer en plein écran", "Go full screen") + "</button></div>";
+  return '<div class="card bigc fsc"><div class="trophy">🖥️</div><h2>' + (KIND === "bugs" ? T("La chasse se joue en plein écran", "The hunt is played in full screen") : T("Le relais se joue en plein écran", "The relay is played in full screen")) + '</h2><p class="muted">' + T("Quitter le plein écran, changer d'onglet ou de fenêtre arrête ta session jusqu'à ce que ton formateur te laisse revenir.", "Leaving full screen, switching tab or window stops your session until your teacher lets you back in.") + (S.noPaste ? " " + T("Copier-coller interdit.", "No copy-paste.") : "") + '</p><button class="btn primary big" id="fsgo">🖥️ ' + T("Passer en plein écran", "Go full screen") + "</button></div>";
 }
 function relayView() {
   const mwarn = mwarnHtml();
@@ -1281,15 +1329,63 @@ function relayView() {
   }
   return mwarn + hud() + '<div class="card wait"><div class="shh-ic">🤫</div><div class="wwho"><span class="muted">' + T("Au clavier", "At the keyboard") + "</span><h2>" + e(S.writerName || "…") + "</h2></div>" + '<div class="tbar"><i id="wbar"></i></div><div class="wnext">' + (S.nextAt ? T("Ton tour dans", "Your turn in") + ' <b id="nx"></b>' : "✅ " + T("Tes tours sont finis : reste silencieux jusqu'au bout !", "Your turns are done: stay silent to the end!")) + "</div>" + track() + "</div>" + taskCard();
 }
+// ---------------------------------------------------------------- 🐞 bug hunt
+let bugIdx = -1, bugOut = "", bugEdited = false, bugSaveT = 0, bugBusy = false;
+function top3() {
+  if (!S.top || !S.top.length) return "";
+  return '<div class="top3"><span class="lbl">🏆 Top 3</span>' + S.top.map((x, i) => '<span class="p' + (x.me ? " me" : "") + '">' + ["🥇", "🥈", "🥉"][i] + " " + e(x.me ? T("Toi", "You") : x.name) + " <b>" + x.solved + "/" + S.total + "</b>" + (x.done ? " 🏁" : "") + "</span>").join("") +
+    (S.rank && S.rank > 3 ? '<span class="mine">' + T("Toi : ", "You: ") + "#" + S.rank + " · " + S.solved + "/" + S.total + "</span>" : "") + "</div>";
+}
+function bugHud() {
+  return '<div class="hud"><div class="hc"><span class="hl">⏱ ' + T("Temps", "Time") + '</span><b id="tot">' + (S.endAt ? mmss(S.endAt - nowMs()) : "") + '</b></div><div class="hc"><span class="hl">🐞 ' + T("Corrigés", "Fixed") + "</span><b>" + S.solved + "/" + S.total + '</b><div class="bprog">' + Array.from({ length: S.total }, (_, i) => '<i class="' + (i < S.solved ? "ok" : i === S.idx ? "now" : "") + '"></i>').join("") + '</div></div><div class="hc"><span class="hl">' + T("Classement", "Rank") + "</span><b>#" + (S.rank || "–") + '<span class="muted" style="font-size:13px"> / ' + S.players + "</span></b></div></div>";
+}
+const LVL = { easy: T("Facile", "Easy"), medium: T("Moyen", "Medium"), hard: T("Difficile", "Hard") };
+function bugsView() {
+  if (S.phase === "lobby") return '<div class="card rhero"><div class="lane"><span class="runner">🐞</span></div><h2>' + T("Tu es dans la chasse aux bugs !", "You're in the Bug Hunt!") + '</h2><div class="rules"><div><i>🐞</i>' + S.total + T(" codes cassés, un par un", " broken codes, one by one") + "</div><div><i>🧪</i>" + T("Les tests décident", "The tests decide") + "</div><div><i>🏆</i>" + T("Le premier à tout corriger gagne", "The first to fix them all wins") + "</div>" + (S.lockScreen && FS_OK ? "<div><i>🖥️</i>" + T("En plein écran", "In full screen") + "</div>" : "") + (S.noPaste ? "<div><i>🚫</i>" + T("Pas de copier-coller", "No copy-paste") + "</div>" : "") + "</div>" + (S.lockScreen && FS_OK && !document.fullscreenElement ? '<p style="margin:14px 0 0"><button class="btn" id="fsgo">🖥️ ' + T("Passer en plein écran maintenant", "Go full screen now") + "</button></p>" : "") + '<p class="muted">' + T("Attends le départ : le premier code arrive ici.", "Wait for the start: the first code shows up here.") + "</p></div>";
+  if (S.phase === "over") {
+    const win = S.winSquad === S.me.squad;
+    if (win && !window.__conf) { window.__conf = 1; setTimeout(confetti, 300); }
+    return top3() + '<div class="card bigc ' + (win ? "won" : "") + '"><div class="trophy">' + (win ? "🏆" : "🏁") + "</div><h2>" + (win ? T("Tu gagnes la chasse !", "You win the hunt!") : T("Fin de la chasse", "Hunt over")) + '</h2><div class="score"><div class="pring" style="--p:' + Math.round(100 * S.solved / Math.max(1, S.total)) + '"><span>' + S.solved + "/" + S.total + "</span></div><div>" + T("codes corrigés", "codes fixed") + (S.rank ? '<br><b class="rank">#' + S.rank + "</b>" : "") + "</div></div>" +
+      (S.review ? '<div style="text-align:left;margin-top:12px">' + S.review.map((x, i) => "<div>" + (x.fixed ? "✅" : "❌") + " " + (i + 1) + ". " + e(x.title) + ' <span class="lv ' + x.level + '">' + e(LVL[x.level] || "") + "</span></div>").join("") + "</div>" : "") + "</div>";
+  }
+  if (S.locked) return top3() + lockView();
+  if (needFs() && !document.fullscreenElement) return top3() + fsGate();
+  const it = S.item;
+  if (!it) return top3() + '<div class="card bigc"><div class="trophy">🏁</div><h2>' + T("Tout est corrigé !", "All fixed!") + "</h2></div>";
+  return top3() + bugHud() + '<div class="card tcard"><div class="th"><b>🐞 ' + it.n + "/" + S.total + " · " + e(it.title) + '</b><span><span class="lv ' + it.level + '">' + e(LVL[it.level] || "") + '</span> <span class="lang">' + "🐞".repeat(it.bugs) + " " + it.bugs + " bug" + (it.bugs > 1 ? "s" : "") + '</span></span></div><p>' + e(it.text) + '</p><div class="ex">' + it.shown.map((x) => "<code>" + e(x.call) + " <i>→</i> " + e(x.expect) + "</code>").join("") + '</div><p class="muted small" style="margin:6px 0 0">' + T("Le code ci-dessous ne marche pas : trouve ", "The code below doesn't work: find ") + (it.bugs > 1 ? T("les ", "the ") + it.bugs + " bugs" : T("le bug", "the bug")) + T(" et corrige-", " and fix ") + (it.bugs > 1 ? T("les", "them") : T("le", "it")) + ". " + it.tests + T(" tests (certains cachés) décident.", " tests (some hidden) decide.") + "</p></div>" +
+    '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(it.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted" id="saved"></span></div><div class="ed"><pre class="gut" id="gut">1</pre><textarea class="js" id="code" spellcheck="false" wrap="off" autocomplete="off"></textarea></div><div class="ifoot"><button class="btn primary" id="fix">✅ ' + T("Envoyer ma correction", "Submit my fix") + '</button><button class="btn" id="bugreset" title="' + T("Revenir au code de départ", "Back to the code as given") + '">↺</button><span class="muted small">Tab = ' + T("indentation", "indent") + '</span></div><div id="tout" class="bres">' + bugOut + "</div></div>";
+}
+async function bugDraft() {
+  const ta = $("#code"); if (!ta || !S || !S.item || !bugEdited) return;
+  bugEdited = false; try { await call("draft", { idx: S.idx, code: ta.value }); const st = $("#saved"); if (st) st.textContent = "✓ " + T("enregistré", "saved"); } catch (x) {}
+}
+async function bugFix() {
+  const ta = $("#code"); if (!ta || bugBusy) return;
+  bugBusy = true; const b = $("#fix"); if (b) b.disabled = true;
+  const o = $("#tout"); if (o) o.innerHTML = '<div class="msg info">⏳ ' + T("Les tests tournent…", "Running the tests…") + "</div>";
+  try {
+    const r = await call("fix", { idx: S.idx, code: ta.value });
+    if (r.stale) { bugOut = ""; poke(); return; }
+    if (r.ok) { bugOut = ""; ptoast("✅ " + T("Corrigé ! Code suivant…", "Fixed! Next code…")); if (navigator.vibrate) navigator.vibrate([40, 40, 80]); if (r.done) setTimeout(confetti, 200); poke(); return; }
+    bugOut = r.error ? '<div class="msg no">' + e(r.error) + "</div>" : '<div class="msg no">❌ ' + r.passed + "/" + r.total + T(" tests réussis", " tests passed") + "</div>" + (r.visible || []).map((x) => '<div class="msg ' + (x.ok ? "ok" : "no") + '">' + (x.ok ? "✅ " : "❌ ") + e(x.call) + " → " + e(x.got) + (x.ok ? "" : T(" (attendu ", " (expected ") + e(x.expect) + ")") + "</div>").join("") + (r.hiddenFailed ? '<div class="msg no">🔒 ' + r.hiddenFailed + T(" test(s) caché(s) échoue(nt) encore", " hidden test(s) still fail") + "</div>" : "");
+    if (o) o.innerHTML = bugOut;
+  } catch (x) { if (o) o.innerHTML = '<div class="msg no">' + e(x.message) + "</div>"; }
+  finally { bugBusy = false; const b2 = $("#fix"); if (b2) b2.disabled = false; }
+}
 // ---------------------------------------------------------------- frame
+let keepBug = null;
 function draw() {
-  const k = KIND === "sql" ? sqlView : KIND === "relay" ? relayView : royale;
+  // 🐞 drawn again (the top 3 moved, back in full screen): the code being typed stays
+  if (KIND === "bugs" && $("#code") && S.item && S.idx === bugIdx) keepBug = $("#code").value;
+  const k = KIND === "sql" ? sqlView : KIND === "relay" ? relayView : KIND === "bugs" ? bugsView : royale;
   const keep = $("#sql") ? $("#sql").value : null;
   $("#app").innerHTML = k();
   if (KIND === "royale" && S.phase === "reveal" && S.nextAt) $("#app").insertAdjacentHTML("afterbegin", '<div class="nxq" id="nxq"></div>');
   if (keep != null && $("#sql")) $("#sql").value = keep;
   // the editor drawn again (back in full screen): the code as the squad left it
   if (KIND === "relay" && S.writing) { const ta = $("#code"); if (ta && !ta.value) { ta.value = S.code || S.starter || ""; gutter(); } }
+  if (KIND === "bugs" && S.item) { const ta = $("#code"); if (ta && !ta.value) { ta.value = keepBug != null ? keepBug : S.item.code; gutter(); } }
+  keepBug = null;
   wire();
 }
 function render() {
@@ -1300,12 +1396,20 @@ function render() {
     myTurn = S.turn; testOut = ""; lastKey = ""; seenStrikes = S.strikes; seenOut = S.out; draw(); const ta = $("#code"); if (ta) { ta.value = mine != null ? mine : S.code || S.starter || ""; gutter(); ta.focus(); } if (fresh) turnFx(); return;
   }
   if (KIND === "relay" && !S.writing && myTurn !== -1 && $("#code")) { save().finally(() => { myTurn = -1; lastKey = ""; draw(); }); return; }
+  if (KIND === "bugs" && S.idx !== bugIdx) { bugIdx = S.idx; bugOut = ""; bugEdited = false; lastKey = ""; if ($("#code")) $("#code").remove(); }
   if (KIND === "royale") royaleEffects();
   if (KIND === "relay") { relayEffects(); const hp = document.querySelector(".hud .pips"); if (hp) hp.outerHTML = pips(S.strikes, S.strikesMax); }
-  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "") + "." + (S.locked || "") + "." + (document.fullscreenElement ? 1 : 0);
+  const key = S.seq + "." + S.phase + "." + S.step + "." + (S.picked != null) + "." + (KIND === "royale" && S.phase === "question" && nowMs() < S.qAt ? "cd" : "") + "." + (S.writing ? "w" : S.writer) + "." + S.strikes + "." + (S.out ? 1 : 0) + "." + (S.done ? 1 : 0) + "." + (S.lock ? 1 : 0) + "." + S.pts + "." + (S.me.alive ? 1 : 0) + "." + JSON.stringify(S.pleas || []) + "." + (S.squad ? S.squad.mates.map((m) => (m.alive ? 1 : 0)).join("") : "") + "." + (S.mates ? S.mates.map((m) => m.mic).join("") : "") + "." + (S.locked || "") + "." + (document.fullscreenElement ? 1 : 0) + "." + (KIND === "bugs" ? S.idx + "." + JSON.stringify(S.top || []) + "." + S.rank + "." + S.solved : "");
   if (key === lastKey) return;
   lastKey = key;
   if (KIND === "relay" && S.writing && $("#code")) return;   // never redraw the editor under the writer's fingers
+  // 🐞 typing: only the top 3 and the counters change, never the editor
+  if (KIND === "bugs" && S.phase === "playing" && S.item && S.idx === bugIdx && $("#code") && !S.locked && !(needFs() && !document.fullscreenElement)) {
+    const t3 = document.querySelector(".top3"), h = document.querySelector(".hud");
+    if (t3) t3.outerHTML = top3() || '<div class="top3" hidden></div>';
+    if (h) h.outerHTML = bugHud();
+    return;
+  }
   draw();
 }
 function wire() {
@@ -1321,11 +1425,13 @@ function wire() {
   document.querySelectorAll("#micb").forEach((b) => b.onclick = () => micStart());
   const cb = $("#calb"); if (cb) cb.onclick = () => { calib = { end: Date.now() + 4000, v: [] }; calibMsg = ""; lastKey = ""; draw(); };
   if ($("#try")) $("#try").onclick = tryIt;
+  if ($("#fix")) $("#fix").onclick = bugFix;
+  if ($("#bugreset")) $("#bugreset").onclick = () => { if (!S.item || !confirm(T("Revenir au code de départ ? Tes changements sont perdus.", "Back to the code as given? Your changes are lost."))) return; $("#code").value = S.item.start; bugEdited = true; gutter(); };
   const ta = $("#code");
   if (ta) {
-    ta.oninput = () => { edited = true; gutter(); };
+    ta.oninput = () => { edited = true; bugEdited = true; gutter(); };
     ta.onscroll = gutter;
-    ta.onkeydown = (ev) => { if (ev.key === "Tab") { ev.preventDefault(); const sp = S.codeLang === "python" || S.codeLang === "php" ? "    " : "  "; const p = ta.selectionStart; ta.value = ta.value.slice(0, p) + sp + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = p + sp.length; edited = true; gutter(); } };
+    ta.onkeydown = (ev) => { if (ev.key === "Tab") { ev.preventDefault(); const sp = S.codeLang === "python" || S.codeLang === "php" ? "    " : "  "; const p = ta.selectionStart; ta.value = ta.value.slice(0, p) + sp + ta.value.slice(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = p + sp.length; edited = true; bugEdited = true; gutter(); } };
   }
 }
 setInterval(() => {
@@ -1343,6 +1449,10 @@ setInterval(() => {
       const t = $("#tm"); if (t) t.textContent = Math.max(0, Math.ceil(left / 1000));
       const b = $("#tb"); if (b) { b.style.width = Math.max(0, Math.min(100, 100 * left / tot)) + "%"; b.style.background = barColor(left / tot); }
     }
+  }
+  if (KIND === "bugs" && S.phase === "playing") {
+    const tot = $("#tot"); if (tot && S.endAt) tot.textContent = mmss(S.endAt - nowMs());
+    if (bugEdited && Date.now() - bugSaveT > 5000 && $("#code")) { bugSaveT = Date.now(); bugDraft(); }
   }
   if (KIND === "relay" && S.phase === "playing") {
     const left = S.turnEnd - nowMs(), frac = S.turnEnd && S.turnStart ? Math.max(0, Math.min(1, (nowMs() - S.turnStart) / (S.turnEnd - S.turnStart))) : 0;

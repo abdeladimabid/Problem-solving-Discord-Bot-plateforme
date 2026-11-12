@@ -285,3 +285,63 @@ export function cleanStoredCase(c: any): SqlCase | null {
     steps: steps.slice(0, 8).map((x: any) => ({ title: s(x.title, 60), clue: s(x.clue, 400), hint: s(x.hint, 300), ref: s(x.ref, 1500), found: s(x.found, 300), expect: x.expect })),
     question: s(c.question, 200), culprit: c.culprit.map((x: unknown) => s(x, 80).toLowerCase()).filter(Boolean), ending: s(c.ending, 800) };
 }
+
+// ------------------------------------------------------------------ 🐞 Bug Hunt: codes with bugs to fix
+// Each item is a small function that DOESN'T work: the student finds the bugs and fixes them; it counts when every
+// test passes (run on the code runner, never in their browser). Written by the teacher, pasted (e.g. from Claude), or
+// written by the AI. Every item is CHECKED before the game: the buggy code must fail at least one test, and the
+// correct version (when given) must pass them all — otherwise there is nothing to find, or the tests are wrong.
+export interface BugItem extends RelayTask { code: string; bugs: number }
+export const BUG_LEVELS = ["easy", "medium", "hard"] as const;
+export function cleanBug(x: any, by: RelayTask["by"] = "teacher"): BugItem | null {
+  const t = cleanTask({ ...x, solution: x?.solution ?? x?.fixed }, ["ai", "teacher"].includes(x?.by) ? x.by : by);
+  const code = String(x?.code ?? x?.buggy ?? "").replace(/\r/g, "").slice(0, 8000);
+  if (!t || !code.trim()) return null;
+  const bugs = Math.max(1, Math.min(5, Math.round(Number(x?.bugs) || 1)));
+  return { ...t, code, bugs, ...(x?.solution || x?.fixed ? { solution: String(x.solution ?? x.fixed).replace(/\r/g, "").slice(0, 8000) } : {}) };
+}
+export interface BugCheck { item: BugItem | null; ok: boolean; error?: string; buggy?: RelayResult; fixed?: RelayResult }
+/** The buggy code must fail at least one test (and run); the correct version, when given, must pass every test. */
+export async function checkBug(env: Env, lang: RelayLang, raw: any, by: RelayTask["by"] = "teacher"): Promise<BugCheck> {
+  const item = cleanBug(raw, by);
+  if (!item) return { item: null, ok: false, error: "Incomplete: a function name, at least 2 tests ([args] => result) and the buggy code are needed." };
+  const buggy = await runRelay(env, lang, item.code, item.fn, item.tests);
+  if (/ne répond pas/.test(buggy.error || "")) return { item, ok: false, error: "The code runner doesn't answer: try again in a moment.", buggy };
+  if (!buggy.error && buggy.passed === buggy.total) return { item, ok: false, error: "The buggy code passes every test: there is no bug to find (or the tests don't catch it).", buggy };
+  if (!item.solution) return { item, ok: true, buggy };
+  const fixed = await runRelay(env, lang, item.solution, item.fn, item.tests);
+  if (fixed.error || fixed.passed !== fixed.total) return { item, ok: false, error: `The correct version fails ${fixed.error ? "to run" : `${fixed.total - fixed.passed} test(s)`}: check the tests or the solution.${fixed.error ? " " + fixed.error.slice(0, 160) : ""}`, buggy, fixed };
+  return { item, ok: true, buggy, fixed };
+}
+
+const BUG_SYS = (lang: RelayLang) => `You write the codes of "Bug Hunt", a class game: each programming student gets small ${RELAY_LANGS[lang]} functions that DON'T work and must find and fix the bugs. The fixed function must pass hidden tests.
+For each item: a small, realistic function (plain JSON values in and out: numbers, strings, booleans, arrays, objects; no input/output, no randomness, no dates), its CORRECT version, and the SAME code with exactly "bugs" bugs added.
+Good bugs are the mistakes students really make: off-by-one (< vs <=, starting at 1), a wrong comparison or operator, the wrong variable, a missing or misplaced return, a wrong initial value (0 vs 1, "" vs []), a condition inverted, forgetting an edge case (empty array), a wrong index, mutating the input, == vs === when it matters, string vs number. The buggy code must still RUN (no syntax error) and look normal: no comment pointing at the bug, same name and parameters, same style as the correct version, everything else identical.
+Levels: easy = 1 bug in a short function (5 to 12 lines); medium = 1 or 2 bugs, 10 to 20 lines; hard = 2 or 3 subtle bugs, 15 to 30 lines (a small algorithm).
+Write 6 to 8 tests per item that catch EVERY bug (normal cases and edge cases). The correct version must pass them all; the buggy one must fail at least one.
+Reply ONLY with JSON: {"items":[{"title":"…","text":"what the function should do, with one example (for the students)","fn":"camelCaseName","params":["…"],"level":"easy|medium|hard","bugs":1,"tests":[{"args":[…],"expect":…}],"solution":"the correct ${RELAY_LANGS[lang]} code","code":"the same code with the bugs"}]}`;
+
+/** Bug Hunt codes by the AI, each one checked by running it (the ones that don't check out are left out). */
+export async function generateBugs(env: Env, o: { count: number; level: string; lang: "fr" | "en"; codeLang: RelayLang; prompt?: string; avoid?: string[] }): Promise<{ items: BugItem[]; dropped: number; error?: string }> {
+  const n = Math.max(1, Math.min(6, Math.round(o.count) || 3));
+  if (!(await aiBudgetOk(env, 2))) return { items: [], dropped: 0, error: "The AI is used up for today: write the codes yourself, or try tomorrow." };
+  await aiBudgetUse(env, 2);
+  // a mix: from easy to hard
+  const levels = o.level === "mix" ? Array.from({ length: n }, (_, i) => BUG_LEVELS[Math.min(2, Math.floor((i * 3) / n))]) : Array.from({ length: n }, () => (BUG_LEVELS.includes(o.level as any) ? o.level : "medium"));
+  const user = [`Write ${n} items, in this order of level: ${levels.join(", ")}. Each one about a different idea.`,
+    o.prompt ? `The teacher wants: ${s(o.prompt, 500)}` : "Pick varied, useful functions (strings, arrays, objects, numbers, small algorithms).",
+    (o.avoid ?? []).length ? `Not these (already used): ${(o.avoid ?? []).slice(0, 30).join(", ")}.` : "",
+    `Write the titles and statements in ${o.lang === "en" ? "English" : "French"}. Function and parameter names in camelCase, without accents.`].filter(Boolean).join("\n");
+  let raw: any = null;
+  try { raw = extractJson(await chat(env, [{ role: "system", content: BUG_SYS(o.codeLang) }, { role: "user", content: user }], { maxTokens: 7000, temperature: 0.8, timeoutMs: 120000, json: true })); }
+  catch { return { items: [], dropped: 0, error: "The AI didn't answer: try again in a minute." }; }
+  const list: any[] = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw) ? raw : [];
+  const items: BugItem[] = [];
+  let dropped = 0;
+  for (const x of list.slice(0, n)) {
+    const c = await checkBug(env, o.codeLang, { ...x, by: "ai" }, "ai");
+    if (c.ok && c.item && c.item.solution) items.push(c.item); else dropped++;
+  }
+  if (!items.length) return { items, dropped, error: "None of the AI's codes checked out (no real bug, or wrong tests): try again." };
+  return { items, dropped };
+}

@@ -24,6 +24,7 @@ import { analyzeLog, editorToken, editorUrl, fingerprint, integrityOf, similarit
 import type { EditorLog, IntegrityReport } from "./integrity.ts";
 import { type Block, blockFor, blockSql, blockVars, getBlocks, typeOf } from "./practiceblock.ts";
 import { makeStarter, parseSignature, sampleCall, signatureLine } from "./starter.ts";
+import { inputStarter } from "./inputstarter.ts";
 
 const LETTERS = ["A", "B", "C", "D"];
 const DIFF_COLOR: Record<string, number> = { easy: COLORS.green, medium: COLORS.gold, hard: COLORS.red };
@@ -919,9 +920,16 @@ export { basePoints };
 
 // ------------------------------------------------------------ integrity
 /** The template the student started from (its characters don't count as "typed"). */
-export function starterFor(c: ChallengeRow, lang: CodeLang, L = "en"): string {
+/** The starter code: the function to write (signature), else the lines reading the input as its samples show it. */
+export function starterFor(c: ChallengeRow, lang: CodeLang, L = "en", sampleInputs: string[] = []): string {
   const sig = parseSignature(c.signature);
-  return sig ? makeStarter(sig, lang, L) : STARTER[lang];
+  return sig ? makeStarter(sig, lang, L) : inputStarter(sampleInputs, lang, L);
+}
+/** The same, reading the challenge's samples first. */
+export async function starterOf(env: Env, c: ChallengeRow, lang: CodeLang, L = "en"): Promise<string> {
+  if (parseSignature(c.signature)) return starterFor(c, lang, L);
+  const ins = (await loadTests(env, c).catch(() => [])).filter((x) => x.sample).map((x) => x.input ?? "");
+  return starterFor(c, lang, L, ins);
 }
 
 /** Save what the editor recorded, the flags, and similar code from other students. */
@@ -929,7 +937,7 @@ async function recordIntegrity(env: Env, guild: GuildRow, a: AttemptRow, c: Chal
   const ig = integrityOf(guild);
   const prev = (() => { try { return JSON.parse(a.integrity || "null") as IntegrityReport | null; } catch { return null; } })();
   let report: IntegrityReport;
-  if (via === "editor") report = analyzeLog(log, code, starterFor(c, lang, guild.lang).length);
+  if (via === "editor") report = analyzeLog(log, code, (await starterOf(env, c, lang, guild.lang)).length);
   else report = { flags: ig.editor === "off" ? [] : ["Submitted in Discord, not in the code editor (no typing record)"], level: ig.editor === "off" ? 0 : 1, stats: prev?.stats ?? { typedChars: 0, deletedChars: 0, bigInserts: 0, awayCount: 0, awaySec: 0, activeSec: 0, pastes: 0, finalChars: code.length }, editor: false };
   // flags from earlier submissions stay
   if (prev) {

@@ -140,6 +140,8 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"GET","path":"/games","note":""},
   {"method":"POST","path":"/games/questions","note":""},
   {"method":"POST","path":"/games/task","note":"Code Relay: a challenge by the AI (the teacher's idea or its own), checked by running its solution"},
+  {"method":"POST","path":"/games/bugs","note":"🐞 Bug Hunt: codes by the AI (each one checked by running it), or the teacher's / Claude's codes checked"},
+  {"method":"POST","path":"/games/bugs/check","note":""},
   {"method":"POST","path":"/games/case","note":"SQL Detective: a case by the AI, or the teacher's own case checked (its queries run on its database)"},
   {"method":"POST","path":"/games","note":""},
   {"method":"ANY","path":"/games/:id/(clear|remove|squads|announce)","note":"reuse a game: free everyone, remove one player, change the squads"},

@@ -5933,6 +5933,72 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   await rg.tv("state");
   const rt = await rg.tv("act", { a: "runtests" });
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
+  // ---------------------------------------------------------------- 🐞 bug hunt (solo, JavaScript)
+  {
+    const gen = await api("POST", `/api/games/bugs?g=${G}`, { count: 3, level: "mix", codeLang: "javascript" });
+    check(gen.status === 200 && gen.data.items.length === 2 && gen.data.dropped === 1 && gen.data.items[0].fn === "somme" && gen.data.items[1].bugs === 2,
+      `AI codes: each one checked by running it (the one without a real bug is left out) (${JSON.stringify(gen.data).slice(0, 160)})`);
+    const own = { title: "Pair", text: "estPair(n)", fn: "estPair", params: ["n"], level: "easy", bugs: 1, tests: [{ args: [2], expect: true }, { args: [3], expect: false }, { args: [0], expect: true }], code: "function estPair(n) { return n % 2 === 1; }", solution: "function estPair(n) { return n % 2 === 0; }" };
+    const ck = await api("POST", `/api/games/bugs/check?g=${G}`, { codeLang: "javascript", items: [own, { ...own, code: own.solution }, { ...own, solution: "function estPair(n) { return true; }" }, { fn: "x" }] });
+    check(ck.status === 200 && ck.data.results.map((r: any) => r.ok).join() === "true,false,false,false" && /no bug|passes every test/.test(ck.data.results[1].error) && /correct version fails/.test(ck.data.results[2].error),
+      "the teacher's (or Claude's) codes checked: a real bug, a correct version that passes, complete");
+    const items = [own, ...gen.data.items];
+    const B = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 600, lockScreen: true, noPaste: true, reward: 25 } });
+    check(B.status === 200 && B.data.kind === "bugs" && B.data.content.items.length === 3 && B.data.settings.bugTime === 600, "Bug Hunt created (solo, 3 codes, 10 min)");
+    const bh = game(B.data);
+    let parsedB = true;
+    try { for (const u of [B.data.tv, B.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsedB = false; console.log(e); }
+    check(parsedB, "Bug Hunt pages: valid scripts");
+    for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id]] as [number, string][]) await bh.join(k, pid);
+    const bs = await bh.tv("act", { a: "start" });
+    check(bs.data.phase === "playing" && bs.data.board.length === 3 && bs.data.endAt === bs.data.now - (bs.data.now - bs.data.endAt), "the hunt starts: everyone on the board");
+    const a0 = await bh.play("state", dev(1));
+    check(a0.data.item.n === 1 && a0.data.item.code === own.code && a0.data.item.shown.length === 2 && !JSON.stringify(a0.data).includes("n % 2 === 0") && a0.data.top.length === 3 && a0.data.lockScreen,
+      "a student gets the first code (with its bugs), 2 examples, never the correct version nor the hidden tests; the top 3");
+    // a wrong fix: the tests say so (the visible ones in detail, the hidden ones counted)
+    const bad = await bh.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n > 1; }" });
+    check(bad.status === 200 && !bad.data.ok && bad.data.passed === 1 && bad.data.visible.length === 2 && bad.data.hiddenFailed === 1, "a wrong fix: what fails (shown and hidden)");
+    check((await bh.play("fix", dev(1), { idx: 0, code: own.solution })).status === 409, "one try every few seconds");
+    clock.advance(5);
+    const good = await bh.play("fix", dev(1), { idx: 0, code: own.solution });
+    const a1 = await bh.play("state", dev(1));
+    check(good.data.ok && good.data.next === 1 && a1.data.item.n === 2 && a1.data.item.title === "Somme" && a1.data.solved === 1 && a1.data.top[0].me && a1.data.top[0].solved === 1, "fixed: the next code comes; Alice leads the top 3");
+    const b1 = await bh.play("state", dev(2));
+    check(b1.data.top[0].name !== b1.data.me.name && b1.data.top[0].solved === 1 && b1.data.rank >= 2, "the others see the top 3 move");
+    // a draft kept; a stale index ignored
+    await bh.play("draft", dev(2), { idx: 0, code: "function estPair(n) { // en cours" });
+    check((await bh.play("state", dev(2))).data.item.code.includes("en cours") && (await bh.play("fix", dev(2), { idx: 1, code: "x" })).data.stale, "the code being typed is kept (a reload), an old index is ignored");
+    // anti-cheat: leaving full screen stops Bob until the teacher lets him back in
+    await bh.play("cheat", dev(2), { what: "fullscreen" });
+    const bl = await bh.play("state", dev(2));
+    check(bl.data.locked === "fullscreen" && (await bh.play("fix", dev(2), { idx: 0, code: own.solution })).status === 409 && Object.keys((await bh.tv("state")).data.teams.find((t: any) => t.locks[U.bob.id])?.locks || {}).length === 1, "anti-cheat: out of full screen, stopped (the TV sees it)");
+    await bh.tv("act", { a: "letin", pid: U.bob.id });
+    check(!(await bh.play("state", dev(2))).data.locked, "the teacher lets him back in");
+    // the anti-cheat off: nothing stops
+    // Alice fixes the 2 others: she wins, the hunt ends
+    clock.advance(5);
+    const f2 = await bh.play("fix", dev(1), { idx: 1, code: gen.data.items[0].solution });
+    clock.advance(5);
+    const f3 = await bh.play("fix", dev(1), { idx: 2, code: gen.data.items[1].solution });
+    const end = await bh.tv("state");
+    const winPts = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'game' AND ref = ?", G, U.alice.id, String(B.data.id)).s;
+    check(f2.data.ok && f3.data.done && end.data.phase === "over" && end.data.winSquad === end.data.board[0].squad && end.data.board[0].name === q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name && winPts === 25,
+      `the first to fix them all wins: the hunt ends, +25 points (${winPts})`);
+    const bo = await bh.play("state", dev(2));
+    check(bo.data.phase === "over" && bo.data.review.length === 3 && (bo.data.rank === 2 || bo.data.rank === 3), "the others see the result and their rank");
+    // time up with nobody done: the most codes fixed wins
+    const B2 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh2 = game(B2.data);
+    await bh2.join(1, U.alice.id); await bh2.join(2, U.bob.id);
+    await bh2.tv("act", { a: "start" });
+    check((await bh2.play("cheat", dev(1), { what: "fullscreen" })).data.ignored, "anti-cheat off: leaving full screen stops nobody");
+    await bh2.play("fix", dev(2), { idx: 0, code: own.solution });
+    clock.advance(301);
+    const e2 = await bh2.tv("state");
+    check(e2.data.phase === "over" && e2.data.board[0].pid === U.bob.id && e2.data.winSquad === e2.data.board[0].squad, "the time is up: the one who fixed the most wins");
+    const lst = await api("GET", `/api/games?g=${G}`);
+    check(lst.data.kinds.bugs.modes.join() === "solo" && lst.data.myBugs.some((x: any) => x.fn === "estPair" && x.codeLang === "javascript"), "the games page: Bug Hunt, the codes made before (to play again)");
+  }
   const list = await api("GET", `/api/games?g=${G}`);
   check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 1) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
@@ -8618,6 +8684,32 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
   await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
+}
+
+section("✍️ the starter code reads each challenge's input as its samples show it (never « n, then n numbers » for all)");
+{
+  const { inputStarter, readPlan } = await import("../src/shared/inputstarter.ts");
+  const { loadTests } = await import("../src/shared/challenges.ts");
+  const { execFileSync } = await import("node:child_process");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const plan = (ins: string[]) => { const p = readPlan(ins); return p ? p.map((x: any) => (x.t === "one" ? `${x.name}:${x.kind}` : `${x.name}:${x.kind}[${x.len}]`)).join(" ") : "neutral"; };
+  check(plan(["0", "5\nababa"]) === "n:int s:word" && plan(["5\n1 2 3 4 5", "0"]) === "n:int a:int[n]" && plan(["2 3", "10 -4"]) === "n:int m:int"
+    && plan(["4\n1.5 2 3 4"]) === "n:int a:num[n]" && plan(["3\nabc\nde\nf", "1\nz"]) === "n:int a:word[n]" && plan(["4 2\n1 2 3 4\n5 6"]) === "n:int m:int a:int[n] b:int[m]",
+    "the reading plan from the samples: a number then a word, n numbers, two numbers, decimals, n words (one per line), two lists");
+  check(plan(["1 2 3 4 5 6 7"]) === "neutral" && plan(["2\n1 2\n3 4", "3\n1 2 3\n4 5 6\n7 8 9"]) === "neutral" && plan([]) === "neutral", "…unsure (a long line, a grid, no sample): a neutral starter, assuming nothing");
+  // every challenge with samples: the JavaScript and Python starters run on every sample (and an empty input) without crashing
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "starter-"));
+  const ws = db.prepare("SELECT * FROM challenges WHERE kind = 'write' AND (signature IS NULL OR signature = '')").all() as any[];
+  let crashed = 0, ran = 0;
+  for (const c of ws) {
+    const ins = (await loadTests(env, c)).filter((x: any) => x.sample).map((x: any) => x.input ?? "");
+    if (!ins.length) continue;
+    for (const [lang, cmd, ext] of [["javascript", "node", "js"], ["python", "python3", "py"]] as const) {
+      const f = path.join(dir, "s." + ext); fs.writeFileSync(f, inputStarter(ins, lang));
+      for (const inp of [...ins, ""]) { ran++; try { execFileSync(cmd, [f], { input: inp, stdio: "pipe" }); } catch (e: any) { crashed++; if (crashed < 4) console.log("starter crash", c.title, lang, JSON.stringify(inp).slice(0, 60), String(e.stderr).slice(0, 160)); } }
+    }
+  }
+  check(ran > 20 && !crashed, `every challenge's starter reads its samples without crashing (${ran} runs, ${crashed} crashes)`);
 }
 
 section("GitHub: the whole repo in one request (an archive), not file by file (Cloudflare's 50 calls per request)");

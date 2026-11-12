@@ -3070,3 +3070,11 @@ body.sl-open { overflow: hidden; }
 /* the selection column: just its checkbox (the first column's width is for the name, now the next one) */
 .res-table th.res-sel, .res-table td.res-sel { width: 32px; min-width: 0; padding-left: 12px; padding-right: 0; }
 .res-table td.res-sel + td { white-space: nowrap; min-width: 280px; }
+/* 🐞 bug hunt: the codes of a new hunt, and the answer key */
+.gm-blist{display:flex;flex-direction:column;gap:6px;margin:4px 0 10px}
+.gm-bit{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.gm-bit .gm-bact{margin-left:auto;display:flex;gap:4px}
+.gm-bit pre{flex-basis:100%;margin:6px 0 0;max-height:280px;overflow:auto}
+.gm-bkey{border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:6px 0}
+.gm-bkey summary{cursor:pointer}
+.gm-bkey pre{max-height:320px;overflow:auto}

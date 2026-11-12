@@ -3,6 +3,8 @@
 //           wins. Squads: a teammate spends the squad's points to bring someone back.
 //   sql     SQL Detective: a mystery in a database; each squad runs real SQL (sql.js in the browser) to find the clues,
 //           then names the culprit. The first squad to solve the case wins.
+//   bugs    Bug Hunt: everyone gets the same buggy codes, one by one, and fixes them (the tests run on the code runner);
+//           a top 3 on every screen; the first one to fix them all wins.
 //   relay   Code Relay: each squad member writes the same function in turn (5 min ÷ the squad's size each), without
 //           talking (the microphones listen); the tests run on the TV at the end; the most tests passed wins.
 // Everything is in D1 and read by polling (no socket): the game row (state, compare-and-set on its seq), one row per
@@ -15,18 +17,19 @@ import { arenaChannel } from "./arena.ts";
 import { SQL_CASES, caseForPlayers, checkResult, culpritOk } from "./sqlcases.ts";
 import type { SqlCase } from "./sqlcases.ts";
 import { generateQuestions, shuffle } from "./battle.ts";
-import { RELAY_LANGS, RELAY_TASKS, cleanStoredCase, cleanTask, literal, runRelay, starterFor } from "./gamecontent.ts";
-import type { RelayLang, RelayTask } from "./gamecontent.ts";
+import { RELAY_LANGS, RELAY_TASKS, cleanBug, cleanStoredCase, cleanTask, literal, runRelay, starterFor } from "./gamecontent.ts";
+import type { BugItem, RelayLang, RelayTask } from "./gamecontent.ts";
 export { RELAY_TASKS, cleanTask };
 import type { BQuestion } from "./battle.ts";
 
 export class GameError extends Error {}
-export type GKind = "royale" | "sql" | "relay";
+export type GKind = "royale" | "sql" | "relay" | "bugs";
 export type GMode = "solo" | "squads" | "random";
 export const GAME_KINDS: Record<GKind, { emoji: string; en: string; fr: string; modes: GMode[] }> = {
   royale: { emoji: "👑", en: "Battle Royale quiz", fr: "Battle Royale", modes: ["solo", "squads", "random"] },
   sql: { emoji: "🕵️", en: "SQL Detective", fr: "Détective SQL", modes: ["solo", "squads", "random"] },
   relay: { emoji: "🏃", en: "Code Relay", fr: "Relais de code", modes: ["squads", "random"] },
+  bugs: { emoji: "🐞", en: "Bug Hunt", fr: "Chasse aux bugs", modes: ["solo"] },
 };
 export interface GSquad { name: string; emoji: string; color: string; members: string[] }
 export interface GSettings {
@@ -34,7 +37,8 @@ export interface GSettings {
   seconds: number; reviveCost: number; maxRevives: number; autoNext: boolean; // royale (autoNext: the next question comes by itself)
   caseId: string; hintPenalty: number; wrongPenalty: number;                  // sql (seconds)
   total: number; rounds: number; noise: boolean; sensitivity: "low" | "medium" | "high"; strikes: number; codeLang: RelayLang;   // relay
-  lockScreen: boolean; noPaste: boolean;   // relay: full screen (leaving it stops the student until the teacher lets them back in), no copy-paste
+  lockScreen: boolean; noPaste: boolean;   // relay, bugs: full screen (leaving it stops the student until the teacher lets them back in), no copy-paste
+  bugTime: number;                          // bugs: how long the hunt lasts (seconds)
 }
 export interface RQ { prompt: string; code?: string; options: string[]; answer: number; topic?: string }
 export interface GState {
@@ -70,7 +74,7 @@ export function cleanSettings(v: any, lang: string): GSettings {
     caseId: SQL_CASES.some((c) => c.id === v?.caseId) ? v.caseId : SQL_CASES[0].id, hintPenalty: n(v?.hintPenalty, 60, 0, 600), wrongPenalty: n(v?.wrongPenalty, 120, 0, 900),
     total: n(v?.total, 300, 60, 1800), rounds: n(v?.rounds, 1, 1, 4), noise: v?.noise !== false, sensitivity: ["low", "medium", "high"].includes(v?.sensitivity) ? v.sensitivity : "medium", strikes: n(v?.strikes, 3, 1, 10),
     codeLang: (v?.codeLang && v.codeLang in RELAY_LANGS ? v.codeLang : "javascript") as RelayLang,
-    lockScreen: v?.lockScreen !== false, noPaste: v?.noPaste !== false,
+    lockScreen: v?.lockScreen !== false, noPaste: v?.noPaste !== false, bugTime: n(v?.bugTime, 1800, 300, 7200),
   };
 }
 export function cleanSquads(v: any): GSquad[] {
@@ -125,7 +129,7 @@ export type Game = ReturnType<typeof parseGame>;
 const newState = (): GState => ({ phase: "lobby", seq: 1, startAt: null });
 
 export async function createGame(env: Env, g: GuildRow, b: any): Promise<number> {
-  const kind = (["royale", "sql", "relay"].includes(b?.kind) ? b.kind : "") as GKind;
+  const kind = (["royale", "sql", "relay", "bugs"].includes(b?.kind) ? b.kind : "") as GKind;
   if (!kind) throw new GameError("Pick a game.");
   const mode = (GAME_KINDS[kind].modes.includes(b?.mode) ? b.mode : GAME_KINDS[kind].modes[0]) as GMode;
   const settings = cleanSettings(b?.settings ?? {}, g.lang);
@@ -142,12 +146,16 @@ export async function createGame(env: Env, g: GuildRow, b: any): Promise<number>
       if (!c) throw new GameError("This case isn't complete: check it again.");
       content = { case: c };
     } else content = { caseId: settings.caseId };
+  } else if (kind === "bugs") {
+    const items = (Array.isArray(b?.items) ? b.items : []).map((x: any) => cleanBug(x)).filter(Boolean) as BugItem[];
+    if (!items.length) throw new GameError("Add at least one code to fix.");
+    content = { items: items.slice(0, 30) };
   } else {
     const task = b?.task ? cleanTask(b.task, ["ai", "teacher"].includes(b.task?.by) ? b.task.by : "teacher") : RELAY_TASKS[Math.max(0, Math.min(RELAY_TASKS.length - 1, Number(b?.taskIndex) || 0))];
     if (!task) throw new GameError("The challenge needs a function name and at least 2 tests.");
     content = { task };
   }
-  const title = s(b?.title, 80) || (kind === "sql" ? (content.case ?? caseOf(content.caseId)).title : kind === "relay" ? `${GAME_KINDS.relay[settings.lang]} · ${content.task.title}` : GAME_KINDS.royale[settings.lang]);
+  const title = s(b?.title, 80) || (kind === "sql" ? (content.case ?? caseOf(content.caseId)).title : kind === "relay" ? `${GAME_KINDS.relay[settings.lang]} · ${content.task.title}` : GAME_KINDS[kind][settings.lang]);
   const t = now();
   const r = await one<{ id: number }>(env, `INSERT INTO games (guild_id, kind, title, mode, squads, settings, content, state, tv_token, join_code, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?) RETURNING id`, g.id, kind, title, mode, JSON.stringify(squads), JSON.stringify(settings), JSON.stringify(content), JSON.stringify(newState()), hex(12), code(), t, t);
@@ -195,7 +203,7 @@ async function updateTeam(env: Env, gameId: number, squad: number, fn: (d: any) 
   throw new GameError("Too many changes at once: try again.");
 }
 const teamStart = (kind: GKind, members: string[], set: GSettings): any =>
-  kind === "royale" ? { pts: 0 } : kind === "sql" ? { step: 0, times: [], hints: [], wrong: 0, done: null, penalty: 0, lock: 0 } : { order: shuffle(members), code: null, savedAt: null, savedBy: null, turnSaved: -1, strikes: 0, out: false, noise: {}, sens: set.sensitivity };
+  kind === "royale" ? { pts: 0 } : kind === "bugs" ? { idx: 0, solved: [], tries: 0, drafts: {}, done: null } : kind === "sql" ? { step: 0, times: [], hints: [], wrong: 0, done: null, penalty: 0, lock: 0 } : { order: shuffle(members), code: null, savedAt: null, savedBy: null, turnSaved: -1, strikes: 0, out: false, noise: {}, sens: set.sensitivity };
 
 // ------------------------------------------------------------------ joining
 /** A student's own pass to a game (from Discord: /play or the 🎮 button): who they are, signed, valid 12 hours. */
@@ -381,7 +389,7 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
     }
     case "letin": {
       // the teacher lets a student who left full screen back in (they continue where the relay is)
-      if (gm.kind !== "relay") throw new GameError("Only in Code Relay.");
+      if (gm.kind !== "relay" && gm.kind !== "bugs") throw new GameError("Only in Code Relay and Bug Hunt.");
       const want = s((x as any).pid, 25);
       const p = players.find((pl) => pl.pid === want);
       if (!p || p.squad < 0) throw new GameError("This player isn't in a squad.");
@@ -439,6 +447,8 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
         st.step = 1; st.phase = "question"; st.qAt = at + COUNTDOWN_MS; st.qEnd = at + COUNTDOWN_MS + gm.settings.seconds * 1000; st.last = null;
       } else if (gm.kind === "sql") {
         st.phase = "playing"; st.feed = []; st.endAt = null;
+      } else if (gm.kind === "bugs") {
+        st.phase = "playing"; st.feed = []; st.endAt = at + gm.settings.bugTime * 1000;
       } else {
         st.phase = "playing"; st.totalMs = gm.settings.total * 1000; st.endAt = at + gm.settings.total * 1000 * gm.settings.rounds;
       }
@@ -513,6 +523,7 @@ export async function hostAction(env: Env, gm: Game, x: GAction, at = Date.now()
         st.winSquad = gm.mode === "solo" ? null : bestSquad(alive);
       }
       if (gm.kind === "sql") sqlRanking(st, await teamsOf(env, gm.id));
+      if (gm.kind === "bugs") bugRanking(st, await teamsOf(env, gm.id));
       st.phase = "over";
       break;
     }
@@ -788,7 +799,7 @@ export async function resolveNoise(env: Env, gm: Game, at = Date.now()) {
  */
 const LEAVES = ["fullscreen", "hidden", "blur"], CLIPS = ["copy", "cut", "paste", "drop"];
 export async function cheatRelay(env: Env, gm: Game, p: Player, what: string, at = Date.now()) {
-  if (gm.kind !== "relay" || gm.state.phase !== "playing" || p.squad < 0) return { ignored: true };
+  if ((gm.kind !== "relay" && gm.kind !== "bugs") || gm.state.phase !== "playing" || p.squad < 0) return { ignored: true };
   const leave = LEAVES.includes(what) && gm.settings.lockScreen, clip = CLIPS.includes(what) && gm.settings.noPaste;
   if (!leave && !clip) return { ignored: true };
   const d = await updateTeam(env, gm.id, p.squad, (x) => {
@@ -810,6 +821,74 @@ export async function tryRelay(env: Env, gm: Game, p: Player, code: string) {
   return runRelay(env, relayLang(gm), String(code || "").slice(0, 20000), task.fn, task.tests.slice(0, 2));
 }
 
+// ------------------------------------------------------------------ 🐞 bugs
+/** The most codes fixed first; the same number: the one who got there first. */
+export function bugRanking(st: GState, teams: { squad: number; data: any }[]) {
+  const last = (d: any) => (d.solved?.length ? d.solved[d.solved.length - 1].at : Infinity);
+  st.ranking = teams.map((t) => t.squad).sort((a, b) => {
+    const A = teams.find((t) => t.squad === a)!.data, B = teams.find((t) => t.squad === b)!.data;
+    return (B.solved?.length || 0) - (A.solved?.length || 0) || last(A) - last(B) || a - b;
+  });
+  const top = st.ranking[0];
+  st.winSquad = top != null && (teams.find((t) => t.squad === top)!.data.solved?.length || 0) > 0 ? top : null;
+}
+/** The top of the hunt (everyone sees it all the time): name, codes fixed, finished. */
+export async function bugBoard(env: Env, gm: Game, players?: Player[], teams?: { squad: number; data: any }[]) {
+  players ??= await playersOf(env, gm.id); teams ??= await teamsOf(env, gm.id);
+  const st: GState = { ...gm.state }; bugRanking(st, teams);
+  return (st.ranking ?? []).map((sq) => {
+    const p = players!.find((x) => x.squad === sq), d = teams!.find((t) => t.squad === sq)!.data;
+    return { squad: sq, pid: p?.pid ?? "", name: p?.name ?? "?", solved: d.solved?.length || 0, last: d.solved?.length ? d.solved[d.solved.length - 1].at : null, done: d.done ?? null };
+  });
+}
+/** The student's code of the moment, kept (a reload, another device): never counted, only their « Submit » is. */
+export async function draftBug(env: Env, gm: Game, p: Player, idx: number, code: string) {
+  if (gm.kind !== "bugs" || gm.state.phase !== "playing") return { ok: false };
+  await updateTeam(env, gm.id, p.squad, (x) => (x.idx !== idx || x.locks?.[p.pid] ? null : { ...x, drafts: { [idx]: String(code ?? "").slice(0, 20000) } }));
+  return { ok: true };
+}
+/**
+ * The student sends their fix: it runs on the code runner on every test (the hidden ones too). All passed: the next
+ * code comes, and the TV and the others' top 3 move; the last one fixed: they win and the game ends.
+ */
+export async function submitBug(env: Env, gm: Game, p: Player, idx: number, code: string, at = Date.now()) {
+  if (gm.kind !== "bugs") throw new GameError("Only in Bug Hunt.");
+  if (gm.state.phase !== "playing") throw new GameError(gm.state.phase === "lobby" ? "The hunt hasn't started." : "The hunt is over.");
+  const items: BugItem[] = gm.content.items;
+  const t0 = await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad);
+  if (!t0) throw new GameError("You're not in the game.");
+  const d0 = JSON.parse(t0.data);
+  if (d0.locks?.[p.pid]) throw new GameError("Your session is stopped: ask your teacher to let you back in.");
+  if (d0.done || idx !== d0.idx || idx >= items.length) return { stale: true };
+  // one run every 4 s (the code runner is shared)
+  const ok0 = await updateTeam(env, gm.id, p.squad, (x) => (at - (x.tryAt || 0) < 4000 ? null : { ...x, tryAt: at, tries: (x.tries || 0) + 1, drafts: { [idx]: String(code ?? "").slice(0, 20000) } }));
+  if (!ok0) throw new GameError("Wait a few seconds before trying again.");
+  const it = items[idx];
+  const r = await runRelay(env, relayLang(gm), String(code ?? "").slice(0, 20000), it.fn, it.tests);
+  if (/ne répond pas/.test(r.error || "")) throw new GameError("The code runner doesn't answer: try again in a moment.");
+  const visible = r.details.slice(0, 2).map((x, i) => ({ ...x, call: `${it.fn}(${it.tests[i].args.map((a) => literal(a, relayLang(gm))).join(", ")})`, expect: literal(it.tests[i].expect, relayLang(gm)) }));
+  const out = { ok: false, passed: r.passed, total: r.total, error: r.error ? s(r.error, 300) : null, visible, hiddenFailed: r.details.slice(2).filter((x) => !x.ok).length };
+  if (r.error || r.passed !== r.total) return out;
+  const nd = await updateTeam(env, gm.id, p.squad, (x) => (x.idx !== idx || x.done ? null : {
+    ...x, idx: idx + 1, solved: [...(x.solved || []), { i: idx, at, tries: x.tries || 1 }], tries: 0, drafts: {}, ...(idx + 1 >= items.length ? { done: at } : {}),
+  }));
+  if (!nd) return { ...out, ok: true, stale: true };
+  await feed(env, gm, p.squad, `${nd.solved.length}/${items.length}`);
+  // the first one to fix them all wins: the hunt ends
+  if (nd.done) {
+    for (let i = 0; i < 4; i++) {
+      const cur = (await getGame(env, gm.id))!;
+      if (cur.state.phase !== "playing") break;
+      const st = structuredClone(cur.state);
+      bugRanking(st, await teamsOf(env, gm.id));
+      st.winSquad = p.squad; st.ranking = [p.squad, ...(st.ranking ?? []).filter((q) => q !== p.squad)];
+      st.phase = "over";
+      if (await saveState(env, cur, st, cur.state.seq)) { Object.assign(gm, cur); await finish(env, gm); break; }
+    }
+  }
+  return { ...out, ok: true, next: nd.idx, done: !!nd.done };
+}
+
 // ------------------------------------------------------------------ the clocks
 /** Things that happen by themselves: a royale question whose time is long gone (the TV is closed), the end of the relay. */
 export async function liveGame(env: Env, gm: Game, at = Date.now()): Promise<Game> {
@@ -819,6 +898,11 @@ export async function liveGame(env: Env, gm: Game, at = Date.now()): Promise<Gam
   if (gm.kind === "relay" && st.phase === "playing" && st.endAt && at >= st.endAt) {
     const n = structuredClone(st); n.phase = "testing";
     if (!(await saveState(env, gm, n, st.seq))) { const f = await getGame(env, gm.id); if (f) Object.assign(gm, f); }
+  }
+  // 🐞 the time is up: the ranking (the most codes fixed, then the quickest)
+  if (gm.kind === "bugs" && st.phase === "playing" && st.endAt && at >= st.endAt) {
+    const n = structuredClone(st); bugRanking(n, await teamsOf(env, gm.id)); n.phase = "over";
+    if (await saveState(env, gm, n, st.seq)) await finish(env, gm); else { const f = await getGame(env, gm.id); if (f) Object.assign(gm, f); }
   }
   if (gm.kind === "royale" && st.phase === "question" && st.qEnd && at >= st.qEnd + 4000) {
     await revealRoyale(env, gm, await playersOf(env, gm.id), at);
@@ -902,6 +986,14 @@ export async function tvView(env: Env, gm: Game, at = Date.now()) {
     return { ...base, case: { title: c.title, story: c.story, steps: c.steps.map((x) => x.title), notions: c.notions }, feed: st.feed ?? [], ending: st.phase === "over" ? c.ending : null,
       teams: teams.map((t) => ({ squad: t.squad, step: t.data.step, times: t.data.times, done: t.data.done, penalty: t.data.penalty || 0, hints: (t.data.hints || []).length, wrong: t.data.wrong || 0 })) };
   }
+  if (gm.kind === "bugs") {
+    const items: BugItem[] = gm.content.items;
+    const board = await bugBoard(env, gm, players, teams);
+    return { ...base, codeLang: relayLang(gm), langName: RELAY_LANGS[relayLang(gm)], endAt: st.endAt ?? null, bugTime: gm.settings.bugTime, lockScreen: gm.settings.lockScreen, noPaste: gm.settings.noPaste,
+      items: items.map((it) => ({ title: it.title, level: it.level, bugs: it.bugs })), board, feed: st.feed ?? [],
+      teams: teams.map((t) => ({ squad: t.squad, idx: t.data.idx, solved: (t.data.solved || []).length, done: t.data.done ?? null, tries: t.data.tries || 0,
+        locks: Object.fromEntries(Object.entries(t.data.locks || {}).map(([pid, v]: [string, any]) => [pid, v.why])), alerts: (t.data.alerts || []).slice(-8) })) };
+  }
   const task: RelayTask = gm.content.task;
   return { ...base, task: { title: task.title, text: task.text, fn: task.fn, tests: task.tests.length }, codeLang: relayLang(gm), langName: RELAY_LANGS[relayLang(gm)], endAt: st.endAt, totalMs: st.totalMs ?? gm.settings.total * 1000, rounds: gm.settings.rounds, strikesMax: gm.settings.strikes, noise: gm.settings.noise, aiJudge: st.aiJudge ?? null,
     results: st.results ?? null,
@@ -938,6 +1030,20 @@ export async function playerView(env: Env, gm: Game, p: Player, at = Date.now())
   }
   const team = p.squad >= 0 ? await one<{ data: string }>(env, "SELECT data FROM game_teams WHERE game_id = ? AND squad = ?", gm.id, p.squad) : null;
   const d = team ? JSON.parse(team.data) : null;
+  if (gm.kind === "bugs") {
+    const items: BugItem[] = gm.content.items, L = relayLang(gm);
+    const idx = d?.idx ?? 0, it = st.phase === "playing" && !d?.done ? items[idx] : null;
+    const board = await bugBoard(env, gm, players);
+    const myRank = board.findIndex((b) => b.squad === p.squad) + 1;
+    return { ...base, codeLang: L, langName: RELAY_LANGS[L], endAt: st.endAt ?? null, total: items.length, idx, solved: (d?.solved || []).length, done: d?.done ?? null,
+      top: board.slice(0, 3).map((b) => ({ name: b.name, solved: b.solved, me: b.squad === p.squad, done: !!b.done })), rank: myRank || null, players: board.length,
+      item: it ? { n: idx + 1, title: it.title, text: it.text, level: it.level, bugs: it.bugs, fn: it.fn, tests: it.tests.length,
+        shown: it.tests.slice(0, 2).map((t) => ({ call: `${it.fn}(${t.args.map((a) => literal(a, L)).join(", ")})`, expect: literal(t.expect, L) })),
+        code: d?.drafts?.[idx] ?? it.code, start: it.code } : null,
+      locked: st.phase === "playing" ? d?.locks?.[p.pid]?.why ?? null : null, lockScreen: gm.settings.lockScreen !== false, noPaste: gm.settings.noPaste !== false,
+      // once it's over: each code as it was given, and the one they fixed
+      review: st.phase === "over" ? items.map((x, i) => ({ title: x.title, level: x.level, fixed: (d?.solved || []).some((z: any) => z.i === i) })) : null };
+  }
   if (gm.kind === "sql") {
     const c = gameCase(gm);
     const step = d?.step ?? 0;

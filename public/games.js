@@ -16,6 +16,10 @@ const GM_INFO = {
     pitch: "A mystery hidden in a database. Squads run <b>real SQL</b> in the browser; each right result unlocks the next clue. <b>Name the culprit first to win.</b>",
     learn: "SELECT, WHERE, JOIN, GROUP BY, HAVING",
     steps: [["🗂️", "Pick a case", "A built-in case, a new one by the AI, or your own: ClassBot runs every solution query to check it."], ["📺", "Open the TV screen", "The story on the TV; the squads join from their laptops."], ["🔎", "Investigate", "Each right query unlocks a clue. Hints cost time; a wrong accusation costs more."]] },
+  bugs: { name: "Bug Hunt", art: "🐞", tag: "Code · debugging race", device: "Laptops",
+    pitch: "Everyone gets the same broken codes, <b>one by one</b>: find the bugs, fix them, the tests decide. A <b>top 3</b> shows on every screen; <b>the first to fix them all wins.</b>",
+    learn: "Reading code, finding and fixing bugs",
+    steps: [["🐞", "Pick the codes", "Easy, medium, hard or a mix: written by you, by the AI, or pasted from Claude. Each one is checked by running it."], ["📺", "Open the TV screen", "The students join from their laptops; anti-cheat (full screen, no copy-paste) if you want it."], ["🏆", "Race!", "Each fix runs on the hidden tests; the TV shows the leaderboard live."]] },
   relay: { name: "Code Relay", art: "🏃", tag: "Code · team relay", device: "Laptops",
     pitch: "Each squad member writes the same function in turn (5 min ÷ squad size each), <b>without talking</b>: the mics listen. The tests run at the end; <b>the most tests passed wins.</b>",
     learn: "Reading someone else's code, writing clear code",
@@ -68,6 +72,7 @@ async function viewGameKind(kind) {
   const live = mine.filter((x) => !["lobby", "over"].includes(x.phase)).length, done = mine.filter((x) => x.phase === "over").length;
   const art = kind === "royale" ? `<div class="gm-royale-art"><div class="gm-crown">👑</div><div class="gm-dots">${Array.from({ length: 15 }, (_, i) => `<i class="${[1, 4, 6, 9, 10, 13].includes(i) ? "out" : i === 7 ? "win" : ""}"></i>`).join("")}</div><div class="gm-alive">9 alive</div></div>`
     : kind === "sql" ? `<div class="gm-sql-art"><div class="gm-tbl"><div class="h"><span>personne</span><span>porte</span><span>heure</span></div><div><span>Yassine</span><span>bureau</span><span>15:05</span></div><div class="hit"><span>Omar</span><span>bureau</span><span>15:24</span></div><div><span>Salma</span><span>cuisine</span><span>15:12</span></div></div><div class="gm-lens">🔎</div></div>`
+    : kind === "bugs" ? `<div class="gm-relay-art"><div class="gm-code">for (let i = 1; i &lt;= n; i++) <i>🐞</i><br>&nbsp;&nbsp;total += a[i];</div><div class="gm-run"><span class="on">🥇 Yasmine 5/8</span><span>🥈 Omar 4/8</span><span>🥉 Lina 4/8</span></div></div>`
     : `<div class="gm-relay-art"><div class="gm-run"><span class="on">✍️ Yasmine</span><b>→</b><span>Omar</span><b>→</b><span>Lina</span></div><div class="gm-code">for (let i = 0; i &lt; n; i++) {<br>&nbsp;&nbsp;<i>|</i></div><div class="gm-timer">⏱ 0:42 · 🤫</div></div>`;
   view.innerHTML = `
     <div class="crumbs" style="margin-bottom:8px"><a href="#/games">Class games</a></div>
@@ -100,8 +105,8 @@ function gameDialog(d, kind, pre = {}) {
   const modes = d.kinds[kind].modes;
   const sets = d.squads || [];
   const topicOpts = (d.topics || []).map((t) => ({ value: t, label: t }));
-  // the challenge / the case chosen so far (generated, written, or made before)
-  let picked = null;
+  // the challenge / the case chosen so far (generated, written, or made before); 🐞 the codes of a bug hunt
+  let picked = null, bugItems = [];
   const srcChips = (id, list) => `<div class="chips" id="${id}">${list.map(([v, l], i) => `<button type="button" class="chip" data-${id}="${v}" aria-pressed="${i === 0}">${l}</button>`).join("")}</div>`;
   openDialog(`${I.art} New ${I.name}`, `
     <label>Who plays</label>
@@ -160,6 +165,32 @@ function gameDialog(d, kind, pre = {}) {
       <p class="small muted" style="margin-top:0" id="gm-noisehelp">Each student sets their voice in the lobby: their mic then only counts a voice next to their own screen, and when several squads' mics hear the same moment, only the squad where it was loudest gets the strike. On the TV, ＋ gives a strike by hand, and clicking a squad's strikes cancels one.</p>
       <label class="check"><input type="checkbox" id="gm-lock" checked> 🖥️ Full screen: leaving it, the tab or the window stops the student until you let them back in (from the TV)</label>
       <label class="check"><input type="checkbox" id="gm-nopaste" checked> 🚫 No copy-paste (blocked, and the TV shows who tried)</label>` : ""}
+    ${kind === "bugs" ? `
+      <div class="field-row"><div><label for="gm-bl">Language</label><select id="gm-bl">${Object.entries(d.langs || { javascript: "JavaScript" }).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></div>
+        <div><label for="gm-bt">The hunt lasts</label><select id="gm-bt">${[10, 15, 20, 30, 45, 60, 90].map((m) => `<option value="${m * 60}" ${m === 30 ? "selected" : ""}>${m} min</option>`).join("")}</select></div></div>
+      <label>The codes to fix <span class="muted">(they come in this order)</span></label>
+      <div id="gm-blist" class="gm-blist"></div>
+      ${srcChips("bsrc", [["ai", "✨ Generate with AI"], ["own", "✍️ Write one"], ["paste", "📋 Paste from Claude"], ...((d.myBugs || []).length ? [["mine", "🗂 Made before"]] : [])])}
+      <div data-bpane="ai"><div class="field-row"><div><label for="gm-bn">How many</label><select id="gm-bn">${[1, 2, 3, 4, 5, 6].map((n) => `<option ${n === 5 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <div><label for="gm-blv">Level</label><select id="gm-blv"><option value="mix">A mix, from easy to hard</option><option value="easy">Easy (1 bug, short)</option><option value="medium">Medium (1–2 bugs)</option><option value="hard">Hard (2–3 subtle bugs)</option></select></div></div>
+        <label for="gm-bp">Your idea <span class="muted">(optional: the notions, a theme)</span></label><textarea id="gm-bp" style="min-height:50px" placeholder="e.g. arrays and loops, strings, objects; off-by-one errors"></textarea>
+        <button type="button" class="btn primary" id="gm-bgen" style="margin-top:8px">✨ Generate and check</button></div>
+      <div data-bpane="own" hidden>
+        <div class="field-row"><div><label for="gm-bwt">Title</label><input type="text" id="gm-bwt" style="width:100%" placeholder="Somme des pairs"></div><div><label for="gm-bwl">Level · bugs</label><span style="display:flex;gap:6px"><select id="gm-bwl"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select><select id="gm-bwb">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}">${n} bug${n > 1 ? "s" : ""}</option>`).join("")}</select></span></div></div>
+        <label for="gm-bwx">What the function should do <span class="muted">(shown to the students)</span></label><textarea id="gm-bwx" style="min-height:50px"></textarea>
+        <div class="field-row"><div><label for="gm-bwf">Function name</label><input type="text" id="gm-bwf" style="width:100%" placeholder="sommePairs"></div><div><label for="gm-bwp">Parameters <span class="muted">(comma-separated)</span></label><input type="text" id="gm-bwp" style="width:100%" placeholder="nombres"></div></div>
+        <label for="gm-bwts">Tests <span class="muted">(one per line: [arguments] =&gt; result; the first two are shown)</span></label><textarea id="gm-bwts" style="min-height:90px;font-family:var(--mono,monospace)" placeholder='[[1,2,3,4]] => 6&#10;[[]] => 0&#10;[[5,7]] => 0'></textarea>
+        <label for="gm-bwc">The buggy code <span class="muted">(what the students get)</span></label><textarea id="gm-bwc" style="min-height:120px;font-family:var(--mono,monospace)"></textarea>
+        <label for="gm-bws">The correct code <span class="muted">(optional, recommended: ClassBot checks your tests with it)</span></label><textarea id="gm-bws" style="min-height:90px;font-family:var(--mono,monospace)"></textarea>
+        <button type="button" class="btn primary" id="gm-bwadd" style="margin-top:8px">✔ Check and add</button></div>
+      <div data-bpane="paste" hidden><p class="small muted">Ask Claude (or another AI) for the codes in this JSON format, then paste the answer here. Each code is checked by running it.</p>
+        <button type="button" class="btn small" id="gm-bcopy">📋 Copy the instructions for Claude</button>
+        <textarea id="gm-bjson" style="min-height:120px;font-family:var(--mono,monospace);margin-top:8px" placeholder='{"items":[{"title":"…","text":"…","fn":"…","params":["…"],"level":"easy","bugs":1,"tests":[{"args":[…],"expect":…}],"code":"…","solution":"…"}]}'></textarea>
+        <button type="button" class="btn primary" id="gm-bpaste" style="margin-top:8px">✔ Check and add</button></div>
+      <div data-bpane="mine" hidden><div id="gm-bmine" class="gm-pick"></div><button type="button" class="btn small" id="gm-bmadd" style="margin-top:6px">＋ Add the ticked ones</button></div>
+      <div id="gm-bmsg"></div>
+      <label class="check"><input type="checkbox" id="gm-lock" checked> 🖥️ Anti-cheat: full screen (leaving it, the tab or the window stops the student until you let them back in, from the TV)</label>
+      <label class="check"><input type="checkbox" id="gm-nopaste" checked> 🚫 Anti-cheat: no copy-paste (blocked, and the TV shows who tried)</label>` : ""}
     <div class="field-row"><div><label for="gm-rw">Winners get</label><select id="gm-rw">${[0, 10, 20, 30, 50].map((s) => `<option value="${s}" ${s === 20 ? "selected" : ""}>${s ? s + " pts each" : "no points"}</option>`).join("")}</select></div>
       <div><label for="gm-lang">Language of the game</label><select id="gm-lang"><option value="fr" ${d.lang !== "en" ? "selected" : ""}>Français</option><option value="en" ${d.lang === "en" ? "selected" : ""}>English</option></select></div></div>
     <label class="check"><input type="checkbox" id="gm-ann" checked> Post the winners in #arena</label>
@@ -195,6 +226,11 @@ function gameDialog(d, kind, pre = {}) {
       if (src === "built") settings.caseId = $("[name=gm-case]:checked", dlg).value;
       else if (src === "mine") body.case = d.myCases[Number($("#gm-mc").value)];
       else { if (!picked) throw new Error(src === "ai" ? "Generate a case first" : "Check your case first"); body.case = picked; }
+    }
+    if (kind === "bugs") {
+      if (!bugItems.length) throw new Error("Add at least one code to fix");
+      Object.assign(settings, { codeLang: $("#gm-bl").value, bugTime: Number($("#gm-bt").value), lockScreen: $("#gm-lock").checked, noPaste: $("#gm-nopaste").checked });
+      body.items = bugItems;
     }
     if (kind === "relay") {
       Object.assign(settings, { codeLang: $("#gm-cl2").value, total: Number($("#gm-tot").value), rounds: Number($("#gm-rounds").value), noise: $("#gm-noise").checked, sensitivity: $("#gm-sens").value, strikes: Number($("#gm-str").value), lockScreen: $("#gm-lock").checked, noPaste: $("#gm-nopaste").checked });
@@ -302,6 +338,89 @@ function gameDialog(d, kind, pre = {}) {
         : "No microphones: you give the strikes yourself on the TV (＋ next to a squad's strikes) when a squad talks or cheats; clicking the strikes cancels one.";
     };
   }
+  if (kind === "bugs") wireBugs(d, dlg, () => bugItems, (v) => { bugItems = v; });
+}
+/** The tests written as lines "[args] => expected" (relay challenges, bug hunt codes). */
+function testLines(text) {
+  const tests = [];
+  for (const [i, line] of text.split("\n").map((l) => l.trim()).filter(Boolean).entries()) {
+    const m = line.match(/^(.*?)\s*=>\s*(.*)$/);
+    if (!m) throw new Error(`Test ${i + 1}: write it as [arguments] => result`);
+    let args, expect;
+    try { args = JSON.parse(m[1]); expect = JSON.parse(m[2]); } catch { throw new Error(`Test ${i + 1}: the arguments and the result must be JSON (strings in "double quotes")`); }
+    if (!Array.isArray(args)) args = [args];
+    tests.push({ args, expect });
+  }
+  return tests;
+}
+const BUG_PROMPT = (lang) => `Write the codes for "Bug Hunt", a class game: my students get small ${lang} functions that DON'T work and must find and fix the bugs (hidden tests decide).
+Give me N codes (say how many, and the levels: easy = 1 bug in 5-12 lines, medium = 1-2 bugs in 10-20 lines, hard = 2-3 subtle bugs in 15-30 lines), from easy to hard.
+For each: a realistic function (plain JSON values in and out, no input/output, no randomness), its CORRECT version, and the SAME code with the bugs added: real student mistakes (off-by-one, wrong operator, wrong variable, missing return, wrong initial value, inverted condition, a forgotten edge case). The buggy code must run, look normal, and have no comment pointing at the bug. 6 to 8 tests per code that catch EVERY bug. Statements in French.
+Reply ONLY with this JSON:
+{"items":[{"title":"…","text":"what the function should do, with one example","fn":"camelCaseName","params":["…"],"level":"easy|medium|hard","bugs":1,"tests":[{"args":[…],"expect":…}],"code":"the buggy ${lang} code","solution":"the correct ${lang} code"}]}`;
+function wireBugs(d, dlg, get, set) {
+  const lang = () => $("#gm-bl", dlg).value, langName = () => (d.langs || {})[lang()] || "JavaScript";
+  const msg = (h) => { $("#gm-bmsg", dlg).innerHTML = h; };
+  const draw = () => {
+    const list = get();
+    $("#gm-blist", dlg).innerHTML = list.length ? list.map((x, i) => `<div class="gm-bit"><b>${i + 1}.</b> <span class="tag">${GM_LEVEL[x.level] || ""} · ${"🐞".repeat(x.bugs || 1)}</span> <b>${esc(x.title)}</b> <code class="small">${esc(x.fn)}()</code> <span class="small muted">${x.tests.length} tests${x.by === "ai" ? " · ✨ AI" : ""}</span>
+      <span class="gm-bact"><button type="button" class="btn small" data-bup="${i}" ${i ? "" : "disabled"} title="Earlier">↑</button><button type="button" class="btn small" data-bsee="${i}" title="See the code">👁</button><button type="button" class="btn small danger" data-bdel="${i}" title="Remove">×</button></span>
+      <pre class="code small" data-bcode="${i}" hidden>${esc(x.code)}${x.solution ? `\n\n// ✔ ${esc("correct version")}:\n${esc(x.solution)}` : ""}</pre></div>`).join("") + `<p class="small muted">${list.length} code${list.length > 1 ? "s" : ""} · <a href="#" data-bsort>sort from easy to hard</a></p>`
+      : `<p class="small muted">No code yet: generate some, write one, or paste them from Claude.</p>`;
+  };
+  const add = (items) => { set([...get(), ...items].slice(0, 30)); draw(); };
+  const checkAdd = async (raw) => {
+    const r = await api("/games/bugs/check", { method: "POST", body: { codeLang: lang(), items: raw } });
+    const ok = r.results.filter((x) => x.ok).map((x) => x.item), bad = r.results.map((x, i) => (x.ok ? "" : `<li>${i + 1}. ${esc(x.item?.title || "?")}: ${esc(x.error)}</li>`)).filter(Boolean);
+    add(ok);
+    msg((ok.length ? `<p class="small ok-text">✔ ${ok.length} code${ok.length > 1 ? "s" : ""} added (checked: the bugs make tests fail${ok.some((x) => x.solution) ? ", the correct version passes them all" : ""}).</p>` : "") + (bad.length ? `<div class="notice"><b>Not added:</b><ul class="small">${bad.join("")}</ul></div>` : ""));
+    return ok.length;
+  };
+  dlg.addEventListener("click", (ev) => {
+    const dl = ev.target.closest("[data-bdel]"); if (dl) { const l = get().slice(); l.splice(Number(dl.dataset.bdel), 1); set(l); draw(); return; }
+    const up = ev.target.closest("[data-bup]"); if (up) { const i = Number(up.dataset.bup), l = get().slice(); [l[i - 1], l[i]] = [l[i], l[i - 1]]; set(l); draw(); return; }
+    const se = ev.target.closest("[data-bsee]"); if (se) { const c = $(`[data-bcode="${se.dataset.bsee}"]`, dlg); c.hidden = !c.hidden; return; }
+    if (ev.target.closest("[data-bsort]")) { ev.preventDefault(); const o = { easy: 0, medium: 1, hard: 2 }; set(get().slice().sort((a, b) => (o[a.level] ?? 1) - (o[b.level] ?? 1))); draw(); }
+  });
+  const show = (v) => { $$("[data-bsrc]", dlg).forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.bsrc === v))); $$("[data-bpane]", dlg).forEach((p) => { p.hidden = p.dataset.bpane !== v; }); msg(""); if (v === "mine") mine(); };
+  $$("[data-bsrc]", dlg).forEach((b) => b.onclick = () => show(b.dataset.bsrc));
+  const mine = () => {
+    const list = (d.myBugs || []).map((x, i) => ({ ...x, i })).filter((x) => (x.codeLang || "javascript") === lang());
+    $("#gm-bmine", dlg).innerHTML = list.length ? list.map((x) => `<label class="gm-opt"><input type="checkbox" value="${x.i}"><span><b>${esc(x.title)}</b> <span class="tag">${GM_LEVEL[x.level] || ""} · ${"🐞".repeat(x.bugs || 1)}</span><br><span class="small muted">${esc((x.text || "").slice(0, 140))}</span></span></label>`).join("") : `<p class="small muted">None in ${esc(langName())} yet.</p>`;
+  };
+  $("#gm-bl", dlg).onchange = () => { if (get().length && !confirm("The codes already added are in another language: remove them?")) return; set([]); draw(); if (!$('[data-bpane="mine"]', dlg).hidden) mine(); };
+  $("#gm-bgen", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    msg(`<p class="small muted">⏳ The AI writes the codes, then ClassBot runs each one (the bugs must fail the tests, the correct version pass them)… up to a minute</p>`);
+    try {
+      const r = await api("/games/bugs", { method: "POST", body: { count: Number($("#gm-bn", dlg).value), level: $("#gm-blv", dlg).value, prompt: $("#gm-bp", dlg).value, codeLang: lang(), lang: $("#gm-lang", dlg).value, avoid: get().map((x) => x.title) } });
+      add(r.items);
+      msg(`<p class="small ok-text">✔ ${r.items.length} code${r.items.length > 1 ? "s" : ""} added${r.dropped ? ` · ${r.dropped} left out (they didn't check out)` : ""}. Click 👁 to read them.</p>`);
+    } catch (x) { msg(`<div class="notice">${esc(x.message)}</div>`); }
+  });
+  $("#gm-bwadd", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const fn = $("#gm-bwf", dlg).value.trim();
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fn)) throw new Error("Give the function a name (letters, no spaces)");
+      const item = { title: $("#gm-bwt", dlg).value.trim() || fn, text: $("#gm-bwx", dlg).value.trim(), level: $("#gm-bwl", dlg).value, bugs: Number($("#gm-bwb", dlg).value), fn,
+        params: $("#gm-bwp", dlg).value.split(",").map((x) => x.trim()).filter(Boolean), tests: testLines($("#gm-bwts", dlg).value), code: $("#gm-bwc", dlg).value, solution: $("#gm-bws", dlg).value.trim() || undefined };
+      if (item.tests.length < 2) throw new Error("Write at least 2 tests");
+      if (await checkAdd([item])) for (const id of ["gm-bwt", "gm-bwx", "gm-bwf", "gm-bwp", "gm-bwts", "gm-bwc", "gm-bws"]) $("#" + id, dlg).value = "";
+    } catch (x) { msg(`<div class="notice">${esc(x.message)}</div>`); }
+  });
+  $("#gm-bcopy", dlg).onclick = () => copyText(BUG_PROMPT(langName()), "Instructions copied: paste them to Claude, then paste its answer here");
+  $("#gm-bpaste", dlg).onclick = (e) => busy(e.currentTarget, async () => {
+    try {
+      const txt = $("#gm-bjson", dlg).value.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+      let j; try { j = JSON.parse(txt); } catch { throw new Error("This isn't JSON: paste only Claude's JSON answer"); }
+      const items = Array.isArray(j) ? j : Array.isArray(j.items) ? j.items : [j];
+      if (!items.length) throw new Error("No code in it");
+      let n = 0;
+      for (let k = 0; k < items.length; k += 10) n += await checkAdd(items.slice(k, k + 10));
+      if (n) $("#gm-bjson", dlg).value = "";
+    } catch (x) { msg(`<div class="notice">${esc(x.message)}</div>`); }
+  });
+  $("#gm-bmadd", dlg).onclick = () => { const picks = $$("#gm-bmine input:checked", dlg).map((x) => d.myBugs[Number(x.value)]); if (!picks.length) return toast("Tick some codes first", true); add(picks.map(({ codeLang, ...x }) => x)); msg(`<p class="small ok-text">✔ ${picks.length} added</p>`); };
+  show("ai"); draw();
 }
 /** The teacher's own relay function: the tests are lines "[args] => expected". */
 function ownTask() {
@@ -387,7 +506,8 @@ async function viewGame(id) {
   const G = await api(`/games/${id}`);
   const info = GM_INFO[G.kind];
   const L = G.live;
-  const sub = G.kind === "royale" ? `${G.content.questions.length} questions · ${G.settings.seconds} s each`
+  const sub = G.kind === "bugs" ? `${G.content.lang || "JavaScript"} · ${G.content.items.length} codes · ${G.settings.bugTime / 60} min${G.settings.lockScreen ? " · 🖥️ full screen" : ""}${G.settings.noPaste ? " · 🚫 no copy-paste" : ""}`
+    : G.kind === "royale" ? `${G.content.questions.length} questions · ${G.settings.seconds} s each`
     : G.kind === "sql" ? `${G.content.case?.steps.length || 0} clues · ${(G.content.case?.notions || []).join(", ")}`
     : `${G.content.lang || "JavaScript"} · ${G.content.task.fn}() · ${G.content.task.tests.length} tests · ${G.settings.total / 60} min per round${G.settings.rounds > 1 ? ` × ${G.settings.rounds}` : ""}${G.settings.noise ? " · 🎤 no talking" : ""}`;
   view.innerHTML = `
@@ -410,6 +530,10 @@ async function viewGame(id) {
     ${G.kind === "sql" && G.content.case ? `<section class="panel"><h2>🕵️ The case <span class="muted">(your answer key)</span></h2><p>${esc(G.content.case.story)}</p>
       <ol>${G.content.case.steps.map((s) => `<li><b>${esc(s.title)}</b> · ${esc(s.clue)}<pre class="code small">${esc(s.ref)}</pre></li>`).join("")}</ol>
       <p>🎯 ${esc(G.content.case.question)} <b>${esc(G.content.case.culprit[0].replace(/\b\w/g, (c) => c.toUpperCase()))}</b></p></section>` : ""}
+    ${G.kind === "bugs" ? `<section class="panel"><h2>🐞 The codes <span class="muted">(your answer key: in this order)</span></h2>${G.content.items.map((x, i) => `<details class="gm-bkey"><summary><b>${i + 1}. ${esc(x.title)}</b> <span class="tag">${GM_LEVEL[x.level] || ""} · ${"🐞".repeat(x.bugs || 1)}</span> <code class="small">${esc(x.fn)}()</code></summary>
+      <p class="small">${esc(x.text)}</p><div class="field-row"><div><b class="small">Given to the students</b><pre class="code small">${esc(x.code)}</pre></div>${x.solution ? `<div><b class="small">✔ Correct version</b><pre class="code small">${esc(x.solution)}</pre></div>` : ""}</div>
+      <div class="small">${x.tests.map((t, k) => `${k < 2 ? "👁 " : "🔒 "}<code>${esc(x.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div></details>`).join("")}
+      <p class="small muted">👁 shown to the students · 🔒 hidden · a code counts as fixed when every test passes</p></section>` : ""}
     ${G.kind === "relay" ? `<section class="panel"><h2>🏃 ${esc(G.content.task.title)}</h2><p>${esc(G.content.task.text)}</p><pre class="code small">${esc(G.content.starter || "")}</pre>${G.content.task.solution ? `<details><summary class="small">A reference solution (Python)</summary><pre class="code small">${esc(G.content.task.solution)}</pre></details>` : ""}
       <div class="small">${G.content.task.tests.map((t, i) => `${i < 2 ? "👁 " : "🔒 "}<code>${esc(G.content.task.fn)}(${t.args.map((a) => esc(JSON.stringify(a))).join(", ")}) → ${esc(JSON.stringify(t.expect))}</code>`).join("<br>")}</div>
       <p class="small muted">👁 shown to the students · 🔒 hidden, run at the end</p></section>` : ""}`;
@@ -458,6 +582,7 @@ function gameLive(G, L) {
   const facts = [`<span class="gm-fact">${status(cls, lbl)}</span>`, `<span class="gm-fact"><b>${L.players.length}</b> player${L.players.length === 1 ? "" : "s"}</span>`];
   if (G.kind === "royale" && playing) facts.push(`<span class="gm-fact"><b>${alive}</b> alive</span>`, `<span class="gm-fact gm-q">Question <b>${L.step}</b>/${L.total}<span class="gm-bar"><i style="width:${Math.round((100 * (L.step || 0)) / (L.total || 1))}%"></i></span></span>`);
   if (G.kind === "sql" && L.teams?.length) facts.push(`<span class="gm-fact">${L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)} ${t.done ? "🎯" : `${t.step}/${L.case.steps.length}`}`).join(" · ")}</span>`);
+  if (G.kind === "bugs" && L.board?.length) facts.push(`<span class="gm-fact">${L.board.slice(0, 3).map((b, i) => `${["🥇", "🥈", "🥉"][i]} ${esc(b.name)} <b>${b.solved}/${L.items.length}</b>`).join(" · ")}</span>`);
   if (G.kind === "relay" && L.teams?.length) facts.push(`<span class="gm-fact">${L.teams.map((t) => `${esc(sq(t.squad).emoji + " " + sq(t.squad).name)}${t.strikes ? ` 🗣️${t.strikes}` : ""}${t.out ? " (out)" : ""}${L.results?.[t.squad] ? ` · ${L.results[t.squad].passed}/${L.results[t.squad].total} ✓` : ""}`).join(" · ")}</span>`);
   const win = L.phase === "over" ? (L.winSquad != null ? `${esc(sq(L.winSquad).emoji + " " + sq(L.winSquad).name)} <span class="muted">· ${L.players.filter((p) => L.winners?.includes(p.pid) || p.squad === L.winSquad).map((p) => esc(p.name)).join(", ")}</span>` : L.winners?.length ? L.players.filter((p) => L.winners.includes(p.pid)).map((p) => esc(p.name)).join(", ") : "") : "";
   // the players: by squad (with their colour), or all together

@@ -85,7 +85,7 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
   trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
-export const github = { userRepos: {} as Record<string, any[]>, repoMeta: {} as Record<string, any>, repoLangs: {} as Record<string, any>, commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
+export const github = { userRepos: {} as Record<string, any[]>, repoMeta: {} as Record<string, any>, repoLangs: {} as Record<string, any>, commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>(), tarballs: {} as Record<string, Uint8Array> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -389,6 +389,12 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "other.classbot.test") {
     leagueFake.calls++;
     return Response.json(leagueFake.status === 200 ? leagueFake.body : { error: "This class isn't in the league (or the link was renewed)." }, { status: leagueFake.status });
+  }
+  // the whole repo as a .tar.gz (one request: review/gh.ts repoArchive)
+  if (url.hostname === "api.github.com" && /^\/repos\/[^/]+\/[^/]+\/tarball$/.test(url.pathname)) {
+    github.calls++;
+    const tb = github.tarballs[url.pathname.split("/").slice(2, 4).join("/")];
+    return tb ? new Response(tb as unknown as BodyInit, { status: 200, headers: { "content-type": "application/x-gzip" } }) : Response.json({ message: "Not Found" }, { status: 404 });
   }
   if (url.hostname === "api.github.com") {
     // an installation: which repos the student lets the App see (github.sel[id], else all)
@@ -788,6 +794,13 @@ function fakeAI() {
       }
       if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
+      if (sys.includes('"Bug Hunt", a class game')) return { response: JSON.stringify({ items: [
+        { title: "Somme", text: "somme(t) additionne les nombres.", fn: "somme", params: ["t"], level: "easy", bugs: 1, tests: [{ args: [[1, 2, 3]], expect: 6 }, { args: [[]], expect: 0 }, { args: [[5]], expect: 5 }],
+          solution: "function somme(t) {\n  let s = 0;\n  for (let i = 0; i < t.length; i++) s += t[i];\n  return s;\n}", code: "function somme(t) {\n  let s = 0;\n  for (let i = 1; i < t.length; i++) s += t[i];\n  return s;\n}" },
+        { title: "Pas de bug", text: "…", fn: "id", params: ["x"], level: "medium", bugs: 1, tests: [{ args: [1], expect: 1 }, { args: [2], expect: 2 }], solution: "function id(x) { return x; }", code: "function id(x) { return x; }" },
+        { title: "Maximum", text: "maxi(t) donne le plus grand.", fn: "maxi", params: ["t"], level: "hard", bugs: 2, tests: [{ args: [[1, 5, 3]], expect: 5 }, { args: [[-4, -2]], expect: -2 }, { args: [[7]], expect: 7 }],
+          solution: "function maxi(t) {\n  let m = t[0];\n  for (const x of t) if (x > m) m = x;\n  return m;\n}", code: "function maxi(t) {\n  let m = 0;\n  for (const x of t) if (x < m) m = x;\n  return m;\n}" },
+      ] }) };
       if (sys.includes('"code relay" class game')) return { response: JSON.stringify({ title: "Le double", text: "Écris doubler(tableau) qui double chaque nombre.", fn: "doubler", params: ["tableau"], level: "medium",
         tests: [{ args: [[1, 2]], expect: [2, 4] }, { args: [[]], expect: [] }, { args: [[0]], expect: [0] }, { args: [[-3]], expect: [-6] }, { args: [[5, 5]], expect: [10, 10] }, { args: [[7]], expect: [99] }],
         solution: "def doubler(tableau):\n    return [x * 2 for x in tableau]\n" }) };
