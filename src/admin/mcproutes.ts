@@ -144,6 +144,7 @@ export const ROUTES: { method: string; path: string; note: string }[] = [{"metho
   {"method":"POST","path":"/games/bugs/check","note":""},
   {"method":"POST","path":"/games/case","note":"SQL Detective: a case by the AI, or the teacher's own case checked (its queries run on its database)"},
   {"method":"POST","path":"/games","note":""},
+  {"method":"ANY","path":"/games/:id/translate","note":"🐞 the codes' statements in French, English and Arabic, by the AI (the code itself never changes)"},
   {"method":"ANY","path":"/games/:id/(clear|remove|squads|announce)","note":"reuse a game: free everyone, remove one player, change the squads"},
   {"method":"ANY","path":"/games/:id","note":""},
   {"method":"ANY","path":"/battles","note":"⚔️ squad battles"},

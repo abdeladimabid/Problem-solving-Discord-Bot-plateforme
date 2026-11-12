@@ -3078,3 +3078,5 @@ body.sl-open { overflow: hidden; }
 .gm-bkey{border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:6px 0}
 .gm-bkey summary{cursor:pointer}
 .gm-bkey pre{max-height:320px;overflow:auto}
+.gm-bact{float:right;display:inline-flex;gap:4px}
+.gm-bkey summary .gm-bact .btn{padding:2px 8px}

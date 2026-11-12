@@ -148,11 +148,26 @@ console.log("@@R@@"+JSON.stringify(T.map(function(t){try{var g=${fn}.apply(null,
 }
 export interface RelayResult { passed: number; total: number; error?: string; details: { ok: boolean; got: string }[] }
 /** Runs a squad's code on the tests (on the code runner: Python, PHP, or JavaScript as a backup). */
+// the same code on the same tests gives the same result: a student pressing again, or the teacher's check of a code
+// already checked, doesn't go to the (shared, sometimes saturated) code runner again — a small cache, a few minutes
+const relayCache = new Map<string, { at: number; r: RelayResult }>();
 export async function runRelay(env: Env, lang: RelayLang, code: string, fn: string, tests: RTest[]): Promise<RelayResult> {
   if (!String(code || "").trim()) return { passed: 0, total: tests.length, error: "Pas de code.", details: [] };
+  const key = JSON.stringify([lang, code, fn, tests]);
+  const hit = relayCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.r;
+  const r = await runRelayNow(env, lang, code, fn, tests);
+  if (!/ne répond pas/.test(r.error || "") && key.length < 60_000) {
+    relayCache.delete(key); relayCache.set(key, { at: Date.now(), r });
+    while (relayCache.size > 150) relayCache.delete(relayCache.keys().next().value!);
+  }
+  return r;
+}
+async function runRelayNow(env: Env, lang: RelayLang, code: string, fn: string, tests: RTest[]): Promise<RelayResult> {
   let r;
+  // the code runner is shared and sometimes busy: runOnce already waits and tries again (see wandbox in runner.ts)
   try { r = await runOnce(env, lang, relayProgram(lang, code, fn, tests)); }
-  catch (e) { return { passed: 0, total: tests.length, error: "Le serveur de code ne répond pas : réessaie.", details: [] }; }
+  catch { return { passed: 0, total: tests.length, error: "Le serveur de code ne répond pas : réessaie.", details: [] }; }
   const at = r.out.lastIndexOf("@@R@@");
   if (at < 0) return { passed: 0, total: tests.length, error: (r.err || "Le code ne s’exécute pas.").slice(-300), details: [] };
   let details: { ok: boolean; got: string }[] = [];
@@ -291,25 +306,41 @@ export function cleanStoredCase(c: any): SqlCase | null {
 // test passes (run on the code runner, never in their browser). Written by the teacher, pasted (e.g. from Claude), or
 // written by the AI. Every item is CHECKED before the game: the buggy code must fail at least one test, and the
 // correct version (when given) must pass them all — otherwise there is nothing to find, or the tests are wrong.
-export interface BugItem extends RelayTask { code: string; bugs: number }
+export type BugLang = "fr" | "en" | "ar";
+export interface BugItem extends RelayTask { code: string; bugs: number; tr?: Partial<Record<BugLang, { title?: string; text?: string }>>; unchecked?: boolean }
+/** The statement in other languages (French, English, Arabic): { en: { title, text }, ar: { … } }. */
+export function cleanTr(v: any): BugItem["tr"] | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const out: NonNullable<BugItem["tr"]> = {};
+  for (const k of ["fr", "en", "ar"] as BugLang[]) {
+    const x = v[k];
+    if (!x || typeof x !== "object") continue;
+    const title = s(x.title, 120), text = s(x.text, 2000);
+    if (title || text) out[k] = { ...(title ? { title } : {}), ...(text ? { text } : {}) };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 export const BUG_LEVELS = ["easy", "medium", "hard"] as const;
 export function cleanBug(x: any, by: RelayTask["by"] = "teacher"): BugItem | null {
   const t = cleanTask({ ...x, solution: x?.solution ?? x?.fixed }, ["ai", "teacher"].includes(x?.by) ? x.by : by);
   const code = String(x?.code ?? x?.buggy ?? "").replace(/\r/g, "").slice(0, 8000);
   if (!t || !code.trim()) return null;
   const bugs = Math.max(1, Math.min(5, Math.round(Number(x?.bugs) || 1)));
-  return { ...t, code, bugs, ...(x?.solution || x?.fixed ? { solution: String(x.solution ?? x.fixed).replace(/\r/g, "").slice(0, 8000) } : {}) };
+  const tr = cleanTr(x?.tr ?? x?.translations);
+  return { ...t, code, bugs, ...(x?.solution || x?.fixed ? { solution: String(x.solution ?? x.fixed).replace(/\r/g, "").slice(0, 8000) } : {}), ...(tr ? { tr } : {}), ...(x?.unchecked ? { unchecked: true } : {}) };
 }
-export interface BugCheck { item: BugItem | null; ok: boolean; error?: string; buggy?: RelayResult; fixed?: RelayResult }
+export interface BugCheck { item: BugItem | null; ok: boolean; error?: string; runner?: boolean; buggy?: RelayResult; fixed?: RelayResult }
 /** The buggy code must fail at least one test (and run); the correct version, when given, must pass every test. */
 export async function checkBug(env: Env, lang: RelayLang, raw: any, by: RelayTask["by"] = "teacher"): Promise<BugCheck> {
   const item = cleanBug(raw, by);
   if (!item) return { item: null, ok: false, error: "Incomplete: a function name, at least 2 tests ([args] => result) and the buggy code are needed." };
   const buggy = await runRelay(env, lang, item.code, item.fn, item.tests);
-  if (/ne répond pas/.test(buggy.error || "")) return { item, ok: false, error: "The code runner doesn't answer: try again in a moment.", buggy };
+  if (/ne répond pas/.test(buggy.error || "")) return { item, ok: false, runner: true, error: "The code runner doesn't answer: try again in a moment.", buggy };
   if (!buggy.error && buggy.passed === buggy.total) return { item, ok: false, error: "The buggy code passes every test: there is no bug to find (or the tests don't catch it).", buggy };
+  delete item.unchecked;
   if (!item.solution) return { item, ok: true, buggy };
   const fixed = await runRelay(env, lang, item.solution, item.fn, item.tests);
+  if (/ne répond pas/.test(fixed.error || "")) return { item, ok: false, runner: true, error: "The code runner doesn't answer: try again in a moment.", buggy };
   if (fixed.error || fixed.passed !== fixed.total) return { item, ok: false, error: `The correct version fails ${fixed.error ? "to run" : `${fixed.total - fixed.passed} test(s)`}: check the tests or the solution.${fixed.error ? " " + fixed.error.slice(0, 160) : ""}`, buggy, fixed };
   return { item, ok: true, buggy, fixed };
 }

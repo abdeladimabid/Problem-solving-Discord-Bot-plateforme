@@ -347,25 +347,47 @@ done(rows);
 let wandboxNode = "nodejs-20.17.0";
 let wandboxPhp = LANGS.php.wandbox ?? "php-8.3.12";
 
+// Wandbox is free and shared: when a whole class runs code at once it answers "429 Too many requests" (or 503).
+// So the runs of one worker go out a few at a time, and a busy answer is tried again after a growing wait.
+export const wandboxPace = { waits: [1200, 2500, 4500, 7000], max: 3 };
+let wandboxBusy = 0;
+const wandboxQueue: (() => void)[] = [];
+async function wandboxSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (wandboxBusy >= wandboxPace.max) await new Promise<void>((ok) => wandboxQueue.push(ok));
+  wandboxBusy++;
+  try { return await fn(); } finally { wandboxBusy--; wandboxQueue.shift()?.(); }
+}
 async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 60000): Promise<any> {
   const base = (env.WANDBOX_URL || "https://wandbox.org").replace(/\/$/, "");
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  let res: Response;
-  try {
-    res = await fetch(`${base}/api/compile.json`, {
-      method: "POST", signal: ctrl.signal,
-      headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "ClassBot judge (Discord coding practice bot for a CS class)" },
-      body: JSON.stringify({ save: false, stdin: "", ...body }),
+  for (let attempt = 0; ; attempt++) {
+    const r = await wandboxSlot(async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const res = await fetch(`${base}/api/compile.json`, {
+          method: "POST", signal: ctrl.signal,
+          headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": "ClassBot judge (Discord coding practice bot for a CS class)" },
+          body: JSON.stringify({ save: false, stdin: "", ...body }),
+        });
+        return { res, text: await res.text() };
+      } catch (e) {
+        return { error: (e as Error).name === "AbortError" ? "timeout" : (e as Error).message };
+      } finally {
+        clearTimeout(timer);
+      }
     });
-  } catch (e) {
-    throw new RunnerUnavailable(`code runner unreachable (${(e as Error).name === "AbortError" ? "timeout" : (e as Error).message})`);
-  } finally {
-    clearTimeout(timer);
+    // busy (too many runs at once), or the connection dropped: wait a little, then again
+    const busy = r.error ? r.error !== "timeout" : [429, 502, 503, 504].includes(r.res!.status);
+    if (busy && attempt < wandboxPace.waits.length) {
+      const after = Number(r.res?.headers.get("retry-after"));
+      const wait = after > 0 && after <= 8 ? after * 1000 : wandboxPace.waits[attempt];
+      await new Promise((ok) => setTimeout(ok, wait + Math.floor(Math.random() * wait * 0.4)));
+      continue;
+    }
+    if (r.error) throw new RunnerUnavailable(`code runner unreachable (${r.error})`);
+    if (!r.res!.ok) throw new RunnerUnavailable(`code runner answered HTTP ${r.res!.status}: ${r.text!.slice(0, 120)}`);
+    try { return JSON.parse(r.text!); } catch { throw new RunnerUnavailable("code runner sent an unexpected answer"); }
   }
-  const text = await res.text();
-  if (!res.ok) throw new RunnerUnavailable(`code runner answered HTTP ${res.status}: ${text.slice(0, 120)}`);
-  try { return JSON.parse(text); } catch { throw new RunnerUnavailable("code runner sent an unexpected answer"); }
 }
 
 /** Find the current name of a Wandbox compiler when ours was retired. */
@@ -493,7 +515,8 @@ export async function runOnce(env: Env, lang: CodeLang, code: string, stdin = ""
       j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);
       if (/compiler.*not found|unknown compiler/i.test(JSON.stringify(j).slice(0, 300)) && !j.program_output) throw new RunnerUnavailable("HTTP 400 compiler not found");
     } catch (e) {
-      if (!(e instanceof RunnerUnavailable) || !/HTTP [45]\d\d|timeout/.test(e.message)) throw e;
+      // a retired version answers 400/404/500 "not found"; busy (429…) was already tried again: no new version to look for
+      if (!(e instanceof RunnerUnavailable) || !/HTTP (?!429|50[234])[45]\d\d|timeout/.test(e.message)) throw e;
       const n = await wandboxCompiler(env, prefix);
       if (n) { comp = n; if (lang === "javascript") wandboxNode = n; else wandboxPhp = n; }
       j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);

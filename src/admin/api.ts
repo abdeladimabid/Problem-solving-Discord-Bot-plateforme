@@ -52,9 +52,9 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setRoyaleQuestions, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setBugItems, setRoyaleQuestions, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
 import { SQL_CASES } from "../shared/sqlcases.ts";
-import { RELAY_LANGS, buildCase, checkBug, generateBugs, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
+import { RELAY_LANGS, buildCase, checkBug, cleanBug, cleanTr, generateBugs, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appsettings.ts";
@@ -889,7 +889,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           const results = [];
           for (const x of list) {
             const c = await checkBug(env, codeLang, x, "teacher");
-            results.push({ ok: c.ok, error: c.error ?? null, item: c.item, buggy: c.buggy ? { passed: c.buggy.passed, total: c.buggy.total, error: c.buggy.error ?? null } : null, fixed: c.fixed ? { passed: c.fixed.passed, total: c.fixed.total } : null });
+            results.push({ ok: c.ok, runner: !!c.runner, error: c.error ?? null, item: c.item, buggy: c.buggy ? { passed: c.buggy.passed, total: c.buggy.total, error: c.buggy.error ?? null } : null, fixed: c.fixed ? { passed: c.fixed.passed, total: c.fixed.total } : null });
           }
           return ok({ results });
         }
@@ -907,6 +907,29 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (x?.kind === "relay" && x.content.task && x.content.task.by && x.content.task.by !== "builtin") await libTemplate(env, g, "task", x.content.task.title, x.content.task).catch(() => null);
           if (x?.kind === "royale" && !body.fromLibrary && !body.fromAssessment) await libTemplate(env, g, "royale", String(body.setTitle || x.title).slice(0, 80), { questions: x.content.questions }).catch(() => null);
           return ok(await gview(id));
+        }
+        // 🐞 the codes' statements in French, English and Arabic, by the AI (the code itself never changes)
+        const gt = path.match(/^\/games\/(\d+)\/translate$/);
+        if (gt && method === "POST") {
+          const x = await getGame(env, Number(gt[1]), g.id);
+          if (!x || x.kind !== "bugs") throw new HttpError(404, "This hunt doesn't exist anymore.");
+          const langs = (["fr", "en", "ar"] as const).filter((k) => !Array.isArray(body.langs) || body.langs.includes(k));
+          const items: any[] = x.content.items;
+          const NAMES = { fr: "French", en: "English", ar: "Arabic (Modern Standard)" };
+          const j = await chatJson(env, [
+            { role: "system", content: `You translate the statements of small programming exercises for students. Keep code, function names, values and examples exactly as they are (in \`code\`), translate only the words. Reply ONLY with JSON: {"items":[{"i":0,${langs.map((k) => `"${k}":{"title":"…","text":"…"}`).join(",")}}]} — one entry per exercise, in ${langs.map((k) => NAMES[k]).join(", ")}.` },
+            { role: "user", content: items.map((it, i) => `#${i}\nTitle: ${it.title}\nText: ${it.text}`).join("\n\n") },
+          ], { maxTokens: 8000, temperature: 0.1, timeoutMs: 90000 }).catch(() => null);
+          if (!Array.isArray(j?.items)) throw new HttpError(503, "The AI didn't answer: try again in a minute.");
+          let n = 0;
+          for (const t of j.items) {
+            const it = items[Number(t?.i)];
+            if (!it) continue;
+            const tr = cleanTr({ ...(it.tr ?? {}), ...Object.fromEntries(langs.filter((k) => t[k]).map((k) => [k, t[k]])) });
+            if (tr) { it.tr = tr; n++; }
+          }
+          await setBugItems(env, x, items);
+          return ok({ ...(await gview(x.id)), translated: n });
         }
         // reuse a game: free everyone, remove one player, change the squads
         const gr = path.match(/^\/games\/(\d+)\/(clear|remove|squads|announce)$/);
@@ -926,6 +949,26 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (method === "PUT") {
             const x = await getGame(env, id, g.id);
             if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
+            if (x.kind === "bugs") {
+              // the codes as edited: the ones whose code, tests or correct version changed are checked again by running them
+              const lang = (x.settings.codeLang in RELAY_LANGS ? x.settings.codeLang : "javascript") as keyof typeof RELAY_LANGS;
+              const sig = (it: any) => JSON.stringify([it.fn, it.code, it.tests, it.solution ?? null, it.params]);
+              const before = new Map<string, any>((x.content.items || []).map((it: any) => [sig(it), it]));
+              const items: any[] = [], problems: string[] = [];
+              for (const [i, raw] of (Array.isArray(body.items) ? body.items : []).slice(0, 30).entries()) {
+                const it = cleanBug(raw);
+                if (!it) { problems.push(`${i + 1}: incomplete`); continue; }
+                const old = before.get(sig(it));
+                if (old) { items.push({ ...it, ...(old.unchecked ? { unchecked: true } : {}) }); continue; }
+                const c = await checkBug(env, lang, it, it.by);
+                if (c.ok && c.item) items.push(c.item);
+                else if (c.runner && c.item) items.push({ ...c.item, unchecked: true });
+                else problems.push(`${i + 1}. ${it.title}: ${c.error}`);
+              }
+              if (problems.length) throw new HttpError(400, `Not saved: ${problems.join(" · ")}`);
+              await setBugItems(env, x, items);
+              return ok(await gview(id));
+            }
             await setRoyaleQuestions(env, x, body.questions);
             return ok(await gview(id));
           }

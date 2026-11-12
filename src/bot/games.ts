@@ -842,6 +842,7 @@ const BUGS_CSS = `/* ---- 🐞 bug hunt */
 .lv{padding:3px 10px;border-radius:999px;font-weight:800;font-size:12px}.lv.easy{background:rgba(34,197,94,.25)}.lv.medium{background:rgba(245,158,11,.28)}.lv.hard{background:rgba(239,68,68,.3)}
 .bprog{display:flex;gap:4px;margin:6px 0 0}.bprog i{flex:1;height:8px;border-radius:5px;background:rgba(255,255,255,.1)}.bprog i.ok{background:linear-gradient(90deg,#22c55e,#06b6d4)}.bprog i.now{background:rgba(245,158,11,.6)}
 .bres .msg{margin-top:6px}
+.blangs{display:flex;gap:6px;justify-content:flex-end;margin:-4px 0 8px}.blangs .bl{border:1px solid var(--line);background:rgba(255,255,255,.06);color:inherit;border-radius:999px;padding:3px 12px;font:inherit;font-size:12px;font-weight:800;cursor:pointer}.blangs .bl.on{background:linear-gradient(90deg,rgba(139,92,246,.6),rgba(6,182,212,.5))}
 `;
 const PLAY = (gm: Game) => `<!doctype html><html lang="${gm.settings.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="robots" content="noindex">
 <title>${esc(gm.title)}</title><style>${CSS}
@@ -1331,6 +1332,7 @@ function relayView() {
 }
 // ---------------------------------------------------------------- 🐞 bug hunt
 let bugIdx = -1, bugOut = "", bugEdited = false, bugSaveT = 0, bugBusy = false;
+let bugLang = ""; try { bugLang = localStorage.getItem("cb-buglang") || ""; } catch (x) {}
 function top3() {
   if (!S.top || !S.top.length) return "";
   return '<div class="top3"><span class="lbl">🏆 Top 3</span>' + S.top.map((x, i) => '<span class="p' + (x.me ? " me" : "") + '">' + ["🥇", "🥈", "🥉"][i] + " " + e(x.me ? T("Toi", "You") : x.name) + " <b>" + x.solved + "/" + S.total + "</b>" + (x.done ? " 🏁" : "") + "</span>").join("") +
@@ -1352,7 +1354,12 @@ function bugsView() {
   if (needFs() && !document.fullscreenElement) return top3() + fsGate();
   const it = S.item;
   if (!it) return top3() + '<div class="card bigc"><div class="trophy">🏁</div><h2>' + T("Tout est corrigé !", "All fixed!") + "</h2></div>";
-  return top3() + bugHud() + '<div class="card tcard"><div class="th"><b>🐞 ' + it.n + "/" + S.total + " · " + e(it.title) + '</b><span><span class="lv ' + it.level + '">' + e(LVL[it.level] || "") + '</span> <span class="lang">' + "🐞".repeat(it.bugs) + " " + it.bugs + " bug" + (it.bugs > 1 ? "s" : "") + '</span></span></div><p>' + e(it.text) + '</p><div class="ex">' + it.shown.map((x) => "<code>" + e(x.call) + " <i>→</i> " + e(x.expect) + "</code>").join("") + '</div><p class="muted small" style="margin:6px 0 0">' + T("Le code ci-dessous ne marche pas : trouve ", "The code below doesn't work: find ") + (it.bugs > 1 ? T("les ", "the ") + it.bugs + " bugs" : T("le bug", "the bug")) + T(" et corrige-", " and fix ") + (it.bugs > 1 ? T("les", "them") : T("le", "it")) + ". " + it.tests + T(" tests (certains cachés) décident.", " tests (some hidden) decide.") + "</p></div>" +
+  // the statement in another language (when the teacher added translations): the student picks it
+  const tl = it.tr && it.tr[bugLang] ? it.tr[bugLang] : null, title = (tl && tl.title) || it.title, text = (tl && tl.text) || it.text;
+  const langs = it.tr ? ["", ...["fr", "en", "ar"].filter((k) => it.tr[k])] : [];
+  const sw = langs.length > 1 ? '<div class="blangs">' + langs.map((k) => '<button type="button" class="bl' + ((k || "") === (tl ? bugLang : "") ? " on" : "") + '" data-bl="' + k + '">' + (k ? { fr: "FR", en: "EN", ar: "عربي" }[k] : "🌐 " + T("Original", "Original")) + "</button>").join("") + "</div>" : "";
+  const rtl = tl && bugLang === "ar" ? ' dir="rtl"' : "";
+  return top3() + bugHud() + '<div class="card tcard">' + sw + '<div class="th"><b' + rtl + '>🐞 ' + it.n + "/" + S.total + " · " + e(title) + '</b><span><span class="lv ' + it.level + '">' + e(LVL[it.level] || "") + '</span> <span class="lang">' + "🐞".repeat(it.bugs) + " " + it.bugs + " bug" + (it.bugs > 1 ? "s" : "") + '</span></span></div><p' + rtl + ">" + e(text) + '</p><div class="ex">' + it.shown.map((x) => "<code>" + e(x.call) + " <i>→</i> " + e(x.expect) + "</code>").join("") + '</div><p class="muted small" style="margin:6px 0 0">' + T("Le code ci-dessous ne marche pas : trouve ", "The code below doesn't work: find ") + (it.bugs > 1 ? T("les ", "the ") + it.bugs + " bugs" : T("le bug", "the bug")) + T(" et corrige-", " and fix ") + (it.bugs > 1 ? T("les", "them") : T("le", "it")) + ". " + it.tests + T(" tests (certains cachés) décident.", " tests (some hidden) decide.") + "</p></div>" +
     '<div class="ide"><div class="tabs"><span class="tab"><i class="ld"></i>' + e(it.fn) + "." + (EXT[S.codeLang] || "js") + '</span><span class="muted" id="saved"></span></div><div class="ed"><pre class="gut" id="gut">1</pre><textarea class="js" id="code" spellcheck="false" wrap="off" autocomplete="off"></textarea></div><div class="ifoot"><button class="btn primary" id="fix">✅ ' + T("Envoyer ma correction", "Submit my fix") + '</button><button class="btn" id="bugreset" title="' + T("Revenir au code de départ", "Back to the code as given") + '">↺</button><span class="muted small">Tab = ' + T("indentation", "indent") + '</span></div><div id="tout" class="bres">' + bugOut + "</div></div>";
 }
 async function bugDraft() {
@@ -1426,6 +1433,12 @@ function wire() {
   const cb = $("#calb"); if (cb) cb.onclick = () => { calib = { end: Date.now() + 4000, v: [] }; calibMsg = ""; lastKey = ""; draw(); };
   if ($("#try")) $("#try").onclick = tryIt;
   if ($("#fix")) $("#fix").onclick = bugFix;
+  document.querySelectorAll("[data-bl]").forEach((b) => (b.onclick = () => {
+    bugLang = b.dataset.bl; try { localStorage.setItem("cb-buglang", bugLang); } catch (x) {}
+    const k = document.querySelector(".tcard"); if (!k || !S.item) return;
+    const ta = $("#code"), keep = ta ? ta.value : null;
+    lastKey = ""; draw(); if (keep != null && $("#code")) { $("#code").value = keep; gutter(); }
+  }));
   if ($("#bugreset")) $("#bugreset").onclick = () => { if (!S.item || !confirm(T("Revenir au code de départ ? Tes changements sont perdus.", "Back to the code as given? Your changes are lost."))) return; $("#code").value = S.item.start; bugEdited = true; gutter(); };
   const ta = $("#code");
   if (ta) {

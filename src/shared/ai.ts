@@ -482,15 +482,38 @@ export async function aiHealth(env: Env): Promise<{ ok: boolean; ms: number; det
 
 // ------------------------------------------------------- explain your code
 /** Two short questions that only the author of this code can answer quickly. */
-export async function explainQuestions(env: Env, o: { lang: string; codeLang: CodeLang; statement: string; code: string }): Promise<string[] | null> {
+export async function explainQuestions(env: Env, o: { lang: string; codeLang: CodeLang; statement: string; code: string; given?: string[] }): Promise<string[] | null> {
   if (!o.code.trim() || !(await aiBudgetOk(env, AI_COST.feedback))) return null;
   await aiBudgetUse(env, AI_COST.feedback);
   const language = o.lang === "fr" ? "French" : "English";
-  const j = await chatJson(env, [
-    { role: "system", content: `You check that a student really wrote and understands their own program. Ask exactly 2 short questions (max 160 characters each) in ${language}, about THIS code specifically: name a variable, a line or a construct from it. Good questions: "What is the role of the variable \`seen\`?", "What does your code return when the list is empty, and why?", "Why does the loop on line 7 start at 1?". The answers must take 1-2 sentences. Don't ask about the problem in general, don't reveal the answers. Reply ONLY with JSON: {"questions": ["...", "..."]}` },
-    { role: "user", content: `Problem:\n${o.statement.slice(0, 1500)}\n\nStudent code (${LANGS[o.codeLang].label}), with line numbers:\n${o.code.split("\n").slice(0, 120).map((l, i) => `${i + 1}: ${l}`).join("\n")}` },
-  ], { maxTokens: 2000, temperature: 0.4, timeoutMs: 25000 }).catch(() => null);
-  const qs = Array.isArray(j?.questions) ? j.questions.filter((q: unknown) => typeof q === "string" && q.trim()).map((q: string) => q.trim().slice(0, 220)).slice(0, 2) : [];
+  // the lines the starter code gave them (reading the input…): they didn't write them, never a question about them
+  const norm = (l: string) => l.trim().replace(/\s+/g, " ");
+  const given = new Set((o.given ?? []).map(norm).filter(Boolean));
+  const lines = o.code.split("\n").slice(0, 120);
+  const isGiven = (l: string) => !norm(l) || given.has(norm(l)) || /^(\/\/|#|\/\*|\*)/.test(norm(l));
+  const mine = lines.map((l, i) => (isGiven(l) ? -1 : i + 1)).filter((n) => n > 0);
+  if (!mine.length) return null;
+  // the names only the given lines use (data, pos, next…): a question naming one is about the starter
+  const words = (ls: string[]) => new Set(ls.join(" ").match(/[A-Za-z_$][\w$]*/g) ?? []);
+  // (language words, and the names the problem itself gives, like the function to write, stay askable)
+  const KEYWORDS = new Set("function return const let var def if else for while in of int long double float char string String bool boolean void public static class new print printf println echo php include using namespace std main import from self this true false null None True False and or not".split(" "));
+  const statementWords = words([o.statement]);
+  const own = words(lines.filter((l) => !isGiven(l))), theirs = [...words(lines.filter((l) => given.has(norm(l))))].filter((w) => !own.has(w) && w.length > 1 && !KEYWORDS.has(w) && !statementWords.has(w));
+  const aboutStarter = (q: string) => {
+    for (const m of q.matchAll(/\b(?:line|ligne)s?\s+(\d+)/gi)) if (!mine.includes(Number(m[1]))) return true;
+    return theirs.some((w) => new RegExp("`[^`]*\\b" + w.replace(/\$/g, "\\$") + "\\b[^`]*`").test(q) || new RegExp("\\b" + w.replace(/\$/g, "\\$") + "\\(").test(q));
+  };
+  const ask = async () => {
+    const j = await chatJson(env, [
+      { role: "system", content: `You check that a student really wrote and understands their own program. Ask exactly 2 short questions (max 160 characters each) in ${language}, about THIS code specifically: name a variable, a line or a construct from it. Good questions: "What is the role of the variable \`seen\`?", "What does your code return when the list is empty, and why?", "Why does the loop on line 7 start at 1?". The answers must take 1-2 sentences. Don't ask about the problem in general, don't reveal the answers.
+The lines marked [given] came with the starter code (reading the input, printing): the student did NOT write them. NEVER ask about a [given] line, its variables or functions (how the input is read, data, pos, next…): only about the lines the student wrote, their own logic. Reply ONLY with JSON: {"questions": ["...", "..."]}` },
+      { role: "user", content: `Problem:\n${o.statement.slice(0, 1500)}\n\nStudent code (${LANGS[o.codeLang].label}), with line numbers:\n${lines.map((l, i) => `${i + 1}: ${given.has(norm(l)) ? "[given] " : ""}${l}`).join("\n")}` },
+    ], { maxTokens: 2000, temperature: 0.4, timeoutMs: 25000 }).catch(() => null);
+    return Array.isArray(j?.questions) ? j.questions.filter((q: unknown) => typeof q === "string" && q.trim()).map((q: string) => q.trim().slice(0, 220)) : [];
+  };
+  let qs = (await ask()).filter((q: string) => !aboutStarter(q));
+  if (qs.length < 2) qs = [...qs, ...(await ask()).filter((q: string) => !aboutStarter(q) && !qs.includes(q))];
+  qs = qs.slice(0, 2);
   return qs.length === 2 ? qs : null;
 }
 

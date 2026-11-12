@@ -312,6 +312,15 @@ export async function setRoyaleQuestions(env: Env, gm: Game, v: unknown) {
   gm.content.questions = qs.slice(0, 80);
   await run(env, "UPDATE games SET content = ? WHERE id = ?", JSON.stringify(gm.content), gm.id);
 }
+/** 🐞 Bug Hunt: the codes (edited, translated, reordered, removed, added), before it starts or once it's over.
+ *  The codes are already cleaned and checked (admin/api.ts). */
+export async function setBugItems(env: Env, gm: Game, items: BugItem[]) {
+  if (gm.kind !== "bugs") throw new GameError("Only a Bug Hunt has codes to edit.");
+  if (!["lobby", "over"].includes(gm.state.phase)) throw new GameError("Change the codes before the hunt starts (or once it's over).");
+  if (!items.length) throw new GameError("Keep at least one code to fix.");
+  gm.content.items = items.slice(0, 30);
+  await run(env, "UPDATE games SET content = ? WHERE id = ?", JSON.stringify(gm.content), gm.id);
+}
 export async function setSquads(env: Env, gm: Game, v: unknown) {
   if (gm.mode !== "squads") throw new GameError("This game isn't played with the class's squads.");
   if (!["lobby", "over"].includes(gm.state.phase)) throw new GameError("Change the squads before the game starts (or once it's over).");
@@ -1037,12 +1046,12 @@ export async function playerView(env: Env, gm: Game, p: Player, at = Date.now())
     const myRank = board.findIndex((b) => b.squad === p.squad) + 1;
     return { ...base, codeLang: L, langName: RELAY_LANGS[L], endAt: st.endAt ?? null, total: items.length, idx, solved: (d?.solved || []).length, done: d?.done ?? null,
       top: board.slice(0, 3).map((b) => ({ name: b.name, solved: b.solved, me: b.squad === p.squad, done: !!b.done })), rank: myRank || null, players: board.length,
-      item: it ? { n: idx + 1, title: it.title, text: it.text, level: it.level, bugs: it.bugs, fn: it.fn, tests: it.tests.length,
+      item: it ? { n: idx + 1, title: it.title, text: it.text, tr: it.tr ?? null, level: it.level, bugs: it.bugs, fn: it.fn, tests: it.tests.length,
         shown: it.tests.slice(0, 2).map((t) => ({ call: `${it.fn}(${t.args.map((a) => literal(a, L)).join(", ")})`, expect: literal(t.expect, L) })),
         code: d?.drafts?.[idx] ?? it.code, start: it.code } : null,
       locked: st.phase === "playing" ? d?.locks?.[p.pid]?.why ?? null : null, lockScreen: gm.settings.lockScreen !== false, noPaste: gm.settings.noPaste !== false,
       // once it's over: each code as it was given, and the one they fixed
-      review: st.phase === "over" ? items.map((x, i) => ({ title: x.title, level: x.level, fixed: (d?.solved || []).some((z: any) => z.i === i) })) : null };
+      review: st.phase === "over" ? items.map((x, i) => ({ title: x.tr?.[gm.settings.lang as "fr" | "en"]?.title || x.title, level: x.level, fixed: (d?.solved || []).some((z: any) => z.i === i) })) : null };
   }
   if (gm.kind === "sql") {
     const c = gameCase(gm);

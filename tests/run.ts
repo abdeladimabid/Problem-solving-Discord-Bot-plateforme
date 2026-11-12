@@ -43,6 +43,9 @@ import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { wandboxPace } from "../src/shared/runner.ts";
+wandboxPace.waits = [5, 5, 5, 5];   // the waits when Wandbox is busy: short in the tests
+import { explainQuestions } from "../src/shared/ai.ts";
 import { allowedLevel, blockSql, getBlocks, quickKindFor, setBlock } from "../src/shared/practiceblock.ts";
 import { pickChallenge as pickForTest } from "../src/shared/challenges.ts";
 import { contribution as memberContribution, memberLevel, memberLevelOf, memberLevels } from "../src/shared/review/members.ts";
@@ -1143,6 +1146,19 @@ section("anti-cheat: function mode, code editor, typing record, explain your cod
   check(JSON.parse(at.integrity).level === 0 && q1("SELECT COUNT(*) AS n FROM attempt_logs WHERE attempt_id = ?", aid).n === 1, "honest typing: no flag, replay stored");
   const ex: any = await (await ed("/explain", {})).json();
   check(ex.explain?.questions?.length === 2 && ex.explain.deadline > clock.now(), "2 questions about their own code");
+  {
+    // never a question about the starter's lines: the AI asking one is asked again; only starter code → no questions
+    const given = ["const data = require(\"fs\").readFileSync(0, \"utf8\").split(/\\s+/);", "let pos = 0;", "const next = () => data[pos++];", "console.log(solve(next()));"];
+    const code = [...given.slice(0, 3), "function solve(s) {", "  let r = \"\";", "  for (const ch of s) r = ch + r;", "  return r;", "}", given[3]].join("\n");
+    ai.explainQs.push(["What does `next()` do?", "Why is `pos` set to 0 on line 2?"], ["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]);
+    const qs = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(JSON.stringify(qs) === JSON.stringify(["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]), `explain: questions about the starter refused, asked again (${JSON.stringify(qs)})`);
+    ai.explainQs.push(["What does `solve` return?", "What is `data`?"], ["How does line 1 read the input?"]);
+    const qs2 = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(qs2 === null, "explain: no 2 good questions → none (the points aren't held over the starter)");
+    check(await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "x", code: given.join("\n"), given }) === null, "explain: only the starter code → nothing to explain");
+    ai.explainQs.length = 0;
+  }
   const ans: any = await (await ed("/answer", { answers: ["r builds the encoded string", "an empty string, because the loop never runs"] })).json();
   check(ans.explain.done && ans.explain.score === 0.75, "answers graded (75%)");
   const after = q1("SELECT points, held FROM attempts WHERE id = ?", aid);
@@ -5992,10 +6008,30 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
     await bh2.join(1, U.alice.id); await bh2.join(2, U.bob.id);
     await bh2.tv("act", { a: "start" });
     check((await bh2.play("cheat", dev(1), { what: "fullscreen" })).data.ignored, "anti-cheat off: leaving full screen stops nobody");
-    await bh2.play("fix", dev(2), { idx: 0, code: own.solution });
+    // Wandbox saturated by the class ("429 Too many requests" three times): the fix waits and goes through
+    runner.tooMany = 3;
+    const busyFix = await bh2.play("fix", dev(2), { idx: 0, code: own.solution + "\n// corrigé" });
+    check(busyFix.status === 200 && busyFix.data.ok && runner.tooMany === 0, `the code runner busy (429): tried again, the fix counts (${JSON.stringify(busyFix.data).slice(0, 120)})`);
     clock.advance(301);
     const e2 = await bh2.tv("state");
     check(e2.data.phase === "over" && e2.data.board[0].pid === U.bob.id && e2.data.winSquad === e2.data.board[0].squad, "the time is up: the one who fixed the most wins");
+    // the codes edited after a hunt: a statement or a translation saved as it is, a changed code checked again, a wrong one refused
+    const ed1 = B2.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, text: "estPair(n) dit si n est pair.", tr: { en: { title: "Even", text: "estPair(n) tells if n is even." } } } : x);
+    const pe = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: ed1 });
+    check(pe.status === 200 && pe.data.content.items[0].text.includes("dit si") && pe.data.content.items[0].tr.en.title === "Even", "Bug Hunt edited: a statement and a translation saved");
+    const pb = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [...ed1, { ...own, title: "Faux", code: own.solution }] });
+    check(pb.status === 400 && pb.data.error.includes("Faux") && (await api("GET", `/api/games/${B2.data.id}?g=${G}`)).data.content.items.length === 3, "a code without a bug added: refused, nothing saved");
+    const pa = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [ed1[1], ed1[0], ed1[2], { ...own, title: "Pair 2", tests: [...own.tests, { args: [8], expect: true }] }] });
+    check(pa.status === 200 && pa.data.content.items.length === 4 && pa.data.content.items[1].title === ed1[0].title && pa.data.content.items[3].title === "Pair 2", "reordered and a code added (checked)");
+    const tr = await api("POST", `/api/games/${B2.data.id}/translate?g=${G}`, { langs: ["en", "ar"] });
+    const t0 = tr.data.content?.items?.[0]?.tr;
+    check(tr.status === 200 && tr.data.translated === 4 && t0?.ar?.title === "AR 0" && t0?.en?.title === "EN 0" && !t0?.fr, `🌍 translated by the AI into the languages asked (${JSON.stringify(t0)})`);
+    const B3 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items: pa.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, tr: { ar: { title: "زوجي", text: "هل العدد زوجي" } } } : x), settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh3 = game(B3.data);
+    await bh3.join(1, U.carol.id);
+    await bh3.tv("act", { a: "start" });
+    check((await bh3.play("state", dev(1))).data.item.tr?.ar?.title === "زوجي", "a student gets the translations of the code (to switch the language)");
+    check((await api("PUT", `/api/games/${B3.data.id}?g=${G}`, { items: pa.data.content.items })).status !== 200, "during the hunt: the codes can't change");
     const lst = await api("GET", `/api/games?g=${G}`);
     check(lst.data.kinds.bugs.modes.join() === "solo" && lst.data.myBugs.some((x: any) => x.fn === "estPair" && x.codeLang === "javascript"), "the games page: Bug Hunt, the codes made before (to play again)");
   }

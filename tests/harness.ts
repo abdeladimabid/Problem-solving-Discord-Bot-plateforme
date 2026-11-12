@@ -72,7 +72,7 @@ export const hr = {
   profiles: {} as Record<string, string>,      // username (lowercase) -> bio
   down: false,
 };
-export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0 };
+export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0, tooMany: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
@@ -209,6 +209,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.pathname === "/api/list.json") return Response.json([{ name: "nodejs-20.17.0" }, { name: "nodejs-22.11.0" }, { name: "nodejs-head" }, { name: "php-8.3.12" }].filter((c) => !runner.retired.includes(c.name)));
     if (runner.retired.includes(String(body?.compiler))) return new Response(`Error: compiler ${body.compiler} not found`, { status: 500 });
     if (runner.busyOnce > 0) { runner.busyOnce--; return new Response("busy", { status: 503 }); }
+    if (runner.tooMany > 0) { runner.tooMany--; return new Response("Error: Too many requests", { status: 429 }); }
     return Response.json(wandboxLocal(body));
   }
   if (url.hostname === "godbolt.org") {
@@ -471,6 +472,8 @@ export const ai = {
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups" | "plan",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
   miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
+  explainQs: [] as string[][],   // the next questions about a student's code (one list per call)
+  bugTr: null as any,   // the Bug Hunt translations
   planSum: "Écrire une page en Flexbox et répondre à une question sur Git.", planSumDown: false,   // the sheet's « Actions »: what a plan d'action asks, summed up
 };
 
@@ -689,6 +692,8 @@ function fakeAI() {
         return { output: [{ type: "reasoning", content: [] }, { type: "message", content: [{ type: "output_text", text: "```json\n" + JSON.stringify(p) + "\n```" }] }] };
       }
       if (sys.includes("really wrote and understands")) {
+        const q = ai.explainQs.shift();
+        if (q) return { response: JSON.stringify({ questions: q }) };
         return { response: JSON.stringify({ questions: ["What is the role of the variable `r` in your code?", "What does your solve return for an empty string, and why?"] }) };
       }
       if (sys.includes("grade a student's short answers")) {
@@ -794,6 +799,11 @@ function fakeAI() {
       }
       if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
+      if (sys.includes("translate the statements of small programming exercises")) {
+        if (ai.bugTr) return { response: JSON.stringify(ai.bugTr) };
+        const n = (user.match(/^#\d+$/gm) || []).length;
+        return { response: JSON.stringify({ items: Array.from({ length: n }, (_, i) => ({ i, en: { title: `EN ${i}`, text: `English ${i}` }, ar: { title: `AR ${i}`, text: `عربي ${i}` }, fr: { title: `FR ${i}`, text: `Français ${i}` } })) }) };
+      }
       if (sys.includes('"Bug Hunt", a class game')) return { response: JSON.stringify({ items: [
         { title: "Somme", text: "somme(t) additionne les nombres.", fn: "somme", params: ["t"], level: "easy", bugs: 1, tests: [{ args: [[1, 2, 3]], expect: 6 }, { args: [[]], expect: 0 }, { args: [[5]], expect: 5 }],
           solution: "function somme(t) {\n  let s = 0;\n  for (let i = 0; i < t.length; i++) s += t[i];\n  return s;\n}", code: "function somme(t) {\n  let s = 0;\n  for (let i = 1; i < t.length; i++) s += t[i];\n  return s;\n}" },

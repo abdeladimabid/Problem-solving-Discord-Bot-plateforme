@@ -925,6 +925,11 @@ export function starterFor(c: ChallengeRow, lang: CodeLang, L = "en", sampleInpu
   const sig = parseSignature(c.signature);
   return sig ? makeStarter(sig, lang, L) : inputStarter(sampleInputs, lang, L);
 }
+/** The starters used before (line by line): students who started from them still have those lines. */
+const LEGACY_STARTER: Partial<Record<CodeLang, string>> = {
+  javascript: `const lines = require("fs").readFileSync(0, "utf8").trim().split("\\n");\nconst n = Number(lines[0]);\nconst a = lines[1].split(" ").map(Number);\nconsole.log(n);`,
+  php: `<?php\n$lines = explode("\\n", trim(stream_get_contents(STDIN)));\n$n = (int)$lines[0];\n$a = array_map("intval", explode(" ", $lines[1]));\necho $n, "\\n";`,
+};
 /** The same, reading the challenge's samples first. */
 export async function starterOf(env: Env, c: ChallengeRow, lang: CodeLang, L = "en"): Promise<string> {
   if (parseSignature(c.signature)) return starterFor(c, lang, L);
@@ -1001,7 +1006,10 @@ export async function startExplain(env: Env, guild: GuildRow, a: AttemptRow, c: 
   const st = explainState(a);
   if (st?.score !== undefined) return "done";
   if (st) return st;
-  const qs = await explainQuestions(env, { lang: guild.lang, codeLang: (isCodeLang(a.lang) ? a.lang : "python") as CodeLang, statement: c.question ?? "", code: a.answer_given ?? "" });
+  const codeLang = (isCodeLang(a.lang) ? a.lang : "python") as CodeLang;
+  // what the starter code gave them, now and before (they may have started from an older one): never asked about
+  const given = [await starterOf(env, c, codeLang, guild.lang), inputStarter([], codeLang, guild.lang), inputStarter([], codeLang, guild.lang === "fr" ? "en" : "fr"), STARTER[codeLang], LEGACY_STARTER[codeLang] ?? ""].join("\n").split("\n");
+  const qs = await explainQuestions(env, { lang: guild.lang, codeLang, statement: c.question ?? "", code: a.answer_given ?? "", given });
   if (!qs) {
     // the AI can't ask right now: don't punish the student, give the held points
     await releaseHeld(env, guild, a, 1, "explanation skipped (AI unavailable)");
