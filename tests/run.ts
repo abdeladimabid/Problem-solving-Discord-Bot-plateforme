@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { intranetFake, googleFake, googleDocFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
-import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, aiFake, clock, paiza, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import botRaw from "../src/bot/index.ts";
 // Papers (/quiz, /mes) open only after « Sign in with Discord »: the old tests act as an already signed-in browser
 // (device "testdev-0000000000"), unless they send x-test-noident (the sign-in tests).
@@ -43,7 +43,7 @@ import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
-import { wandboxPace } from "../src/shared/runner.ts";
+import { _wandboxCool, runHarness, wandboxPace } from "../src/shared/runner.ts";
 wandboxPace.waits = [5, 5, 5, 5];   // the waits when Wandbox is busy: short in the tests
 import { explainQuestions } from "../src/shared/ai.ts";
 import { allowedLevel, blockSql, getBlocks, quickKindFor, setBlock } from "../src/shared/practiceblock.ts";
@@ -6010,8 +6010,21 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
     check((await bh2.play("cheat", dev(1), { what: "fullscreen" })).data.ignored, "anti-cheat off: leaving full screen stops nobody");
     // Wandbox saturated by the class ("429 Too many requests" three times): the fix waits and goes through
     runner.tooMany = 3;
+    const pz0 = paiza.calls, wb0 = runner.calls;
     const busyFix = await bh2.play("fix", dev(2), { idx: 0, code: own.solution + "\n// corrigé" });
-    check(busyFix.status === 200 && busyFix.data.ok && runner.tooMany === 0, `the code runner busy (429): tried again, the fix counts (${JSON.stringify(busyFix.data).slice(0, 120)})`);
+    check(busyFix.status === 200 && busyFix.data.ok && paiza.calls > pz0, `Wandbox saturated (429): the backup runner (paiza.io) runs the fix, it counts (${JSON.stringify(busyFix.data).slice(0, 80)})`);
+    const wb1 = runner.calls, pz1 = paiza.calls;
+    const next = await bh2.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n % 2 == 0; }" });
+    check(next.data.ok && runner.calls === wb1 && paiza.calls > pz1 && wb1 - wb0 === 2, "for a minute the runs go straight to the backup (Wandbox gets a rest)");
+    // a whole test run (a write challenge) on the backup too, the same rows as on Wandbox
+    const hz = await runHarness(env, "javascript", "const l = require('fs').readFileSync(0, 'utf8').trim(); console.log(l.split(' ').map(Number).reduce((a, b) => a + b, 0));", [{ input: "2 3", gen: null }, { input: "10 -4", gen: null }], 2);
+    check(hz.rows.length === 2 && hz.rows.every((r: any) => r.s === "ok") && hz.rows[1].o.trim() === "6" && runner.calls === wb1, "a write challenge's tests judged on the backup runner while Wandbox rests");
+    // both saturated: an honest « try again », nothing counted
+    paiza.down = true; runner.tooMany = 50;
+    clock.advance(6);
+    const both = await bh2.play("fix", dev(1), { idx: 1, code: "function somme(t) { return t.reduce((a, b) => a + b, 0); }" });
+    check(both.status === 409 && /runner/.test(both.data.error || ""), `both runners saturated: « try again », nothing counted (${both.status} ${both.data.error})`);
+    paiza.down = false; runner.tooMany = 0; _wandboxCool(0);
     clock.advance(301);
     const e2 = await bh2.tv("state");
     check(e2.data.phase === "over" && e2.data.board[0].pid === U.bob.id && e2.data.winSquad === e2.data.board[0].squad, "the time is up: the one who fixed the most wins");

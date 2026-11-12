@@ -72,6 +72,8 @@ export const hr = {
   profiles: {} as Record<string, string>,      // username (lowercase) -> bio
   down: false,
 };
+// paiza.io, the backup runner: down with the others (runner.down), or alone
+export const paiza = { down: false, calls: 0, runs: new Map<string, any>() };
 export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0, tooMany: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
@@ -172,6 +174,27 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
   if (url.hostname === "docs.google.com" && /\/export$/.test(url.pathname)) return googleDocFake.text == null ? new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } }) : new Response(googleDocFake.text, { headers: { "content-type": "text/plain; charset=utf-8" } });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
+  if (url.hostname === "api.paiza.io") {
+    paiza.calls++;
+    if (runner.down || paiza.down) return new Response("busy", { status: 503 });
+    const q = method === "POST" ? new URLSearchParams(String(init.body || "")) : url.searchParams;
+    if (q.get("api_key") !== "guest") return Response.json({ error: "bad key" }, { status: 401 });
+    if (url.pathname === "/runners/create") {
+      const lang = q.get("language");
+      const dir = mkdtempSync(join(tmpdir(), "cbpaiza-"));
+      try {
+        const file = lang === "python3" ? "main.py" : lang === "php" ? "main.php" : "main.js";
+        writeFileSync(join(dir, file), q.get("source_code") || "");
+        const r = spawnSync(lang === "python3" ? "python3" : lang === "php" ? "php" : process.execPath, [file], { input: q.get("input") || "", cwd: dir, timeout: 60000, maxBuffer: 64 * 1024 * 1024, encoding: "utf8" });
+        const id = "pz" + (paiza.runs.size + 1);
+        paiza.runs.set(id, { id, status: "completed", build_result: null, stdout: r.stdout ?? "", stderr: r.stderr ?? "", exit_code: r.status ?? 1, result: r.error ? "timeout" : r.status === 0 ? "success" : "failure" });
+        return Response.json({ id, status: "running" });
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
+    const run = paiza.runs.get(String(q.get("id")));
+    if (!run) return Response.json({ error: "not found" });
+    return Response.json(url.pathname === "/runners/get_status" ? { id: run.id, status: run.status } : run);
+  }
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
     const path = url.pathname.replace("/api/v10", "");

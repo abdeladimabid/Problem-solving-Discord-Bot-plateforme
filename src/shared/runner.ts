@@ -349,15 +349,19 @@ let wandboxPhp = LANGS.php.wandbox ?? "php-8.3.12";
 
 // Wandbox is free and shared: when a whole class runs code at once it answers "429 Too many requests" (or 503).
 // So the runs of one worker go out a few at a time, and a busy answer is tried again after a growing wait.
-export const wandboxPace = { waits: [1200, 2500, 4500, 7000], max: 3 };
-let wandboxBusy = 0;
+export const wandboxPace = { waits: [1200, 2500, 4500, 7000], max: 3, coolMs: 60_000 };
+let wandboxBusy = 0, wandboxCoolUntil = 0;
+/** (tests) Wandbox marked saturated for `ms`, or not anymore. */
+export function _wandboxCool(ms = 0) { wandboxCoolUntil = ms ? Date.now() + ms : 0; }
+/** Wandbox said "too many requests" a moment ago, or this worker already has its runs out: the second runner goes first. */
+const wandboxSaturated = () => Date.now() < wandboxCoolUntil || wandboxBusy >= wandboxPace.max;
 const wandboxQueue: (() => void)[] = [];
 async function wandboxSlot<T>(fn: () => Promise<T>): Promise<T> {
   if (wandboxBusy >= wandboxPace.max) await new Promise<void>((ok) => wandboxQueue.push(ok));
   wandboxBusy++;
   try { return await fn(); } finally { wandboxBusy--; wandboxQueue.shift()?.(); }
 }
-async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 60000): Promise<any> {
+async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 60000, waits = wandboxPace.waits): Promise<any> {
   const base = (env.WANDBOX_URL || "https://wandbox.org").replace(/\/$/, "");
   for (let attempt = 0; ; attempt++) {
     const r = await wandboxSlot(async () => {
@@ -377,10 +381,11 @@ async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 6000
       }
     });
     // busy (too many runs at once), or the connection dropped: wait a little, then again
+    if (r.res?.status === 429) wandboxCoolUntil = Date.now() + wandboxPace.coolMs;
     const busy = r.error ? r.error !== "timeout" : [429, 502, 503, 504].includes(r.res!.status);
-    if (busy && attempt < wandboxPace.waits.length) {
+    if (busy && attempt < waits.length) {
       const after = Number(r.res?.headers.get("retry-after"));
-      const wait = after > 0 && after <= 8 ? after * 1000 : wandboxPace.waits[attempt];
+      const wait = after > 0 && after <= 8 ? after * 1000 : waits[attempt];
       await new Promise((ok) => setTimeout(ok, wait + Math.floor(Math.random() * wait * 0.4)));
       continue;
     }
@@ -388,6 +393,51 @@ async function wandbox(env: Env, body: Record<string, unknown>, timeoutMs = 6000
     if (!r.res!.ok) throw new RunnerUnavailable(`code runner answered HTTP ${r.res!.status}: ${r.text!.slice(0, 120)}`);
     try { return JSON.parse(r.text!); } catch { throw new RunnerUnavailable("code runner sent an unexpected answer"); }
   }
+}
+
+// ------------------------------------------------------------------ paiza.io: the second free runner
+// Wandbox is shared by the whole world: a class of 25 running code at once gets "429 Too many requests". paiza.io
+// (another free online runner) takes the runs then — JavaScript, PHP and Python — and Wandbox the next ones again.
+// Only the code and its tests go there, never a student's name.
+const PAIZA_LANG: Partial<Record<CodeLang, string>> = { javascript: "javascript", php: "php", python: "python3" };
+export async function paizaRun(env: Env, lang: CodeLang, code: string, stdin = "", timeoutMs = 30000): Promise<{ ok: boolean; out: string; err: string; timedOut: boolean }> {
+  const language = PAIZA_LANG[lang];
+  if (!language) throw new RunnerUnavailable(`no backup runner for ${lang}`);
+  const base = (env.PAIZA_URL || "https://api.paiza.io").replace(/\/$/, ""), key = env.PAIZA_KEY || "guest";
+  const end = Date.now() + timeoutMs;
+  const call = async (path: string, params: Record<string, string>, post = false): Promise<any> => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), Math.max(1000, end - Date.now()));
+    try {
+      const q = new URLSearchParams({ ...params, api_key: key });
+      const res = await fetch(post ? `${base}${path}` : `${base}${path}?${q}`, post
+        ? { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: q.toString() }
+        : { signal: ctrl.signal, headers: { Accept: "application/json" } });
+      const text = await res.text();
+      if (!res.ok) throw new RunnerUnavailable(`backup runner answered HTTP ${res.status}: ${text.slice(0, 120)}`);
+      const j = JSON.parse(text);
+      if (j?.error) throw new RunnerUnavailable(`backup runner: ${String(j.error).slice(0, 120)}`);
+      return j;
+    } catch (e) {
+      if (e instanceof RunnerUnavailable) throw e;
+      throw new RunnerUnavailable(`backup runner unreachable (${(e as Error).name === "AbortError" ? "timeout" : (e as Error).message})`);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const c = await call("/runners/create", { source_code: code, language, input: stdin, longpoll: "true", longpoll_timeout: "15" }, true);
+  if (!c?.id) throw new RunnerUnavailable("backup runner: no run id");
+  let status = c.status;
+  while (status !== "completed") {
+    if (Date.now() > end - 1000) throw new RunnerUnavailable("backup runner unreachable (timeout)");
+    await new Promise((ok) => setTimeout(ok, 700));
+    status = (await call("/runners/get_status", { id: String(c.id) })).status;
+  }
+  const d = await call("/runners/get_details", { id: String(c.id) });
+  if (d.build_result && d.build_result !== "success") return { ok: false, out: "", err: String(d.build_stderr || d.build_stdout || "compile error").slice(-900), timedOut: d.build_result === "timeout" };
+  const out = String(d.stdout ?? "");
+  const timedOut = d.result === "timeout";
+  return { ok: d.result === "success" && Number(d.exit_code ?? 0) === 0 && out.length < 100000, out: out.replace(/\s+$/, ""), err: String(d.stderr || (timedOut ? "timeout" : "")).slice(-400), timedOut };
 }
 
 /** Find the current name of a Wandbox compiler when ours was retired. */
@@ -399,8 +449,52 @@ async function wandboxCompiler(env: Env, prefix: string): Promise<string | null>
   } catch { return null; }
 }
 
-/** Run a program on several tests in ONE Wandbox request (any language). */
+/** Run a program on several tests in ONE request (any language): Wandbox, or paiza.io for JavaScript when Wandbox is saturated. */
 export async function runHarness(env: Env, lang: CodeLang, src: string, tests: { input: string | null; gen: string | null }[], limit: number, full = 300, budget = 22)
+  : Promise<{ compile?: string; rows: HarnessRow[] }> {
+  if (lang !== "javascript") return runHarnessWandbox(env, lang, src, tests, limit, full, budget);
+  const viaPaiza = () => runHarnessPaiza(env, src, tests, limit, full, budget);
+  if (wandboxSaturated()) {
+    try { return await viaPaiza(); } catch (e) { if (!(e instanceof RunnerUnavailable)) throw e; }
+    return runHarnessWandbox(env, lang, src, tests, limit, full, budget);
+  }
+  try { return await runHarnessWandbox(env, lang, src, tests, limit, full, budget, [800]); }
+  catch (e) { if (!(e instanceof RunnerUnavailable) || !wandboxSaturated()) throw e; }
+  try { return await viaPaiza(); } catch (e) { if (!(e instanceof RunnerUnavailable)) throw e; }
+  return runHarnessWandbox(env, lang, src, tests, limit, full, budget);
+}
+
+// the same harness in ONE file for paiza.io (it takes one program): it writes its files, then runs as on Wandbox.
+// paiza.io is not where the tests were made for: a slow or missing result there (time out, a big test's generator) is
+// never held against the student — Wandbox judges it instead.
+async function runHarnessPaiza(env: Env, src: string, tests: { input: string | null; gen: string | null }[], limit: number, full: number, budget: number)
+  : Promise<{ compile?: string; rows: HarnessRow[] }> {
+  const mark = "__CB" + crypto.randomUUID().replace(/-/g, "").slice(0, 12) + "__";
+  const files: Record<string, string> = {
+    "cfg.json": JSON.stringify({ lang: "javascript", file: LANGS.javascript.file, limit, full, mark, budget, root: "/nonexistent" }),
+    "tests.json": JSON.stringify(tests.map((t) => (t.input != null ? { i: t.input } : { g: t.gen }))),
+    [LANGS.javascript.file]: src,
+  };
+  const prog = `{ const fs = require("fs"), os = require("os"), path = require("path");
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "cb"));
+  const F = ${JSON.stringify(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, b64(v)])))};
+  for (const k in F) fs.writeFileSync(path.join(d, k), Buffer.from(F[k], "base64").toString("utf8"));
+  process.chdir(d);
+  // can this runner start the student's program as a separate process? If not, it can't judge: Wandbox will
+  const t = require("child_process").spawnSync(process.execPath, ["-e", "console.log(6 * 7)"], { encoding: "utf8", timeout: 10000 });
+  if (String(t.stdout || "").trim() !== "42") { process.stdout.write(${JSON.stringify(mark)} + JSON.stringify({ je: "no child process" }) + "\\n"); process.exit(0); } }
+${WANDBOX_HARNESS}`;
+  const r = await paizaRun(env, "javascript", prog, "", 40000);
+  const line = r.out.split("\n").reverse().find((l) => l.startsWith(mark));
+  if (!line) throw new RunnerUnavailable(`backup judge error: ${(r.err || r.out).slice(-300)}`);
+  const data = JSON.parse(line.slice(mark.length));
+  if (data && !Array.isArray(data) && data.je) throw new RunnerUnavailable(`backup runner: ${data.je}`);
+  if (data && !Array.isArray(data) && data.ce) return { compile: String(data.ce), rows: [] };
+  if (!Array.isArray(data) || data.length < tests.length || data.some((x: HarnessRow) => x.s === "ge" || x.s === "tle")) throw new RunnerUnavailable("backup runner: not every test ran");
+  return { rows: data as HarnessRow[] };
+}
+
+async function runHarnessWandbox(env: Env, lang: CodeLang, src: string, tests: { input: string | null; gen: string | null }[], limit: number, full = 300, budget = 22, waits = wandboxPace.waits)
   : Promise<{ compile?: string; rows: HarnessRow[] }> {
   const info = LANGS[lang];
   const mark = "__CB" + crypto.randomUUID().replace(/-/g, "").slice(0, 12) + "__";
@@ -417,22 +511,16 @@ export async function runHarness(env: Env, lang: CodeLang, src: string, tests: {
   // a timeout or a server error (it's busy) is tried once more after a short pause
   const call = async () => {
     try {
-      const r = await wandbox(env, body());
+      const r = await wandbox(env, body(), 60000, waits);
       if (!(/compiler.*not found|unknown compiler/i.test(JSON.stringify(r).slice(0, 300)) && !r.program_output)) return r;
     } catch (e) {
-      if (!(e instanceof RunnerUnavailable) || !/HTTP [45]\d\d/.test(e.message)) throw e;
+      if (!(e instanceof RunnerUnavailable) || !/HTTP (?!429|50[234])[45]\d\d/.test(e.message)) throw e;
     }
     const n = await wandboxCompiler(env, "nodejs-");
-    if (n && n !== wandboxNode) { wandboxNode = n; return wandbox(env, body()); }
-    return wandbox(env, body());
+    if (n && n !== wandboxNode) { wandboxNode = n; return wandbox(env, body(), 60000, waits); }
+    return wandbox(env, body(), 60000, waits);
   };
-  let j: any;
-  try { j = await call(); }
-  catch (e) {
-    if (!(e instanceof RunnerUnavailable) || !/timeout|HTTP 5\d\d|unexpected answer/.test(e.message)) throw e;
-    await new Promise((r) => setTimeout(r, 1500));
-    j = await call();
-  }
+  const j: any = await call();
   const out = String(j.program_output ?? "");
   const line = out.split("\n").reverse().find((l) => l.startsWith(mark));
   if (!line) throw new RunnerUnavailable(`judge error: ${String(j.program_error || j.compiler_error || j.signal || out).slice(-300)}`);
@@ -503,8 +591,26 @@ async function judgeCompiled(env: Env, code: string, lang: CodeLang, tests: Test
   return base;
 }
 
-/** Run a short program once (used to compute the real output of "predict the output" challenges). */
+/** Run a short program once (the Bug Hunt and relay tests, "predict the output"…): Wandbox or godbolt, and paiza.io
+ *  when they're saturated or down. */
 export async function runOnce(env: Env, lang: CodeLang, code: string, stdin = ""): Promise<{ ok: boolean; out: string; err: string }> {
+  const viaPaiza = async () => { const r = await paizaRun(env, lang, lang === "php" && !/^\s*<\?php/.test(code) ? "<?php\n" + code : code, stdin); return { ok: r.ok, out: r.out, err: r.err }; };
+  if (lang === "javascript" || lang === "php") {
+    if (wandboxSaturated()) {
+      try { return await viaPaiza(); } catch (e) { if (!(e instanceof RunnerUnavailable)) throw e; }
+      return runOnceMain(env, lang, code, stdin);
+    }
+    try { return await runOnceMain(env, lang, code, stdin, [800]); }
+    catch (e) { if (!(e instanceof RunnerUnavailable)) throw e; }
+    try { return await viaPaiza(); } catch (e) { if (!(e instanceof RunnerUnavailable)) throw e; }
+    return runOnceMain(env, lang, code, stdin);
+  }
+  try { return await runOnceMain(env, lang, code, stdin); }
+  catch (e) { if (!(e instanceof RunnerUnavailable) || !PAIZA_LANG[lang]) throw e; }
+  return viaPaiza();   // godbolt down: Python on paiza.io
+}
+
+async function runOnceMain(env: Env, lang: CodeLang, code: string, stdin = "", waits = wandboxPace.waits): Promise<{ ok: boolean; out: string; err: string }> {
   if (lang === "javascript" || lang === "php") {
     const php = lang === "php" && !/^\s*<\?php/.test(code) ? "<?php\n" + code : code;
     // the current Node.js / PHP version of Wandbox (a retired one is looked up and the run tried again)
@@ -512,14 +618,14 @@ export async function runOnce(env: Env, lang: CodeLang, code: string, stdin = ""
     let comp = lang === "javascript" ? wandboxNode : wandboxPhp;
     let j: any;
     try {
-      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);
+      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000, waits);
       if (/compiler.*not found|unknown compiler/i.test(JSON.stringify(j).slice(0, 300)) && !j.program_output) throw new RunnerUnavailable("HTTP 400 compiler not found");
     } catch (e) {
       // a retired version answers 400/404/500 "not found"; busy (429…) was already tried again: no new version to look for
       if (!(e instanceof RunnerUnavailable) || !/HTTP (?!429|50[234])[45]\d\d|timeout/.test(e.message)) throw e;
       const n = await wandboxCompiler(env, prefix);
       if (n) { comp = n; if (lang === "javascript") wandboxNode = n; else wandboxPhp = n; }
-      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000);
+      j = await wandbox(env, { compiler: comp, code: php, stdin }, 30000, waits);
     }
     const out = String(j.program_output ?? "");
     const ok = String(j.status) === "0" && !j.signal && !j.compiler_error && out.length < 100000;
@@ -554,6 +660,13 @@ export async function runnerHealth(env: Env): Promise<{ ok: boolean; ms: number;
   } catch (e) {
     ok = false;
     parts.push(`Wandbox: ${(e as Error).message}`);
+  }
+  // paiza.io: the backup when Wandbox is saturated (a whole class at once)
+  try {
+    const r = await paizaRun(env, "javascript", "console.log([1,2,3].map(x => x * 2).join('-'))", "", 20000);
+    parts.push(`Backup runner paiza.io: ${r.ok && r.out.trim() === "2-4-6" ? "OK" : r.err || r.out || "no output"}`);
+  } catch (e) {
+    parts.push(`Backup runner paiza.io: ${(e as Error).message}`);
   }
   return { ok, ms: Date.now() - t, detail: parts.join(" · ") };
 }
