@@ -243,17 +243,25 @@ const notionsOfQ = (q: any) => {
   const sharp = cs.filter((c: string) => !BROAD.includes(c));
   return (sharp.length ? sharp : cs).slice(0, 3);
 };
-/** A learner's notions: mastered (every question on it right) and missed (at least one wrong, partly right or empty). */
+/**
+ * A learner's notions, from what they really scored on each one (a question 70 % right counts 0.7): missed = under 60 % on
+ * the notion's questions (the worst first), mastered = 80 % or more on at least two questions. One partly right answer
+ * among several good ones isn't a gap: a learner at 74 % isn't told to relearn every notion the assessment touched.
+ */
 export function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
-  const good = new Map<string, number>(), bad = new Map<string, number>();
+  const per = new Map<string, { n: number; got: number }>();
   for (const q of qs) {
     const v = verdictOf(q, p);
     if (!v) continue;
-    for (const c of notionsOfQ(q)) (v === "correct" ? good : bad).set(c, ((v === "correct" ? good : bad).get(c) || 0) + 1);
+    const sc = Number(p.g?.[q.id]?.score);
+    const got = Number.isFinite(sc) && (sc > 0 || v !== "correct") ? Math.max(0, Math.min(1, sc / 100)) : v === "correct" ? 1 : v === "partial" ? 0.5 : 0;
+    for (const c of notionsOfQ(q)) { const x = per.get(c) || { n: 0, got: 0 }; x.n++; x.got += got; per.set(c, x); }
   }
-  const top = (m: Map<string, number>) => [...m.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c);
-  // mastered: at least two questions on it, all right (one right answer isn't a proof)
-  return { ok: top(good).filter((c) => !bad.has(c) && (good.get(c) || 0) >= 2).slice(0, 6), ko: top(bad).slice(0, 6) };
+  const all = [...per.entries()].map(([c, x]) => ({ c, n: x.n, avg: x.got / x.n }));
+  return {
+    ok: all.filter((x) => x.n >= 2 && x.avg >= 0.8).sort((a, b) => b.avg - a.avg || b.n - a.n).map((x) => x.c).slice(0, 6),
+    ko: all.filter((x) => x.avg < 0.6).sort((a, b) => a.avg - b.avg || b.n - a.n).map((x) => x.c).slice(0, 6),
+  };
 }
 /** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
  *  what to study, grouped (the most missed first), never the list of questions. */

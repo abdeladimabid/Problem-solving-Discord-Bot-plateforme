@@ -37,7 +37,7 @@ import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
-import { assessForAi } from "../src/shared/review/debrief.ts";
+import { assessForAi, paperFacts } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
@@ -4160,6 +4160,13 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
       assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
       level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen", seen: true }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", seen: true }, { text: "Flexbox : aligner et répartir des éléments", level: "bon" }] } };
+    {
+      // an assessment's notions from what was really scored: one partly right answer among good ones isn't a gap
+      const qs = [{ id: "a", prompt: "Quelle commande Git crée une nouvelle branche ?" }, { id: "b", prompt: "Quelle commande Git envoie les commits sur le dépôt distant ?" }, { id: "c", prompt: "Que fait git merge sur une branche ?" },
+        { id: "d", prompt: "Quelle est la différence entre margin et padding ?" }, { id: "e", prompt: "Comment centrer un bloc avec margin auto ?" }];
+      const pf = paperFacts(qs, { g: { a: { verdict: "correct" }, b: { verdict: "correct" }, c: { verdict: "partial", score: 60 }, d: { verdict: "incorrect", score: 0 }, e: { verdict: "partial", score: 50 } }, an: {} });
+      check(pf.ok.some((x) => /Git/.test(x)) && !pf.ko.some((x) => /Git/.test(x)) && pf.ko.some((x) => /boîte/.test(x)), `assessment: Git mostly right → mastered, not to relearn; the box model missed → to learn (${JSON.stringify(pf)})`);
+    }
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
     check(!d2.toLearn.some((x: any) => /Flexbox/.test(x.notion)), "a Fiche item kept before the brief check (no « seen »): never in the comment");
     // a good learner: the AI never adds points to learn, nor the « practise every day » advice
