@@ -577,9 +577,9 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
   rec.final = final;
   const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
   rec.suivi = steps.length ? await suiviFor(env, briefId, who, steps, rec.rhythm ?? null) : null;
-  // the Fiche niveaux's items not known yet (from the page): what the comment says is still to learn
-  if (Array.isArray(raw?.ficheGaps)) rec.level = { ...(rec.level || {}), gaps: raw.ficheGaps.slice(0, 10).map((x: any) => ({ code: String(x?.code || "").slice(0, 20), text: String(x?.text || "").replace(/\s+/g, " ").trim().slice(0, 240), level: String(x?.level || "") }))
-    .filter((x: any) => x.text && ["faible", "moyen", "bon", "excellent"].includes(x.level)) };
+  // the Fiche niveaux's items not known yet (from the page): what the comment says is still to learn — only what THIS
+  // learner got wrong in THIS brief (see briefGaps), never the sprint's items in general
+  if (Array.isArray(raw?.ficheGaps)) rec.level = { ...(rec.level || {}), gaps: briefGaps(raw.ficheGaps, briefId, rec.assess) };
   rec.result.feedback = buildComment(rec.first || "", rec, final);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
   // written again from the switches (↻ Rebuild): the next changes rewrite it too
@@ -1344,4 +1344,25 @@ export async function checkAi(env: Env, g: GuildRow, b: BriefCtx, who: string) {
   const lv = aiLevel(signals);
   rec.aiCheck = { at: Date.now(), ...lv, signals: signals.sort((a, z) => z.pts - a.pts), parts, commits: pushes.length, lines: pushes.reduce((s, p) => s + (Number(p.adds) || 0), 0), ai } satisfies AiCheck;
   await putReview(env, g, b.id, who, rec);
+}
+
+/**
+ * The Fiche niveaux's items the debrief comment may call « still to learn »: the ones this learner showed they don't know
+ * IN THIS BRIEF — its assessments' questions, its mises en situation, its debrief (the project's code, the oral, the live
+ * task) — more than half missed there; or the ones the teacher decided « not known ». An item never asked, asked elsewhere,
+ * or mostly right is never a gap: the comment stays this learner's own, never the sprint's programme.
+ */
+export function briefGaps(list: unknown, briefId: number, assess: unknown): { code: string; text: string; level: string; seen: true }[] {
+  const mine = new Set<string>([`b${briefId}`]);
+  for (const a of Array.isArray(assess) ? assess : []) if (a && Number.isFinite(Number(a.id))) mine.add(`${a.kind === "mise" ? "m" : "a"}${Number(a.id)}`);
+  const out: { code: string; text: string; level: string; seen: true }[] = [];
+  for (const x of Array.isArray(list) ? list.slice(0, 20) : []) {
+    const text = String(x?.text || "").replace(/\s+/g, " ").trim().slice(0, 240), level = String(x?.level || "");
+    if (!text || !["faible", "moyen", "bon", "excellent"].includes(level)) continue;
+    const ev = (Array.isArray(x?.ev) ? x.ev : []).filter((e: any) => mine.has(String(e?.ref || "").split(":")[0]));
+    const got = ev.reduce((s: number, e: any) => s + Math.max(0, Math.min(1, Number(e?.got) || 0)), 0);
+    if (x?.teacher === false || (ev.length && got / ev.length <= 0.5)) out.push({ code: String(x?.code || "").slice(0, 20), text, level, seen: true });
+    if (out.length >= 6) break;
+  }
+  return out;
 }

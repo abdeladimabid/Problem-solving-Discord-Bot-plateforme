@@ -1884,14 +1884,16 @@ async function aiLinesDialog(gid) {
         <pre class="ail-code ${esc(f.label)}">${f.lines.map((l) => esc(l)).join("\n")}${f.more ? `\n… ${f.more} more line(s)` : ""}</pre></details>`; }).join("")}</div>`).join("") || (r.note ? "" : `<p class="empty">No commit to show.</p>`)}`;
 }
 
-// the Fiche niveaux's items still to learn (for the comment): the ones not known up to the level to reach, the base first
+// the Fiche niveaux's items this learner showed they don't know yet (for the comment): only with proof — a question got
+// wrong, a live task or an oral missed, or the teacher's « not known ». An item never asked (or asked too little to tell) is
+// never a gap: the server then keeps only the ones of THIS brief (its assessments, its mises en situation, its debrief).
 const FG_ORDER = ["faible", "moyen", "bon", "excellent"];
 function ficheGaps(m) {
-  const lv = m?.level || {}, items = Array.isArray(m?.items) ? m.items : [];
-  const target = lv.next?.level || lv.probe || lv.reached || "moyen", top = FG_ORDER.indexOf(target === "critique" ? "faible" : target);
-  return items.filter((c) => FG_ORDER.indexOf(c.level) >= 0 && FG_ORDER.indexOf(c.level) <= top && (c.final === "ko" || (c.level === target && c.final !== "ok")))
+  const items = Array.isArray(m?.items) ? m.items : [];
+  return items.filter((c) => FG_ORDER.indexOf(c.level) >= 0 && c.teacher !== true && (c.teacher === false || (c.evidence || []).some((e) => Number(e.got) < 0.5)))
     .sort((a, b) => FG_ORDER.indexOf(a.level) - FG_ORDER.indexOf(b.level) || (a.final === "ko" ? -1 : 1) - (b.final === "ko" ? -1 : 1))
-    .slice(0, 8).map((c) => ({ code: c.code, text: c.text, level: c.level }));
+    .slice(0, 12).map((c) => ({ code: c.code, text: c.text, level: c.level, teacher: c.teacher === false ? false : null,
+      ev: (c.evidence || []).slice(0, 20).map((e) => ({ ref: String(e.ref || ""), got: Number(e.got) || 0 })) }));
 }
 function currentStates() {
   const ck = {}, ex = [], co = {};

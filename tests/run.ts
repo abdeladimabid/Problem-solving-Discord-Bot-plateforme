@@ -4159,8 +4159,14 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     // notion once; never where it was seen, the level, the Fiche, a feature of the project
     const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
       assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
-      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
+      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen", seen: true }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", seen: true }, { text: "Flexbox : aligner et répartir des éléments", level: "bon" }] } };
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
+    check(!d2.toLearn.some((x: any) => /Flexbox/.test(x.notion)), "a Fiche item kept before the brief check (no « seen »): never in the comment");
+    // a good learner: the AI never adds points to learn, nor the « practise every day » advice
+    const good = { ...d2, level: "bon", toLearn: d2.toLearn.slice(0, 1), notions: d2.notions.slice(0, 1) };
+    const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n2. Les listes et les tableaux HTML : choisir entre une liste et un tableau.\n3. Flexbox : aligner et répartir des éléments sur une ligne.\n\nContinue comme ça.";
+    check(C.aiCommentText(good, { commentaire: padded }) === null, "a good learner's AI comment that adds points to learn: refused (the comment is written from the switches)");
+    check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
     const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
     check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
       && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
@@ -4221,8 +4227,17 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
-  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
-  check(/\n\d\. Écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [
+    { code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", ev: [{ ref: `b${bid}:o0`, got: 0 }, { ref: "a999:q1", got: 1 }] },
+    { code: "S1.M4", text: "Les listes et les tableaux HTML", level: "moyen", ev: [] },
+    { code: "S1.M5", text: "Le positionnement en CSS", level: "moyen", ev: [{ ref: "b99999:o1", got: 0 }, { ref: "a999:q2", got: 0 }] },
+    { code: "S1.B1", text: "Flexbox : aligner et répartir des éléments sur une ligne", level: "bon", ev: [{ ref: `b${bid}:o1`, got: 1 }, { ref: `b${bid}:c2`, got: 0 }, { ref: `b${bid}:t`, got: 1 }] },
+    { code: "S1.M6", text: "Le modèle de boîte et le centrage d’un bloc", level: "moyen", teacher: false, ev: [] },
+    { code: "x", text: "Ignoré", level: "critique", ev: [{ ref: `b${bid}:o0`, got: 0 }] }] } });
+  const fb0 = fgp.data.review.result.feedback;
+  check(/\n\d\. Écrire la structure de base d’une page/.test(fb0) && /\n\d\. (Le modèle de boîte|La différence entre margin)/.test(fb0) && !/niveau|fiche/i.test(fb0) && fgp.data.review.level.gaps.length === 2,
+    `the Fiche's items go into the comment only when missed in THIS brief (or decided « not known » by the teacher) (${JSON.stringify(fgp.data.review.level.gaps.map((x: any) => x.code))})`);
+  check(!/listes et les tableaux|positionnement|Flexbox/i.test(fb0), "…never an item never asked, missed in another brief, or mostly right here: no programme of the sprint for everyone");
   await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
