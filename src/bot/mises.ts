@@ -170,6 +170,7 @@ dialog h2 { margin: 0 0 8px; font-size: 19px; } dialog ul { margin: 8px 0 14px; 
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 @media (max-width: 1050px) { .sit { grid-template-columns: 1fr; } .editor .CodeMirror { height: 320px; } .cb-monaco, .edload { height: 360px; } .prog { top: 57px; } .prog-legend { display: none; } }
 @media (max-width: 560px) { .top { gap: 8px; padding: 8px 12px; } .saved { display: none; } main { padding: 12px; } .pi { min-width: 40px; padding: 0 7px; } #finish span { display: none; } }
+.pvbar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 9999; background: #7c3aed; color: #fff; border-radius: 99px; padding: 7px 16px; font: 650 13px Inter, system-ui, sans-serif; box-shadow: 0 6px 20px #0f1d3a33; max-width: calc(100% - 32px); text-align: center; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -282,6 +283,7 @@ function intro(info) {
   if (info.status === "live" && info.taker === "locked") return lockedScreen(info.lockWhy);
   // full screen rule: the page opened again while working (a reload, another tab): the server stops the session
   if (info.status === "live" && info.taker === "active" && LOCK) return start();
+  if (info.status === "submitted" && info.preview) return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Aperçu élève : ' + (info.score != null ? "score automatique <b>" + info.score + " / 100</b> (vérifications et QCM ; les situations à corriger à la main comptent 0 ici)." : "le score automatique arrive dans un instant, recharge la page.") + " Rien n’est compté pour la classe.</p>");
   if (info.status === "submitted") return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>');
   if (info.status === "closed" || info.status === "draft") return screen('<div class="big">🔒</div><h1>Cette mise en situation est fermée</h1><p class="muted">Demande à ton formateur si tu penses que c’est une erreur.</p>');
   var rules = ["💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>",
@@ -920,7 +922,7 @@ function flushLog(id) { if (LOGS[id]) saveNow(id, true); }
 setInterval(function () { if (CUR && sit(CUR) && LOGS[CUR] && !DONE) saveNow(CUR, true); }, 25000);
 function heartbeat() { if (!DONE && !LOCKED && document.visibilityState === "visible") call("/save", { cur: CUR, spent: SPENT }).then(function (r) { if (r && (r.error === "closed" || r.error === "submitted")) closedNow(r.error); else if (r && r.error === "locked") lockedNow("fullscreen", true); }); }
 function tickSpent() { if (!DONE && !LOCKED && CUR && document.visibilityState === "visible" && document.hasFocus()) SPENT[CUR] = (SPENT[CUR] || 0) + 1000; }
-function closedNow(why) { if (DONE) return; DONE = true; screen(why === "submitted" ? '<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats.</p>' : '<div class="big">⏰</div><h1>La mise en situation est terminée</h1><p class="muted">Ton travail enregistré a été envoyé à ton formateur.</p>'); }
+function closedNow(why) { if (DONE) return; DONE = true; if (PV) { call("/info").then(intro); return; } screen(why === "submitted" ? '<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats.</p>' : '<div class="big">⏰</div><h1>La mise en situation est terminée</h1><p class="muted">Ton travail enregistré a été envoyé à ton formateur.</p>'); }
 
 // ---------------------------------------------------------------- leaving the page (allowed: only written down)
 var FOCUS = [], awayAt = null;
@@ -1009,6 +1011,7 @@ function finish(timeUp) {
     DONE = true;
     if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
     try { localStorage.removeItem(KEY + ":unsaved"); localStorage.removeItem(KEY + ":visited"); } catch (e) {}
+    if (PV) return call("/info").then(intro);   // a preview: its automatic score
     screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">' + (timeUp ? "Le temps est écoulé : ton travail a été envoyé tel quel. " : "") + "Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>");
   });
 }
@@ -1016,7 +1019,16 @@ $("#finish").onclick = confirmFinish;
 
 // the code editor loads while they read the rules
 CBEditor.load();
-call("/info").then(function (i) { if (i && i.ident === false) return signInScreen(i); if (!i || i.error) { if (i && i.error === "identify") return; return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); } intro(i); });
+// 👁️ a teacher's preview: a private copy, nothing counts (said on every screen)
+var PV = false;
+function previewBar() {
+  PV = true;
+  var b = document.createElement("div");
+  b.className = "pvbar";
+  b.textContent = "👁️ Aperçu élève : une copie privée, rien n’est compté ni envoyé à la classe";
+  document.body.appendChild(b);
+}
+call("/info").then(function (i) { if (i && i.preview) previewBar(); if (i && i.ident === false) return signInScreen(i); if (!i || i.error) { if (i && i.error === "identify") return; return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); } intro(i); });
 })();
 </script>
 </body>

@@ -6,7 +6,8 @@ export const CLASS = Symbol.for("classbot.aiClass");
 
 /** The same env, marked for one class (a thin copy: the bindings stay shared). */
 export function forClass<T extends object>(env: T, guildId: unknown): T {
-  const id = guildId == null ? "" : String(guildId);
+  // a teacher's preview (pv:<guild>, staff.ts) uses its class's keys
+  const id = guildId == null ? "" : String(guildId).replace(/^pv:/, "");
   if (!id || (env as any)[CLASS] === id) return env;
   const e = Object.create(env);
   e[CLASS] = id;

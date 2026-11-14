@@ -29,3 +29,8 @@ export async function withoutStaff<T extends { discord_id: string }>(env: Env, g
   const s = await staffIds(env, gid);
   return s.size ? rows.filter((r) => !s.has(String(r.discord_id))) : rows;
 }
+
+// 👁️ « Preview as a student »: a private copy of an assessment or a mise en situation, kept under its own class id
+// (pv:<guild>), so no list, result, statistic or record of the real class ever sees it (src/shared/preview.ts).
+export const PREVIEW = "pv:";
+export const isPreview = (gid: unknown) => String(gid ?? "").startsWith(PREVIEW);

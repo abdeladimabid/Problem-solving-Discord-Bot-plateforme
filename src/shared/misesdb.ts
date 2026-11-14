@@ -5,7 +5,7 @@ import type { Ctx, Env, GuildRow } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
 import { dm, linkBtn, row, send } from "./discord.ts";
 import { signText } from "./integrity.ts";
-import { staffIds, withoutStaff } from "./staff.ts";
+import { isPreview, staffIds, withoutStaff } from "./staff.ts";
 import { currentSquads } from "./squads.ts";
 import { askReview } from "./review/debrief.ts";
 import { forClass } from "./aictx.ts";
@@ -653,7 +653,9 @@ export async function learnerInfo(env: Env, takerId: number) {
   const mt = forTaker(m, t);
   return { title: m.title, metier: c.metier, status: t.status === "submitted" ? "submitted" : statusOf(mt), taker: t.status, name: p?.name ?? null,
     n: { situations: c.situations.length, qcm: c.qcm.length }, startsAt: mt.starts_at, endsAt: mt.ends_at, minutes: t.minutes ?? null, now: now(), noPaste: st.noPaste,
-    lockScreen: st.lockScreen, lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null };
+    lockScreen: st.lockScreen, lockWhy: t.status === "locked" || t.status === "resume" ? lockWhy(t) : null,
+    // a teacher's preview: the page says so, and shows the automatic score once handed in
+    ...(isPreview(t.guild_id) ? { preview: true, score: t.status === "submitted" ? t.score ?? null : null } : {}) };
 }
 /** Why their session stopped (the last "lock" event): fullscreen, hidden, blur, reload. */
 const lockWhy = (t: Pick<MiseTakerRow, "events">) => String(parse<MiseEvent[]>(t.events, []).filter((e) => e[1] === "lock").at(-1)?.[4] ?? "fullscreen");
@@ -707,7 +709,8 @@ export async function lockTaker(env: Env, takerId: number, what: unknown) {
   // another device stops it whatever the full screen rule; leaving the page only with the full screen rule
   if (!x || x.t.status !== "active" || (what !== "device" && !settingsOf(x.m).lockScreen)) return { ok: false };
   const why = ["fullscreen", "hidden", "blur", "reload", "device"].includes(String(what)) ? String(what) : "fullscreen";
-  const r = await run(env, "UPDATE mise_takers SET status = 'locked', last_seen = ? WHERE id = ? AND status = 'active'", now(), x.t.id);
+  // a teacher's preview stops like a learner's paper, then lets itself back in (nobody to ask)
+  const r = await run(env, "UPDATE mise_takers SET status = ?, last_seen = ? WHERE id = ? AND status = 'active'", isPreview(x.t.guild_id) ? "resume" : "locked", now(), x.t.id);
   if (r.meta.changes) await pushEvent(env, x.t.id, [now(), "lock", x.t.cur_item ?? "", 0, why]);
   return { ok: true, status: "locked" };
 }
@@ -901,7 +904,7 @@ export async function refreshScore(env: Env, takerId: number) {
   const sc = scoreMise(c, dataOf(x.t));
   await run(env, "UPDATE mise_takers SET score = ? WHERE id = ?", sc.total, x.t.id);
   // a teacher testing it: nothing goes to their record
-  if (x.t.status === "submitted" && !sc.toGrade && !(await staffIds(env, x.t.guild_id)).has(x.t.discord_id)) await applyResults(env, x.m, x.t.discord_id, c, sc);
+  if (x.t.status === "submitted" && !sc.toGrade && !isPreview(x.t.guild_id) && !(await staffIds(env, x.t.guild_id)).has(x.t.discord_id)) await applyResults(env, x.m, x.t.discord_id, c, sc);
 }
 const dataOf = (t: MiseTakerRow): TakerData => ({ answers: parse(t.answers, {}), checks: parse(t.checks, {}), grades: parse(t.grades, {}) });
 

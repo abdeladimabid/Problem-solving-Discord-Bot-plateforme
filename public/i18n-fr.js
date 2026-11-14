@@ -4704,4 +4704,8 @@ window.CB_FR = {
   "This hunt doesn't exist anymore.": "Cette chasse n'existe plus.",
   "The AI didn't answer: try again in a minute.": "L'IA n'a pas répondu : réessayez dans une minute.",
   "Original": "Original",
+"👁️ Preview as a student": "👁️ Aperçu élève",
+"Take it yourself as a student sees it, in a new tab: a private copy, nobody is invited and nothing counts": "La passer toi-même comme un élève la voit, dans un nouvel onglet : une copie privée, personne n’est invité et rien n’est compté",
+"Take it yourself as a learner sees it, in a new tab: a private copy, nobody is invited and nothing counts": "La passer toi-même comme un apprenant la voit, dans un nouvel onglet : une copie privée, personne n’est invité et rien n’est compté",
+"Student preview opened in a new tab: a private copy, nothing counts": "Aperçu élève ouvert dans un nouvel onglet : une copie privée, rien n’est compté"
 };

@@ -2517,6 +2517,7 @@ function renderAssessment() {
       <p class="iv-sum" style="margin:6px 0 0">${optsChips(a.settings)} <button class="ap-link" id="aa-opts">Change</button></p></div>
       <div class="toolbar" style="margin:0">
         ${a.questions.length ? `<button class="btn" id="aa-slides" title="One question per slide, to explain them to the class">▶ Present</button>` : ""}
+        ${a.questions.length ? `<button class="btn" id="aa-preview" title="Take it yourself as a student sees it, in a new tab: a private copy, nobody is invited and nothing counts">👁️ Preview as a student</button>` : ""}
         <button class="btn primary" id="aa-inv">${A.takers.length ? "Invite more" : "Invite students"}</button>
         ${a.status !== "draft" && A.takers.length ? `<button class="btn" id="aa-retake" title="Students who missed it (absent, never started, handed in empty): their own link, even when it's closed">🔁 Retake</button>` : ""}
         ${a.status !== "draft" && A.takers.some((t) => t.status !== "invited") ? `<button class="btn" id="aa-reassign" title="Students who already took it: a new attempt replaces their paper (the earlier one is kept in their paper's history)">🔄 Reassign</button>` : ""}
@@ -2546,6 +2547,7 @@ function renderAssessment() {
   if ($("#aa-reassign")) $("#aa-reassign").onclick = () => reassignDialog([]);
   $("#aa-opts").onclick = () => assessOptionsDialog();
   $("#aa-share").onclick = () => shareAssessmentDialog(a.id);
+  if ($("#aa-preview")) $("#aa-preview").onclick = (e) => previewAsStudent(e.currentTarget, `/assessments/${a.id}/preview`);
   if ($("#aa-close")) $("#aa-close").onclick = () => confirmDialog("Close this assessment?", "Students still working are handed in automatically within a minute.", "Close", async () => { AS.A = await api(`/assessments/${a.id}/close`, { method: "POST", body: {} }); renderAssessment(); });
   // ♻️ never a one-use: a new draft from the same questions (back to a draft if nobody took it)
   if ($("#aa-reuse")) $("#aa-reuse").onclick = (e) => busy(e.currentTarget, async () => {

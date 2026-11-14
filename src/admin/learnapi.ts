@@ -38,6 +38,7 @@ import { GhDetailError, studentGithub, summarizeStudentGithub, syncStudentGithub
 import { StepError, makeSteps, parseSteps, proposeStep, redate, saveStep, stepRecs, stepsFallback, stepsFrom, stepsOf, stepsToText } from "../shared/review/steps.ts";
 import { WatcherError, importWatcher, markWatcherImport, memoryKv, watcherImportOf, watcherKeys, watcherValues } from "../shared/watcher.ts";
 import { programFromSheets } from "../shared/planning_import.ts";
+import { previewAssessment } from "../shared/preview.ts";
 
 export class ApiError extends Error { status: number; constructor(status: number, msg: string) { super(msg); this.status = status; } }
 const ok = (data: unknown) => Response.json(data);
@@ -766,7 +767,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, papers: undefined, ...(await assessView(env, g, a.id)) });
     }
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|reassign|unlock|complete|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|reassign|unlock|complete|grade|close|reopen|results|links|remove|share|link|options|reuse|preview))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -794,6 +795,8 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       const r = await run(env, "INSERT INTO assessments (guild_id, title, brief_id, status, settings, questions, created_at) VALUES (?, ?, ?, 'draft', ?, ?, ?)", g.id, a.title, a.brief_id ?? null, a.settings, a.questions, now());
       return ok({ id: Number(r.meta.last_row_id), fresh: true });
     }
+    // 👁️ the student's page in a new tab, on a private copy: nobody invited, nothing counted (preview.ts)
+    if (act === "preview" && method === "POST") return ok(await previewAssessment(env, g, id));
     if (act === "invite") {
       const r = await invite(env, g, id, body.students === "all" ? "all" : (Array.isArray(body.students) ? body.students : []), { days: Number(body.days) || 7, send: body.send !== false });
       return ok({ ...r, ...(await assessView(env, g, id)) });

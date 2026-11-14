@@ -6,7 +6,7 @@
 // (skills, competencies, what to work on).
 import { forClass } from "./aictx.ts";
 import type { Env, GuildRow } from "./types.ts";
-import { withoutStaff } from "./staff.ts";
+import { isPreview, withoutStaff } from "./staff.ts";
 import { addPoints, aiBudgetOk, aiBudgetUse, all, now, one, run } from "./db.ts";
 import { dm, linkBtn, row } from "./discord.ts";
 import { signText } from "./integrity.ts";
@@ -374,7 +374,7 @@ export function closedOf(tk: Pick<TakerRow, "closed" | "pos" | "seed" | "answers
   return paperFor(qs, tk.seed, st.shuffle).filter((p: any, i: number) => i < (tk.pos || 0) && !notAttempted(qs.find((q) => q.id === p.id)!, ans[p.id])).map((p: any) => String(p.id));
 }
 
-export interface SessionView { closed?: string[]; lang?: string; rules?: { noPaste: boolean; lockScreen: boolean; nav: "free" | "forward" }; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null }
+export interface SessionView { closed?: string[]; lang?: string; rules?: { noPaste: boolean; lockScreen: boolean; nav: "free" | "forward" }; status: string; title: string; n: number; minutes: number; deadline: number | null; now: number; pos: number; answers: Record<string, unknown>; paper?: any[]; reason?: string | null; name?: string | null; preview?: boolean }
 async function loadTaker(env: Env, takerId: number) {
   const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE id = ?", takerId);
   if (!tk) return null;
@@ -382,6 +382,8 @@ async function loadTaker(env: Env, takerId: number) {
   return a ? { tk, a } : null;
 }
 const sidOk = (s: unknown) => typeof s === "string" && /^[A-Za-z0-9_-]{16,64}$/.test(s);
+/** A teacher's preview stops like a student's paper, then lets itself back in (nobody to ask). */
+const selfResume = (tk: Pick<TakerRow, "guild_id">) => (isPreview(tk.guild_id) ? 1 : 0);
 const pushEvent = (tk: TakerRow, what: string) => JSON.stringify([...parse<[number, string][]>(tk.events, []), [now(), what]].slice(-80));
 
 /** Signed in with Discord on another device while working (« one device per paper »): the session stops. */
@@ -405,7 +407,7 @@ export async function sessionInfo(env: Env, takerId: number): Promise<SessionVie
   const p = await one<{ name: string | null }>(env, "SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", tk.guild_id, tk.discord_id);
   const st = settingsOf(a);
   return { lang: st.lang, rules: { noPaste: st.noPaste, lockScreen: st.lockScreen, nav: st.nav }, status: closedFor(a, tk) && ["invited", "active", "locked"].includes(tk.status) ? "closed" : tk.status, title: a.title, n: questionsOf(a).length, minutes: st.minutes,
-    deadline: tk.deadline, now: now(), pos: tk.pos, answers: {}, reason: tk.lock_reason, name: p?.name ?? null };
+    deadline: tk.deadline, now: now(), pos: tk.pos, answers: {}, reason: tk.lock_reason, name: p?.name ?? null, ...(isPreview(tk.guild_id) ? { preview: true } : {}) };
 }
 
 /**
@@ -430,7 +432,7 @@ export async function startSession(env: Env, takerId: number, sid: string): Prom
   if (tk.sid === sid && tk.status === "active") return view("active", { paper: paperFor(qs, tk.seed, st.shuffle), answers: parse(tk.answers, {}), closed: closedOf(tk, qs, st) });
   if (!resume) {
     // a reload or another device while the session runs: it stops
-    if (tk.status === "active") await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = 'reload', events = ? WHERE id = ?", t0, pushEvent(tk, "reload"), tk.id);
+    if (tk.status === "active") await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = 'reload', resume_ok = ?, events = ? WHERE id = ?", t0, selfResume(tk), pushEvent(tk, "reload"), tk.id);
     return view("locked", { reason: tk.status === "active" ? "reload" : tk.lock_reason });
   }
   // back to finish the questions not attempted (reopened after sending): their time starts now
@@ -513,7 +515,7 @@ export async function leaveEvent(env: Env, takerId: number, sid: string, what: s
   // no full screen lock for this assessment: leaving the page is only written down, the session goes on
   if (!st.lockScreen && why !== "paste") { await run(env, "UPDATE assessment_takers SET events = ? WHERE id = ?", pushEvent(x.tk, why), x.tk.id); return; }
   if (why === "paste") { await run(env, "UPDATE assessment_takers SET events = ? WHERE id = ?", pushEvent(x.tk, "paste"), x.tk.id); return; }
-  await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = ?, events = ? WHERE id = ? AND status = 'active'", now(), why, pushEvent(x.tk, why), x.tk.id);
+  await run(env, "UPDATE assessment_takers SET status = 'locked', locked_at = ?, lock_reason = ?, resume_ok = ?, events = ? WHERE id = ? AND status = 'active'", now(), why, selfResume(x.tk), pushEvent(x.tk, why), x.tk.id);
 }
 
 /** Has the teacher let them back in? (the locked page asks every few seconds) */
@@ -789,7 +791,7 @@ const LEVEL_DIFF = ["easy", "easy", "medium", "hard"];
 /** The results go into the student's record: skill evidence per question, competencies, points. (Again on each change.) */
 export async function applyResults(env: Env, a: AssessRow, takerId: number) {
   const tk = await one<TakerRow>(env, "SELECT * FROM assessment_takers WHERE id = ?", takerId);
-  if (!tk || tk.status !== "graded") return;
+  if (!tk || tk.status !== "graded" || isPreview(a.guild_id)) return;   // a teacher's preview: nothing in a record
   const qs = questionsOf(a), st = settingsOf(a);
   const grades = parse<Record<string, Grade>>(tk.grades, {});
   const t0 = now(), src = `assess:${a.id}`;
@@ -884,7 +886,8 @@ export async function resultsView(env: Env, takerId: number) {
   const x = await loadTaker(env, takerId);
   if (!x) return null;
   const { tk, a } = x, st = settingsOf(a);
-  if (tk.status !== "graded" || !st.showResults || !(await releasedOf(env, a.id)).has(tk.id)) return { ready: false, lang: st.lang };
+  const pv = isPreview(a.guild_id);   // a teacher's preview: the correction right after grading
+  if (tk.status !== "graded" || (!pv && (!st.showResults || !(await releasedOf(env, a.id)).has(tk.id)))) return { ready: false, lang: st.lang };
   const qs = questionsOf(a), byId = new Map(qs.map((q) => [q.id, q]));
   const grades = parse<Record<string, Grade>>(tk.grades, {}), answers = parse<Record<string, any>>(tk.answers, {});
   const items = paperFor(qs, tk.seed, st.shuffle).map((p: any) => {

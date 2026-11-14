@@ -96,6 +96,7 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
 .marks{margin:0 0 12px;padding-left:18px;font-size:14px}.marks li{margin:3px 0}
 .srch{display:flex;flex-wrap:wrap;gap:8px}.chipl{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:99px;background:var(--blue50);color:var(--blue);font-weight:650;font-size:14px;text-decoration:none}
 .chipl:hover,.btn.ghost:hover{text-decoration:underline}a.btn{text-decoration:none}
+.pvbar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:50;background:#7c3aed;color:#fff;border-radius:99px;padding:7px 16px;font-size:13px;font-weight:650;box-shadow:0 6px 20px #0f1d3a33;max-width:calc(100% - 32px);text-align:center}
 </style></head><body><div id="app" class="full"><p class="muted">…</p></div>
 <script>
 (() => {
@@ -156,6 +157,15 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
       + (i && i.signIn ? '<a class="btn big" style="background:#5865f2;text-decoration:none" href="' + esc(i.signIn) + '">' + (fr ? "Se connecter avec Discord" : "Sign in with Discord") + "</a>" : ""));
   }
 
+  // 👁️ a teacher's preview: a private copy, nothing counts (said on every screen)
+  let PV = false;
+  function previewBar() {
+    PV = true;
+    const b = document.createElement("div");
+    b.className = "pvbar";
+    b.textContent = L === "fr" ? "👁️ Aperçu élève : une copie privée, rien n’est compté ni envoyé à la classe" : "👁️ Student preview: a private copy, nothing is counted or sent to the class";
+    document.body.appendChild(b);
+  }
   function screen(html) { app.className = "full"; app.innerHTML = '<div class="card center" style="max-width:560px">' + html + "</div>"; }
   function intro(info) {
     const resume = info.status === "active" || info.status === "locked";
@@ -185,6 +195,8 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (v.status === "locked") return lockedScreen(v.reason);
     if (v.status === "graded") return get("/results").then((r) => (r && r.ready ? results(r) : screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>"))).catch(() => screen('<h1>' + tr("done") + "</h1>"));
+    // a teacher's preview: the correction comes here as soon as it's graded
+    if (v.status === "submitted" && PV) { setTimeout(() => get("/info").then(show).catch(() => {}), 4000); return screen('<div class="big-ico">⏳</div><h1>' + tr("done") + '</h1><p class="muted">' + (L === "fr" ? "Aperçu : la correction s’affiche ici dans un instant." : "Preview: the correction shows here in a moment.") + "</p>"); }
     if (v.status === "submitted") return screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + tr("donesub") + "</p>");
     if (v.status === "closed") return screen('<div class="big-ico">🔒</div><h1>' + tr("closed") + "</h1>");
     if (v.error === "expired") return screen('<h1>' + tr("expired") + "</h1>");
@@ -373,6 +385,6 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
     screen('<div class="big-ico">🎉</div><h1>' + tr("done") + '</h1><p class="muted">' + (timeUp ? tr("timeup") : tr("donesub")) + "</p>");
   }
   if (TOKEN === "expired") return screen("<h1>" + tr("expired") + "</h1>");
-  get("/info").then((info) => { if (!info) return screen("<h1>" + tr("expired") + "</h1>"); if (info.lang) L = info.lang; if (info.ident === false) return signInScreen(info); show(info); }).catch(() => screen("<h1>" + tr("expired") + "</h1>"));
+  get("/info").then((info) => { if (!info) return screen("<h1>" + tr("expired") + "</h1>"); if (info.lang) L = info.lang; if (info.ident === false) return signInScreen(info); if (info.preview) previewBar(); show(info); }).catch(() => screen("<h1>" + tr("expired") + "</h1>"));
 })();
 </script></body></html>`;

@@ -10,7 +10,7 @@
 // Each paper's record: app_settings `ident:<quiz|mes>:<takerId>` → { uid, devices, ips }.
 import type { Env } from "./types.ts";
 import { all, now, one, run } from "./db.ts";
-import { staffIds } from "./staff.ts";
+import { isPreview, staffIds } from "./staff.ts";
 
 export type IdentKind = "quiz" | "mes";
 export interface IdentRec { uid: string; devices: string[]; ips: { ip: string; at: number }[]; at: number }
@@ -43,7 +43,7 @@ export async function identOk(env: Env, kind: IdentKind, takerId: number, req: R
  */
 export async function staffPaper(env: Env, kind: IdentKind, takerId: number): Promise<boolean> {
   const t = await one<{ guild_id: string; discord_id: string }>(env, `SELECT guild_id, discord_id FROM ${kind === "mes" ? "mise_takers" : "assessment_takers"} WHERE id = ?`, takerId).catch(() => null);
-  return !!t && (await staffIds(env, t.guild_id)).has(t.discord_id);
+  return !!t && (isPreview(t.guild_id) || (await staffIds(env, t.guild_id)).has(t.discord_id));
 }
 /** A new attempt of a paper (« Réassigner »): its sign-in starts again (the record is archived with the old attempt). */
 export async function forgetIdent(env: Env, kind: IdentKind, takerId: number) {

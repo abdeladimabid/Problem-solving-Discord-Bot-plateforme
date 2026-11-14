@@ -72,6 +72,19 @@ async function busy(btn, fn) {
   try { return await fn(); } catch (e) { if (e.message !== CANCELLED) toast(e.message, true); } finally { btn.disabled = false; }
 }
 
+/** 👁️ « Preview as a student »: a private copy (nothing counts, nobody invited), the student's page in a new tab.
+ *  The tab opens at the click (a popup blocker lets it through), its address comes when the copy is ready. */
+async function previewAsStudent(btn, path) {
+  const w = window.open("about:blank", "_blank");
+  await busy(btn, async () => {
+    try {
+      const r = await api(path, { method: "POST", body: {} });
+      if (w) { w.opener = null; w.location.href = r.url; } else location.href = r.url;
+      toast("Student preview opened in a new tab: a private copy, nothing counts");
+    } catch (e) { if (w) w.close(); throw e; }
+  });
+}
+
 const fmtDate = (u) => (u ? new Date(u * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "—");
 const fmtDateTime = (u) => (u ? new Date(u * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
 function fmtAgo(u) {

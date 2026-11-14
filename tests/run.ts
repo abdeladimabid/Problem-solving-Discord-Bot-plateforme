@@ -8919,5 +8919,55 @@ section("the assistant knows the app: its pages and how to set up");
   check(tabs.length >= 10 && tabs.every((t) => front.includes(`["${t}", `)), "…and every Settings tab it names");
 }
 
+section("👁️ preview as a student: a private copy of an assessment or a mise en situation, nothing counts for the class");
+{
+  const qs = [{ type: "mcq", prompt: "2 + 2 ?", choices: ["4", "5"], answer: [0], points: 1 }, { type: "mcq", prompt: "3 + 3 ?", choices: ["5", "6"], answer: [1], points: 1 }];
+  const aid = (await api("POST", "/api/assessments", { g: G, title: "Aperçu", questions: qs, settings: { minutes: 20 } })).data.assessment.id;
+  const pv = await api("POST", `/api/assessments/${aid}/preview`, { g: G });
+  const tok = String(pv.data.url ?? "").split("/quiz/")[1];
+  check(pv.status === 200 && !!tok, "the assessment page gives the student's link of a preview");
+  check(q1("SELECT status FROM assessments WHERE id = ?", aid).status === "draft" && !q1("SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ?", aid).n, "the assessment itself stays a draft, nobody invited");
+  check(!(await api("GET", `/api/assessments?g=${G}`)).data.assessments?.some?.((a: any) => a.id !== aid && a.title === "Aperçu"), "the copy isn't in the class's list");
+  const quiz = async (action: string, body?: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx); await ctx.flush(); return r.json() as any; };
+  const info = await quiz("info");
+  check(info.preview === true && info.title === "Aperçu" && info.ident !== false, "it opens without the Discord sign-in, and the page knows it's a preview");
+  const sid = "sessionPREVIEWPREVIEW01";
+  const st = await quiz("start", { sid });
+  check(st.status === "active" && st.paper.length === 2, "the paper, as a student gets it");
+  await quiz("event", { sid, what: "fullscreen" });
+  check((await quiz("state")).resume === true, "leaving full screen stops it like a student's, then it lets itself back in");
+  const st2 = await quiz("start", { sid });
+  for (const p of st2.paper) await quiz("answer", { sid, qid: p.id, answer: [p.choices.findIndex((c: any) => c.text === "4" || c.text === "6") >= 0 ? p.choices.find((c: any) => c.text === "4" || c.text === "6").k : 0], pos: 0 });
+  await quiz("submit", { sid });
+  const res = await quiz("results");
+  check(res.ready === true && res.score === 100, "handed in: the correction at once (no results to send) " + JSON.stringify(res).slice(0, 120));
+  const copy = q1("SELECT guild_id FROM assessment_takers WHERE id = ?", Number(tok.split(".")[0]));
+  check(String(copy.guild_id) === "pv:" + G, "the copy is kept apart from the class");
+  check(!q1("SELECT COUNT(*) AS n FROM ledger WHERE guild_id LIKE 'pv:%'").n && !q1("SELECT COUNT(*) AS n FROM competency_results WHERE guild_id LIKE 'pv:%'").n && !q1("SELECT COUNT(*) AS n FROM skill_evidence WHERE guild_id LIKE 'pv:%'").n, "nothing in a record: no points, competencies or skills");
+  const firstCopy = q1("SELECT assessment_id FROM assessment_takers WHERE id = ?", Number(tok.split(".")[0])).assessment_id;
+  await api("POST", `/api/assessments/${aid}/preview`, { g: G });
+  check(!q1("SELECT COUNT(*) AS n FROM assessments WHERE id = ?", firstCopy).n && q1("SELECT COUNT(*) AS n FROM assessments WHERE guild_id = ?", "pv:" + G).n === 1, "a new preview replaces the previous one");
+
+  const mid = q1("SELECT id FROM mises WHERE guild_id = ? ORDER BY id LIMIT 1", G).id;
+  const before = q1("SELECT status, (SELECT COUNT(*) FROM mise_takers WHERE mise_id = mises.id) AS n FROM mises WHERE id = ?", mid);
+  db.prepare("UPDATE mises SET settings = json_set(COALESCE(settings, '{}'), '$.lockScreen', json('true')) WHERE id = ?").run(mid);   // the full screen rule
+  const mp = await api("POST", `/api/mises/${mid}/preview`, { g: G });
+  const mtok = String(mp.data.url ?? "").split("/mes/")[1];
+  check(mp.status === 200 && !!mtok, "the mise en situation page gives the learner's link of a preview");
+  const mes = async (action: string, body?: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${mtok}/${action}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx); await ctx.flush(); return r.json() as any; };
+  const mi = await mes("info");
+  check(mi.preview === true && mi.status === "live" && mi.ident !== false, "open now, without the sign-in, whatever the real one's state");
+  check((await mes("start", {})).status === "active", "the learner's paper");
+  await mes("event", { kind: "lock", why: "fullscreen", item: "m1" });
+  check(mi.lockScreen === true && (await mes("info")).taker === "resume", "leaving full screen stops it, then it lets itself back in");
+  await mes("start", {});
+  await mes("submit", {});
+  const mi2 = await mes("info");
+  check(mi2.status === "submitted" && typeof mi2.score === "number", "handed in: the automatic score on the page");
+  const after = q1("SELECT status, (SELECT COUNT(*) FROM mise_takers WHERE mise_id = mises.id) AS n FROM mises WHERE id = ?", mid);
+  check(after.status === before.status && after.n === before.n && !(await api("GET", `/api/mises?g=${G}`)).data.mises?.some?.((m: any) => m.id !== mid && m.id === Number(q1("SELECT mise_id FROM mise_takers WHERE id = ?", Number(mtok.split(".")[0])).mise_id)), "the real one and the class's list don't change");
+  check(!q1("SELECT COUNT(*) AS n FROM competency_results WHERE guild_id LIKE 'pv:%'").n, "nothing in a record");
+}
+
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);

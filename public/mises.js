@@ -324,6 +324,7 @@ function mesRender() {
       <p class="sub">${mesStatus(m.status)} · week ${m.week ?? "—"} · ${c.situations.length} situations + ${c.qcm.length} QCM${m.starts_at ? ` · ${m.status === "scheduled" ? "starts" : "started"} ${fmtDateTime(m.starts_at)}` : ""}${m.ends_at ? ` · ${m.status === "closed" ? "ended" : "ends"} ${fmtDateTime(m.ends_at)}` : m.status === "live" ? " · open until you close it" : ""}</p>
       <p class="iv-sum" style="margin:6px 0 0">${m.comps.map((x) => compChip(x)).join(" ")} ${m.settings.brief ? `<a class="tag" href="#/brief/${m.settings.brief.id}">📄 ${esc(m.settings.brief.title)}</a> ` : ""}${m.settings.lockScreen ? `<span class="tag">🖥️ full screen, locked when they leave</span> ` : ""}${m.settings.noPaste ? `<span class="tag">✋ copy-paste blocked</span>` : `<span class="tag">📋 copy-paste allowed (recorded)</span>`} ${m.status === "draft" ? "" : ((n) => !m.target.length ? `<span class="tag">whole class</span>` : n ? `<span class="tag">${n} learner(s) chosen</span>` : "")(m.target.filter((x) => !(m.settings.testers || []).includes(x)).length)}${(m.settings.testers || []).length ? ` <span class="tag">🧪 ${m.settings.testers.length} teacher(s) testing</span>` : ""}</p></div>
       <div class="toolbar" style="margin:0">
+        ${c.situations.length ? `<button class="btn" id="me-preview" title="Take it yourself as a learner sees it, in a new tab: a private copy, nobody is invited and nothing counts">👁️ Preview as a student</button>` : ""}
         ${m.status === "draft" ? `<button class="btn primary" id="me-launch">Launch · choose who takes it</button>` : ""}
         ${m.status === "live" && takers.some((t) => t.status === "locked") ? `<button class="btn primary" id="me-unall">Let everyone stopped back in (${takers.filter((t) => t.status === "locked").length})</button>` : ""}
         ${m.status === "live" || m.status === "scheduled" ? `<button class="btn" id="me-add">＋ Add learners</button><button class="btn" id="me-ext">⏱ More time</button><button class="btn danger" id="me-close">Close for everyone</button>` : ""}
@@ -349,6 +350,7 @@ function mesRender() {
   if ($("#me-unall")) $("#me-unall").onclick = (e) => busy(e.currentTarget, async () => { MSIT.d = await api(`/mises/${m.id}/unlock`, { method: "POST", body: {} }); toast("They can come back: their page asks for full screen again"); mesRender(); });
   if ($("#me-add")) $("#me-add").onclick = (e) => busy(e.currentTarget, () => mesAddDialog());
   if ($("#me-ext")) $("#me-ext").onclick = () => mesExtendDialog();
+  if ($("#me-preview")) $("#me-preview").onclick = (e) => previewAsStudent(e.currentTarget, `/mises/${m.id}/preview`);
   if ($("#me-reuse")) $("#me-reuse").onclick = (e) => busy(e.currentTarget, () => mesReuse(m.id));
   if ($("#me-late")) $("#me-late").onclick = (e) => busy(e.currentTarget, () => mesLateDialog());
   if ($("#me-close")) $("#me-close").onclick = () => confirmDialog("Close it for everyone?", "Every paper still open is handed in as it is now (the work saved so far). Their links stop working.", "Close", async () => { MSIT.d = await api(`/mises/${m.id}/close`, { method: "POST", body: {} }); mesRender(); });

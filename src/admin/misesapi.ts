@@ -4,7 +4,7 @@
 //   POST /mises/generate            the AI writes it (for a brief, or the sprint and week): the JSON, its preview and checklist (not saved)
 //   GET  /mises/:id                 the session, the live table and the class statistics (refreshed every few seconds)
 //   PUT  /mises/:id                 title, learners, options, the JSON of a draft          DELETE /mises/:id
-//   POST /mises/:id/launch|add|late|resend|extend|close|remove|results|unlock     GET /mises/:id/links
+//   POST /mises/:id/launch|add|late|resend|extend|close|remove|results|unlock|preview     GET /mises/:id/links
 //   (late: learners absent at the launch get it now, with their own time counted from when they open it)
 //   GET  /mises/:id/taker/:t        one learner        PUT /mises/:id/grade|comment        GET /mises/:id/live.csv|results.csv
 import type { Ctx, Env, GuildRow } from "../shared/types.ts";
@@ -12,6 +12,7 @@ import {
   MiseError, addLate, addTakers, reuseMise, answersExport, importGrades, closeMise, deleteMise, extend, fixMise, generateMise, importMise, launch, links, listMises, liveCsv, miseView, promptFor, removeTaker, resend, resultsCsv,
   reopenTaker, resetTaker, saveMise, sendResults, setComment, setGrade, setupView, takerDetail, unlockTakers,
 } from "../shared/misesdb.ts";
+import { previewMise } from "../shared/preview.ts";
 
 const ok = (data: unknown) => Response.json(data);
 const csv = (body: string, name: string) => new Response(body, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="${name}"` } });
@@ -46,13 +47,15 @@ async function route(env: Env, path: string, method: string, body: any, guild: (
     return csv(m[2] === "live" ? await liveCsv(env, g, id) : await resultsCsv(env, g, id), `mise-${id}-${m[2] === "live" ? "live" : "resultats"}.csv`);
   }
   if ((m = path.match(/^\/mises\/(\d+)\/taker\/(\d+)$/)) && method === "GET") return ok(await takerDetail(env, await guild(), Number(m[1]), Number(m[2])));
-  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|late|reuse|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock))?$/))) return null;
+  if (!(m = path.match(/^\/mises\/(\d+)(?:\/(launch|add|late|reuse|resend|extend|close|remove|reset|reopen|results|links|grade|comment|unlock|preview))?$/))) return null;
   const g = await guild(), id = Number(m[1]), act = m[2];
   if (!act && method === "GET") return ok(await miseView(env, g, id));
   if (!act && method === "PUT") { const r = await saveMise(env, g, id, body); return ok(r.problems.length ? r : { ...r, ...(await miseView(env, g, id)) }); }
   if (!act && method === "DELETE") { await deleteMise(env, g, id); return ok({ ok: true }); }
   if (act === "links" && method === "GET") return ok({ links: await links(env, g, id) });
   if (method !== "POST" && method !== "PUT") return null;
+  // 👁️ the learner's page in a new tab, on a private copy: nobody invited, nothing counted (preview.ts)
+  if (act === "preview") return ok(await previewMise(env, g, id));
   if (act === "launch") { const r = await launch(env, g, id, body); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   if (act === "add") { const r = await addTakers(env, g, id, Array.isArray(body.students) ? body.students : [], body.send !== false); return ok({ ...r, ...(await miseView(env, g, id)) }); }
   // ♻️ use it again: back to a draft if nobody took it, else a new session (a draft) from the same content
