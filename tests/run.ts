@@ -6850,6 +6850,47 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
     await api("POST", `/api/wplans/${id}/check?g=${G}`, { step: br.id, i: 0, on: before.includes(0) });
     check((await api("POST", `/api/wplans/${id}/check?g=${G}`, { step: br.id, i: 99, on: true })).status === 400, "…an unknown objective is refused");
   }
+  {
+    // 🔍 the mini brief's repo read objective by objective: what's in the code, on the plan and in the class list
+    const { _test: sc } = await import("../src/shared/wpscan.ts");
+    check(sc.repoOfLink("https://github.com/bob/nav/tree/main") === "bob/nav" && sc.repoOfLink("https://bob.github.io/nav/") === "bob/nav" && sc.repoOfLink("https://bob.github.io") === "bob/bob.github.io"
+      && sc.repoOfLink("https://netlify.app/x") === null && sc.repoOfLink("https://github.com/orgs/acme/projects") === null, "a repo from the link: github.com, its GitHub Pages site; another site: none");
+    const cl = sc.cleanScan({ objectifs: [{ n: 2, etat: "partiel", preuve: "x" }, { n: 1, etat: "fait" }] }, 3);
+    check(cl.tasks.map((t: any) => t.state).join() === "done,partial,missing" && sc.scanPct({ tasks: cl.tasks } as any) === 50, "the AI's answer cleaned: by number, a missing one is « missing »; partial counts half");
+    const was = { key: env.GITHUB_PRIVATE_KEY, id: env.GITHUB_APP_ID };
+    env.GITHUB_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----"; env.GITHUB_APP_ID = "1";
+    run1("UPDATE players SET gh_inst = '777' WHERE guild_id = ? AND discord_id = ?", G, B);
+    run1("INSERT OR REPLACE INTO gh_tokens (inst, token, exp) VALUES ('777', 'tok777', ?)", clock.now() + 3000);
+    github.repoMeta["bob/nav"] = { full_name: "bob/nav", pushed_at: new Date(Date.now() - 3600e3).toISOString(), default_branch: "main" };
+    github.trees["bob/nav@HEAD"] = ["index.html", "style.css", "README.md"];
+    github.files["bob/nav/HEAD/index.html"] = "<nav class=\"menu\"><a href=\"#\">Accueil</a></nav>";
+    github.files["bob/nav/HEAD/style.css"] = ".menu { display: flex; gap: 8px }";
+    const n0 = ai.scanUsers.length;
+    const S1 = await api("POST", `/api/wplans/${id}/scan?g=${G}`, { step: br.id });
+    const scan = S1.data.plan?.steps.find((x: any) => x.id === br.id).scan;
+    check(S1.status === 200 && scan?.repo === "bob/nav" && !scan.error && scan.tasks.length === nT && scan.tasks[0].state === "done" && scan.tasks[1].state === "partial" && /nav est faite/.test(scan.summary),
+      `🔍 Scan the repo: each objective done / started / not there, with what shows it (${S1.status} ${JSON.stringify(scan ?? S1.data).slice(0, 200)})`);
+    check(ai.scanUsers.length === n0 + 1 && /index\.html/.test(ai.scanUsers[n0]) && /display: flex/.test(ai.scanUsers[n0]) && !/Bob/.test(ai.scanUsers[n0]), "…the AI read the files and the code (no name sent)");
+    const stB = S1.data.status.steps.find((x: any) => x.id === br.id);
+    check(stB.found === 1.5 && S1.data.status.repo.found === 1.5 && S1.data.status.repo.of === nT, `…the plan's progress knows what's in the code (${JSON.stringify(stB)})`);
+    const L2 = await api("GET", `/api/wplans?g=${G}`);
+    const mine = L2.data.find((x: any) => x.id === id);
+    check(mine.repo?.link === "https://github.com/bob/nav" && mine.repo.pct === Math.round(150 / nT) && mine.repo.repo === "bob/nav", `…and the class list shows how far their code is (${JSON.stringify(mine.repo)})`);
+    const A1 = await api("POST", `/api/wplans/scan?g=${G}`, {});
+    check(A1.status === 200 && A1.data.scanned.length === 0 && A1.data.left === 0 && A1.data.handedIn >= 1 && ai.scanUsers.length === n0 + 1, "🔍 Scan all repos: a repo read less than 6 h ago isn't read again");
+    clock.advance(5);
+    const A2 = await api("POST", `/api/wplans/scan?g=${G}`, { force: true });
+    const A3 = await api("POST", `/api/wplans/scan?g=${G}`, { force: true, since: A2.data.since });
+    check(A2.data.scanned.some((x: any) => x.sid === B && x.pct === Math.round(150 / nT)) && A3.data.scanned.length === 0 && ai.scanUsers.length === n0 + 2, "…Shift+click reads them all again, each once in the round");
+    // a private repo nobody can read: the reason is kept, nothing counted
+    const keep = github.repoMeta["bob/nav"]; delete github.repoMeta["bob/nav"];
+    const S2 = await api("POST", `/api/wplans/${id}/scan?g=${G}`, { step: br.id });
+    const sc2 = S2.data.plan.steps.find((x: any) => x.id === br.id).scan;
+    check(S2.status === 200 && /can't read bob\/nav/.test(sc2.error) && S2.data.status.repo === null && ai.scanUsers.length === n0 + 2, `…a repo ClassBot can't read: said why, nothing counted (${sc2.error})`);
+    github.repoMeta["bob/nav"] = keep;
+    check((await api("POST", `/api/wplans/${id}/scan?g=${G}`, { step: code.id })).status === 400, "…an action that isn't a mini brief: refused");
+    env.GITHUB_PRIVATE_KEY = was.key; env.GITHUB_APP_ID = was.id;
+  }
   // everything done (the challenge solved in Discord) → the plan is done
   run1("UPDATE assignments SET status = 'done', completed_at = ? WHERE discord_id = ? AND note LIKE 'Plan d''action%'", clock.now(), B);
   const ans = v.steps.find((x: any) => x.kind === "answer");

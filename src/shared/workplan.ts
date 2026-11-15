@@ -34,7 +34,10 @@ export interface Step {
   merged?: string[];
   /** a mini brief: the objectives the student ticked (their indexes), and when */
   checks?: number[]; checked_at?: number | null;
+  /** a mini brief: its GitHub repo read by the AI, objective by objective (🔍 wpscan.ts) */
+  scan?: RepoScan | null;
 }
+export interface RepoScan { at: number; link: string; repo: string; pushed_at: string | null; tasks: { state: "done" | "partial" | "missing"; why: string }[]; summary: string; error?: string }
 export interface Lacune { notion: string; priority: 1 | 2 | 3; why: string; evidence: string[]; comps: string[] }
 export interface Diagnosis { at: number; model: string; summary: string; lacunes: Lacune[]; proposals: Step[]; wish?: string }
 export interface WorkPlan {
@@ -453,12 +456,17 @@ export async function planStatus(env: Env, p: WorkPlan) {
     // how far they are in it: done = all of it; a mini brief = the objectives they ticked
     const tasks = s.kind === "brief" ? (s.brief?.tasks || []).length : 0;
     const ticked = tasks ? (s.checks || []).filter((k) => k >= 0 && k < tasks).length : 0;
-    const progress = state === "done" ? 1 : tasks ? ticked / tasks : 0;
-    return { id: s.id, state, asg: asg.find((x) => x.id === s.asg_id)?.status ?? null, ticked, tasks, progress };
+    // …or what the repo scan found in their code (the partial ones count half), when it's further
+    const sc = tasks && s.scan && !s.scan.error && s.scan.link === s.work?.link && s.scan.tasks.length === tasks ? s.scan.tasks : null;
+    const found = sc ? sc.reduce((a, t) => a + (t.state === "done" ? 1 : t.state === "partial" ? 0.5 : 0), 0) : 0;
+    const progress = state === "done" ? 1 : tasks ? Math.max(ticked, found) / tasks : 0;
+    return { id: s.id, state, asg: asg.find((x) => x.id === s.asg_id)?.status ?? null, ticked, tasks, progress, found: sc ? found : null };
   });
   const done = steps.filter((s) => s.state === "done").length;
   const objTotal = steps.reduce((a, s) => a + s.tasks, 0), objDone = steps.reduce((a, s) => a + s.ticked, 0);
-  return { steps, done, total: steps.length, objDone, objTotal, pct: steps.length ? Math.round((100 * steps.reduce((a, s) => a + s.progress, 0)) / steps.length) : 0 };
+  const scanned = steps.filter((s) => s.found != null);
+  const repo = scanned.length ? { found: scanned.reduce((a, s) => a + s.found!, 0), of: scanned.reduce((a, s) => a + s.tasks, 0) } : null;
+  return { steps, done, total: steps.length, objDone, objTotal, repo, pct: steps.length ? Math.round((100 * steps.reduce((a, s) => a + s.progress, 0)) / steps.length) : 0 };
 }
 async function settle(env: Env, p: WorkPlan) {
   if (p.status !== "sent") return;
@@ -503,8 +511,18 @@ export async function plansSummary(env: Env, g: GuildRow, sid?: string) {
     const at = Math.max(0, ...p.steps.map((s) => s.work?.at || 0)) || null;
     return { id: p.id, sid: p.sid, name: p.name, title: p.title, status: p.status, due_at: p.due_at, created_at: p.created_at, sent_at: p.sent_at, updated_at: p.updated_at,
       steps: p.steps.length, kinds: p.steps.map((s) => s.kind), done: st?.done ?? 0, pct: st?.pct ?? 0, objDone: st?.objDone ?? 0, objTotal: st?.objTotal ?? 0, lastWork: at,
-      toReview: p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length };
+      toReview: p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length, repo: repoOf(p, st?.repo ?? null) };
   });
+}
+
+/** The mini brief's repo, for the lists: handed in or not, how far the code is (🔍 the scan), when it was read. */
+function repoOf(p: WorkPlan, found: { found: number; of: number } | null) {
+  const b = p.steps.filter((s) => s.kind === "brief");
+  if (!b.length) return null;
+  const s = b.find((x) => x.work?.link) || b[0];
+  const sc = s.scan && s.scan.link === s.work?.link ? s.scan : null;
+  return { link: s.work?.link || null, repo: sc?.repo || null, at: sc?.at ?? null, error: sc?.error || null,
+    pct: found && found.of ? Math.round((100 * found.found) / found.of) : null, found: found?.found ?? null, of: found?.of ?? (s.brief?.tasks.length || 0) };
 }
 
 // ------------------------------------------------------------------ the student's side

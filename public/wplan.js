@@ -207,7 +207,7 @@ function chListHtml(s, q) {
   return lib.slice(0, 60).map((c) => `<label class="wp-cho ${c.id === s.challenge_id ? "on" : ""}"><input type="radio" name="ch-${esc(s.id)}" value="${c.id}" ${c.id === s.challenge_id ? "checked" : ""}><b>${esc(c.title)}</b> ${diffTag(c.difficulty)} <span class="muted small">${esc(KIND[c.kind] || c.kind)}</span></label>`).join("") || `<p class="muted small">No challenge matches.</p>`;
 }
 function peekHtml(s, st) {
-  const n = s.kind === "brief" ? (s.brief?.tasks || []).length : 0, ticks = n ? `<span class="wp-objpeek"><span class="ap-wpbar"><i style="width:${Math.round((100 * (s.checks || []).length) / n)}%"></i></span>${(s.checks || []).length}/${n} objectives ticked</span>` : "";
+  const n = s.kind === "brief" ? (s.brief?.tasks || []).length : 0, ticks = n ? `<span class="wp-objpeek"><span class="ap-wpbar"><i style="width:${Math.round((100 * (s.checks || []).length) / n)}%"></i></span>${(s.checks || []).length}/${n} objectives ticked</span>${wpScanOf(s) ? `<span class="wp-objpeek" title="What the scan found in their repo">🔍 ${wpScanOf(s).tasks.filter((t) => t.state === "done").length}/${n} in the code</span>` : ""}` : "";
   if (!s.work && !s.review) return ticks || `<span class="muted small">${s.kind === "challenge" ? (st?.asg === "open" ? "Not solved yet (in Discord)" : "") : "Not answered yet"}</span>`;
   return ticks + trackHtml(s, st, true);
 }
@@ -220,8 +220,8 @@ function trackHtml(s, st, short = false) {
       const ck = new Set(s.checks || []), n = (s.brief?.tasks || []).length;
       h += `<div class="wp-ctx">${wpCtx(s.brief?.context || "")}</div><div class="wp-h">Objectives ${WPS.plan.status === "draft" ? "" : `<span class="wp-objn">${ck.size}/${n} ticked by ${wpFirst()}${s.checked_at ? ` · ${esc(fmtAgo(s.checked_at))}` : ""}</span>`}</div>
         <ul class="wp-objl ${WPS.plan.status === "draft" ? "" : "ticks"}">${(s.brief?.tasks || []).map((t, k) => WPS.plan.status === "draft" ? `<li>${esc(t)}</li>`
-          : `<li class="${ck.has(k) ? "on" : ""}"><button type="button" class="wp-tick" data-tck="${esc(s.id)}" data-k="${k}" data-on="${ck.has(k) ? 0 : 1}" title="${ck.has(k) ? "Done: click to mark it not done" : "Not done: click to mark it done"}" aria-label="${esc(t)}: ${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</button>${esc(t)}</li>`).join("")}</ul>
-        ${WPS.plan.status === "draft" ? "" : `<p class="small muted" style="margin:-4px 0 8px">Tick what you saw done; ${wpFirst()} sees the same list.</p>`}`;
+          : `<li class="${ck.has(k) ? "on" : ""}"><button type="button" class="wp-tick" data-tck="${esc(s.id)}" data-k="${k}" data-on="${ck.has(k) ? 0 : 1}" title="${ck.has(k) ? "Done: click to mark it not done" : "Not done: click to mark it done"}" aria-label="${esc(t)}: ${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</button><span class="wp-objt">${esc(t)}${wpScanOf(s)?.tasks[k] ? wpFoundHtml(wpScanOf(s).tasks[k]) : ""}</span></li>`).join("")}</ul>
+        ${WPS.plan.status === "draft" ? "" : `<p class="small muted" style="margin:-4px 0 8px">Tick what you saw done; ${wpFirst()} sees the same list.</p>${wpScanHtml(s)}`}`;
     }
     else h += `<p class="wp-q">${esc(s.prompt)}</p>`;
   }
@@ -238,6 +238,20 @@ function trackHtml(s, st, short = false) {
       <textarea data-rvc="${esc(s.id)}" rows="3" maxlength="1000" placeholder="A comment for ${wpFirst()} (optional): what's right, what to fix…">${esc(s.review?.comment || "")}</textarea>
       <div class="wp-revb"><button class="btn small primary" data-rv="${esc(s.id)}" data-ok="1">✓ Done</button><button class="btn small" data-rv="${esc(s.id)}" data-ok="0">✗ Not done</button>${s.review ? `<button class="btn small" data-rvclear="${esc(s.id)}" title="Remove your mark: the action's state comes from ${wpFirst()}'s work again">Remove the mark</button>` : ""}</div></div>`;
   return h;
+}
+// 🔍 the repo handed in, read objective by objective (only the scan of the link handed in now)
+const WP_FOUND = { done: ["up", "✓ In the code"], partial: ["warn", "◐ Started"], missing: ["down", "✗ Not in the code"] };
+function wpScanOf(s) { const sc = s.scan; return sc && !sc.error && sc.link === s.work?.link && sc.tasks.length === (s.brief?.tasks || []).length ? sc : null; }
+function wpFoundHtml(t) { const v = WP_FOUND[t.state] || WP_FOUND.missing; return `<span class="wp-found"><span class="wp-state ${v[0]}">${v[1]}</span>${t.why ? `<span class="small muted">${esc(t.why)}</span>` : ""}</span>`; }
+function wpScanHtml(s) {
+  if (!s.work?.link) return `<div class="wp-scan muted small">🔍 When ${wpFirst()} hands in their repo, ClassBot can read it and check each objective in the code.</div>`;
+  const sc = s.scan && s.scan.link === s.work.link ? s.scan : null, ok = wpScanOf(s);
+  const n = ok ? ok.tasks.filter((t) => t.state === "done").length : 0, half = ok ? ok.tasks.filter((t) => t.state === "partial").length : 0;
+  return `<div class="wp-scan"><div class="wp-scan-h"><b>🔍 In the repo</b>${ok ? `<span class="ap-wpbar"><i style="width:${Math.round((100 * (n + half / 2)) / ok.tasks.length)}%"></i></span><span class="small">${n}/${ok.tasks.length} done${half ? ` · ${half} started` : ""}</span>` : ""}
+      <button class="btn small" data-scan="${esc(s.id)}">${sc ? "Scan again" : "🔍 Scan the repo"}</button></div>
+    ${sc?.error ? `<p class="wp-alert">${esc(sc.error)}</p>` : ""}
+    ${ok?.summary ? `<p class="small">${esc(ok.summary)}</p>` : ""}
+    <p class="small muted">${sc ? `${sc.repo ? `<a href="https://github.com/${esc(sc.repo)}" target="_blank" rel="noopener noreferrer">${esc(sc.repo)}</a> · ` : ""}read ${esc(fmtAgo(sc.at))}${sc.pushed_at ? ` · last push ${esc(fmtAgo(Math.floor(Date.parse(sc.pushed_at) / 1000)))}` : ""} · the AI reads the code; your ticks and your mark stay yours.` : "The AI reads the code and says, for each objective, if it's done, started or not there."}</p></div>`;
 }
 // a brief's context: its parts (a line starting with an emoji) as headings, « - » lines as lists
 function wpCtx(text) {
@@ -269,7 +283,7 @@ function progressPanelHtml(st) {
   const toReview = p.steps.filter((s) => s.kind === "brief" && s.work && !s.review).length;
   return `<section class="panel wp-prog"><h2>${p.status === "done" ? "🎉 Done" : "Progress"}</h2>
     <div class="wp-ring"><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${r}" class="bg"/><circle cx="55" cy="55" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct / 100)}"/></svg>
-      <div><b>${pct}%</b><span>${st?.done ?? 0}/${st?.total ?? p.steps.length} action${(st?.total ?? p.steps.length) > 1 ? "s" : ""} done${st?.objTotal ? `<br>${st.objDone}/${st.objTotal} objectives ticked` : ""}</span></div></div>
+      <div><b>${pct}%</b><span>${st?.done ?? 0}/${st?.total ?? p.steps.length} action${(st?.total ?? p.steps.length) > 1 ? "s" : ""} done${st?.objTotal ? `<br>${st.objDone}/${st.objTotal} objectives ticked` : ""}${st?.repo ? `<br>${+st.repo.found.toFixed(1)}/${st.repo.of} found in the repo` : ""}</span></div></div>
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
     <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
@@ -436,6 +450,13 @@ function wireWorkPlan() {
       const r = await api(`/wplans/${p.id}/review`, { method: "POST", body: { step: b.dataset.rvclear, clear: true } });
       Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan(); toast("Mark removed");
     }));
+    $$("[data-scan]").forEach((b) => b.onclick = () => busy(b, async () => {
+      b.textContent = "Reading the repo…";
+      const r = await api(`/wplans/${p.id}/scan`, { method: "POST", body: { step: b.dataset.scan } });
+      Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan();
+      const sc = r.plan.steps.find((x) => x.id === b.dataset.scan)?.scan;
+      toast(sc?.error ? sc.error : "Repo read", !!sc?.error);
+    }));
     $$("[data-tck]").forEach((b) => b.onclick = () => busy(b, async () => {
       const r = await api(`/wplans/${p.id}/check`, { method: "POST", body: { step: b.dataset.tck, i: Number(b.dataset.k), on: b.dataset.on === "1" } });
       Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null }); drawWorkPlan();
@@ -569,15 +590,41 @@ function wpImportDialog() {
 function wpCardLine(plans) {
   if (!plans.length) return "";
   return `<div class="ap-wp">${plans.slice(0, 2).map((p) => `<a href="#/wplan/${p.id}" class="ap-wpl ${p.status}"><span>🧭</span><b>${p.status === "draft" ? "Draft plan" : p.status === "done" ? "Plan done" : "Plan d'action"}</b>
-    ${p.status === "draft" ? `<span class="muted small">${p.steps} action(s)</span>` : `<span class="ap-wpbar"><i style="width:${p.pct}%"></i></span><span class="small">${p.done}/${p.steps}</span>`}${p.toReview ? `<span class="wp-state blue">📦 to validate</span>` : ""}</a>`).join("")}</div>`;
+    ${p.status === "draft" ? `<span class="muted small">${p.steps} action(s)</span>` : `<span class="ap-wpbar"><i style="width:${p.pct}%"></i></span><span class="small">${p.done}/${p.steps}</span>`}${p.repo?.pct != null && p.status !== "draft" ? `<span class="small" title="Objectives found in their repo">🔍 ${p.repo.pct}%</span>` : ""}${p.toReview ? `<span class="wp-state blue">📦 to validate</span>` : ""}</a>`).join("")}</div>`;
+}
+function wpRepoHtml(p) {
+  const r = p.repo;
+  if (!r || p.status === "draft") return "";
+  if (!r.link) return `<span class="wp-repo muted small" title="The mini brief's repo">🔍 no repo yet</span>`;
+  if (r.error) return `<span class="wp-repo small" title="${esc(r.error)}">🔍 <span class="wp-state down">can't read</span></span>`;
+  if (r.pct == null) return `<span class="wp-repo muted small" title="Handed in, not read yet: « 🔍 Scan all repos »">🔍 not scanned</span>`;
+  return `<span class="wp-repo small" title="What the scan found in ${esc(r.repo || "the repo")} (${esc(fmtAgo(r.at))}): ${+r.found.toFixed(1)} of ${r.of} objectives">🔍 <span class="ap-wpbar"><i style="width:${r.pct}%"></i></span>${r.pct}% in the code</span>`;
 }
 function wpListHtml(plans) {
   if (!plans.length) return "";
-  return `<section class="panel"><div class="panel-head"><h2>🧭 Plans d'action</h2><span class="muted small">${plans.length}</span></div>
+  const repos = plans.filter((p) => p.status !== "draft" && p.repo?.link).length;
+  return `<section class="panel" id="wp-plans"><div class="panel-head"><h2>🧭 Plans d'action</h2><span class="muted small">${plans.length}</span>
+      ${repos ? `<button class="btn small" id="wp-scanall" title="The AI reads each mini brief's GitHub repo and checks each objective in the code (the ones read less than 6 h ago are kept; Shift+click reads them all again)">🔍 Scan all repos <span class="muted">· ${repos}</span></button>` : ""}</div>
     <div class="wp-list">${plans.map((p) => `<a class="wp-row" href="#/wplan/${p.id}">${avatar(p.name, p.sid)}<span class="wp-row-w"><b>${esc(p.name)}</b><span class="muted small">${esc(p.title)}</span></span>
-      <span class="wp-row-k">${p.kinds.map((k) => WK[k]?.ico || "").join("")}</span>
+      <span class="wp-row-k">${p.kinds.map((k) => WK[k]?.ico || "").join("")}</span>${wpRepoHtml(p)}
       ${p.status === "draft" ? `<span class="wp-state">Draft</span>` : `<span class="ap-wpbar wide"><i style="width:${p.pct}%"></i></span><span class="small">${p.done}/${p.steps}</span>`}
       ${p.toReview ? `<span class="wp-state blue">📦 ${p.toReview} to validate</span>` : p.status === "done" ? `<span class="wp-state up">✓ Done</span>` : p.status === "sent" ? `<span class="muted small">${p.due_at ? `due ${fmtDate(p.due_at)}` : `sent ${fmtAgo(p.sent_at)}`}</span>` : `<span class="muted small">${fmtAgo(p.updated_at)}</span>`}</a>`).join("")}</div></section>`;
 }
+
+/** 🔍 Every handed-in repo, read a few at a time (each call reads the next ones), then the page again. */
+async function wpScanAll(btn, force = false) {
+  await busy(btn, async () => {
+    let since = 0, done = 0, errors = 0;
+    for (let i = 0; i < 30; i++) {
+      const r = await api("/wplans/scan", { method: "POST", body: { force, since } });
+      since = r.since; done += r.scanned.length; errors += r.scanned.filter((x) => x.error).length;
+      btn.textContent = `Reading the repos… ${done}${r.left ? ` (${r.left} left)` : ""}`;
+      if (!r.left || !r.scanned.length) break;
+    }
+    toast(done ? `${done} repo(s) read${errors ? `, ${errors} couldn't be` : ""}` : "Every repo was read less than 6 h ago (Shift+click to read them again)", errors > 0 && errors === done);
+    await viewAssignments();
+  });
+}
+document.addEventListener("click", (e) => { const b = e.target.closest?.("#wp-scanall"); if (b) wpScanAll(b, e.shiftKey); });
 
 Object.assign(routes, { wplan: (id) => viewWorkPlan(id) });

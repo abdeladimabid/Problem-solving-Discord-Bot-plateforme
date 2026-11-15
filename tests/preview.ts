@@ -450,6 +450,29 @@ env.ASSETS = {
   db.prepare("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`actsign:${G}`, JSON.stringify({ channel: null, veille: 20, live: 40 }), now);
 }
 
+// ---------------------------------------------------------- plans d'action: a mini brief each, their repo read (🔍)
+{
+  const tasks = ["Une barre de navigation en Flexbox, alignée et espacée", "Une galerie de projets en CSS Grid (3 colonnes, 1 sur mobile)", "Un formulaire de contact avec des champs requis et leurs labels", "Le site publié sur GitHub Pages"];
+  const brief = { context: "📌 Contexte\nTon portfolio d'une page pour présenter tes projets.", tasks, deliverable: "Le lien du dépôt GitHub", hours: 4 };
+  const scan = (states: string[], why: string[], summary: string, link: string, ago: number) => ({ at: now - ago, link, repo: link.replace("https://github.com/", ""), pushed_at: new Date((now - ago - 7200) * 1000).toISOString(),
+    tasks: states.map((state, k) => ({ state, why: why[k] })), summary });
+  const plans = [
+    { sid: "103", name: "Mehdi", link: "https://github.com/mehdi-dev/portfolio", scan: scan(["done", "done", "partial", "missing"], ["index.html : <nav> en display:flex, gap et justify-content", "style.css : .gallery en grid, repeat(3, 1fr) et une media query", "contact.html : le formulaire est là mais les champs n'ont pas de label", "pas de lien GitHub Pages dans le README"], "La navigation et la galerie sont faites ; il reste les labels du formulaire et la mise en ligne.", "https://github.com/mehdi-dev/portfolio", 2 * 3600), checks: [0] },
+    { sid: "109", name: "Ilyas", link: "https://github.com/ilyas-b/mini-portfolio", scan: scan(["partial", "missing", "missing", "missing"], ["index.html : une <nav> sans flex pour l'instant", "aucune galerie dans le code", "aucun formulaire", "le dépôt n'est pas publié"], "Le projet commence à peine : seule la structure HTML de la navigation existe.", "https://github.com/ilyas-b/mini-portfolio", 26 * 3600), checks: [] },
+    { sid: "105", name: "Sara", link: "https://github.com/sara-codes/portfolio", scan: null, checks: [0, 1] },
+    { sid: "102", name: "Lina", link: null, scan: null, checks: [] },
+  ];
+  plans.forEach((x, i) => {
+    const id = 1780000000000 + i;
+    const step = { id: "br" + i, kind: "brief", title: "Mini-projet : ton portfolio", notion: "Flexbox et Grid", why: "Pratiquer la mise en page sur un vrai livrable.", prompt: "", lang: "", starter: "", expected: "", choices: [], answer: [], challenge_id: null, asg_id: null, brief,
+      work: x.link ? { at: now - 30 * 3600, link: x.link, note: "", verdict: "submitted", tries: 1 } : null, review: null, checks: x.checks, scan: x.scan };
+    const q = { id: "q" + i, kind: "answer", title: "Flex ou Grid ?", notion: "Flexbox", why: "", prompt: "Quand choisir Grid plutôt que Flexbox ?", lang: "", starter: "", expected: "", choices: [], answer: [], challenge_id: null, asg_id: null, brief: null,
+      work: i < 2 ? { at: now - 40 * 3600, answer: "Grid pour deux dimensions", verdict: "correct", tries: 1 } : null, review: null };
+    const p = { id, gid: G, sid: x.sid, name: x.name, title: `Plan d'action · ${x.name}`, message: "", status: "sent", due_at: now + 5 * DAY, created_at: now - 3 * DAY, updated_at: now - 3600, sent_at: now - 3 * DAY, done_at: null, diag: null, steps: [q, step] };
+    db.prepare("INSERT OR REPLACE INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)").run(`wplan:${G}:${id}`, JSON.stringify(p), now - 3600 + i);
+  });
+}
+
 // ---------------------------------------------------------- squads: last debrief levels, and an earlier sprint's squads
 {
   const lv = ["bon", "moyen", "faible", "critique", "moyen", "bon", "faible", "moyen", "excellent", "critique", "moyen", "faible", "bon", "moyen"];

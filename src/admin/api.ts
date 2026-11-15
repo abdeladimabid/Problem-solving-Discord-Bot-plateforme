@@ -38,6 +38,7 @@ import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/crea
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import { ChatError, chatCheck, chatFeedback, chatSuggestions, classChat, runChatAction, undoChatAction } from "../shared/classchat.ts";
+import { scanAll, scanStep } from "../shared/wpscan.ts";
 import { WorkPlanError, copyPlan, createClassPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
@@ -541,7 +542,9 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
     // 👥 a plan for the whole class: on a sprint's objectives not reached (then copied to each student)
     if (path === "/wplans" && method === "POST") return ok(body.sprint != null ? await createClassPlan(env, await guild(), Number(body.sprint)) : await createPlan(env, await guild(), String(body.student ?? "")));
-    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy))?$/);
+    // 🔍 every mini brief's repo read objective by objective (a few per call: the page calls again while some are left)
+    if (path === "/wplans/scan" && method === "POST") return ok(await scanAll(env, await guild(), { force: !!body.force, since: Number(body.since) || 0 }));
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy|scan))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
@@ -551,6 +554,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       if (m[2] === "ai" && method === "POST") return ok(await stepAi(env, g, pid, body));
       if (m[2] === "review" && method === "POST") { await reviewStep(env, g, pid, String(body.step ?? ""), body); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "check" && method === "POST") { await teacherCheck(env, g, pid, body); return ok(await workPlanView(env, g, pid)); }
+      if (m[2] === "scan" && method === "POST") { await scanStep(env, g, pid, String(body.step ?? "")); return ok(await workPlanView(env, g, pid)); }
       if (m[2] === "send" && method === "POST") {
         if (body.edits) await savePlanEdits(env, g, pid, body.edits);
         const r = await sendPlan(env, g, pid, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });

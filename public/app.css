@@ -2586,6 +2586,13 @@ body.sl-open { overflow: hidden; }
 .wp-ask-h { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .wp-objpeek { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-soft); }
 .wp-objpeek .ap-wpbar { width: 90px; }
+/* 🔍 the mini brief's repo, read objective by objective */
+.wp-objt { display: grid; gap: 3px; min-width: 0; }
+.wp-found { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; } .wp-found .wp-state { font-size: 11px; padding: 1px 7px; }
+.wp-scan { border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 12px; margin: 0 0 10px; }
+.wp-scan p { margin: 6px 0 0; }
+.wp-scan-h { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; } .wp-scan-h .ap-wpbar { flex: 0 1 120px; } .wp-scan-h .btn { margin-left: auto; }
+.wp-repo { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; min-width: 150px; } .wp-repo .ap-wpbar { width: 70px; flex: none; }
 .wp-gnot { margin: 0 0 10px; padding-left: 18px; font-size: 13.5px; } .wp-gnot li { margin: 2px 0; }
 
 /* 📋 Sprints · Bilan administratif */

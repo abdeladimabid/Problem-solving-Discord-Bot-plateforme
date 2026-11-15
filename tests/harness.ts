@@ -477,6 +477,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
 export const ai = {
   calls: 0,
   guideUsers: [] as string[],
+  scanUsers: [] as string[],          // 🔍 plan d'action: the repos read for a mini brief
   mode: "good" as "" | "good" | "lying" | "broken" | "badwrite" | "blind" | "fixable" | "brokengens" | "deadgens",
   judgeVerdict: "accepted",
   prompts: [] as string[],
@@ -602,6 +603,12 @@ function fakeAI() {
         return { response: JSON.stringify({ categories: ["selection", "Erreur de syntaxe", "give-the-answer", "logic", "event"], ligne: 3, explication: "Corrige la ligne 3 : écris document.querySelector('#titre')", solution: "titre.textContent = 'x'" }) };
       }
       // plan d'action: the diagnosis (lacunes and proposed actions), one action, the correction of an answer
+      // 🔍 a mini brief's repo read: the 1st objective done, the 2nd started, the others not there
+      if (sys.includes("Tu lis le dépôt GitHub d'un apprenant")) {
+        ai.scanUsers.push(user);
+        const n = (user.split("OBJECTIFS DU MINI-PROJET :\n")[1] || "").split("\n\n")[0].split("\n").filter(Boolean).length;
+        return { response: JSON.stringify({ objectifs: Array.from({ length: n }, (_, k) => ({ n: k + 1, etat: k === 0 ? "fait" : k === 1 ? "partiel" : "absent", preuve: k === 0 ? "index.html : la nav en flex" : k === 1 ? "style.css : gap commencé" : "rien dans le code" })), resume: "La nav est faite, le reste à commencer." }) };
+      }
       if (sys.includes("Tu fais évoluer le MINI-PROJET")) {
         // folds each element into the brief: the old tasks kept, one task per element, in the project's story
         const cur = JSON.parse((user.split("LE MINI-PROJET ACTUEL :\n<<<\n")[1] || "{}").split("\n>>>")[0] || "{}");
