@@ -4178,7 +4178,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const L2 = d2.toLearn.map((x: any) => x.notion);
     check(!/\n\d\. /.test(t2) && learnPs.length === L2.length && /^La différence entre margin et padding/.test(L2[0]) && /^Écrire la structure de base d’une page avec doctype, head et body/.test(L2[1]) && /^Sélectionner un élément du DOM avec querySelector/.test(L2[2])
       && learnPs.every((x: string, i: number) => x.startsWith(L2[i].replace(/[.\s]+$/, "").charAt(0).toUpperCase() + L2[i].replace(/[.\s]+$/, "").slice(1)))
-      && /« MDN box model »/.test(learnPs[0]) && /« MDN querySelector »/.test(learnPs[2]) && learnPs.every((x: string) => !/ est l’espace| permet de |developer\.mozilla|Froggy|CSS-Tricks/.test(x))
+      && /« box model »/.test(learnPs[0]) && /« querySelector »/.test(learnPs[2]) && learnPs.every((x: string) => !/ est l’espace| permet de |developer\.mozilla|Froggy|CSS-Tricks/.test(x))
       && /l'attribut alt/i.test(list) && /création branche/i.test(list) && /les événements JavaScript/i.test(list)
       && !/bouton supprimer|(HTML|CSS|JavaScript|Git) :/.test(list.split("\n\n").map((x: string) => x.slice(0, 40)).join(" ")),
       `what to learn: one paragraph per point, no numbers, what it is, what to do and what to look up (${learnPs.map((x: string) => x.slice(0, 60)).join(" / ")})`);
@@ -4216,7 +4216,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
       assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
     const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
-    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n\nLa manipulation du DOM et les sélecteurs JavaScript/.test(th) && /\n\nFlexbox[^\n]*« MDN flexbox »/i.test(th),
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n\nLa manipulation du DOM et les sélecteurs JavaScript/.test(th) && /\n\nFlexbox[^\n]*« flexbox »/i.test(th),
       `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
   }
   {
@@ -4244,7 +4244,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       assess: [{ members: { u1: { score: 51, ok: [], ko: ["les tableaux JavaScript (map, filter)", "les fonctions"], summary: "" } } }, { kind: "mise", members: { u1: { score: 26, ok: [], ko: ["addEventListener", "createElement"], summary: "" } } }], level: { lvl: "faible" } };
     const ta = C.commentText(C.commentData({ first: "Aya", project: ra.brief, rec: ra, uid: "u1" }));
     const pa = (ta.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x));
-    check(/^Planification : pas de description, user stories/.test(pa[0] || "") && pa.some((x: string) => /^Acceder aux classes[^\n]*« MDN classList contains »/.test(x)) && pa.some((x: string) => /^Recuperer une image qui existe deja dans un div[^\n]*« MDN getAttribute »/.test(x))
+    check(/^Planification : pas de description, user stories/.test(pa[0] || "") && pa.some((x: string) => /^Acceder aux classes[^\n]*« classList contains »/.test(x)) && pa.some((x: string) => /^Recuperer une image qui existe deja dans un div[^\n]*« getAttribute »/.test(x))
       && pa.some((x: string) => /^Les tableaux JavaScript/.test(x)) && pa.findIndex((x: string) => /^Les tableaux/.test(x)) > pa.findIndex((x: string) => /^Recuperer une image/.test(x)) && !/insérer une image|developer\.mozilla|Froggy/.test(ta),
       `the teacher's notes first, each fact, with what to look up; then the assessment's gaps (${pa.map((x: string) => x.slice(0, 40)).join(" / ")})`);
   }

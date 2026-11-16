@@ -266,40 +266,40 @@ export const LEARN: Record<string, string> = {
   "Git (commit, branches)": "faire des commits clairs, travailler sur une branche et fusionner par pull request",
 };
 // the notions of the frameworks and tools (not in CONCEPTS), said the same way
-// what to look up about a point (the concepts, as the student will type them), and what to pay attention to: never an
+// what to look up about a point (the concepts only, as the student will type them: never a site's name), and what to pay attention to: never an
 // explanation — the student searches and finds it. The first that fits; the most precise first.
 const GUIDE: [RegExp, string[], string][] = [
-  [/(?:acc[ée]d|v[ée]rifi|savoir|tester|lire|r[ée]cup[ée]r)\w*[^.]{0,30}\bclasses?\b|classList\.contains/i, ["MDN classList contains", "MDN classList"], "classList.contains(\"nom\") renvoie true ou false, sans le point devant le nom de la classe."],
-  [/(?:r[ée]cup[ée]r|s[ée]lectionn|acc[ée]d|trouv|cibl)\w*[^.]{0,30}\b(?:images?|img)\b|images? (?:qui existe|existante|d[ée]j[àa])/i, ["MDN querySelector", "sélecteur descendant CSS", "MDN getAttribute"], "pars de l’élément parent (div img), et vérifie dans la console que le résultat n’est pas null."],
+  [/(?:acc[ée]d|v[ée]rifi|savoir|tester|lire|r[ée]cup[ée]r)\w*[^.]{0,30}\bclasses?\b|classList\.contains/i, ["classList contains", "classList"], "classList.contains(\"nom\") renvoie true ou false, sans le point devant le nom de la classe."],
+  [/(?:r[ée]cup[ée]r|s[ée]lectionn|acc[ée]d|trouv|cibl)\w*[^.]{0,30}\b(?:images?|img)\b|images? (?:qui existe|existante|d[ée]j[àa])/i, ["querySelector", "sélecteur descendant CSS", "getAttribute"], "pars de l’élément parent (div img), et vérifie dans la console que le résultat n’est pas null."],
   [/relations? Eloquent|hasMany|belongsTo/i, ["Laravel Eloquent relationships"], "la clé étrangère va dans la table du côté belongsTo."],
   [/migrations?/i, ["Laravel migrations"], "up() crée, down() annule : les deux doivent correspondre."],
   [/donn[ée]es? (?:à|vers) la vue|\bview\(|compact/i, ["Laravel passing data to views", "Blade foreach"], ""],
   [/composer|artisan/i, ["Laravel Artisan console", "Composer install"], ""],
   [/tailwind/i, ["Tailwind CSS utility classes", "Tailwind responsive design"], "les préfixes sm: md: lg: s’appliquent à partir de cette largeur."],
   [/planifi|user stor|deadline|estim|trello|github projects|kanban|t[âa]ches?\b/i, ["rédiger une user story", "GitHub Projects kanban"], "chaque tâche a une estimation et une date limite, et le lien du tableau est dans le README."],
-  [/HTMLCollection|NodeList|liste vivante|liste statique/i, ["MDN HTMLCollection", "MDN NodeList"], "querySelectorAll ne se met pas à jour, getElementsByClassName oui."],
-  [/children|childNodes/i, ["MDN children", "MDN childNodes"], "childNodes compte aussi les textes et les espaces."],
-  [/currentTarget|e\.target|event\.target|d[ée]l[ée]gation/i, ["MDN event.target", "MDN event.currentTarget", "délégation d’événements"], ""],
-  [/textContent|innerHTML/i, ["MDN textContent", "MDN innerHTML"], "innerHTML avec ce que tape l’utilisateur est une faille."],
-  [/images?\b|\bimg\b|\balt\b|\bsrc\b/i, ["MDN HTMLImageElement", "MDN createElement"], "une image a toujours un alt qui la décrit."],
-  [/classList|classes?\b/i, ["MDN classList"], "add, remove, toggle et contains : sans le point devant le nom de la classe."],
-  [/[ée]v[ée]nements?|addEventListener|clic|\bclick\b/i, ["MDN addEventListener", "MDN event.target", "MDN preventDefault"], "on passe la fonction sans l’appeler : addEventListener(\"click\", maFonction), pas maFonction()."],
-  [/createElement|appendChild|cr[ée]er (?:et|des)|ins[ée]rer|manipulation (?:du )?dom/i, ["MDN createElement", "MDN appendChild", "MDN remove"], "un élément créé n’apparaît pas tant qu’il n’est pas ajouté à la page."],
-  [/s[ée]lect|querySelector|getElementBy|\bDOM\b/i, ["MDN querySelector", "MDN querySelectorAll"], "le # pour un id, le . pour une classe, et vérifie que le résultat n’est pas null."],
-  [/localStorage|sauvegard/i, ["MDN localStorage", "MDN JSON.stringify", "MDN JSON.parse"], "localStorage ne garde que du texte."],
-  [/formulaires?|validation|\binput\b|\bchange\b|saisie/i, ["MDN input event", "MDN submit event", "validation de formulaire JavaScript"], ""],
-  [/forEach|\bmap\b|\bfilter\b|tableaux? JS|tableaux? JavaScript|boucles?/i, ["MDN Array forEach", "MDN Array map", "MDN Array filter"], "map et filter renvoient un nouveau tableau."],
-  [/async|await|fetch|promesse|promise/i, ["MDN fetch", "MDN async function"], "await seulement dans une fonction async, et un try/catch autour."],
-  [/ES6|fl[ée]ch[ée]e|destructur|modules?\b|import|export|template literal/i, ["MDN arrow functions", "MDN destructuring", "MDN modules JavaScript"], ""],
-  [/doctype|structure (?:de base )?d.une page|\bhead\b|\bbody\b/i, ["MDN structure document HTML"], ""],
+  [/HTMLCollection|NodeList|liste vivante|liste statique/i, ["HTMLCollection", "NodeList"], "querySelectorAll ne se met pas à jour, getElementsByClassName oui."],
+  [/children|childNodes/i, ["children", "childNodes"], "childNodes compte aussi les textes et les espaces."],
+  [/currentTarget|e\.target|event\.target|d[ée]l[ée]gation/i, ["event.target", "event.currentTarget", "délégation d’événements"], ""],
+  [/textContent|innerHTML/i, ["textContent", "innerHTML"], "innerHTML avec ce que tape l’utilisateur est une faille."],
+  [/images?\b|\bimg\b|\balt\b|\bsrc\b/i, ["HTMLImageElement", "createElement"], "une image a toujours un alt qui la décrit."],
+  [/classList|classes?\b/i, ["classList"], "add, remove, toggle et contains : sans le point devant le nom de la classe."],
+  [/[ée]v[ée]nements?|addEventListener|clic|\bclick\b/i, ["addEventListener", "event.target", "preventDefault"], "on passe la fonction sans l’appeler : addEventListener(\"click\", maFonction), pas maFonction()."],
+  [/createElement|appendChild|cr[ée]er (?:et|des)|ins[ée]rer|manipulation (?:du )?dom/i, ["createElement", "appendChild", "remove"], "un élément créé n’apparaît pas tant qu’il n’est pas ajouté à la page."],
+  [/s[ée]lect|querySelector|getElementBy|\bDOM\b/i, ["querySelector", "querySelectorAll"], "le # pour un id, le . pour une classe, et vérifie que le résultat n’est pas null."],
+  [/localStorage|sauvegard/i, ["localStorage", "JSON.stringify", "JSON.parse"], "localStorage ne garde que du texte."],
+  [/formulaires?|validation|\binput\b|\bchange\b|saisie/i, ["input event", "submit event", "validation de formulaire JavaScript"], ""],
+  [/forEach|\bmap\b|\bfilter\b|tableaux? JS|tableaux? JavaScript|boucles?/i, ["Array forEach", "Array map", "Array filter"], "map et filter renvoient un nouveau tableau."],
+  [/async|await|fetch|promesse|promise/i, ["fetch", "async function"], "await seulement dans une fonction async, et un try/catch autour."],
+  [/ES6|fl[ée]ch[ée]e|destructur|modules?\b|import|export|template literal/i, ["arrow functions", "destructuring", "modules JavaScript"], ""],
+  [/doctype|structure (?:de base )?d.une page|\bhead\b|\bbody\b/i, ["structure document HTML"], ""],
   [/fonctions?\b|param[èe]tres?|return/i, ["fonction paramètres return"], "une fonction fait une seule chose et renvoie son résultat avec return."],
   [/\bgit\b|commits?|branches?|pull request|merge/i, ["git branch", "pull request GitHub", "conventional commits"], "un commit par petite étape, avec un message clair."],
   [/README|documentation/i, ["README GitHub exemple"], ""],
-  [/flex|centr/i, ["MDN flexbox", "MDN justify-content", "MDN align-items"], ""],
-  [/\bgrid\b/i, ["MDN CSS grid", "MDN grid-template-columns"], ""],
-  [/margin|padding|bo[îi]te|border/i, ["MDN box model", "MDN margin", "MDN padding"], ""],
-  [/responsive|media|breakpoint/i, ["MDN media queries", "mobile first"], ""],
-  [/s[ée]mantique|header|footer|<main>/i, ["MDN balises sémantiques HTML"], ""],
+  [/flex|centr/i, ["flexbox", "justify-content", "align-items"], ""],
+  [/\bgrid\b/i, ["CSS grid", "grid-template-columns"], ""],
+  [/margin|padding|bo[îi]te|border/i, ["box model", "margin", "padding"], ""],
+  [/responsive|media|breakpoint/i, ["media queries", "mobile first"], ""],
+  [/s[ée]mantique|header|footer|<main>/i, ["balises sémantiques HTML"], ""],
   [/\bSQL\b|jointure|requ[êe]te/i, ["SQL JOIN", "SQL WHERE", "SQL GROUP BY"], ""],
 ];
 /** What to look up and what to pay attention to, about a point to learn (« Cherche … Attention : … »). */
@@ -393,7 +393,7 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
     // what it is about: a subject only named → its essentials; else its notion (said once, if the title doesn't already)
     const more = LEARN_MORE.find(([rx]) => rx.test(p.title));
     const about = p.vague && ess.length ? andList(ess) : p.cs.length && !saidIn(LEARN[p.cs[0]], p.title) ? LEARN[p.cs[0]] : more && !saidIn(more[1], p.title) ? more[1] : "";
-    return { notion: title, why: about, how: guideOf(p.title) || guideOf(about) || (() => { const q = title.replace(/\s*\([^)]*\)/g, "").trim(); return q.length <= 40 ? `Cherche « ${familyOf(`${title} ${about}`) === "php" ? "Laravel" : "MDN"} ${q} ».` : ""; })(), from: p.from, w: p.w };
+    return { notion: title, why: about, how: guideOf(p.title) || guideOf(about) || (() => { const q = title.replace(/\s*\([^)]*\)/g, "").trim(); return q.length <= 40 ? `Cherche « ${familyOf(`${title} ${about}`) === "php" ? "Laravel " : ""}${q} ».` : ""; })(), from: p.from, w: p.w };
   });
 }
 
@@ -694,7 +694,7 @@ export const AI_COMMENT_SYSTEM = [
   "- INDIVIDUEL : uniquement ce qu’il SAIT FAIRE et ne sait PAS ENCORE FAIRE techniquement, et ce que le formateur a noté en face à face. JAMAIS les livrables, les fonctionnalités, les pages ou les exigences du brief, ni les bonus. Dans le premier paragraphe, après l’avis, ce qu’il maîtrise : UNIQUEMENT ce qui est dans « CE QU’IL MAÎTRISE » (et ce qui va bien selon l’échange), en une phrase ; si c’est vide, ne dis RIEN de ce qu’il maîtrise. Le commentaire du correcteur sert seulement à préciser ce qu’il doit apprendre.",
   "- ÉQUIPE : parle du PROJET (fonctionnalités, interface, planification, README, commits, travail en équipe) : ce qui est réussi, ce qui manque encore (« il manque encore… », sans recopier la grille), ce qui est à améliorer. Bonus : s’il y en a, dis seulement qu’ils en ont réalisé, sans les lister ; sinon n’en parle pas.",
   "- Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel).",
-  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Annonce-le par « Ce que tu dois encore travailler en priorité, point par point : », puis UN court paragraphe par point (sans numéro ni puce), avec tous les points donnés, dans l’ORDRE donné (d’abord ce que le formateur a noté, avec SES faits précis : ce que l’apprenant n’a pas réussi à faire), sans en ajouter. Chaque paragraphe : le point, puis tel quel « Cherche « … » » et « Attention : … » donnés dans « quoi chercher et à quoi faire attention ». N’explique jamais la notion (pas de définition, pas de cours) et ne cite aucun autre site.",
+  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Annonce-le par « Ce que tu dois encore travailler en priorité, point par point : », puis UN court paragraphe par point (sans numéro ni puce), avec tous les points donnés, dans l’ORDRE donné (d’abord ce que le formateur a noté, avec SES faits précis : ce que l’apprenant n’a pas réussi à faire), sans en ajouter. Chaque paragraphe : le point, puis tel quel « Cherche « … » » et « Attention : … » donnés dans « quoi chercher et à quoi faire attention ». N’explique jamais la notion (pas de définition, pas de cours) et ne cite jamais de site ni de source (ni MDN, ni W3Schools, ni autre).",
   "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
   "- Si l’apprenant est en difficulté (faible ou critique) avec plusieurs points, un court paragraphe sur la méthode : pratiquer chaque jour, écrire le code soi-même sans copier, s’appuyer sur la documentation officielle.",
   "- Si tout est maîtrisé et qu’il n’y a rien à travailler (« CE QU’IL DOIT ENCORE APPRENDRE : (rien) »), n’invente rien : pas de liste, pas de conseil général, deux ou trois phrases sur ce qu’il réussit suffisent. Un apprenant au niveau bon ou excellent n’a pas de points à apprendre en plus de ceux donnés, et jamais le conseil de pratiquer chaque jour sans copier.",
@@ -783,6 +783,8 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   const nL = (d.toLearn || []).length;
   const said = (d.toLearn || []).filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return !w.length || w.some((k) => body.toLowerCase().includes(k)); }).length;
   if (nL >= 2 && said < nL - 1) return null;
+  // never a site or a source (the student searches the concepts)
+  if (/\bMDN\b|mozilla|w3schools|openclassrooms|stack ?overflow|css-tricks|youtube/i.test(body)) return null;
   // never a subject outside the brief's sprint (HTML, CSS in a JavaScript sprint)
   // (a subject the teacher wrote about in the one-to-one remarks stays allowed)
   if (!d.group && (d.off || []).some((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); })) return null;
