@@ -4935,7 +4935,7 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   const qs = [1, 2, 3].map((i) => ({ type: "explain", prompt: `Question numéro ${i}`, expected: "x", points: 1 }));
   const mk = await api("POST", "/api/assessments", { g: G, title: "Options", questions: qs, settings: { minutes: 0 } });
   const aid = mk.data.assessment.id;
-  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "forward", "by default: copy-paste blocked, full screen, shuffled, no going back");
+  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, they can move between the questions");
   const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
@@ -4953,7 +4953,20 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   await quiz("event", { sid, what: "fullscreen" });
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).status === "active", "no full screen lock: leaving the page doesn't stop the session");
   const late = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "free", shuffle: true });
-  check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
+  check(late.data.assessment.settings.nav === "free" && late.data.assessment.settings.shuffle === false, "once a student started: the order doesn't change, going back can still be opened");
+  const opened = await quiz("answer", { sid, qid: st.paper[1].id, answer: "deux", pos: 2 });
+  check(opened.status === 200 && opened.d.nav === "free", "…the student's page is told with their next answer");
+  const again = await quiz("answer", { sid, qid: st.paper[0].id, answer: "changé", pos: 0 });
+  check(again.status === 200 && JSON.parse(q1("SELECT answers FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).answers)[st.paper[0].id] === "changé", "…and they can go back and change a passed answer");
+  const shut = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "forward" });
+  check(shut.data.assessment.settings.nav === "free", "going back can't be closed again once they've started");
+  // the student reloads the page: their session stops (as always), the teacher lets them back in, the page gets « free »
+  const sid2 = "sessionOPTOPTOPTOPTOPT02";
+  const re = (await quiz("start", { sid: sid2 })).d;
+  const tkId = q1("SELECT id FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).id;
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkId });
+  const back2 = (await quiz("start", { sid: sid2 })).d;
+  check(re.status === "locked" && back2.status === "active" && back2.rules.nav === "free" && back2.paper.length === 3, "after a reload: stopped until let back in, then the page moves freely between the questions");
 }
 
 section("assessments, no going back: a question passed without an answer comes back after a stop; « finish the missing » after sending");
@@ -7718,6 +7731,24 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
     const r12 = M.checkMise(d12, { ...opts, count: { situations: 12, qcm: 5 } });
     check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
     check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
+  // the teacher's own file: many situations, another week, a technology not seen yet: advice (the checklist), the format still checked
+  { const d31 = good(); d31.week = 9; d31.situations = Array.from({ length: 31 }, (_, i) => ({ ...good().situations[i % 5], context: good().situations[i % 5].context + " Ajoute les classes Bootstrap btn et btn-primary." }));
+    const fr = M.checkMise(d31, { ...opts, week: 3, free: true });
+    check(!fr.problems.length && fr.content!.situations.length === 31 && fr.content!.week === 3, "a teacher's file of 31 situations from week 9 with Bootstrap: accepted, saved in week 3 " + JSON.stringify(fr.problems.slice(0, 2)));
+    const adv = M.adviceChecks(fr.advice).map((c) => c.text).join("\n");
+    check(/"week" is 9, but you chose week 3/.test(adv) && /situation 1, situation 2, situation 3 and 28 more · out of scope: Bootstrap/.test(adv), "…what isn't the week's scope is told in the checklist, one line each " + adv);
+    check(has(M.checkMise(d31, { ...opts, week: 3 }).problems, "file", /1 to 15/), "…the AI's file is still held to 15 and to the week");
+    check(has(probs((d) => { d.situations[0].runtime = "nope"; }, { ...opts, free: true }), "situation 1", /"runtime": one of/), "…a broken format is still refused");
+    check(has(probs((d) => { d.situations = Array.from({ length: M.MAX_IMPORT_SITUATIONS + 1 }, () => good().situations[0]); }, { ...opts, free: true }), "file", new RegExp(`1 to ${M.MAX_IMPORT_SITUATIONS}`)), `…more than ${M.MAX_IMPORT_SITUATIONS}: refused`); }
+  // …or QCM only, many of them (no situations, or the list left out): 1 point each with the automatic barème
+  { const q203 = good(); q203.situations = []; q203.qcm = Array.from({ length: 203 }, (_, i) => ({ ...good().qcm[i % 5], question: `Question ${i + 1} : que renvoie document.querySelector(".prix") ?` }));
+    const rq = M.checkMise(q203, { ...opts, free: true, scoring: { qcmShare: 20 } });
+    check(!rq.problems.length && rq.content!.situations.length === 0 && rq.content!.qcm.length === 203 && rq.preview!.points === 203, "a teacher's file of 203 QCM and no situation: accepted, 1 point each " + JSON.stringify(rq.problems.slice(0, 2)));
+    const { situations: _s, ...noS } = q203;
+    check(!M.checkMise(noS, { ...opts, free: true }).problems.length, "…the situations list may be left out");
+    check(has(M.checkMise(q203, opts).problems, "file", /1 to 15 mises en situation \(found 0\)/), "…the AI's file still needs situations");
+    check(has(M.checkMise({ ...q203, qcm: [] }, { ...opts, free: true }).problems, "file", /"situations": 1 to/), "…nothing at all: refused");
+    check(!M.miseChecks(rq.content!).some((c) => /^Difficulty|automatic checks/.test(c.text)), "…its checklist says nothing of situations"); }
   const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
   // the automatic barème: situations by difficulty, the QCM a fixed share of the score, whatever their number
   { const r = M.checkMise(good(), { ...opts, scoring: { qcmShare: 20 } }); const c = r.content!;
@@ -7824,8 +7855,10 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     errorHints: ["selection", "syntax"] });
   const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
-  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
-  check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify({ ...file, qcm: file.qcm.map((q, i) => (i ? q : { ...q, choices: ["Il change le texte", "Il change le style"] })) }) });
+  check(bad.status === 200 && bad.data.problems.some((p: any) => p.where === "QCM 1" && /"choices": 3 or 4/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  { const fewer = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
+    check(!fewer.data.problems.length && fewer.data.preview && fewer.data.checks.some((c: any) => !c.ok && /4 QCM/.test(c.text)), "…but the teacher's own file isn't held to a count: 4 QCM instead of 5 is said in the checklist only"); }
   { const auto = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
     const fileP = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], scoring: "file", json: JSON.stringify(file) });
     check(auto.status === 200 && Math.abs(auto.data.preview.points - fileP.data.preview.points) > 0.01 && fileP.data.preview.points === file.situations.length * 3 + file.qcm.length, "import: the automatic barème by default, the file's points when asked"); }
@@ -8229,14 +8262,15 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
   }
-  // 📐 the Fiche niveaux: every item of its scope worked on by 5 of the 10 situations / QCM at least
+  // 📐 the Fiche niveaux: what the AI must cover (5 of the 10 per item); a teacher's own file is only shown its coverage
   {
     const sc = ["S2.M2", "S2.M4"];
     const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
-    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's items on its situations: refused, one by one");
+    check(!untagged.data.problems.length && untagged.data.preview, "a teacher's file without the Fiche's items on its situations: accepted (the coverage is advice)");
     const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.M2"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.M4"] : ["S2.M2"] })) });
     const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
-    check(four.data.problems.some((p: any) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…an item in 4 only: refused, with how many");
+    check(!four.data.problems.length && four.data.preview, "…an item in 4 only: accepted too");
+    check(M.checkMise(JSON.stringify(tagged(4)), { concepts: { known: new Set(["S2.M2", "S2.M4"]), scope: sc } }).problems.some((p) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…but the AI's file is held to it: an item in 4 only refused, with how many");
     const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
     const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
     check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.M2,S2.M4" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.M4", "…in 5 each: saved, with its items (the mise's and each situation's / QCM's)");

@@ -329,13 +329,16 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   async function saveNow(q) {
     clearTimeout(saveT);
     const r = await post("/answer", { qid: q.id, answer: answers[q.id], pos: cur }).catch(() => null);
+    if (r && r.nav === "free") R.nav = "free";
     const s = document.getElementById("saved");
     if (r && r.ok) { if (s) { s.textContent = tr("saved") + " ✓"; s.className = "saved"; } }
     else if (r && r.error === "passed") { flash(tr("passed")); }
     else if (r && r.error) { running = false; return r.error === "locked" ? lockedScreen("left") : r.error === "time" ? finish(true) : show({ status: r.error }); }
   }
+  let moving = false;
   async function go(i) {
     const q = paper[cur];
+    if (moving) return;
     if (R.nav === "forward") {
       // only forward, to the next open question; saved at once: answered, it closes (the server refuses going back);
       // passed without an answer, it stays open (they find it again if they come back after a stop)
