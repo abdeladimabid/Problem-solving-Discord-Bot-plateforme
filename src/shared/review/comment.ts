@@ -18,6 +18,7 @@ export interface CommentData {
   group: boolean;            // a squad's comment (« vous » for everyone)
   team: string;              // the squad's name (its greeting)
   level: string;             // excellent | bon | moyen | faible | critique | ""
+  off?: string[];            // the subjects the brief's sprint isn't about (never said: e.g. HTML, CSS in a JavaScript sprint)
   allDone: boolean;          // every feature of the brief validated
   partDone: boolean;         // at least half of them
   themes: string[];          // what the validated requirements are about (2 to 4)
@@ -339,6 +340,32 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
   });
 }
 
+// ------------------------------------------------------------------ the sprint's subjects
+// A comment teaches what the brief's sprint is about: in a JavaScript sprint, never HTML or CSS (a notion the assessment
+// touched, but not the sprint's). The teacher's own remarks are always kept. Git, planning, method: always.
+const FAMILY: [string, RegExp][] = [
+  ["javascript", /JavaScript|\bJS\b|\bDOM\b|querySelector|addEventListener|createElement|appendChild|classList|événement|localStorage|\bfetch\b|\bES6|fonction fléchée|forEach|NodeList|HTMLCollection|textContent|innerHTML|preventDefault|\bconsole\b|\bvariables?\b|\bboucles?\b|\bfonctions?\b/i],
+  ["php", /\bPHP\b|Laravel|Eloquent|Blade|Artisan/i],
+  ["sql", /\bSQL\b|jointure|base de données|MySQL|PostgreSQL/i],
+  ["css", /\bCSS\b|Tailwind|Flexbox|\bflex\b|\bgrid\b|margin|padding|modèle de boîte|positionnement|media quer|responsive|couleurs?\b|typographie|polices?\b|centrage/i],
+  ["html", /\bHTML\b|balises?\b|sémantique|<[a-z]+>|attribut alt|doctype/i],
+];
+/** The subject of a notion (javascript, css, html…), or null when it is about none (Git, planning, method). */
+export function familyOf(text: unknown): string | null {
+  const t = String(text || "");
+  return FAMILY.find(([, rx]) => rx.test(t))?.[0] ?? null;
+}
+/** The subjects the sprint is about (its title, objectives, technologies), or null when unknown (nothing removed then). */
+export function sprintFamilies(text: unknown): Set<string> | null {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  const f = new Set(FAMILY.filter(([, rx]) => rx.test(t)).map(([k]) => k));
+  // « interfaces web » sprints without a word on HTML/CSS: still HTML and CSS
+  if (!f.size) return null;
+  return f;
+}
+const inSprint = (fam: Set<string> | null, text: unknown) => { if (!fam) return true; const k = familyOf(text); return !k || fam.has(k); };
+
 /**
  * The sections of the comment, from the teacher's decisions only. `states`: the switches (saved or on the screen);
  * `member`: in a squad, a member's own competencies and note (their one-to-one), when the teacher set them.
@@ -379,20 +406,26 @@ export function commentData(o: { first?: string; group?: string; project: string
   const task = !st.skip.live && st.mes && ["non_valide", "partiel"].includes(st.mes.r) ? remarkNotions(st.mes.note) : [];
   // the brief's language: the general notions (functions, loops…) are said in it
   const lang = /\bphp\b|laravel|eloquent|\bblade\b|symfony|\bpdo\b/i.test([o.project, remarks, ...items.map((x) => x.texte), ...oral.map((q) => q.q || ""), ...((rec.assess || []) as any[]).map((a) => a?.title || "")].join("\n")) ? "PHP" : "JavaScript";
+  // the sprint's subjects: what is outside them (HTML/CSS in a JavaScript sprint) is never said — the teacher's remarks always are
+  const fam = sprintFamilies(rec.sprintText);
   const toLearn = toLearnOf({ fromRemarks, gaps, ko: assess ? assess.ko : [], remarks, mastered, task, lang,
-    oral: oral.filter((q, i) => !st.oral[i]).map((q) => ({ q: String(q.q || ""), a: String(q.a || ""), notion: String(q.notion || "") })) });
+    oral: oral.filter((q, i) => !st.oral[i]).map((q) => ({ q: String(q.q || ""), a: String(q.a || ""), notion: String(q.notion || "") })) })
+    .filter((x) => x.from.includes("remarque") || inSprint(fam, `${x.notion} ${x.why}`));
   const notions = toLearn.map((x) => x.notion);
+  // outside the sprint, still allowed: what the teacher wrote, and the points to learn kept (the teacher's)
+  const keep = new Set<string>(conceptsOf([remarks, ...toLearn.map((x) => `${x.notion} ${x.why}`)].join("\n")));
   // what the comment may talk about: the notions of the brief, of the assessment's questions, of the exchange
   const scope = uniq([
     ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...oral.filter((q, i) => !st.oral[i]).map((q) => String(q.a || "")), ...fromRemarks, ...gaps.map((x) => x.text), ...toLearn.map((x) => `${x.why} ${x.how}`)].join("\n")),
     ...((rec.assess || []) as any[]).flatMap((a) => (Array.isArray(a?.scope) ? a.scope : [])),
     ...(assess ? [...assess.ok, ...assess.ko] : []),
-  ]);
+  ]).filter((c: string) => inSprint(fam, c) || keep.has(c));
   // a squad member: their own level (members.ts), else the debrief's
   const lv = o.member?.level || (rec.level && (rec.level.lvl || rec.level.prop)) || debriefLevel(rec, st) || "";
   return {
     first: String(o.first || "").trim(), greeting: o.group ? `Bonjour ${o.group},` : `Bonjour${o.first ? ` ${o.first}` : ""},`,
     project: clean(o.project, 120), group: !!o.group, team: String(o.group || "").trim(), level: lv,
+    off: fam ? FAMILY.map(([k]) => k).filter((k) => !fam.has(k)) : [],
     allDone: stories.length > 0 && okStories === stories.length,
     partDone: stories.length > 0 && okStories / stories.length >= 0.5,
     themes: themesOf(items.filter((x) => STRONG.includes(x.type) && x.ok).map((x) => x.texte)),
@@ -402,6 +435,7 @@ export function commentData(o: { first?: string; group?: string; project: string
     improve: memberOnly ? [] : uniq(items.filter((x) => TODO.includes(x.type) && !x.ok).map((x) => clean(x.texte, 400))).slice(0, MAX.improve),
     notions, toLearn, remarks, oralMissed, mode,
     mastered: o.group ? [] : uniq([...(assess ? assess.ok : []), ...oral.filter((q, i) => st.oral[i]).map((q) => String(q.notion || ""))]
+      .filter((x) => inSprint(fam, x))
       .map((x) => clean(x, 80).replace(/\s*\([^)]*\)/g, "").replace(/^(?:L['’]|(?:Le|La|Les|Un|Une|Des|Du)(?=\s))/, (w) => w.toLowerCase())).filter(Boolean)).filter((x, i, a) => !a.slice(0, i).some((y) => saidIn(x, y) || saidIn(y, x)))
       // never said mastered when it is in what to learn (the same words, or the same notion)
       .filter((x) => !toLearn.some((t) => saidIn(x, t.notion) || saidIn(t.notion, x) || conceptsOf(x).some((c: string) => conceptsOf(`${t.notion} ${t.why}`).includes(c)))).slice(0, 4), memberOnly, assess, proj: o.group ? projectFacts(rec, st) : null, scope,
@@ -502,8 +536,11 @@ function missingPara(d: CommentData): string {
 function notionsPara(d: CommentData): string {
   const L = d.toLearn && d.toLearn.length ? d.toLearn : [];
   if (!L.length) return "";
-  const lines = L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` : ${x.why}` : ""}.`);
-  return `${L.length > 1 ? Y(d, "Ce que tu dois apprendre en priorité :", "Ce que vous devez apprendre en priorité :") : Y(d, "Ce que tu dois apprendre en priorité :", "Ce que vous devez apprendre en priorité :")}\n${lines.join("\n")}`;
+  // one paragraph, no list: each point, with in a few words what it is about (the first three)
+  // « Le modèle… » → « le modèle… », « Écrire… » → « écrire… »; never a name (Git, Tailwind, Flexbox…)
+  const lc = (t: string) => (/^(?:(?:Le|La|Les|Un|Une|Des|Du|De|Ce|Cette|Ces|Son|Sa|Ses)\s|L[’']|[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:er|ir|re)\s)/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t);
+  const items = L.map((x) => `${lc(String(x.notion))}${x.why && !saidIn(x.why, x.notion) ? ` (${lc(String(x.why)).replace(/[.\s]+$/, "")})` : ""}`);
+  return `${Y(d, "Ce que tu dois encore travailler en priorité, c’est", "Ce que vous devez encore travailler en priorité, c’est")} ${andList(items)}.`;
 }
 // a tip is written with « tu »: a squad's comment says « vous »
 const VOUS_OF: Record<string, string> = { réécris: "réécrivez", relie: "reliez", construis: "construisez", ajoute: "ajoutez", crée: "créez", reproduis: "reproduisez", reprends: "reprenez", écris: "écrivez", dessine: "dessinez", compare: "comparez", refais: "refaites", pars: "partez", mets: "mettez", entraîne: "entraînez", récupère: "récupérez", comprends: "comprenez", parcours: "parcourez", manipule: "manipulez", explique: "expliquez", enregistre: "enregistrez", modélise: "modélisez", travaille: "travaillez", teste: "testez", fais: "faites", vérifie: "vérifiez", nomme: "nommez", passe: "passez", observe: "observez", appelle: "appelez", relis: "relisez", utilise: "utilisez", gère: "gérez", convertis: "convertissez", fusionne: "fusionnez", présente: "présentez", demande: "demandez", corrige: "corrigez", renomme: "renommez", range: "rangez", simplifie: "simplifiez", remplace: "remplacez", cherche: "cherchez", garde: "gardez", transforme: "transformez" };
@@ -572,9 +609,7 @@ export const AI_COMMENT_SYSTEM = [
   "<<<",
   "Ton travail montre que tu connais la surface de Laravel, mais pas encore sa structure. Tu sais ce que sont Blade et Artisan, tu écris des routes simples et tu passes des variables à une vue avec compact().",
   "",
-  "Ce que tu dois apprendre en priorité :",
-  "1. Les relations Eloquent : le rôle de $fillable, l’eager loading avec with() et le sens de hasMany et belongsTo.",
-  "2. Les migrations : la structure de Schema::create() et le rôle de up() et down().",
+  "Ce que tu dois encore travailler en priorité, ce sont les relations Eloquent (le rôle de $fillable, l’eager loading avec with() et le sens de hasMany et belongsTo) et les migrations (la structure de Schema::create() et le rôle de up() et down()).",
   "",
   "Le plus important maintenant, c’est la pratique : écris le code toi-même chaque jour, sans copier, et appuie-toi sur la documentation officielle.",
   "",
@@ -582,12 +617,12 @@ export const AI_COMMENT_SYSTEM = [
   ">>>",
   "Règles strictes :",
   "- Tutoiement (« tu », « ton », « tes »), sauf si le commentaire est pour toute une équipe : alors « vous ».",
-  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, pas de liste à puces (seule la liste numérotée des points à travailler est permise), pas de mise en forme (**, #, `), pas d’emoji.",
+  "- Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de titres de section, aucune liste (ni puces, ni numéros : uniquement des paragraphes), pas de mise en forme (**, #, `), pas d’emoji.",
   "- Le premier paragraphe donne un avis HONNÊTE qui correspond au NIVEAU donné, en une ou deux phrases : excellent → « Excellent travail », bon → « bon travail », moyen → « travail correct », faible → travail encore fragile, critique → les bases ne sont pas encore en place. Ne dis jamais « bon travail » ou « excellent » si le niveau est moyen, faible ou critique.",
   "- INDIVIDUEL : uniquement ce qu’il SAIT FAIRE et ne sait PAS ENCORE FAIRE techniquement, et ce que le formateur a noté en face à face. JAMAIS les livrables, les fonctionnalités, les pages ou les exigences du brief, ni les bonus. Dans le premier paragraphe, après l’avis, ce qu’il maîtrise : UNIQUEMENT ce qui est dans « CE QU’IL MAÎTRISE » (et ce qui va bien selon l’échange), en une phrase ; si c’est vide, ne dis RIEN de ce qu’il maîtrise. Le commentaire du correcteur sert seulement à préciser ce qu’il doit apprendre.",
   "- ÉQUIPE : parle du PROJET (fonctionnalités, interface, planification, README, commits, travail en équipe) : ce qui est réussi, ce qui manque encore (« il manque encore… », sans recopier la grille), ce qui est à améliorer. Bonus : s’il y en a, dis seulement qu’ils en ont réalisé, sans les lister ; sinon n’en parle pas.",
   "- Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel).",
-  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Écris « Ce que tu dois apprendre en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner, et sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque point dit DIRECTEMENT ce qu’il doit apprendre (jamais une catégorie comme « HTML : », « CSS : », « JavaScript : » en tête de ligne), puis en quelques mots en quoi ça consiste (avec les mots du formateur et du correcteur quand ils sont précis) : une phrase, 30 mots au plus. Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options entre parenthèses.",
+  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Écris-le en UN paragraphe, sans liste ni numéros (« Ce que tu dois encore travailler en priorité, c’est… »), avec tous les points donnés, dans l’ORDRE donné, sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque point dit directement ce qu’il doit apprendre, avec en quelques mots entre parenthèses en quoi ça consiste (avec les mots du formateur et du correcteur quand ils sont précis).",
   "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
   "- Si l’apprenant est en difficulté (faible ou critique) avec plusieurs points, un court paragraphe sur la méthode : pratiquer chaque jour, écrire le code soi-même sans copier, s’appuyer sur la documentation officielle.",
   "- Si tout est maîtrisé et qu’il n’y a rien à travailler (« CE QU’IL DOIT ENCORE APPRENDRE : (rien) »), n’invente rien : pas de liste, pas de conseil général, deux ou trois phrases sur ce qu’il réussit suffisent. Un apprenant au niveau bon ou excellent n’a pas de points à apprendre en plus de ceux donnés, et jamais le conseil de pratiquer chaque jour sans copier.",
@@ -602,7 +637,8 @@ export function aiCommentPrompt(d: CommentData): string {
   const missing = d.improve.map(missingOf).filter(Boolean).map((x) => x!.text);
   const remarks = `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`;
   const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`,
-    `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`];
+    `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`,
+    ...(d.off && d.off.length ? [`SUJETS HORS DU SPRINT (n’en parle JAMAIS, ni en bien ni en mal, même si le correcteur en parle) : ${d.off.map((k) => k === "javascript" ? "JavaScript" : k.toUpperCase()).join(", ")}`] : [])];
   if (!d.group) {
     const a = d.assess;
     return [
@@ -667,15 +703,17 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   body = who ? body.replace(/\{pr[ée]nom\}/gi, who) : body.replace(/\{pr[ée]nom\}\s*,\s*(\S)/gi, (_, c) => c.toUpperCase()).replace(/\s*\{pr[ée]nom\}/gi, "");
   if (MARKUP.test(body) || /^(bonjour|cordialement)/im.test(body) || /\{|\}/.test(body)) return null;
   if (d.group ? TU.test(body) : VOUS.test(body)) return null;
-  // no section titles, no bullet lists: only the numbered list of what is still to learn, every point of it
-  const lines = body.split("\n"), numbered = lines.filter((l) => /^\s*\d+[.)]\s/.test(l));
-  if (lines.some((l) => /^\s*[–—•*-]\s/.test(l) || (l.trim() && !/^\s*\d+[.)]\s/.test(l) && l.trim().length < 45 && !/[.:?]$/.test(l.trim())))) return null;
-  if (!d.group && numbered.some((l) => /^\s*\d+[.)]\s+(?:HTML|CSS|JavaScript|JS|PHP|Tailwind|Git|SQL|Laravel|React)\s*:/i.test(l))) return null;
-  if (numbered.some((l) => l.trim().length < 25 || wordCount(l) > 60 || /\b[a-g]\)\s|à l['’]oral|la question «|lors de l['’]évaluation|pendant (?:notre|l['’])échange|face à face|mise en situation/i.test(l))) return null;
+  // no section titles, no lists (neither bullets nor numbers): paragraphs only
+  const lines = body.split("\n");
+  if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l) || (l.trim() && l.trim().length < 45 && !/[.:?!]$/.test(l.trim())))) return null;
+  if (/à l['’]oral|la question «|lors de l['’]évaluation|pendant (?:notre|l['’])échange|face à face|mise en situation/i.test(body)) return null;
+  // every point to learn said (one of its main words)
   const nL = (d.toLearn || []).length;
-  if (nL >= 2 && numbered.length < nL - 1) return null;
-  // never a point to learn that the debrief doesn't give (a list made up to fill the comment of a good learner)
-  if (!d.group && numbered.length > nL) return null;
+  const said = (d.toLearn || []).filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return !w.length || w.some((k) => body.toLowerCase().includes(k)); }).length;
+  if (nL >= 2 && said < nL - 1) return null;
+  // never a subject outside the brief's sprint (HTML, CSS in a JavaScript sprint)
+  // (a subject the teacher wrote about in the one-to-one remarks stays allowed)
+  if (!d.group && (d.off || []).some((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); })) return null;
   const lv = levelOf(d);
   // the « practise every day, without copying » advice is for a learner in difficulty, never a good one
   if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours|documentation officielle/i.test(body)) return null;

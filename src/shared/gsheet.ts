@@ -294,7 +294,7 @@ export async function buildFill(env: Env, g: GuildRow, cfg: SheetCfg, tabs: Retu
   if (tabs.plan) {
     const cols = plan.cols ?? PLAN_DEFAULT;
     const words = resultWords(plan.results);
-    const recs = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `wplan:${g.id}:%`).catch(() => []);
+    const recs = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `wplan:${g.id}:`, `wplan:${g.id};`).catch(() => []);
     const plans: WorkPlan[] = [];
     for (const r of recs) { try { const p = JSON.parse(r.v); if (p && (p.status === "sent" || p.status === "done")) plans.push({ ...p, steps: Array.isArray(p.steps) ? p.steps : [] }); } catch { /* skip */ } }
     plans.sort((a, b) => (a.sent_at || a.created_at || 0) - (b.sent_at || b.created_at || 0));
@@ -417,7 +417,7 @@ export function weekKey(t = Date.now()) {
 export async function sheetCron(env: Env) {
   if (new Date(Date.now()).getUTCMinutes() % 5 !== 2) return;
   const rows = await all<{ k: string; dirty: number | null; week: string | null; next_end: string | null; auto: number | null; id: string | null }>(env,
-    "SELECT k, json_extract(v, '$.dirty') AS dirty, json_extract(v, '$.week') AS week, json_extract(v, '$.next_end') AS next_end, json_extract(v, '$.auto') AS auto, json_extract(v, '$.id') AS id FROM app_settings WHERE k LIKE 'gsheet:%'").catch(() => []);
+    "SELECT k, json_extract(v, '$.dirty') AS dirty, json_extract(v, '$.week') AS week, json_extract(v, '$.next_end') AS next_end, json_extract(v, '$.auto') AS auto, json_extract(v, '$.id') AS id FROM app_settings WHERE k >= 'gsheet:' AND k < 'gsheet;'").catch(() => []);
   const t0 = now(), wk = weekKey(), d0 = today();
   for (const r of rows) {
     if (!r.id || r.auto === 0) continue;

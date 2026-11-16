@@ -54,6 +54,7 @@ async function viewMises() {
       { label: "Created", sort: "created_at", html: (m) => `<span class="small">${fmtDate(m.created_at)}</span>` },
     ], r.items, { onRow: (m) => (location.hash = `#/mise/${m.id}`), empty: "No mise en situation yet: click “New mise en situation”." })}</section>`;
   $("#mes-new").onclick = (e) => busy(e.currentTarget, () => mesWizard());
+  if (window.mesOpenNew) { MSIT.openNew = window.mesOpenNew; window.mesOpenNew = null; }
   if (MSIT.openNew) { const o = typeof MSIT.openNew === "object" ? MSIT.openNew : {}; MSIT.openNew = false; mesWizard(o).catch((e) => toast(e.message, true)); }
 }
 

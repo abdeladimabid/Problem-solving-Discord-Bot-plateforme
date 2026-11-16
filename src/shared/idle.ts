@@ -47,7 +47,7 @@ export async function idleStudents(env: Env, g: GuildRow, c: IdleCfg, t0 = now()
     all<{ discord_id: string; t: number }>(env, "SELECT discord_id, MAX(t) AS t FROM gh_activity WHERE guild_id = ? AND t >= ? GROUP BY discord_id", g.id, start).catch(() => []),
     all<{ discord_id: string; t: number }>(env, "SELECT discord_id, last_t AS t FROM vsc_days WHERE guild_id = ? AND day = ?", g.id, day).catch(() => []),
     all<{ discord_id: string }>(env, "SELECT DISTINCT discord_id FROM hands WHERE guild_id = ? AND status IN ('waiting', 'helping')", g.id).catch(() => []),
-    all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `idlenudge:${g.id}:%`).catch(() => []),
+    all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `idlenudge:${g.id}:`, `idlenudge:${g.id};`).catch(() => []),
   ]);
   const last = new Map<string, number>();
   const see = (id: string, t: number | null | undefined) => { if (t && t > (last.get(id) || 0)) last.set(id, t); };
@@ -86,7 +86,7 @@ export function idleMessage(g: GuildRow, idleMin: number) {
 /** Every 5 minutes: each class that turned it on. `send` is the DM (Discord), given by the caller. */
 export async function idleCron(env: Env, send: (uid: string, payload: Record<string, unknown>) => Promise<boolean>, t0 = now()) {
   if (Math.floor(t0 / 60) % 5) return 0;
-  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE 'idle:%'").catch(() => []);
+  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= 'idle:' AND k < 'idle;'").catch(() => []);
   let sent = 0;
   for (const r of rows) {
     let c: IdleCfg;
@@ -111,7 +111,7 @@ export async function idleCron(env: Env, send: (uid: string, payload: Record<str
 /** For the teacher's page: who was nudged today. */
 export async function idleToday(env: Env, gid: string, t0 = now()) {
   const day = dayOf(t0);
-  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `idlenudge:${gid}:%`).catch(() => []);
+  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `idlenudge:${gid}:`, `idlenudge:${gid};`).catch(() => []);
   const out: { id: string; n: number; at: number; ok: boolean }[] = [];
   for (const r of rows) { try { const v = JSON.parse(r.v); if (v.day === day) out.push({ id: r.k.split(":").pop()!, n: v.n, at: v.at, ok: v.ok !== false }); } catch { /* skip */ } }
   return out.sort((a, b) => b.at - a.at);
