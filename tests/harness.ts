@@ -674,11 +674,11 @@ function fakeAI() {
       if (sys.includes("rédiger le commentaire de débriefing")) {
         const missing = ((user.match(/POINTS DU BRIEF NON VALIDÉS :\n([\s\S]*?)\n\n/) || [])[1] || "").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
         const learn = ((user.match(/CE QU’IL DOIT ENCORE APPRENDRE[^\n]*\n([\s\S]*?)$/) || [])[1] || "").split("\n").filter((l) => /^\d+\. /.test(l))
-          .map((l) => l.replace(/^\d+\. /, "").split(" — ")).map(([n, ...r]) => `${n} : ${(r.find((x) => x.startsWith("en quoi ça consiste : ")) || "").replace("en quoi ça consiste : ", "") || "ce n’est pas encore clair pour toi, et c’est important pour la suite"}.`);
+          .map((l) => l.replace(/^\d+\. /, "").split(" — ")).map(([n, ...r]) => { const w = (r.find((x) => x.startsWith("en quoi ça consiste : ")) || "").replace("en quoi ça consiste : ", ""); return `${n.charAt(0).toLowerCase() + n.slice(1)}${w ? ` (${w})` : ""}`; });
         const p = ["Ton projet est bien structuré et la navigation entre les pages est cohérente. La mise en page est soignée et lisible sur l’ensemble du site."];
         if (/BONUS RÉALISÉS : oui/.test(user)) p[0] += " Tu as aussi réalisé des bonus, ce qui est une très bonne initiative.";
         if (missing.length) p.push(`Il manque encore ${missing.join(", ")} : c’est à terminer pour que ton rendu soit complet.`);
-        if (learn.length) p.push(`Ce que tu dois apprendre en priorité :\n${learn.map((x, i) => `${i + 1}. ${x}`).join("\n")}`);
+        if (learn.length) p.push(`Ce que tu dois encore travailler en priorité, c’est ${learn.length > 1 ? `${learn.slice(0, -1).join(", ")} et ${learn[learn.length - 1]}` : learn[0]}.`);
         p.push("Continue sur cette lancée, {prénom}, et consolide ces points pour progresser encore.");
         return { response: JSON.stringify({ commentaire: p.join("\n\n") }) };
       }
@@ -976,7 +976,7 @@ export async function makeEnv(extra: Partial<Env> = {}) {
   const env: Env = {
     DB: makeD1(),
     AI: fakeAI(),
-    DISCORD_APP_ID: "app1",
+    DISCORD_APP_ID: "app1", CRON_EVERY_MINUTE: "1",   // the tests run the cron at any minute
     DISCORD_PUBLIC_KEY: pub,
     DISCORD_TOKEN: "token",
     PUBLIC_URL: "https://bot.example.workers.dev",

@@ -96,7 +96,7 @@ export async function putPlan(env: Env, p: WorkPlan) {
   await run(env, "INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at", KEY(p.gid, p.id), JSON.stringify(p), p.updated_at);
 }
 export async function listPlans(env: Env, gid: string, sid?: string): Promise<WorkPlan[]> {
-  const rows = await all<{ v: string }>(env, "SELECT v FROM app_settings WHERE k LIKE ? ORDER BY updated_at DESC LIMIT 500", `wplan:${gid}:%`).catch(() => []);
+  const rows = await all<{ v: string }>(env, "SELECT v FROM app_settings WHERE k >= ? AND k < ? ORDER BY updated_at DESC LIMIT 500", `wplan:${gid}:`, `wplan:${gid};`).catch(() => []);
   const out: WorkPlan[] = [];
   for (const r of rows) { try { const p = JSON.parse(r.v); if (!sid || p.sid === sid) out.push(p); } catch { /* skip */ } }
   return out;

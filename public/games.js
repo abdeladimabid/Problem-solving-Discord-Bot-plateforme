@@ -3,7 +3,6 @@
    own phones / laptops (each one opens their own link from Discord: the 🎮 Join button or /play). Loaded after battle.js. */
 "use strict";
 
-Object.assign(REASON, { game: "Class game" });
 const GM_PHASE = { lobby: ["pending", "Waiting for players"], question: ["active", "Live"], reveal: ["active", "Live"], playing: ["active", "Live"], testing: ["active", "Running the tests"], over: ["solved", "Finished"] };
 const GM_MODES = { solo: ["👤", "Solo", "Everyone for themselves"], squads: ["🛡️", "Squads", "The class's squads"], random: ["🎲", "Random squads", "Made at the start from who joined"] };
 const GM_LEVEL = { easy: "Easy", medium: "Medium", hard: "Hard" };

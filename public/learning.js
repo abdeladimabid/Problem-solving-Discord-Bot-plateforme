@@ -824,7 +824,7 @@ function wireDebriefTools(root) {
       await api(`/mises/${v}`, { method: "PUT", body: { settings: { brief: { id: Number(id), title: B.brief.data.title } } } });
       toast("Linked: the draft debriefs use its results"); await reload();
     });
-    $("#dbt-mnew", root).onclick = () => { MSIT.openNew = { brief: Number(id) }; location.hash = "#/mises-en-situation"; };
+    $("#dbt-mnew", root).onclick = () => { window.mesOpenNew = { brief: Number(id) }; location.hash = "#/mises-en-situation"; };
   }
   $$("[data-msunlink]", root).forEach((b) => b.onclick = () => busy(b, async () => {
     await api(`/mises/${b.dataset.msunlink}`, { method: "PUT", body: { settings: { brief: null } } });
@@ -2539,7 +2539,7 @@ function renderAssessment() {
     tabs[k]($("#aa-tab"));
   };
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
-  if ($("#aa-slides") && typeof assessSlides === "function") $("#aa-slides").onclick = () => assessSlides(AS.A, 0);
+  if ($("#aa-slides")) $("#aa-slides").onclick = () => lazyCall("assessSlides", AS.A, 0).catch((e) => toast(e.message, true));
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
   if ($("#aa-retake")) $("#aa-retake").onclick = () => retakeDialog();

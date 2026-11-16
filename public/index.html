@@ -6,7 +6,7 @@
   <title>ClassBot · Teacher dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..900&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/app.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop stop-color='%232563eb'/><stop offset='1' stop-color='%236366f1'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='url(%23g)'/><text x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold'>C</text></svg>">
   <script>try { if (localStorage.getItem("classbot.theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch {}</script>
@@ -69,27 +69,36 @@
   <script src="/extras.js"></script>
   <script src="/xlsx-lite.js"></script>
   <script src="/learning.js"></script>
-  <script src="/mises.js"></script>
-  <script src="/activities.js"></script>
-  <script src="/presentations.js"></script>
-  <script src="/proposals.js"></script>
   <script src="/chat.js"></script>
   <script src="/watcher.js"></script>
   <script src="/squads.js"></script>
-  <script src="/battle.js"></script>
-  <script src="/games.js"></script>
   <script src="/ghstudent.js"></script>
   <script src="/vscode.js"></script>
   <script src="/wplan.js"></script>
   <script src="/blocks.js"></script>
-  <script src="/sprintdiag.js"></script>
-  <script src="/slides.js"></script>
   <script src="/gsheet.js"></script>
   <script src="/concepts.js"></script>
   <script src="/stuinsight.js"></script>
   <script src="/home.js"></script>
   <script src="/assistant.js"></script>
-  <script src="/i18n-fr.js"></script>
+  <!-- pages loaded the first time they are opened (app.js: lazyRoute); their versions are set by the server like the others -->
+  <template id="lazy-pages">
+    <script src="/activities.js" data-for="activities"></script>
+    <link rel="stylesheet" href="/presentations.css" data-for="presentations">
+    <script src="/presentations.js" data-for="presentations"></script>
+    <link rel="stylesheet" href="/proposals.css" data-for="proposals">
+    <script src="/proposals.js" data-for="proposals"></script>
+    <link rel="stylesheet" href="/games.css" data-for="games game battles battle">
+    <script src="/battle.js" data-for="games game battles battle"></script>
+    <script src="/games.js" data-for="games game battles battle"></script>
+    <link rel="stylesheet" href="/mises.css" data-for="mises-en-situation mise" data-fn="mesGiveDialog">
+    <script src="/mises.js" data-for="mises-en-situation mise" data-fn="mesGiveDialog"></script>
+    <script src="/sprintdiag.js" data-fn="renderDiag"></script>
+    <link rel="stylesheet" href="/slides.css" data-fn="assessSlides">
+    <script src="/slides.js" data-fn="assessSlides"></script>
+  </template>
+  <!-- the French dictionary (350 KB): loaded only when the dashboard is in French -->
+  <script>try { if (localStorage.getItem("classbot.lang") === "fr") document.write('<script src="/i18n-fr.js"><\/script>'); } catch {}</script>
   <script src="/prefs.js"></script>
 </body>
 </html>
