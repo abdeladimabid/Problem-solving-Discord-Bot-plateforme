@@ -262,6 +262,43 @@ export const LEARN: Record<string, string> = {
   "Git (commit, branches)": "faire des commits clairs, travailler sur une branche et fusionner par pull request",
 };
 // the notions of the frameworks and tools (not in CONCEPTS), said the same way
+// what to DO about a point, and what to look up (the student's next step, concretely): the first that fits
+const GUIDE: [RegExp, string][] = [
+  [/relations? Eloquent|hasMany|belongsTo/i, "Dans chaque modèle, déclare la relation (hasMany d’un côté, belongsTo de l’autre) et mets la clé étrangère dans la table du côté belongsTo ; teste-la dans php artisan tinker. Cherche « Laravel Eloquent relationships »."],
+  [/migrations?/i, "Crée la table avec php artisan make:migration, décris ses colonnes dans Schema::create() (et la suppression dans down()), puis lance php artisan migrate. Cherche « Laravel migrations »."],
+  [/donn[ée]es? (?:à|vers) la vue|\bview\(|compact/i, "Dans le contrôleur, renvoie return view(\"page\", compact(\"articles\")) et affiche-les dans Blade avec {{ }} et @foreach. Cherche « Laravel passing data to views »."],
+  [/composer|artisan/i, "Composer installe et met à jour les bibliothèques du projet (composer install), Artisan est la ligne de commande de Laravel (make:model, migrate, serve). Cherche « Laravel Artisan console »."],
+  [/planifi|user stor|deadline|estim|trello|github projects|kanban|t[âa]ches?\b/i, "Avant de coder, découpe le brief en user stories (« En tant que…, je veux…, afin de… »), estime chaque tâche, donne-lui une date limite et suis-les dans un tableau (GitHub Projects ou Trello) dont tu mets le lien dans le README. Cherche « rédiger une user story » et « GitHub Projects kanban »."],
+  [/HTMLCollection|NodeList|liste vivante|liste statique/i, "querySelectorAll renvoie une NodeList statique, getElementsByClassName une HTMLCollection vivante : ajoute un élément puis compare les deux dans la console pour voir la différence. Cherche « HTMLCollection vs NodeList »."],
+  [/children|childNodes/i, "children ne donne que les éléments, childNodes compte aussi les textes et les espaces : affiche les deux dans la console sur la même liste. Cherche « MDN children childNodes »."],
+  [/currentTarget|e\.target|event\.target|d[ée]l[ée]gation/i, "event.target est l’élément cliqué, event.currentTarget celui qui porte l’écouteur : c’est la base de la délégation d’événements (un seul écouteur sur la liste au lieu d’un par carte). Cherche « event.target vs currentTarget » et « délégation d’événements JavaScript »."],
+  [/textContent|innerHTML/i, "textContent écrit du texte brut, innerHTML interprète du HTML (dangereux avec ce que tape l’utilisateur) : utilise textContent par défaut. Cherche « textContent vs innerHTML »."],
+  [/images?\b|\bimg\b|\balt\b|\bsrc\b/i, "En JavaScript, une image se crée avec document.createElement(\"img\"), puis on règle img.src et img.alt (le texte qui décrit l’image pour les lecteurs d’écran) avant de l’ajouter à la page. Cherche « MDN HTMLImageElement » et « attribut alt bonnes pratiques »."],
+  [/classList|classes?\b/i, "Ajoute, retire ou bascule une classe avec element.classList.add, remove et toggle, plutôt que de changer le style à la main. Cherche « MDN classList »."],
+  [/[ée]v[ée]nements?|addEventListener|clic|\bclick\b/i, "Branche une fonction sur un clic ou une saisie avec element.addEventListener(\"click\", …), utilise event.target pour savoir ce qui a été cliqué et event.preventDefault() pour qu’un formulaire ne recharge pas la page. Cherche « MDN addEventListener » et « MDN preventDefault »."],
+  [/createElement|appendChild|cr[ée]er (?:et|des)|ins[ée]rer|manipulation du DOM/i, "Crée un élément avec document.createElement, remplis-le avec textContent, puis ajoute-le à la page avec appendChild (ou append) ; refais par exemple l’ajout d’une carte au panier sans innerHTML. Cherche « MDN createElement » et « MDN appendChild »."],
+  [/s[ée]lect|querySelector|getElementBy|\bDOM\b/i, "Récupère un élément avec document.querySelector(\"#id\") ou (\".classe\"), plusieurs avec querySelectorAll et une boucle forEach, et vérifie toujours dans la console que tu as bien l’élément (pas null). Cherche « MDN querySelector » et « MDN querySelectorAll »."],
+  [/localStorage|sauvegard/i, "Sauvegarde avec localStorage.setItem(\"cle\", JSON.stringify(donnees)) et relis au chargement avec JSON.parse(localStorage.getItem(\"cle\")). Cherche « MDN localStorage » et « JSON.stringify JSON.parse »."],
+  [/formulaires?|validation|\binput\b|\bchange\b|saisie/i, "Lis la valeur d’un champ avec input.value, écoute l’événement input ou submit, et vérifie les données avant de les accepter (champ vide, format, message d’erreur). Cherche « validation de formulaire JavaScript »."],
+  [/forEach|\bmap\b|\bfilter\b|tableaux? JS|tableaux? JavaScript|boucles?/i, "Parcours un tableau avec forEach, transforme-le avec map, garde une partie avec filter : refais le filtre de ton projet avec filter. Cherche « MDN Array filter » et « MDN Array map »."],
+  [/async|await|fetch|promesse|promise/i, "Charge des données avec fetch et await, et gère l’erreur avec try/catch. Cherche « MDN fetch » et « async await JavaScript »."],
+  [/ES6|fl[ée]ch[ée]e|destructur|modules?\b|import|export|template literal/i, "Utilise const et let, les fonctions fléchées, les template literals, la déstructuration et les modules (import/export). Cherche « JavaScript ES6 nouveautés »."],
+  [/fonctions?\b|param[èe]tres?|return/i, "Découpe ton code en petites fonctions qui font une seule chose, avec des paramètres et un return, au lieu d’un long bloc. Cherche « fonctions » dans la documentation de ton langage."],
+  [/\bgit\b|commits?|branches?|pull request|merge/i, "Fais un commit par petite étape avec un message clair (feat:, fix:…), travaille sur une branche et fusionne par pull request. Cherche « conventional commits » et « git branche pull request tutoriel »."],
+  [/README|documentation/i, "Ton README doit dire ce que fait le projet, comment le lancer, ses fonctionnalités, et donner le lien du site et de la planification. Cherche « bon README exemple GitHub »."],
+  [/flex|centr/i, "Mets display: flex sur le parent, puis justify-content et align-items pour aligner et centrer. Entraîne-toi avec le jeu « Flexbox Froggy » et cherche « CSS-Tricks guide flexbox »."],
+  [/\bgrid\b/i, "Mets display: grid sur le parent et définis les colonnes avec grid-template-columns. Entraîne-toi avec le jeu « Grid Garden »."],
+  [/margin|padding|bo[îi]te|border/i, "margin est l’espace autour du bloc, padding l’espace à l’intérieur, border le trait entre les deux : ouvre l’inspecteur du navigateur (F12) pour les voir. Cherche « MDN box model »."],
+  [/responsive|media|breakpoint/i, "Pars du mobile, puis adapte la mise en page avec @media (min-width: …) ou les préfixes sm: md: lg: de Tailwind. Cherche « responsive design mobile first »."],
+  [/s[ée]mantique|header|footer|<main>|\bmain\b/i, "Utilise header, nav, main, section et footer selon le rôle de chaque zone, pas des div partout. Cherche « balises sémantiques HTML MDN »."],
+  [/doctype|structure (?:de base )?d.une page|\bhead\b|\bbody\b/i, "Une page commence par <!DOCTYPE html>, puis <html lang=\"fr\"> avec un <head> (titre, encodage, viewport, liens CSS) et un <body> (ce qu’on voit) : réécris-la de mémoire sans copier. Cherche « structure de base HTML MDN »."],
+  [/\bSQL\b|jointure|requ[êe]te/i, "Écris la requête pas à pas : SELECT les colonnes, FROM la table, JOIN … ON la clé, WHERE le filtre. Cherche « SQL JOIN exemples »."],
+];
+/** What to do, and what to look up, about a point to learn (one or two sentences, « tu »). */
+export function guideOf(text: string): string {
+  return GUIDE.find(([rx]) => rx.test(text))?.[1] || "";
+}
+
 const LEARN_MORE: [RegExp, string][] = [
   [/relations?|hasMany|belongsTo|hasOne|cl[ée] [ée]trang[èe]re/i, "définir hasMany et belongsTo dans les modèles et placer la clé étrangère du bon côté"],
   [/migrations?/i, "créer une table avec Schema::create() et comprendre le rôle de up() et down()"],
@@ -336,7 +373,7 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
     // what it is about: a subject only named → its essentials; else its notion (said once, if the title doesn't already)
     const more = LEARN_MORE.find(([rx]) => rx.test(p.title));
     const about = p.vague && ess.length ? andList(ess) : p.cs.length && !saidIn(LEARN[p.cs[0]], p.title) ? LEARN[p.cs[0]] : more && !saidIn(more[1], p.title) ? more[1] : "";
-    return { notion: title, why: about, how: "", from: p.from, w: p.w };
+    return { notion: title, why: about, how: guideOf(title) || guideOf(about) || (() => { const q = title.replace(/\s*\([^)]*\)/g, "").trim(); const where = familyOf(`${title} ${about}`) === "php" ? "dans la documentation de Laravel ou de PHP" : "sur MDN (developer.mozilla.org)"; return q.length <= 40 ? `Cherche « ${q} » ${where} et refais un petit exercice dessus jusqu’à ne plus hésiter.` : "Refais un petit exercice dessus, sans copier, jusqu’à ne plus hésiter."; })(), from: p.from, w: p.w };
   });
 }
 
@@ -413,7 +450,7 @@ export function commentData(o: { first?: string; group?: string; project: string
     .filter((x) => x.from.includes("remarque") || inSprint(fam, `${x.notion} ${x.why}`));
   const notions = toLearn.map((x) => x.notion);
   // outside the sprint, still allowed: what the teacher wrote, and the points to learn kept (the teacher's)
-  const keep = new Set<string>(conceptsOf([remarks, ...toLearn.map((x) => `${x.notion} ${x.why}`)].join("\n")));
+  const keep = new Set<string>(conceptsOf([remarks, ...toLearn.map((x) => `${x.notion} ${x.why} ${x.how}`)].join("\n")));
   // what the comment may talk about: the notions of the brief, of the assessment's questions, of the exchange
   const scope = uniq([
     ...conceptsOf([o.project, ...items.map((x) => x.texte), remarks, ...oral.map((q) => `${q.q || ""} ${q.notion || ""}`), ...oral.filter((q, i) => !st.oral[i]).map((q) => String(q.a || "")), ...fromRemarks, ...gaps.map((x) => x.text), ...toLearn.map((x) => `${x.why} ${x.how}`)].join("\n")),
@@ -536,11 +573,23 @@ function missingPara(d: CommentData): string {
 function notionsPara(d: CommentData): string {
   const L = d.toLearn && d.toLearn.length ? d.toLearn : [];
   if (!L.length) return "";
-  // one paragraph, no list: each point, with in a few words what it is about (the first three)
   // « Le modèle… » → « le modèle… », « Écrire… » → « écrire… »; never a name (Git, Tailwind, Flexbox…)
   const lc = (t: string) => (/^(?:(?:Le|La|Les|Un|Une|Des|Du|De|Ce|Cette|Ces|Son|Sa|Ses)\s|L[’']|[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:er|ir|re)\s)/.test(t) ? t.charAt(0).toLowerCase() + t.slice(1) : t);
-  const items = L.map((x) => `${lc(String(x.notion))}${x.why && !saidIn(x.why, x.notion) ? ` (${lc(String(x.why)).replace(/[.\s]+$/, "")})` : ""}`);
-  return `${Y(d, "Ce que tu dois encore travailler en priorité, c’est", "Ce que vous devez encore travailler en priorité, c’est")} ${andList(items)}.`;
+  const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+  if (d.group) {
+    const items = L.map((x) => `${lc(String(x.notion))}${x.why && !saidIn(x.why, x.notion) ? ` (${lc(String(x.why)).replace(/[.\s]+$/, "")})` : ""}`);
+    return `Ce que vous devez encore travailler en priorité, c’est ${andList(items)}.`;
+  }
+  // one learner: each point in its own paragraph (no numbers): what it is, then what to do and what to look up
+  const one = (x: ToLearn) => {
+    // what it is (the teacher's or the corrector's words), unless the advice already says it
+    const words = (t: string) => (t.toLowerCase().match(/[a-zà-ÿ]{5,}/g) || []);
+    const ww = words(String(x.why || "")), hw = new Set(words(String(x.how || "")));
+    const repeats = ww.length > 0 && ww.filter((w) => hw.has(w)).length / ww.length >= 0.5;
+    const what = x.why && !saidIn(x.why, x.notion) && !repeats ? ` : ${lc(String(x.why)).replace(/[.\s]+$/, "")}.` : ".";
+    return `${cap(String(x.notion).replace(/[.\s]+$/, ""))}${what}${x.how ? ` ${cap(x.how)}` : ""}`;
+  };
+  return [`Ce que tu dois encore travailler en priorité, point par point :`, ...L.map(one)].join("\n\n");
 }
 // a tip is written with « tu »: a squad's comment says « vous »
 const VOUS_OF: Record<string, string> = { réécris: "réécrivez", relie: "reliez", construis: "construisez", ajoute: "ajoutez", crée: "créez", reproduis: "reproduisez", reprends: "reprenez", écris: "écrivez", dessine: "dessinez", compare: "comparez", refais: "refaites", pars: "partez", mets: "mettez", entraîne: "entraînez", récupère: "récupérez", comprends: "comprenez", parcours: "parcourez", manipule: "manipulez", explique: "expliquez", enregistre: "enregistrez", modélise: "modélisez", travaille: "travaillez", teste: "testez", fais: "faites", vérifie: "vérifiez", nomme: "nommez", passe: "passez", observe: "observez", appelle: "appelez", relis: "relisez", utilise: "utilisez", gère: "gérez", convertis: "convertissez", fusionne: "fusionnez", présente: "présentez", demande: "demandez", corrige: "corrigez", renomme: "renommez", range: "rangez", simplifie: "simplifiez", remplace: "remplacez", cherche: "cherchez", garde: "gardez", transforme: "transformez" };
@@ -622,7 +671,7 @@ export const AI_COMMENT_SYSTEM = [
   "- INDIVIDUEL : uniquement ce qu’il SAIT FAIRE et ne sait PAS ENCORE FAIRE techniquement, et ce que le formateur a noté en face à face. JAMAIS les livrables, les fonctionnalités, les pages ou les exigences du brief, ni les bonus. Dans le premier paragraphe, après l’avis, ce qu’il maîtrise : UNIQUEMENT ce qui est dans « CE QU’IL MAÎTRISE » (et ce qui va bien selon l’échange), en une phrase ; si c’est vide, ne dis RIEN de ce qu’il maîtrise. Le commentaire du correcteur sert seulement à préciser ce qu’il doit apprendre.",
   "- ÉQUIPE : parle du PROJET (fonctionnalités, interface, planification, README, commits, travail en équipe) : ce qui est réussi, ce qui manque encore (« il manque encore… », sans recopier la grille), ce qui est à améliorer. Bonus : s’il y en a, dis seulement qu’ils en ont réalisé, sans les lister ; sinon n’en parle pas.",
   "- Ne dis JAMAIS quelles compétences sont validées ou non (ni leur code, ni leur intitulé du référentiel).",
-  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Écris-le en UN paragraphe, sans liste ni numéros (« Ce que tu dois encore travailler en priorité, c’est… »), avec tous les points donnés, dans l’ORDRE donné, sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque point dit directement ce qu’il doit apprendre, avec en quelques mots entre parenthèses en quoi ça consiste (avec les mots du formateur et du correcteur quand ils sont précis).",
+  "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Annonce-le par « Ce que tu dois encore travailler en priorité, point par point : », puis UN court paragraphe par point (sans numéro ni puce), avec tous les points donnés, dans l’ORDRE donné, sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque paragraphe dit ce qu’il doit apprendre, ce qu’il aurait dû faire concrètement dans son projet, et ce qu’il peut chercher (les mots à taper, entre « »), à partir de « quoi faire et quoi chercher » et des mots du formateur et du correcteur quand ils sont précis.",
   "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
   "- Si l’apprenant est en difficulté (faible ou critique) avec plusieurs points, un court paragraphe sur la méthode : pratiquer chaque jour, écrire le code soi-même sans copier, s’appuyer sur la documentation officielle.",
   "- Si tout est maîtrisé et qu’il n’y a rien à travailler (« CE QU’IL DOIT ENCORE APPRENDRE : (rien) »), n’invente rien : pas de liste, pas de conseil général, deux ou trois phrases sur ce qu’il réussit suffisent. Un apprenant au niveau bon ou excellent n’a pas de points à apprendre en plus de ceux donnés, et jamais le conseil de pratiquer chaque jour sans copier.",
@@ -685,7 +734,7 @@ export function aiCommentPrompt(d: CommentData): string {
 function learnList(d: CommentData): string {
   const L = d.toLearn || [];
   return `CE QU’IL DOIT ENCORE APPRENDRE (déjà classé du plus important au moins important ; garde cet ordre et tous les points) :\n${L.length
-    ? L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` — en quoi ça consiste : ${x.why}` : ""}`).join("\n") : "(rien)"}`;
+    ? L.map((x, i) => `${i + 1}. ${x.notion}${x.why ? ` — en quoi ça consiste : ${x.why}` : ""}${x.how ? ` — quoi faire et quoi chercher : ${x.how}` : ""}`).join("\n") : "(rien)"}`;
 }
 /** The notions a comment talks about that are neither in the brief, nor in the assessment, nor in the exchange. */
 export function outsideNotions(d: Pick<CommentData, "scope">, body: string): string[] {
