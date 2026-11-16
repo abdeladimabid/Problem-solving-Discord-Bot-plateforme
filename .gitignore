@@ -10,3 +10,11 @@ _to_delete/
 wrangler.bot.jsonc
 wrangler.admin.jsonc
 dist/
+# skills d'outils d'IA et caches (locaux, pas dans le dépôt)
+.*/skills/
+.claude/
+skills/
+skills-lock.json
+data/
+CLAUDE.md
+graphify-out/cache/
