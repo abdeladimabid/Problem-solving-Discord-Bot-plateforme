@@ -111,7 +111,8 @@ function gameDialog(d, kind, pre = {}) {
     <div id="gm-size" hidden><label for="gm-sz">Players per squad</label><select id="gm-sz">${[2, 3, 4, 5, 6].map((n) => `<option ${n === 4 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
     ${kind === "royale" ? `
       <label>Questions</label>
-      <div class="chips" id="gm-src"><button type="button" class="chip" data-src="ai" aria-pressed="true">✨ AI on topics</button>${d.assessments.length ? `<button type="button" class="chip" data-src="assess" aria-pressed="false">📝 From an assessment</button>` : ""}${(d.royaleSets || []).length ? `<button type="button" class="chip" data-src="lib" aria-pressed="false">📚 Shared library</button>` : ""}</div>
+      <div class="chips" id="gm-src"><button type="button" class="chip" data-src="ai" aria-pressed="true">✨ AI on topics</button>${d.assessments.length ? `<button type="button" class="chip" data-src="assess" aria-pressed="false">📝 From an assessment</button>` : ""}${(d.royaleSets || []).length ? `<button type="button" class="chip" data-src="lib" aria-pressed="false">📚 Shared library</button>` : ""}<button type="button" class="chip" data-src="json" aria-pressed="false">📋 Import JSON</button></div>
+      <div id="gm-json" hidden>${rqImportHtml("gm-j")}</div>
       <div id="gm-ai">${tagSelect("gm-topics", topicOpts, ["HTML", "CSS", "JavaScript"].filter((x) => d.topics.includes(x)), { allowNew: true, placeholder: "Add a topic (e.g. Flexbox, SQL joins)…" })}
         <div class="field-row"><div><label for="gm-n">How many</label><select id="gm-n">${[15, 20, 30, 40].map((n) => `<option ${n === 20 ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div><label for="gm-lvl">Level</label><select id="gm-lvl"><option value="easy">Easy</option><option value="medium">Medium</option></select></div></div></div>
@@ -178,6 +179,7 @@ function gameDialog(d, kind, pre = {}) {
       const fromAs = $("[data-src=assess][aria-pressed=true]", dlg);
       const fromLib = $("[data-src=lib][aria-pressed=true]", dlg);
       if (fromLib) { body.questions = d.royaleSets[Number($("#gm-lsel").value)].questions; body.fromLibrary = true; }
+      else if ($("[data-src=json][aria-pressed=true]", dlg)) body.questions = rqImported(jsonImp.get());
       else {
       body.fromAssessment = !!fromAs;
       $("#gm-st").textContent = fromAs ? "⏳ Reading the assessment…" : "⏳ Writing the questions…";
@@ -220,7 +222,11 @@ function gameDialog(d, kind, pre = {}) {
   $$("[data-src]", dlg).forEach((b) => b.onclick = () => {
     $$("[data-src]", dlg).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     $("#gm-ai").hidden = b.dataset.src !== "ai"; $("#gm-as").hidden = b.dataset.src !== "assess"; if ($("#gm-lib")) $("#gm-lib").hidden = b.dataset.src !== "lib";
+    $("#gm-json").hidden = b.dataset.src !== "json";
   });
+  // 📋 Import JSON: checked and shown as it's pasted (true/false choices follow the game's language)
+  const jsonImp = kind === "royale" ? wireRqImport("gm-j", () => $("#gm-lang", dlg).value) : null;
+  if (jsonImp) $("#gm-lang", dlg).addEventListener("change", jsonImp.refresh);
   // the source chips (built-in / AI / my own / made before) show their pane
   function pane(id) { return $(`[data-${id}][aria-pressed=true]`, dlg)?.getAttribute(`data-${id}`); }
   const wireSrc = (id, attr, prev, start) => {
@@ -322,13 +328,100 @@ function ownTask() {
 }
 
 // ------------------------------------------------------------------ Battle Royale: the questions, editable before the game
+const royaleQItem = (q, i, tools = "") => `<div class="gq"><span class="gq-n">${i + 1}</span><div class="gq-b"><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}
+      <div class="gq-opts">${q.options.map((o, k) => `<span class="gq-o ${k === q.answer ? "ok" : ""}">${k === q.answer ? "✅" : "ABCD"[k] + "."} ${esc(o)}</span>`).join("")}</div></div>${tools}</div>`;
 function royaleQsHtml(G) {
   const edit = ["lobby", "over"].includes(G.live?.phase), qs = G.content.questions;
   return `<div class="panel-head"><h2>Questions <span class="muted">${qs.length}</span></h2>
-      ${edit ? `<span class="toolbar" style="margin:0"><button class="btn small" data-qnew>✍️ Write a question</button><button class="btn small" data-qai>✨ Add some with AI</button></span>` : `<span class="small muted">You can change them before the game starts or once it's over.</span>`}</div>
-    <div class="gq-list">${qs.map((q, i) => `<div class="gq"><span class="gq-n">${i + 1}</span><div class="gq-b"><b>${esc(q.prompt)}</b>${q.code ? `<pre class="code small">${esc(q.code)}</pre>` : ""}
-      <div class="gq-opts">${q.options.map((o, k) => `<span class="gq-o ${k === q.answer ? "ok" : ""}">${k === q.answer ? "✅" : "ABCD"[k] + "."} ${esc(o)}</span>`).join("")}</div></div>
-      ${edit ? `<span class="gq-tools"><button class="wp-ib" data-qup="${i}" title="Move up" ${i ? "" : "disabled"}>↑</button><button class="wp-ib" data-qdown="${i}" title="Move down" ${i < qs.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-qedit="${i}">✏️ Edit</button><button class="wp-ib danger" data-qrm="${i}" title="Remove">✕</button></span>` : ""}</div>`).join("")}</div>`;
+      ${edit ? `<span class="toolbar" style="margin:0"><button class="btn small" data-qnew>✍️ Write a question</button><button class="btn small" data-qai>✨ Add some with AI</button><button class="btn small" data-qjson>📋 Import JSON</button></span>` : `<span class="small muted">You can change them before the game starts or once it's over.</span>`}</div>
+    <div class="gq-list">${qs.map((q, i) => royaleQItem(q, i, edit ? `<span class="gq-tools"><button class="wp-ib" data-qup="${i}" title="Move up" ${i ? "" : "disabled"}>↑</button><button class="wp-ib" data-qdown="${i}" title="Move down" ${i < qs.length - 1 ? "" : "disabled"}>↓</button><button class="btn small" data-qedit="${i}">✏️ Edit</button><button class="wp-ib danger" data-qrm="${i}" title="Remove">✕</button></span>` : "")).join("")}</div>`;
+}
+
+// Battle Royale: questions imported as JSON (written by hand, or by an AI chat from the prompt we copy)
+const RQ_MAX = 80;
+const RQ_JSON_EXAMPLE = `[
+  { "prompt": "Quelle propriété aligne les éléments sur l'axe principal d'un conteneur flex ?", "options": ["align-items", "justify-content", "flex-wrap", "gap"], "answer": 1, "topic": "Flexbox" },
+  { "prompt": "Que vaut arr ?", "code": "const arr = [1, 2, 3].map((x) => x * 2);", "options": ["[1, 2, 3]", "[2, 4, 6]", "6", "undefined"], "answer": "B", "topic": "ES6" },
+  { "prompt": "<section> est une balise sémantique.", "answer": true, "topic": "HTML" }
+]`;
+const RQ_AI_PROMPT = (lang) => `Write multiple-choice questions for a class quiz game (Battle Royale: a wrong answer knocks the student out), in ${lang === "en" ? "English" : "French"}.
+Topics: …
+Number of questions: 20 · Level: easy
+
+Answer ONLY with a JSON array, no text around it, in this format:
+${RQ_JSON_EXAMPLE}
+
+Rules:
+- "prompt": the question, short (300 characters max).
+- "options": 2 to 4 choices (120 characters max each), only one of them right, the wrong ones plausible.
+- "answer": the index of the right choice (0 = the first), or its letter A–D. For a true/false question, leave "options" out and give "answer": true or false.
+- "code" (optional): a code snippet shown under the question, 12 lines max.
+- "topic" (optional): a short topic name.
+- Vary the position of the right answer.`;
+/** Pasted JSON → { questions, nums (each one's number in the JSON), problems, note }: every question is checked like the server does. */
+function parseRoyaleJson(text, lang) {
+  const out = { questions: [], nums: [], problems: [], note: "" };
+  let v;
+  try { v = JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch (e) { out.problems.push(`The JSON can't be read: ${e.message}`); return out; }
+  const list = Array.isArray(v) ? v : Array.isArray(v?.questions) ? v.questions : null;
+  if (!list) { out.problems.push("Expected a list of questions: [ {…}, {…} ]"); return out; }
+  list.forEach((q, i) => {
+    const bad = (why) => out.problems.push(`Question ${i + 1}: ${why}`);
+    if (!q || typeof q !== "object") return bad("not an object { … }");
+    const prompt = String(q.prompt ?? q.question ?? "").trim();
+    if (!prompt) return bad("no prompt");
+    if (prompt.length > 300) return bad("the prompt is over 300 characters");
+    let options = q.options ?? q.choices, answer = q.answer ?? q.correct;
+    if (options == null && typeof answer === "boolean") { options = lang === "en" ? ["True", "False"] : ["Vrai", "Faux"]; answer = answer ? 0 : 1; }
+    if (!Array.isArray(options)) return bad("no options [ … ]");
+    options = options.map((o) => String(o ?? "").trim());
+    if (options.some((o) => !o)) return bad("an empty choice");
+    if (options.length < 2 || options.length > 4) return bad(`${options.length} choices: 2 to 4 are needed`);
+    if (options.some((o) => o.length > 120)) return bad("a choice is over 120 characters");
+    let k = -1;
+    if (typeof answer === "number") k = answer;
+    else if (typeof answer === "string") {
+      const a = answer.trim();
+      k = /^[A-Da-d]$/.test(a) ? "abcd".indexOf(a.toLowerCase()) : /^\d+$/.test(a) ? Number(a) : options.findIndex((o) => o.toLowerCase() === a.toLowerCase());
+    }
+    if (!Number.isInteger(k) || k < 0 || k >= options.length) return bad(`"answer" must be the index of the right choice (0 to ${options.length - 1}), its letter or its text`);
+    const code = String(q.code ?? "").replace(/\s+$/, "");
+    if (code.length > 700 || code.split("\n").length > 12) return bad("the code is over 12 lines (or 700 characters)");
+    out.questions.push({ prompt, ...(code ? { code } : {}), options, answer: k, ...(q.topic ? { topic: String(q.topic).slice(0, 30) } : {}) });
+    out.nums.push(i);
+  });
+  if (out.questions.length > RQ_MAX) { out.note = `Only the first ${RQ_MAX} questions are kept.`; out.questions.length = out.nums.length = RQ_MAX; }
+  return out;
+}
+const rqImportHtml = (id) => `<label for="${id}-t">Questions as JSON <span class="muted">(paste them, or open a .json file)</span></label>
+  <textarea id="${id}-t" rows="7" style="width:100%;font-family:var(--mono);font-size:12.5px" spellcheck="false" placeholder='[ { "prompt": "…", "options": ["…", "…", "…"], "answer": 0 } ]'></textarea>
+  <div class="toolbar" style="margin:6px 0 0"><label class="btn small">📂 Open a .json file<input type="file" id="${id}-f" accept=".json,application/json,text/plain" hidden></label><button type="button" class="btn small" id="${id}-ai" title="Paste it in ChatGPT, Claude…, fill in the topics, then paste its answer here">📋 Copy a prompt for an AI</button></div>
+  <details class="small"><summary>The format</summary><pre class="code small">${esc(RQ_JSON_EXAMPLE)}</pre>
+    <p class="muted">"answer": the index of the right choice (0 = the first), its letter (A–D) or its text. A true/false question: no "options" and "answer": true or false. "code" (optional, 12 lines max) is shown under the question.</p></details>
+  <div id="${id}-prev"></div>`;
+/** Wires an import pane; returns () => the last parse (null while it's empty). */
+function wireRqImport(id, lang) {
+  let last = null;
+  const t = $(`#${id}-t`, dlg), prev = $(`#${id}-prev`, dlg);
+  const show = () => {
+    last = t.value.trim() ? parseRoyaleJson(t.value, lang()) : null;
+    if (!last) { prev.innerHTML = ""; return; }
+    const { questions: qs, nums, problems, note } = last;
+    prev.innerHTML = `<p class="small" style="margin:10px 0 6px">${qs.length ? `<b>✅ ${qs.length} question${qs.length > 1 ? "s" : ""} ready</b>` : "<b>No question can be used yet</b>"}${problems.length ? ` · <span class="gq-warn">⚠ ${problems.length} to fix</span>` : ""}${note ? ` · <span class="muted">${esc(note)}</span>` : ""}</p>
+      ${problems.length ? `<ul class="small gq-bad">${problems.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      ${qs.length ? `<div class="gq-list gq-scroll">${qs.map((q, i) => royaleQItem(q, nums[i])).join("")}</div>` : ""}`;
+  };
+  t.oninput = show;
+  $(`#${id}-f`, dlg).onchange = async (ev) => { const f = ev.target.files[0]; if (!f) return; t.value = await f.text(); ev.target.value = ""; show(); };
+  $(`#${id}-ai`, dlg).onclick = () => navigator.clipboard.writeText(RQ_AI_PROMPT(lang())).then(() => toast("Prompt copied: paste it in an AI chat"));
+  return { get: () => last, refresh: show };
+}
+/** The questions of an import, or why they can't be used yet. */
+function rqImported(r, min = 3) {
+  if (!r) throw new Error("Paste the questions (JSON) first");
+  if (r.problems.length) throw new Error(`Fix the questions marked ⚠ first (${r.problems[0]})`);
+  if (r.questions.length < min) throw new Error(`At least ${min} question${min > 1 ? "s are" : " is"} needed`);
+  return r.questions;
 }
 function royaleQForm(q = { prompt: "", code: "", options: ["", "", "", ""], answer: 0 }) {
   const opts = [...q.options, "", "", "", ""].slice(0, 4);
@@ -379,6 +472,21 @@ function wireRoyaleQs(G, id) {
         const add = r.questions.filter((q) => !have.has(q.prompt.toLowerCase()));
         await save([...qs, ...add].slice(0, 80), `${add.length} question(s) added${r.ai ? "" : " (built-in: the AI wasn't available)"}`); dlg.close();
       } }]);
+    }
+    if (b.hasAttribute("data-qjson")) {
+      openDialog("Import questions (JSON)", `${rqImportHtml("gj")}
+        <label class="check"><input type="checkbox" id="gj-rep"> Replace the ${qs.length} current questions <span class="muted small">(otherwise they are added at the end)</span></label>`, [{ label: "📋 Import them", primary: true, action: async () => {
+        const add = rqImported(imp.get(), $("#gj-rep", dlg).checked ? 3 : 1);
+        if ($("#gj-rep", dlg).checked) await save(add.slice(0, RQ_MAX), `${Math.min(add.length, RQ_MAX)} questions imported`);
+        else {
+          const have = new Set(qs.map((q) => q.prompt.toLowerCase()));
+          const fresh = add.filter((q) => !have.has(q.prompt.toLowerCase()));
+          await save([...qs, ...fresh].slice(0, RQ_MAX), `${fresh.length} question(s) added`);
+        }
+        dlg.close();
+      } }]);
+      dlg.classList.add("wide");
+      const imp = wireRqImport("gj", () => G.settings.lang);
     }
   };
 }

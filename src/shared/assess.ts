@@ -115,8 +115,8 @@ export const settingsOf = (a: Pick<AssessRow, "settings">) => cleanSettings(pars
 export async function saveAssessment(env: Env, g: GuildRow, id: number | null, b: any): Promise<number> {
   const title = str(b?.title, 120) || "Assessment";
   const qs = (Array.isArray(b?.questions) ? b.questions : []).slice(0, 60).map((q: any, i: number) => cleanQuestion(q, i)).filter(Boolean);
-  // a new assessment: no going back by default (one question at a time); the teacher can allow it before inviting
-  let st = cleanSettings({ nav: "forward", ...(b?.settings ?? {}) });
+  // a new assessment: they can move between the questions by default; « one question at a time » is the teacher's choice
+  let st = cleanSettings({ nav: "free", ...(b?.settings ?? {}) });
   if (id) {
     const cur = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
     if (!cur) throw new AssessError("This assessment doesn't exist anymore.");
@@ -447,6 +447,7 @@ export async function saveAnswer(env: Env, takerId: number, sid: string, qid: st
   const answers = parse<Record<string, unknown>>(tk.answers, {});
   answers[qid] = q.type === "mcq" ? (Array.isArray(answer) ? answer : [answer]).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < 6).slice(0, 6) : str(answer, 8000);
   await run(env, "UPDATE assessment_takers SET answers = ?, pos = ? WHERE id = ? AND sid = ?", JSON.stringify(answers), newPos, tk.id, sid);
+  return { nav: st.nav };
 }
 
 /** The page saw them leave (full screen closed, other tab, other window): the session stops. */
@@ -1201,8 +1202,9 @@ export async function saveOptions(env: Env, g: GuildRow, id: number, b: any) {
   const cur = settingsOf(a);
   const started = await one<{ n: number }>(env, "SELECT COUNT(*) AS n FROM assessment_takers WHERE assessment_id = ? AND status != 'invited'", id);
   const next = cleanSettings({ ...cur, ...pick(b, ["noPaste", "lockScreen", "shuffle", "nav", "oneDevice", "netAlerts"]) });
-  // the order of the questions can't change once a student has started (their paper would change under them)
-  if ((started?.n ?? 0) > 0) { next.shuffle = cur.shuffle; next.nav = cur.nav; }
+  // once a student has started: the order of the questions can't change (their paper would change under them), and
+  // going back can be opened (they move freely from their next question) but not closed again
+  if ((started?.n ?? 0) > 0) { next.shuffle = cur.shuffle; if (cur.nav === "free") next.nav = "free"; }
   await run(env, "UPDATE assessments SET settings = ? WHERE id = ?", JSON.stringify(next), id);
   return next;
 }

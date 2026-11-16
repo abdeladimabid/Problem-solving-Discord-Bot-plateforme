@@ -2252,6 +2252,9 @@ button.wp-tick { cursor: pointer; font-family: inherit; color: #fff; padding: 0;
 .gq-o { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--surface-2); }
 .gq-o.ok { background: var(--up-bg); color: var(--up); font-weight: 650; }
 .gq-tools { display: flex; gap: 4px; align-items: center; flex: none; }
+.gq-scroll { max-height: 340px; overflow: auto; padding-right: 4px; }
+.gq-warn { color: var(--warn); font-weight: 650; }
+.gq-bad { margin: 0 0 8px; padding: 8px 12px 8px 28px; border-radius: var(--radius-m); background: var(--warn-bg); color: var(--warn); }
 .gq-form { display: grid; gap: 8px; }
 .gq-row { display: flex; gap: 10px; align-items: center; } .gq-row input[type=text] { flex: 1; } .gq-row input[type=radio] { width: 18px; height: 18px; accent-color: var(--up); }
 @media (max-width: 640px) { .gq { flex-wrap: wrap; } .gq-tools { width: 100%; justify-content: flex-end; } }

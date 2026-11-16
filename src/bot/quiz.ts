@@ -43,7 +43,7 @@ export async function handleQuiz(request: Request, env: Env, ctx: Ctx, token: st
       return json({ texts: await translateTexts(env, b.texts.map(String), to) });
     }
     if (action === "start") { await noteIp(env, "quiz", takerId, request).catch(() => null); return json(await startSession(env, takerId, String(b.sid ?? ""))); }
-    if (action === "answer") { await saveAnswer(env, takerId, String(b.sid ?? ""), String(b.qid ?? ""), b.answer, Number(b.pos) || 0); return json({ ok: true }); }
+    if (action === "answer") { const r = await saveAnswer(env, takerId, String(b.sid ?? ""), String(b.qid ?? ""), b.answer, Number(b.pos) || 0); return json({ ok: true, nav: r.nav }); }
     if (action === "event") { await leaveEvent(env, takerId, String(b.sid ?? ""), String(b.what ?? "")); return json({ ok: true }); }
     if (action === "submit") { await submit(env, takerId, String(b.sid ?? ""), ctx); return json({ ok: true }); }
   } catch (e) {
@@ -321,18 +321,26 @@ textarea:focus{outline:2px solid var(--blue);outline-offset:1px}
   async function saveNow(q) {
     clearTimeout(saveT);
     const r = await post("/answer", { qid: q.id, answer: answers[q.id], pos: cur }).catch(() => null);
+    if (r && r.nav === "free") R.nav = "free";
     const s = document.getElementById("saved");
     if (r && r.ok) { if (s) { s.textContent = tr("saved") + " ✓"; s.className = "saved"; } }
     else if (r && r.error === "passed") { flash(tr("passed")); }
     else if (r && r.error) { running = false; return r.error === "locked" ? lockedScreen("left") : r.error === "time" ? finish(true) : show({ status: r.error }); }
   }
+  let moving = false;
   async function go(i) {
     const q = paper[cur];
+    if (moving) return;
     if (R.nav === "forward") {
-      // only forward, one step; the position is saved at once (the server refuses going back)
+      // only forward, one step; the position is saved at once (the server refuses going back). One move at a time: a
+      // second click while it saves would skip a question
       if (i !== cur + 1 || i >= paper.length) return;
+      moving = true;
+      const nx = document.getElementById("next"); if (nx) nx.disabled = true;
       cur = i;
-      await post("/answer", { qid: q.id, answer: answers[q.id] != null ? answers[q.id] : (q.type === "mcq" ? [] : ""), pos: cur }).catch(() => null);
+      const r = await post("/answer", { qid: q.id, answer: answers[q.id] != null ? answers[q.id] : (q.type === "mcq" ? [] : ""), pos: cur }).catch(() => null);
+      if (r && r.nav === "free") R.nav = "free";
+      moving = false;
       draw();
       return;
     }
