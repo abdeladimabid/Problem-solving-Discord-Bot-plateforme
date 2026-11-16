@@ -243,17 +243,25 @@ const notionsOfQ = (q: any) => {
   const sharp = cs.filter((c: string) => !BROAD.includes(c));
   return (sharp.length ? sharp : cs).slice(0, 3);
 };
-/** A learner's notions: mastered (every question on it right) and missed (at least one wrong, partly right or empty). */
+/**
+ * A learner's notions, from what they really scored on each one (a question 70 % right counts 0.7): missed = under 60 % on
+ * the notion's questions (the worst first), mastered = 80 % or more on at least two questions. One partly right answer
+ * among several good ones isn't a gap: a learner at 74 % isn't told to relearn every notion the assessment touched.
+ */
 export function paperFacts(qs: any[], p: { g: any; an: any }): { ok: string[]; ko: string[] } {
-  const good = new Map<string, number>(), bad = new Map<string, number>();
+  const per = new Map<string, { n: number; got: number }>();
   for (const q of qs) {
     const v = verdictOf(q, p);
     if (!v) continue;
-    for (const c of notionsOfQ(q)) (v === "correct" ? good : bad).set(c, ((v === "correct" ? good : bad).get(c) || 0) + 1);
+    const sc = Number(p.g?.[q.id]?.score);
+    const got = Number.isFinite(sc) && (sc > 0 || v !== "correct") ? Math.max(0, Math.min(1, sc / 100)) : v === "correct" ? 1 : v === "partial" ? 0.5 : 0;
+    for (const c of notionsOfQ(q)) { const x = per.get(c) || { n: 0, got: 0 }; x.n++; x.got += got; per.set(c, x); }
   }
-  const top = (m: Map<string, number>) => [...m.entries()].sort((x, y) => y[1] - x[1]).map(([c]) => c);
-  // mastered: at least two questions on it, all right (one right answer isn't a proof)
-  return { ok: top(good).filter((c) => !bad.has(c) && (good.get(c) || 0) >= 2).slice(0, 6), ko: top(bad).slice(0, 6) };
+  const all = [...per.entries()].map(([c, x]) => ({ c, n: x.n, avg: x.got / x.n }));
+  return {
+    ok: all.filter((x) => x.n >= 2 && x.avg >= 0.8).sort((a, b) => b.avg - a.avg || b.n - a.n).map((x) => x.c).slice(0, 6),
+    ko: all.filter((x) => x.avg < 0.6).sort((a, b) => a.avg - b.avg || b.n - a.n).map((x) => x.c).slice(0, 6),
+  };
 }
 /** The notions behind the questions of an assessment the learner(s) didn't answer, or got wrong / partly wrong:
  *  what to study, grouped (the most missed first), never the list of questions. */
@@ -577,9 +585,9 @@ export async function saveStates(env: Env, g: GuildRow, briefId: number, who: st
   rec.final = final;
   const steps = stepsOf((await one<{ steps: string | null }>(env, "SELECT steps FROM briefs WHERE id = ?", briefId))?.steps);
   rec.suivi = steps.length ? await suiviFor(env, briefId, who, steps, rec.rhythm ?? null) : null;
-  // the Fiche niveaux's items not known yet (from the page): what the comment says is still to learn
-  if (Array.isArray(raw?.ficheGaps)) rec.level = { ...(rec.level || {}), gaps: raw.ficheGaps.slice(0, 10).map((x: any) => ({ code: String(x?.code || "").slice(0, 20), text: String(x?.text || "").replace(/\s+/g, " ").trim().slice(0, 240), level: String(x?.level || "") }))
-    .filter((x: any) => x.text && ["faible", "moyen", "bon", "excellent"].includes(x.level)) };
+  // the Fiche niveaux's items not known yet (from the page): what the comment says is still to learn — only what THIS
+  // learner got wrong in THIS brief (see briefGaps), never the sprint's items in general
+  if (Array.isArray(raw?.ficheGaps)) rec.level = { ...(rec.level || {}), gaps: briefGaps(raw.ficheGaps, briefId, rec.assess) };
   rec.result.feedback = buildComment(rec.first || "", rec, final);
   if (typeof raw?.comment === "string" && raw.comment.trim() && raw.keepComment) rec.result.feedback = raw.comment.slice(0, 6000);
   // written again from the switches (↻ Rebuild): the next changes rewrite it too
@@ -1344,4 +1352,25 @@ export async function checkAi(env: Env, g: GuildRow, b: BriefCtx, who: string) {
   const lv = aiLevel(signals);
   rec.aiCheck = { at: Date.now(), ...lv, signals: signals.sort((a, z) => z.pts - a.pts), parts, commits: pushes.length, lines: pushes.reduce((s, p) => s + (Number(p.adds) || 0), 0), ai } satisfies AiCheck;
   await putReview(env, g, b.id, who, rec);
+}
+
+/**
+ * The Fiche niveaux's items the debrief comment may call « still to learn »: the ones this learner showed they don't know
+ * IN THIS BRIEF — its assessments' questions, its mises en situation, its debrief (the project's code, the oral, the live
+ * task) — more than half missed there; or the ones the teacher decided « not known ». An item never asked, asked elsewhere,
+ * or mostly right is never a gap: the comment stays this learner's own, never the sprint's programme.
+ */
+export function briefGaps(list: unknown, briefId: number, assess: unknown): { code: string; text: string; level: string; seen: true }[] {
+  const mine = new Set<string>([`b${briefId}`]);
+  for (const a of Array.isArray(assess) ? assess : []) if (a && Number.isFinite(Number(a.id))) mine.add(`${a.kind === "mise" ? "m" : "a"}${Number(a.id)}`);
+  const out: { code: string; text: string; level: string; seen: true }[] = [];
+  for (const x of Array.isArray(list) ? list.slice(0, 20) : []) {
+    const text = String(x?.text || "").replace(/\s+/g, " ").trim().slice(0, 240), level = String(x?.level || "");
+    if (!text || !["faible", "moyen", "bon", "excellent"].includes(level)) continue;
+    const ev = (Array.isArray(x?.ev) ? x.ev : []).filter((e: any) => mine.has(String(e?.ref || "").split(":")[0]));
+    const got = ev.reduce((s: number, e: any) => s + Math.max(0, Math.min(1, Number(e?.got) || 0)), 0);
+    if (x?.teacher === false || (ev.length && got / ev.length <= 0.5)) out.push({ code: String(x?.code || "").slice(0, 20), text, level, seen: true });
+    if (out.length >= 6) break;
+  }
+  return out;
 }

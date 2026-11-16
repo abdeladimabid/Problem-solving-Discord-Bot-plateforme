@@ -53,7 +53,7 @@ async function editorData(env: Env, g: GuildRow, a: AttemptRow, c: ChallengeRow)
   const sig = parseSignature(c.signature);
   const samples = (await loadTests(env, c)).filter((x) => x.sample).map((x) => ({ input: x.input ?? "", expected: x.expected }));
   const langs = (Object.keys(LANGS) as CodeLang[]).map((k) => ({
-    id: k, label: LANGS[k].label, starter: starterFor(c, k, L), header: sig ? signatureLine(sig, k) : null,
+    id: k, label: LANGS[k].label, starter: starterFor(c, k, L, samples.map((x) => x.input)), header: sig ? signatureLine(sig, k) : null,
   }));
   return {
     ui: L, title: c.title, statement: c.question ?? "", difficulty: c.difficulty, hint: hintPlain(c, a.used_hint || 0),

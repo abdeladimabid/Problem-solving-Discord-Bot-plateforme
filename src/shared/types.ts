@@ -40,6 +40,8 @@ export interface Env {
   DEV_NO_AUTH?: string;     // "true" only for local development
   RUNNER_URL?: string;      // code runner (default https://godbolt.org)
   WANDBOX_URL?: string;     // multi-language runner (default https://wandbox.org)
+  PAIZA_URL?: string;       // backup runner when Wandbox is saturated (default https://api.paiza.io)
+  PAIZA_KEY?: string;       // its key (default "guest")
   LLM_BASE_URL?: string;    // optional OpenAI-compatible AI (Ollama via a tunnel, Groq, OpenRouter…)
   LLM_MODEL?: string;
   LLM_API_KEY?: string;

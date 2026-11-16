@@ -5,7 +5,8 @@ import type { Env, GuildRow } from "../shared/types.ts";
 import { one } from "../shared/db.ts";
 import { t } from "../shared/i18n.ts";
 import { certData, profileUrl, readCert } from "../shared/share.ts";
-import { portfolioData } from "../shared/portfolio.ts";
+import { getPortfolio, portfolioData } from "../shared/portfolio.ts";
+import { intranetPhoto } from "../shared/intranet.ts";
 import { portfolioHtml } from "./portfoliopage.ts";
 
 const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -50,6 +51,14 @@ export async function profilePage(env: Env, key: string): Promise<Response> {
   if (!d || !g) return notFound("This profile isn't shared.");
   // the student's portfolio: what they show companies
   return html(portfolioHtml(d, g, profileUrl(env, key)));
+}
+
+/** The photo of a shared portfolio: the student's intranet photo (unless they hid it with /portfolio show photo). */
+export async function profilePhoto(env: Env, key: string): Promise<Response> {
+  const p = await one<{ guild_id: string; discord_id: string }>(env, "SELECT guild_id, discord_id FROM players WHERE share_key = ?", key);
+  if (!p || (await getPortfolio(env, p.guild_id, p.discord_id)).hide.includes("photo")) return new Response("Not found", { status: 404 });
+  const img = await intranetPhoto(env, p.guild_id, p.discord_id).catch(() => null);
+  return img || new Response("Not found", { status: 404 });
 }
 
 export async function certPage(env: Env, token: string): Promise<Response> {

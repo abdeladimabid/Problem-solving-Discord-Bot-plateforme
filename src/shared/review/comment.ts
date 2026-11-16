@@ -369,7 +369,9 @@ export function commentData(o: { first?: string; group?: string; project: string
   const memberOnly = !o.group && !!o.member;
   const mode: CommentData["mode"] = o.group ? "group" : assess ? "assess" : "project";
   // the Fiche niveaux's items not known yet (sent by the debrief page with the switches): one learner only
-  const gaps: { code?: string; text: string; level: string }[] = !o.group && !o.member && Array.isArray(rec.level?.gaps) ? rec.level.gaps : [];
+  // the Fiche's items this learner missed in THIS brief (debrief.ts briefGaps): never the sprint's items in general
+  // (a list saved before that check has no « seen »: not used)
+  const gaps: { code?: string; text: string; level: string }[] = !o.group && !o.member && Array.isArray(rec.level?.gaps) ? rec.level.gaps.filter((x: any) => x && x.seen === true) : [];
   // what they showed they master (the assessment, the oral questions answered, the remarks' good points): left out of the tips
   const mastered = [...(assess ? assess.ok : []), ...oral.filter((q, i) => st.oral[i]).map((q) => `${q.notion || ""} ${q.q || ""}`), String(R.positive || ""),
     ...remarks.split(/(?<=[.!?;])\s+|\n+|,?\s+(?:mais|par contre|cependant|en revanche|toutefois)\s+/i).filter((x) => x && !NEGATIVE.test(x))].join("\n");
@@ -588,7 +590,8 @@ export const AI_COMMENT_SYSTEM = [
   "- CE QU’IL DOIT ENCORE APPRENDRE : c’est le cœur du commentaire quand il y en a. Écris « Ce que tu dois apprendre en priorité : » puis une liste NUMÉROTÉE (« 1. », « 2. »…, une ligne par point, sans ligne vide), dans l’ORDRE donné, sans en oublier ni en fusionner, et sans en ajouter (jamais de point sur les fonctionnalités ou les pages du projet). Chaque point dit DIRECTEMENT ce qu’il doit apprendre (jamais une catégorie comme « HTML : », « CSS : », « JavaScript : » en tête de ligne), puis en quelques mots en quoi ça consiste (avec les mots du formateur et du correcteur quand ils sont précis) : une phrase, 30 mots au plus. Pas de sous-liste, pas de « a) b) c) », pas d’énumération d’options entre parenthèses.",
   "- Ne dis JAMAIS d’où vient un point : pas de « à l’oral », « la question… », « lors de l’évaluation », « pendant l’échange », « en face à face », « mise en situation ».",
   "- Si l’apprenant est en difficulté (faible ou critique) avec plusieurs points, un court paragraphe sur la méthode : pratiquer chaque jour, écrire le code soi-même sans copier, s’appuyer sur la documentation officielle.",
-  "- Si tout est maîtrisé et qu’il n’y a rien à travailler, n’invente rien : deux ou trois phrases suffisent.",
+  "- Si tout est maîtrisé et qu’il n’y a rien à travailler (« CE QU’IL DOIT ENCORE APPRENDRE : (rien) »), n’invente rien : pas de liste, pas de conseil général, deux ou trois phrases sur ce qu’il réussit suffisent. Un apprenant au niveau bon ou excellent n’a pas de points à apprendre en plus de ceux donnés, et jamais le conseil de pratiquer chaque jour sans copier.",
+  "- PERSONNEL : chaque commentaire est propre à CET apprenant (ce qu’il a réussi et raté, ce que le formateur a noté de lui) ; jamais un texte qui pourrait être envoyé à toute la classe.",
   "- Dernier paragraphe : une conclusion encourageante et lucide, en une ou deux phrases. Tu peux y écrire {prénom} pour t’adresser à lui par son prénom (il sera remplacé).",
   "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun code de compétence. Ne parle JAMAIS du niveau de l’apprenant (ni « niveau », ni Faible, Moyen, Bon, Critique…), ni de la fiche des niveaux, ni d’aucun outil ou document interne de la formation.",
   'Réponds UNIQUEMENT avec ce JSON : {"commentaire":"le texte, paragraphes séparés par une ligne vide"}',
@@ -671,7 +674,11 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   if (numbered.some((l) => l.trim().length < 25 || wordCount(l) > 60 || /\b[a-g]\)\s|à l['’]oral|la question «|lors de l['’]évaluation|pendant (?:notre|l['’])échange|face à face|mise en situation/i.test(l))) return null;
   const nL = (d.toLearn || []).length;
   if (nL >= 2 && numbered.length < nL - 1) return null;
+  // never a point to learn that the debrief doesn't give (a list made up to fill the comment of a good learner)
+  if (!d.group && numbered.length > nL) return null;
   const lv = levelOf(d);
+  // the « practise every day, without copying » advice is for a learner in difficulty, never a good one
+  if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours|documentation officielle/i.test(body)) return null;
   if (lv !== "excellent" && /excellent/i.test(body)) return null;
   // never the learner's level, nor the Fiche niveaux or any internal tool
   if (/\bniveaux?\b|\bfiche\b|\bcritique\b|\b(?:faible|moyen)\s*[,.]|classbot/i.test(body)) return null;

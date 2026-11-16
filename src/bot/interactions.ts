@@ -13,7 +13,7 @@ import { RULES, SCORE_KINDS, basePoints, dayKey, isLimitedKind, levelInfo, quick
 import { COLORS, EPHEMERAL, MEDALS, NO_PINGS, btn, dm, editOriginal, linkBtn, mention, modal, pingUsers, row, send, ts } from "../shared/discord.ts";
 import {
   answer, feedbackFor, finish, getAttempt, getChallenge, pickChallenge, renderFor, startAttempt, submitCode, verifyCoding,
-  codeLangFor, guildLangs, starterFor, startExplain, answerExplain, explainState, EXPLAIN_SECONDS, ensureHints, hintSteps, solutionFor,
+  codeLangFor, guildLangs, starterOf, startExplain, answerExplain, explainState, EXPLAIN_SECONDS, ensureHints, hintSteps, solutionFor,
 } from "../shared/challenges.ts";
 import type { Mode } from "../shared/challenges.ts";
 import { activeContests, hrNames, isFrozen, standingsEmbed, stopContest, trackContest, trackingEmbed } from "../shared/contests.ts";
@@ -935,7 +935,7 @@ async function component(ix: Ix): Promise<Response> {
       return json(modal(`msub:${id}`, t(L, "ch.submit_title"), [{
         id: "code", label: t(L, "ch.code_label", { lang: LANGS[lang as keyof typeof LANGS].label }), long: true, max: 4000,
         // their last code in this language, else a starter that shows how to read the input
-        value: (r.a.answer_given && (!r.a.lang || r.a.lang === lang) ? r.a.answer_given : starterFor(r.c, lang, L)).slice(0, 4000),
+        value: (r.a.answer_given && (!r.a.lang || r.a.lang === lang) ? r.a.answer_given : await starterOf(ix.env, r.c, lang, L)).slice(0, 4000),
       }]));
     }
     case "exp": {

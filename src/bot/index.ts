@@ -18,7 +18,7 @@ import { replayData, replayPage } from "./replay.ts";
 import { handleEditor } from "./editor.ts";
 import { codeToPng } from "../shared/codeimage.ts";
 import { one } from "../shared/db.ts";
-import { certPage, profilePage } from "./pages.ts";
+import { certPage, profilePage, profilePhoto } from "./pages.ts";
 import { handleQuiz } from "./quiz.ts";
 import { handleMise } from "./mises.ts";
 import { handleAuth } from "./auth.ts";
@@ -65,8 +65,8 @@ export default {
     if (ed) return handleEditor(request, env, ctx, ed[1], ed[2]);
     const img = url.pathname.match(/^\/img\/(\d+)\.png$/);
     if (img && request.method === "GET") return codeImage(request, env, ctx, Number(img[1]));
-    const prof = url.pathname.match(/^\/u\/([a-z0-9]{8,32})$/);
-    if (prof && request.method === "GET") return profilePage(env, prof[1]);
+    const prof = url.pathname.match(/^\/u\/([a-z0-9]{8,32})(\/photo)?$/);
+    if (prof && request.method === "GET") return prof[2] ? profilePhoto(env, prof[1]) : profilePage(env, prof[1]);
     const cert = url.pathname.match(/^\/cert\/([A-Za-z0-9._-]{40,260})$/);
     if (cert && request.method === "GET") return certPage(env, cert[1]);
     if (url.pathname === "/auth/discord") return handleAuth(request, env);
@@ -80,7 +80,7 @@ export default {
     if (bt) return handleBattle(request, env, bt[1] as "tv" | "judge", Number(bt[2]), bt[3], bt[4]);
     const gt = url.pathname.match(/^\/game\/(\d{1,9})\.([a-f0-9]{24})(?:\/(state|qr\.svg|act|codes))?\/?$/);
     if (gt) return handleGame(request, env, "tv", Number(gt[1]), gt[2], gt[3]);
-    const gp = url.pathname.match(/^\/play\/(\d{1,9})\.([a-z0-9]{8})(?:\/(join|state|answer|revive|plea|check|hint|accuse|code|noise|mic|cheat|case|try))?\/?$/);
+    const gp = url.pathname.match(/^\/play\/(\d{1,9})\.([a-z0-9]{8})(?:\/(join|state|answer|revive|plea|check|hint|accuse|code|noise|mic|cheat|case|try|fix|draft))?\/?$/);
     if (gp) return handleGame(request, env, "play", Number(gp[1]), gp[2], gp[3]);
     const shr = url.pathname.match(/^\/share\/assessment\/(\d{1,9})\.([A-Za-z0-9_-]{32})\/?$/);
     if (shr && request.method === "GET") return sharePage(request, env, Number(shr[1]), shr[2]);

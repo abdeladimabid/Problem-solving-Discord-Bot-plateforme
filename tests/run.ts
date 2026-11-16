@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { intranetFake, googleFake, googleDocFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
-import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, aiFake, clock, paiza, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import botRaw from "../src/bot/index.ts";
 // Papers (/quiz, /mes) open only after « Sign in with Discord »: the old tests act as an already signed-in browser
 // (device "testdev-0000000000"), unless they send x-test-noident (the sign-in tests).
@@ -37,12 +37,15 @@ import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
-import { assessForAi } from "../src/shared/review/debrief.ts";
+import { assessForAi, paperFacts } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { _wandboxCool, runHarness, wandboxPace } from "../src/shared/runner.ts";
+wandboxPace.waits = [5, 5, 5, 5];   // the waits when Wandbox is busy: short in the tests
+import { explainQuestions } from "../src/shared/ai.ts";
 import { allowedLevel, blockSql, getBlocks, quickKindFor, setBlock } from "../src/shared/practiceblock.ts";
 import { pickChallenge as pickForTest } from "../src/shared/challenges.ts";
 import { contribution as memberContribution, memberLevel, memberLevelOf, memberLevels } from "../src/shared/review/members.ts";
@@ -1143,6 +1146,19 @@ section("anti-cheat: function mode, code editor, typing record, explain your cod
   check(JSON.parse(at.integrity).level === 0 && q1("SELECT COUNT(*) AS n FROM attempt_logs WHERE attempt_id = ?", aid).n === 1, "honest typing: no flag, replay stored");
   const ex: any = await (await ed("/explain", {})).json();
   check(ex.explain?.questions?.length === 2 && ex.explain.deadline > clock.now(), "2 questions about their own code");
+  {
+    // never a question about the starter's lines: the AI asking one is asked again; only starter code → no questions
+    const given = ["const data = require(\"fs\").readFileSync(0, \"utf8\").split(/\\s+/);", "let pos = 0;", "const next = () => data[pos++];", "console.log(solve(next()));"];
+    const code = [...given.slice(0, 3), "function solve(s) {", "  let r = \"\";", "  for (const ch of s) r = ch + r;", "  return r;", "}", given[3]].join("\n");
+    ai.explainQs.push(["What does `next()` do?", "Why is `pos` set to 0 on line 2?"], ["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]);
+    const qs = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(JSON.stringify(qs) === JSON.stringify(["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]), `explain: questions about the starter refused, asked again (${JSON.stringify(qs)})`);
+    ai.explainQs.push(["What does `solve` return?", "What is `data`?"], ["How does line 1 read the input?"]);
+    const qs2 = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(qs2 === null, "explain: no 2 good questions → none (the points aren't held over the starter)");
+    check(await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "x", code: given.join("\n"), given }) === null, "explain: only the starter code → nothing to explain");
+    ai.explainQs.length = 0;
+  }
   const ans: any = await (await ed("/answer", { answers: ["r builds the encoded string", "an empty string, because the loop never runs"] })).json();
   check(ans.explain.done && ans.explain.score === 0.75, "answers graded (75%)");
   const after = q1("SELECT points, held FROM attempts WHERE id = ?", aid);
@@ -4143,8 +4159,21 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     // notion once; never where it was seen, the level, the Fiche, a feature of the project
     const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
       assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
-      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
+      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen", seen: true }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", seen: true }, { text: "Flexbox : aligner et répartir des éléments", level: "bon" }] } };
+    {
+      // an assessment's notions from what was really scored: one partly right answer among good ones isn't a gap
+      const qs = [{ id: "a", prompt: "Quelle commande Git crée une nouvelle branche ?" }, { id: "b", prompt: "Quelle commande Git envoie les commits sur le dépôt distant ?" }, { id: "c", prompt: "Que fait git merge sur une branche ?" },
+        { id: "d", prompt: "Quelle est la différence entre margin et padding ?" }, { id: "e", prompt: "Comment centrer un bloc avec margin auto ?" }];
+      const pf = paperFacts(qs, { g: { a: { verdict: "correct" }, b: { verdict: "correct" }, c: { verdict: "partial", score: 60 }, d: { verdict: "incorrect", score: 0 }, e: { verdict: "partial", score: 50 } }, an: {} });
+      check(pf.ok.some((x) => /Git/.test(x)) && !pf.ko.some((x) => /Git/.test(x)) && pf.ko.some((x) => /boîte/.test(x)), `assessment: Git mostly right → mastered, not to relearn; the box model missed → to learn (${JSON.stringify(pf)})`);
+    }
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
+    check(!d2.toLearn.some((x: any) => /Flexbox/.test(x.notion)), "a Fiche item kept before the brief check (no « seen »): never in the comment");
+    // a good learner: the AI never adds points to learn, nor the « practise every day » advice
+    const good = { ...d2, level: "bon", toLearn: d2.toLearn.slice(0, 1), notions: d2.notions.slice(0, 1) };
+    const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n2. Les listes et les tableaux HTML : choisir entre une liste et un tableau.\n3. Flexbox : aligner et répartir des éléments sur une ligne.\n\nContinue comme ça.";
+    check(C.aiCommentText(good, { commentaire: padded }) === null, "a good learner's AI comment that adds points to learn: refused (the comment is written from the switches)");
+    check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
     const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
     check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
       && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
@@ -4205,8 +4234,17 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
-  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
-  check(/\n\d\. Écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [
+    { code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", ev: [{ ref: `b${bid}:o0`, got: 0 }, { ref: "a999:q1", got: 1 }] },
+    { code: "S1.M4", text: "Les listes et les tableaux HTML", level: "moyen", ev: [] },
+    { code: "S1.M5", text: "Le positionnement en CSS", level: "moyen", ev: [{ ref: "b99999:o1", got: 0 }, { ref: "a999:q2", got: 0 }] },
+    { code: "S1.B1", text: "Flexbox : aligner et répartir des éléments sur une ligne", level: "bon", ev: [{ ref: `b${bid}:o1`, got: 1 }, { ref: `b${bid}:c2`, got: 0 }, { ref: `b${bid}:t`, got: 1 }] },
+    { code: "S1.M6", text: "Le modèle de boîte et le centrage d’un bloc", level: "moyen", teacher: false, ev: [] },
+    { code: "x", text: "Ignoré", level: "critique", ev: [{ ref: `b${bid}:o0`, got: 0 }] }] } });
+  const fb0 = fgp.data.review.result.feedback;
+  check(/\n\d\. Écrire la structure de base d’une page/.test(fb0) && /\n\d\. (Le modèle de boîte|La différence entre margin)/.test(fb0) && !/niveau|fiche/i.test(fb0) && fgp.data.review.level.gaps.length === 2,
+    `the Fiche's items go into the comment only when missed in THIS brief (or decided « not known » by the teacher) (${JSON.stringify(fgp.data.review.level.gaps.map((x: any) => x.code))})`);
+  check(!/listes et les tableaux|positionnement|Flexbox/i.test(fb0), "…never an item never asked, missed in another brief, or mostly right here: no programme of the sprint for everyone");
   await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
@@ -4931,6 +4969,58 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   check(re.status === "locked" && back2.status === "active" && back2.rules.nav === "free" && back2.paper.length === 3, "after a reload: stopped until let back in, then the page moves freely between the questions");
 }
 
+section("assessments, no going back: a question passed without an answer comes back after a stop; « finish the missing » after sending");
+{
+  const qs = [1, 2, 3, 4].map((i) => ({ type: "explain", prompt: `Retour ${i}`, expected: "x", points: 1 }));
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Retour", questions: qs, settings: { minutes: 40 } });
+  const aid = mk.data.assessment.id;
+  await api("POST", `/api/assessments/${aid}/options`, { g: G, shuffle: true, nav: "forward" });
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id], send: false });
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[U.bob.id].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
+  const tkOf = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  const s1 = "sessionRETOURRETOUR0001";
+  const st = (await quiz("start", { sid: s1 })).d;
+  const P = st.paper.map((p: any) => p.id);
+  // q1 answered and validated, q2 passed empty, q3 answered (being typed)
+  await quiz("answer", { sid: s1, qid: P[0], answer: "réponse un", pos: 1, close: true });
+  await quiz("answer", { sid: s1, qid: P[1], answer: "", pos: 2, close: true });
+  await quiz("answer", { sid: s1, qid: P[2], answer: "réponse trois", pos: 2 });
+  check((await quiz("answer", { sid: s1, qid: P[0], answer: "changé", pos: 2 })).d.error === "passed", "a question validated with an answer: closed");
+  // out of full screen → stopped; the teacher lets them back in
+  await quiz("event", { sid: s1, what: "fullscreen" });
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkOf().id });
+  const s2 = "sessionRETOURRETOUR0002";
+  const back = (await quiz("start", { sid: s2 })).d;
+  check(back.status === "active" && back.paper.map((p: any) => p.id).join() === P.join() && back.closed.join() === P[0],
+    `back in: the same order, only the question validated with an answer is closed (${JSON.stringify(back.closed)})`);
+  const r2 = await quiz("answer", { sid: s2, qid: P[1], answer: "réponse deux après le retour", pos: 2, close: true });
+  check(r2.status === 200 && JSON.parse(tkOf().answers)[P[1]] === "réponse deux après le retour", "…the question passed without an answer can be answered now");
+  // a paper from before (no list): what was answered before their position stays closed, the rest is open
+  run1("UPDATE assessment_takers SET closed = NULL, pos = 3 WHERE id = ?", tkOf().id);
+  const { closedOf, questionsOf, settingsOf } = await import("../src/shared/assess.ts");
+  const ar = q1("SELECT * FROM assessments WHERE id = ?", aid);
+  check(closedOf({ ...tkOf(), answers: JSON.stringify({ [P[0]]: "a", [P[2]]: "c" }) }, questionsOf(ar), settingsOf(ar)).sort().join() === [P[0], P[2]].sort().join(), "a paper from before: only the answered questions before their position are closed");
+  // sent with a question not attempted
+  await quiz("submit", { sid: s2 });
+  check(["submitted", "graded"].includes(tkOf().status), "sent with question 4 not attempted");
+  const n0 = discordCalls.length;
+  const cm = await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id], minutes: "", days: 2 });
+  const tk2 = tkOf();
+  check(cm.status === 200 && cm.data.complete.opened === 1 && tk2.status === "locked" && tk2.lock_reason === "complete" && tk2.resume_ok === 1 && tk2.extra_min === 10 && !tk2.deadline
+    && discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${U.bob.id}/messages` && /didn't answer|non tentées|tentées/.test(text(c.body))),
+    `↩️ finish the missing: their link opens again, 10 min for 1 question of 4 (40 min), a DM (${JSON.stringify(cm.data.complete)})`);
+  const s3 = "sessionRETOURRETOUR0003";
+  const again = (await quiz("start", { sid: s3 })).d;
+  const miss = P.filter((id: string) => !again.closed.includes(id));
+  check(again.status === "active" && miss.length === 1 && again.deadline > clock.now() + 9 * 60, `…only the question not attempted is open, the time starts now (${miss.length} open)`);
+  check((await quiz("answer", { sid: s3, qid: P[0], answer: "changé", pos: 0 })).d.error === "passed", "…the others can't change");
+  await quiz("answer", { sid: s3, qid: miss[0], answer: "la dernière", pos: 3 });
+  await quiz("submit", { sid: s3 });
+  check(["submitted", "graded"].includes(tkOf().status) && Object.keys(JSON.parse(tkOf().answers)).length === 4, "…sent again: every question answered, graded again");
+  check((await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id] })).data.complete.none === 1, "nothing missing any more: nothing to reopen");
+}
+
 section("AI limits: grading in small requests, waiting out a per-minute limit");
 {
   const { perMinuteWait } = await import("../src/shared/aikeys.ts");
@@ -5033,6 +5123,13 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const img = await api("GET", `/api/intranet/photo/${U.carol.id}?g=${G}`);
   check(img.status === 200 && intranetFake.photoCalls === calls0 + 1, `…a photo is fetched from the intranet with the signed access (${img.status})`);
   check((await api("GET", `/api/intranet/photo/${U.bob.id}?g=${G}`)).status === 404 && intranetFake.photoCalls === calls0 + 1, "…no photo: nothing asked, 404");
+  {
+    // a shared portfolio shows it too (bot worker)
+    run1("UPDATE players SET share_key = 'carolpf12345' WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    const ph = await bot.fetch(new Request("https://bot.example.workers.dev/u/carolpf12345/photo"), env, makeCtx());
+    check(ph.status === 200 && /^image\//.test(ph.headers.get("content-type") || ""), `…and on the student's shared portfolio (${ph.status})`);
+    run1("UPDATE players SET share_key = NULL WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  }
   // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
   run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
     JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
@@ -5887,6 +5984,105 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   await rg.tv("state");
   const rt = await rg.tv("act", { a: "runtests" });
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
+  // ---------------------------------------------------------------- 🐞 bug hunt (solo, JavaScript)
+  {
+    const gen = await api("POST", `/api/games/bugs?g=${G}`, { count: 3, level: "mix", codeLang: "javascript" });
+    check(gen.status === 200 && gen.data.items.length === 2 && gen.data.dropped === 1 && gen.data.items[0].fn === "somme" && gen.data.items[1].bugs === 2,
+      `AI codes: each one checked by running it (the one without a real bug is left out) (${JSON.stringify(gen.data).slice(0, 160)})`);
+    const own = { title: "Pair", text: "estPair(n)", fn: "estPair", params: ["n"], level: "easy", bugs: 1, tests: [{ args: [2], expect: true }, { args: [3], expect: false }, { args: [0], expect: true }], code: "function estPair(n) { return n % 2 === 1; }", solution: "function estPair(n) { return n % 2 === 0; }" };
+    const ck = await api("POST", `/api/games/bugs/check?g=${G}`, { codeLang: "javascript", items: [own, { ...own, code: own.solution }, { ...own, solution: "function estPair(n) { return true; }" }, { fn: "x" }] });
+    check(ck.status === 200 && ck.data.results.map((r: any) => r.ok).join() === "true,false,false,false" && /no bug|passes every test/.test(ck.data.results[1].error) && /correct version fails/.test(ck.data.results[2].error),
+      "the teacher's (or Claude's) codes checked: a real bug, a correct version that passes, complete");
+    const items = [own, ...gen.data.items];
+    const B = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 600, lockScreen: true, noPaste: true, reward: 25 } });
+    check(B.status === 200 && B.data.kind === "bugs" && B.data.content.items.length === 3 && B.data.settings.bugTime === 600, "Bug Hunt created (solo, 3 codes, 10 min)");
+    const bh = game(B.data);
+    let parsedB = true;
+    try { for (const u of [B.data.tv, B.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsedB = false; console.log(e); }
+    check(parsedB, "Bug Hunt pages: valid scripts");
+    for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id]] as [number, string][]) await bh.join(k, pid);
+    const bs = await bh.tv("act", { a: "start" });
+    check(bs.data.phase === "playing" && bs.data.board.length === 3 && bs.data.endAt === bs.data.now - (bs.data.now - bs.data.endAt), "the hunt starts: everyone on the board");
+    const a0 = await bh.play("state", dev(1));
+    check(a0.data.item.n === 1 && a0.data.item.code === own.code && a0.data.item.shown.length === 2 && !JSON.stringify(a0.data).includes("n % 2 === 0") && a0.data.top.length === 3 && a0.data.lockScreen,
+      "a student gets the first code (with its bugs), 2 examples, never the correct version nor the hidden tests; the top 3");
+    // a wrong fix: the tests say so (the visible ones in detail, the hidden ones counted)
+    const bad = await bh.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n > 1; }" });
+    check(bad.status === 200 && !bad.data.ok && bad.data.passed === 1 && bad.data.visible.length === 2 && bad.data.hiddenFailed === 1, "a wrong fix: what fails (shown and hidden)");
+    check((await bh.play("fix", dev(1), { idx: 0, code: own.solution })).status === 409, "one try every few seconds");
+    clock.advance(5);
+    const good = await bh.play("fix", dev(1), { idx: 0, code: own.solution });
+    const a1 = await bh.play("state", dev(1));
+    check(good.data.ok && good.data.next === 1 && a1.data.item.n === 2 && a1.data.item.title === "Somme" && a1.data.solved === 1 && a1.data.top[0].me && a1.data.top[0].solved === 1, "fixed: the next code comes; Alice leads the top 3");
+    const b1 = await bh.play("state", dev(2));
+    check(b1.data.top[0].name !== b1.data.me.name && b1.data.top[0].solved === 1 && b1.data.rank >= 2, "the others see the top 3 move");
+    // a draft kept; a stale index ignored
+    await bh.play("draft", dev(2), { idx: 0, code: "function estPair(n) { // en cours" });
+    check((await bh.play("state", dev(2))).data.item.code.includes("en cours") && (await bh.play("fix", dev(2), { idx: 1, code: "x" })).data.stale, "the code being typed is kept (a reload), an old index is ignored");
+    // anti-cheat: leaving full screen stops Bob until the teacher lets him back in
+    await bh.play("cheat", dev(2), { what: "fullscreen" });
+    const bl = await bh.play("state", dev(2));
+    check(bl.data.locked === "fullscreen" && (await bh.play("fix", dev(2), { idx: 0, code: own.solution })).status === 409 && Object.keys((await bh.tv("state")).data.teams.find((t: any) => t.locks[U.bob.id])?.locks || {}).length === 1, "anti-cheat: out of full screen, stopped (the TV sees it)");
+    await bh.tv("act", { a: "letin", pid: U.bob.id });
+    check(!(await bh.play("state", dev(2))).data.locked, "the teacher lets him back in");
+    // the anti-cheat off: nothing stops
+    // Alice fixes the 2 others: she wins, the hunt ends
+    clock.advance(5);
+    const f2 = await bh.play("fix", dev(1), { idx: 1, code: gen.data.items[0].solution });
+    clock.advance(5);
+    const f3 = await bh.play("fix", dev(1), { idx: 2, code: gen.data.items[1].solution });
+    const end = await bh.tv("state");
+    const winPts = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'game' AND ref = ?", G, U.alice.id, String(B.data.id)).s;
+    check(f2.data.ok && f3.data.done && end.data.phase === "over" && end.data.winSquad === end.data.board[0].squad && end.data.board[0].name === q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name && winPts === 25,
+      `the first to fix them all wins: the hunt ends, +25 points (${winPts})`);
+    const bo = await bh.play("state", dev(2));
+    check(bo.data.phase === "over" && bo.data.review.length === 3 && (bo.data.rank === 2 || bo.data.rank === 3), "the others see the result and their rank");
+    // time up with nobody done: the most codes fixed wins
+    const B2 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh2 = game(B2.data);
+    await bh2.join(1, U.alice.id); await bh2.join(2, U.bob.id);
+    await bh2.tv("act", { a: "start" });
+    check((await bh2.play("cheat", dev(1), { what: "fullscreen" })).data.ignored, "anti-cheat off: leaving full screen stops nobody");
+    // Wandbox saturated by the class ("429 Too many requests" three times): the fix waits and goes through
+    runner.tooMany = 3;
+    const pz0 = paiza.calls, wb0 = runner.calls;
+    const busyFix = await bh2.play("fix", dev(2), { idx: 0, code: own.solution + "\n// corrigé" });
+    check(busyFix.status === 200 && busyFix.data.ok && paiza.calls > pz0, `Wandbox saturated (429): the backup runner (paiza.io) runs the fix, it counts (${JSON.stringify(busyFix.data).slice(0, 80)})`);
+    const wb1 = runner.calls, pz1 = paiza.calls;
+    const next = await bh2.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n % 2 == 0; }" });
+    check(next.data.ok && runner.calls === wb1 && paiza.calls > pz1 && wb1 - wb0 === 2, "for a minute the runs go straight to the backup (Wandbox gets a rest)");
+    // a whole test run (a write challenge) on the backup too, the same rows as on Wandbox
+    const hz = await runHarness(env, "javascript", "const l = require('fs').readFileSync(0, 'utf8').trim(); console.log(l.split(' ').map(Number).reduce((a, b) => a + b, 0));", [{ input: "2 3", gen: null }, { input: "10 -4", gen: null }], 2);
+    check(hz.rows.length === 2 && hz.rows.every((r: any) => r.s === "ok") && hz.rows[1].o.trim() === "6" && runner.calls === wb1, "a write challenge's tests judged on the backup runner while Wandbox rests");
+    // both saturated: an honest « try again », nothing counted
+    paiza.down = true; runner.tooMany = 50;
+    clock.advance(6);
+    const both = await bh2.play("fix", dev(1), { idx: 1, code: "function somme(t) { return t.reduce((a, b) => a + b, 0); }" });
+    check(both.status === 409 && /runner/.test(both.data.error || ""), `both runners saturated: « try again », nothing counted (${both.status} ${both.data.error})`);
+    paiza.down = false; runner.tooMany = 0; _wandboxCool(0);
+    clock.advance(301);
+    const e2 = await bh2.tv("state");
+    check(e2.data.phase === "over" && e2.data.board[0].pid === U.bob.id && e2.data.winSquad === e2.data.board[0].squad, "the time is up: the one who fixed the most wins");
+    // the codes edited after a hunt: a statement or a translation saved as it is, a changed code checked again, a wrong one refused
+    const ed1 = B2.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, text: "estPair(n) dit si n est pair.", tr: { en: { title: "Even", text: "estPair(n) tells if n is even." } } } : x);
+    const pe = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: ed1 });
+    check(pe.status === 200 && pe.data.content.items[0].text.includes("dit si") && pe.data.content.items[0].tr.en.title === "Even", "Bug Hunt edited: a statement and a translation saved");
+    const pb = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [...ed1, { ...own, title: "Faux", code: own.solution }] });
+    check(pb.status === 400 && pb.data.error.includes("Faux") && (await api("GET", `/api/games/${B2.data.id}?g=${G}`)).data.content.items.length === 3, "a code without a bug added: refused, nothing saved");
+    const pa = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [ed1[1], ed1[0], ed1[2], { ...own, title: "Pair 2", tests: [...own.tests, { args: [8], expect: true }] }] });
+    check(pa.status === 200 && pa.data.content.items.length === 4 && pa.data.content.items[1].title === ed1[0].title && pa.data.content.items[3].title === "Pair 2", "reordered and a code added (checked)");
+    const tr = await api("POST", `/api/games/${B2.data.id}/translate?g=${G}`, { langs: ["en", "ar"] });
+    const t0 = tr.data.content?.items?.[0]?.tr;
+    check(tr.status === 200 && tr.data.translated === 4 && t0?.ar?.title === "AR 0" && t0?.en?.title === "EN 0" && !t0?.fr, `🌍 translated by the AI into the languages asked (${JSON.stringify(t0)})`);
+    const B3 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items: pa.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, tr: { ar: { title: "زوجي", text: "هل العدد زوجي" } } } : x), settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh3 = game(B3.data);
+    await bh3.join(1, U.carol.id);
+    await bh3.tv("act", { a: "start" });
+    check((await bh3.play("state", dev(1))).data.item.tr?.ar?.title === "زوجي", "a student gets the translations of the code (to switch the language)");
+    check((await api("PUT", `/api/games/${B3.data.id}?g=${G}`, { items: pa.data.content.items })).status !== 200, "during the hunt: the codes can't change");
+    const lst = await api("GET", `/api/games?g=${G}`);
+    check(lst.data.kinds.bugs.modes.join() === "solo" && lst.data.myBugs.some((x: any) => x.fn === "estPair" && x.codeLang === "javascript"), "the games page: Bug Hunt, the codes made before (to play again)");
+  }
   const list = await api("GET", `/api/games?g=${G}`);
   check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 1) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
@@ -6776,6 +6972,21 @@ section("💼 portfolio: /portfolio (projects from GitHub or links, about me, co
   check(page.includes("Développeur web junior") && page.includes("Rabat") && page.includes("opengraph.githubassets.com/1/bob-gh/portfolio-site") && page.includes("https://bob-gh.github.io/portfolio-site")
     && page.includes("Mon blog") && page.includes("mailto:bob@example.com") && page.includes("linkedin.com/in/bob") && page.includes("avatars.githubusercontent.com/bob-gh"), "the portfolio: headline, city, projects with their image and demo, contacts, GitHub avatar");
   check(/internship|stage/.test(page) && !page.includes('class="badges"'), "…what they look for; a hidden part isn't there");
+  // the intranet photo first (the student can hide it: /portfolio show photo)
+  {
+    const lk = q1("SELECT learner_id, photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    run1("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, at, photo) VALUES (?, ?, ?, 'Bob', 0, ?)", G, B, lk?.learner_id ?? 501, lk?.photo ?? "501-1700000000.jpg");
+    const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    const ph = await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx());
+    check(pg.includes(`/u/${key}/photo?v=`) && !pg.includes('class="ava" src="https://avatars.githubusercontent.com') && ph.status === 404,
+      "the portfolio shows the intranet photo (here the intranet is disconnected: the link answers nothing, the initials show)");
+    await pf("show", { part: "photo", visible: false });
+    const pg2 = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    check(!pg2.includes("/photo?v=") && pg2.includes("avatars.githubusercontent.com/bob-gh") && (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx())).status === 404,
+      "…hidden by the student: the GitHub photo again, and the photo link answers nothing");
+    await pf("show", { part: "photo", visible: true });
+    run1("DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, B);
+  }
   check(!/<script/i.test(page), "no script on the page");
   const rm = P.projects.find((x) => !x.repo)!;
   await pf("remove", { project: rm.id });
@@ -6868,6 +7079,56 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   const del = await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=output`);
   check(del.status === 200 && !del.data.blocks.some((b: any) => b.type === "output"), "lifting one block from the dashboard");
   check((await api("GET", `/api/students/${D.id}/blocks?g=${G}`)).data.blocks.length === 2, "the student's page reads their blocks");
+
+  // several types at once: one DM naming them all
+  {
+    const n0 = discordCalls.length;
+    const pm = await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["git", "complexity"], levels: ["hard"], days: 7, reason: "brief first", notify: true });
+    const dmT = discordCalls.slice(n0).filter((c) => c.path === `/channels/dm-${D.id}/messages`).map((c) => text(c.body));
+    check(pm.status === 200 && ["git", "complexity"].every((k) => pm.data.blocks.find((b: any) => b.type === k)?.levels.join() === "hard") && dmT.length === 1 && /Git/.test(dmT[0]) && /Complexity/i.test(dmT[0]),
+      `several types blocked in one go, one DM for all of them (${dmT.length} DM)`);
+    check((await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: [], notify: false })).status === 400 && (await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["mcq", "nope"] })).status === 400,
+      "…no type, or an unknown one: refused");
+    // 👥 every student of the class at once (not the teacher)
+    const n1 = discordCalls.length;
+    const all = await api("POST", "/api/practice-blocks", { g: G, students: "all", types: ["sql", "regex"], days: 3, reason: "cours SQL demain", notify: true });
+    const cls = (await api("GET", `/api/students?g=${G}`)).data;
+    const blocked = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    const both = blocked.filter((x: any) => ["sql", "regex"].every((k) => x.blocks.some((b: any) => b.type === k)));
+    await new Promise((r) => setTimeout(r, 30));
+    const dmN = discordCalls.slice(n1).filter((c) => /^\/channels\/dm-.*\/messages$/.test(c.path)).length;
+    check(all.status === 200 && all.data.students === cls.length && both.length === cls.length && !both.some((x: any) => x.uid === U.prof.id),
+      `👥 all my students: the same block for every student of the class, not the teacher (${all.data.students}/${cls.length})`);
+    check(dmN <= cls.length, "…at most one DM per student");
+    check((await api("POST", "/api/practice-blocks", { g: G, students: ["999999"], types: ["sql"] })).status === 400, "…nobody of the class chosen: refused");
+    const la = await api("DELETE", `/api/practice-blocks?g=${G}&type=regex`);
+    const after = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    check(la.status === 200 && la.data.students === cls.length && !after.some((x: any) => x.blocks.some((b: any) => b.type === "regex")) && after.some((x: any) => x.blocks.some((b: any) => b.type === "sql")),
+      "lift one type for everyone (the other blocks stay)");
+    await api("DELETE", `/api/practice-blocks?g=${G}&type=sql`);
+    for (const k of ["git", "complexity"]) await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=${k}`);
+    // the sql block of D from the test above comes back as it was
+    await setBlock(env, G, D.id, { type: "sql", days: 3 });
+  }
+
+  // solved anyway through /today, the path or the daily: no points, no coins
+  {
+    await setBlock(env, G, D.id, { type: "mcq", levels: ["easy"], reason: "projet d'abord" });
+    const cm = q1("SELECT * FROM challenges WHERE guild_id = ? AND kind = 'mcq' AND difficulty = 'easy' AND status = 'active' LIMIT 1", G)
+      || q1("SELECT * FROM challenges WHERE kind = 'mcq' AND difficulty = 'easy' LIMIT 1");
+    const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+    const p0 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    const l0 = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s;
+    for (const origin of ["path", "daily"]) {
+      const id = Number(db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, started_at, tries) VALUES (?, ?, ?, ?, 'pending', ?, 1)").run(G, D.id, cm.id, origin, clock.now() - 30).lastInsertRowid);
+      const out = await finish(env, gRow, q1("SELECT * FROM attempts WHERE id = ?", id), cm, true, { verified: 1 });
+      check(out.solved && q1("SELECT points FROM attempts WHERE id = ?", id).points === 0 && /paused for you|en pause pour toi/.test(JSON.stringify(out.payload)),
+        `a blocked type solved through ${origin}: counted as solved, 0 points, the student is told why`);
+    }
+    check(q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins === p0 && q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s === l0,
+      "…no point and no coin at all (not even the daily's bonus)");
+    await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=mcq`);
+  }
 
   // it ends by itself
   await setBlock(env, G, D.id, { type: "regex", days: 1 });
@@ -8528,6 +8789,139 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
   await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
+}
+
+section("✍️ the starter code reads each challenge's input as its samples show it (never « n, then n numbers » for all)");
+{
+  const { inputStarter, readPlan } = await import("../src/shared/inputstarter.ts");
+  const { loadTests } = await import("../src/shared/challenges.ts");
+  const { execFileSync } = await import("node:child_process");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const plan = (ins: string[]) => { const p = readPlan(ins); return p ? p.map((x: any) => (x.t === "one" ? `${x.name}:${x.kind}` : `${x.name}:${x.kind}[${x.len}]`)).join(" ") : "neutral"; };
+  check(plan(["0", "5\nababa"]) === "n:int s:word" && plan(["5\n1 2 3 4 5", "0"]) === "n:int a:int[n]" && plan(["2 3", "10 -4"]) === "n:int m:int"
+    && plan(["4\n1.5 2 3 4"]) === "n:int a:num[n]" && plan(["3\nabc\nde\nf", "1\nz"]) === "n:int a:word[n]" && plan(["4 2\n1 2 3 4\n5 6"]) === "n:int m:int a:int[n] b:int[m]",
+    "the reading plan from the samples: a number then a word, n numbers, two numbers, decimals, n words (one per line), two lists");
+  check(plan(["1 2 3 4 5 6 7"]) === "neutral" && plan(["2\n1 2\n3 4", "3\n1 2 3\n4 5 6\n7 8 9"]) === "neutral" && plan([]) === "neutral", "…unsure (a long line, a grid, no sample): a neutral starter, assuming nothing");
+  // every challenge with samples: the JavaScript and Python starters run on every sample (and an empty input) without crashing
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "starter-"));
+  const ws = db.prepare("SELECT * FROM challenges WHERE kind = 'write' AND (signature IS NULL OR signature = '')").all() as any[];
+  let crashed = 0, ran = 0;
+  for (const c of ws) {
+    const ins = (await loadTests(env, c)).filter((x: any) => x.sample).map((x: any) => x.input ?? "");
+    if (!ins.length) continue;
+    for (const [lang, cmd, ext] of [["javascript", "node", "js"], ["python", "python3", "py"]] as const) {
+      const f = path.join(dir, "s." + ext); fs.writeFileSync(f, inputStarter(ins, lang));
+      for (const inp of [...ins, ""]) { ran++; try { execFileSync(cmd, [f], { input: inp, stdio: "pipe" }); } catch (e: any) { crashed++; if (crashed < 4) console.log("starter crash", c.title, lang, JSON.stringify(inp).slice(0, 60), String(e.stderr).slice(0, 160)); } }
+    }
+  }
+  check(ran > 20 && !crashed, `every challenge's starter reads its samples without crashing (${ran} runs, ${crashed} crashes)`);
+}
+
+section("GitHub: the whole repo in one request (an archive), not file by file (Cloudflare's 50 calls per request)");
+{
+  const { gzipSync } = await import("node:zlib");
+  // a small .tar.gz like GitHub's: everything inside "<owner>-<repo>-<sha>/", a long name through a pax header
+  const enc = new TextEncoder();
+  const block = (name: string, size: number, type = "0") => {
+    const h = new Uint8Array(512);
+    h.set(enc.encode(name).slice(0, 100), 0);
+    h.set(enc.encode("0000644\0"), 100);
+    h.set(enc.encode(size.toString(8).padStart(11, "0") + "\0"), 124);
+    h[156] = type.charCodeAt(0);
+    h.set(enc.encode("ustar\0"), 257);
+    h.set(enc.encode("        "), 148);
+    let sum = 0; for (const x of h) sum += x;
+    h.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+    return h;
+  };
+  const parts: Uint8Array[] = [];
+  const add = (name: string, body: string, type = "0") => { const b = enc.encode(body); parts.push(block(name, b.length, type), b, new Uint8Array((512 - (b.length % 512)) % 512)); };
+  const long = "src/" + "dossier-très-profond/".repeat(6) + "page.html";
+  add("pax_global_header", "52 comment=0123456789abcdef0123456789abcdef01234567\n", "g");
+  parts.push(block("stu-proj-abc123/", 0, "5"));
+  add("stu-proj-abc123/index.html", "<!doctype html><title>Accueil</title>");
+  add("stu-proj-abc123/css/style.css", "body { color: red }");
+  add("stu-proj-abc123/img/logo.png", "PNGDATA");
+  const rec = ` path=stu-proj-abc123/${long}\n`;
+  const ln = Buffer.byteLength(rec) + 4;
+  add("PaxHeader", `${ln}${rec}`, "x");
+  add("stu-proj-abc123/" + long.slice(0, 90), "<p>tout au fond</p>");
+  parts.push(new Uint8Array(1024));
+  github.tarballs["stu/proj"] = gzipSync(Buffer.concat(parts));
+  const { repoFiles, githubText } = await import("../src/shared/review/gh.ts");
+  const c0 = github.calls;
+  const files: any = await repoFiles("tok", "stu/proj");
+  const idx = await githubText("/repos/stu/proj/contents/index.html", "tok", "application/vnd.github.raw");
+  const deep = await githubText(`/repos/stu/proj/contents/${long.split("/").map(encodeURIComponent).join("/")}`, "tok", "application/vnd.github.raw");
+  const css = await githubText("/repos/stu/proj/contents/css/style.css", "tok", "application/vnd.github.raw", 5);
+  check(files.map((f: any) => f.path).sort().join() === ["css/style.css", "index.html", long].sort().join() && files.media.join() === "img/logo.png",
+    `the files of the repo from the archive (the long name too; the picture as a deliverable) (${files.map((f: any) => f.path).join(", ")})`);
+  check(idx.includes("Accueil") && deep === "<p>tout au fond</p>" && css === "body " && github.calls - c0 === 1, `…and their text, all in ONE call to GitHub (${github.calls - c0})`);
+  // no archive (too big, refused): file by file as before
+  const c1 = github.calls;
+  github.files["stu/other/HEAD/index.html"] = "<h1>Autre</h1>";
+  check((await githubText("/repos/stu/other/contents/index.html", "tok", "application/vnd.github.raw")) === "<h1>Autre</h1>" && github.calls - c1 === 1, "no archive for a repo: its file is read from GitHub as before");
+  delete github.tarballs["stu/proj"];
+}
+
+section("🔁 a student changes Discord account (hacked, deleted): everything moves to the new one");
+{
+  const OLD = "154972381424858728", NEW = "155972381424858729", OTHER = "166972381424858720", t0 = clock.now();
+  const ex = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at, hr_username, hr_display, hr_verified) VALUES (?, ?, 'Ayoub', 50, 1000, ?, 'ayoubhr', 'ayoubhr', 1)", G, OLD, t0 - 9e5);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Ayoub2', 7, 1000, ?)", G, NEW, t0);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Other', 1, 1000, ?)", G, OTHER, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 120, 'practice', ?)", G, OLD, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 5, 'daily', ?)", G, NEW, t0);
+  ex("INSERT INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, ?, 'first_solve', ?), (?, ?, 'streak7', ?), (?, ?, 'first_solve', ?)", G, OLD, t0, G, OLD, t0, G, NEW, t0);
+  ex("INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, mode, difficulty, created_at, winner_id) VALUES (?, 'c', ?, ?, 'quick', 'easy', ?, ?)", G, OTHER, OLD, t0, OLD);
+  ex("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'S1', ?, 0, ?, ?)", G, JSON.stringify([{ name: "A", members: [OTHER, OLD] }]), t0, t0);
+  const qz = Number(ex("INSERT INTO quizzes (guild_id, title, questions, created_at) VALUES (?, 'q', '[]', ?)", G, t0).lastInsertRowid);
+  ex("INSERT INTO quiz_answers (quiz_id, q_idx, discord_id, answer, correct, ms, score) VALUES (?, 0, ?, 'A', 1, 100, 10)", qz, OLD);
+  // what the app keeps per student under a key: practice blocks, the teacher's level, plans d'action…
+  const { setBlock: setBl, getBlocks: getBl } = await import("../src/shared/practiceblock.ts");
+  await setBl(env, G, OLD, { type: "bug" });
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${OLD}`, JSON.stringify({ level: "moyen", by: OLD }), t0);
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${NEW}`, JSON.stringify({ level: "faible" }), t0);
+  // the same account in another class is not this teacher's: it stays
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('other-guild', ?, 'S', 9, 'practice', ?)", OLD, t0);
+
+  check((await api("POST", `/api/students/${OLD}/move`, { g: G, to: OLD })).status === 400 && (await api("POST", `/api/students/${OLD}/move`, { g: G, to: "nobody_here" })).status === 400,
+    "the same account, or a name nobody has: refused");
+  const n0 = discordCalls.length;
+  const mv = await api("POST", `/api/students/${OLD}/move`, { g: G, to: "Ayoub2" });
+  check(mv.status === 200 && mv.data.to === NEW && mv.data.merged, `found by the new account's name (${mv.status} ${JSON.stringify(mv.data).slice(0, 120)})`);
+  const pl = q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW);
+  check(!q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", G, OLD) && pl.coins === 57 && pl.hr_username === "ayoubhr" && pl.hr_verified === 1 && pl.name === "Ayoub2",
+    "one profile left, on the new account: the old one's links (HackerRank), coins added together, the new Discord name");
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, NEW).s === 125, "every point is on the new account (old and new)");
+  check(db.prepare("SELECT badge FROM badges WHERE guild_id = ? AND discord_id = ? ORDER BY badge").all(G, NEW).map((r: any) => r.badge).join() === "first_solve,streak7", "badges: all kept, a badge both had only once");
+  check(q1("SELECT winner_id, opponent_id FROM duels WHERE guild_id = ? AND challenger_id = ?", G, OTHER).winner_id === NEW && JSON.parse(q1("SELECT squads FROM squad_sets WHERE guild_id = ? AND name = 'S1'", G).squads)[0].members.join() === `${OTHER},${NEW}`,
+    "…in every column (a duel won) and inside texts (the squads)");
+  check(q1("SELECT discord_id FROM quiz_answers WHERE quiz_id = ?", qz).discord_id === NEW, "…also in the tables that belong to the class through another (quiz answers)");
+  check((await getBl(env, G, NEW)).some((b) => b.type === "bug") && !(await getBl(env, G, OLD)).length, "…the practice blocks too");
+  check(JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `stulevel:${G}:${NEW}`).v).level === "moyen" && !q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `stulevel:${G}:${OLD}`),
+    "…and the teacher's level (the old account's wins over the new one's)");
+  // nothing of the class still names the old account; another class's data is untouched
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r: any) => r.name);
+  const leftIn = tables.filter((tb: string) => db.prepare(`PRAGMA table_info("${tb}")`).all().some((c: any) => c.name === "guild_id")
+    && (db.prepare(`SELECT COUNT(*) AS n FROM "${tb}" WHERE guild_id = ? AND instr(${db.prepare(`PRAGMA table_info("${tb}")`).all().map((c: any) => `COALESCE(CAST("${c.name}" AS TEXT), '')`).join(" || '|' || ")}, ?) > 0`).get(G, OLD) as any).n > 0);
+  check(!leftIn.length && q1("SELECT discord_id FROM ledger WHERE guild_id = 'other-guild'").discord_id === OLD, `nothing of the class names the old account any more (${leftIn.join(", ")}); another class's data untouched`);
+  check(discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${NEW}/messages` && /moved your ClassBot profile/.test(text(c.body))), "the student gets a DM on the new account");
+  const st = (await api("GET", `/api/students/${NEW}?g=${G}`)).data;
+  check(st.player.discord_id === NEW && st.badges.length === 2, "the new account's page shows everything");
+  // by Discord ID too, with no profile yet on the new account
+  const NEW2 = "177972381424858731";
+  const mv2 = await api("POST", `/api/students/${NEW}/move`, { g: G, to: `<@${NEW2}>`, notify: false });
+  check(mv2.status === 200 && !mv2.data.merged && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57, "by Discord ID (or mention), to an account that never used ClassBot");
+  // a move done before the settings moved: run again from the old id, it finishes (the profile stays as it is)
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, '[]', ?)", `pf:${G}:${OLD}`, t0);
+  const again = await api("POST", `/api/students/${OLD}/move`, { g: G, to: NEW2, notify: false });
+  check(again.status === 200 && !again.data.merged && q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `pf:${G}:${NEW2}`) && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57,
+    "run again on an account already moved: the rest of its settings follow");
+  for (const tb of ["players", "ledger", "badges", "duels", "squad_sets"]) ex(`DELETE FROM ${tb} WHERE guild_id = ? AND ${tb === "duels" ? "challenger_id" : tb === "squad_sets" ? "name" : "discord_id"} IN (?, ?, ?)`, G, ...(tb === "squad_sets" ? ["S1", "S1", "S1"] : [NEW2, OTHER, NEW]));
+  ex("DELETE FROM ledger WHERE guild_id = 'other-guild'");
+  ex("DELETE FROM app_settings WHERE k LIKE ?", `%${NEW2}%`);
 }
 
 section("the assistant knows the app: its pages and how to set up");

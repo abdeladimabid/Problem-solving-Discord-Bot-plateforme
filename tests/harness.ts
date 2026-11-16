@@ -51,7 +51,8 @@ export function makeD1(): D1 & { raw: DatabaseSync } {
       try {
         const out = [];
         d1.queries++;
-        for (const s of stmts) out.push(await (s as any).run(true));
+        // like D1: a statement that reads (SELECT, PRAGMA) gives its rows in the batch too
+        for (const s of stmts) out.push(/^\s*(SELECT|PRAGMA)\b/i.test((s as any).sql) ? { results: (s as any).db.prepare((s as any).sql).all(...(s as any).params()), meta: {} } : await (s as any).run(true));
         db.exec("COMMIT");
         return out;
       } catch (e) { db.exec("ROLLBACK"); throw e; }
@@ -71,7 +72,9 @@ export const hr = {
   profiles: {} as Record<string, string>,      // username (lowercase) -> bio
   down: false,
 };
-export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0 };
+// paiza.io, the backup runner: down with the others (runner.down), or alone
+export const paiza = { down: false, calls: 0, runs: new Map<string, any>() };
+export const runner = { down: false, wandboxDown: false, calls: 0, retired: [] as string[], busyOnce: 0, tooMany: 0 };
 /** Fake GitHub: "owner/repo/branch/path" -> file content (missing = 404). */
 export const gtrans = { calls: 0, down: false };
 export const leagueFake = { status: 200, body: null as any, calls: 0 };
@@ -84,7 +87,7 @@ export const intranetFake = { secret: "s".repeat(40), keyId: "classbot-test", al
   acts: [] as { id: number; classroom: number; type: string; subject: string; datetime: string; duration: number; md: string; learners: number[]; by?: string; by_id?: number; created?: string }[],
   // the trainer's intranet account, and the ClassBot token it gets at /api/classbot/login
   trainer: { email: "prof@youcode.ma", password: "motdepasse", id: 1008, name: "Prof YouCode" }, tokens: new Set<string>() };
-export const github = { userRepos: {} as Record<string, any[]>, repoMeta: {} as Record<string, any>, repoLangs: {} as Record<string, any>, commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>() };
+export const github = { userRepos: {} as Record<string, any[]>, repoMeta: {} as Record<string, any>, repoLangs: {} as Record<string, any>, commitFiles: {} as Record<string, any[]>, files: {} as Record<string, string>, calls: 0, repos: {} as Record<string, any[]>, commits: {} as Record<string, any[]>, trees: {} as Record<string, string[]>, sel: {} as Record<string, string>, branches: {} as Record<string, string[]>, sizes: {} as Record<string, { additions: number; deletions: number; parents?: number }>, foreign: new Set<string>(), tarballs: {} as Record<string, Uint8Array> };
 
 // ------------------------------------------------------- fake Wandbox
 function wandboxLocal(body: any) {
@@ -171,6 +174,27 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
   if (url.hostname === "links.example.org") return new Response("<html></html>", { status: url.pathname === "/ok" ? 200 : 404 });
   if (url.hostname === "docs.google.com" && /\/export$/.test(url.pathname)) return googleDocFake.text == null ? new Response("<html>Sign in</html>", { status: 200, headers: { "content-type": "text/html" } }) : new Response(googleDocFake.text, { headers: { "content-type": "text/plain; charset=utf-8" } });
   if ((url.hostname === "oauth2.googleapis.com" || url.hostname === "sheets.googleapis.com") && googleFake.handler) return googleFake.handler(url, method, typeof init.body === "string" ? init.body : "", init.headers || {});
+  if (url.hostname === "api.paiza.io") {
+    paiza.calls++;
+    if (runner.down || paiza.down) return new Response("busy", { status: 503 });
+    const q = method === "POST" ? new URLSearchParams(String(init.body || "")) : url.searchParams;
+    if (q.get("api_key") !== "guest") return Response.json({ error: "bad key" }, { status: 401 });
+    if (url.pathname === "/runners/create") {
+      const lang = q.get("language");
+      const dir = mkdtempSync(join(tmpdir(), "cbpaiza-"));
+      try {
+        const file = lang === "python3" ? "main.py" : lang === "php" ? "main.php" : "main.js";
+        writeFileSync(join(dir, file), q.get("source_code") || "");
+        const r = spawnSync(lang === "python3" ? "python3" : lang === "php" ? "php" : process.execPath, [file], { input: q.get("input") || "", cwd: dir, timeout: 60000, maxBuffer: 64 * 1024 * 1024, encoding: "utf8" });
+        const id = "pz" + (paiza.runs.size + 1);
+        paiza.runs.set(id, { id, status: "completed", build_result: null, stdout: r.stdout ?? "", stderr: r.stderr ?? "", exit_code: r.status ?? 1, result: r.error ? "timeout" : r.status === 0 ? "success" : "failure" });
+        return Response.json({ id, status: "running" });
+      } finally { rmSync(dir, { recursive: true, force: true }); }
+    }
+    const run = paiza.runs.get(String(q.get("id")));
+    if (!run) return Response.json({ error: "not found" });
+    return Response.json(url.pathname === "/runners/get_status" ? { id: run.id, status: run.status } : run);
+  }
   const body = init.body ? JSON.parse(init.body) : undefined;
   if (url.hostname === "discord.com") {
     const path = url.pathname.replace("/api/v10", "");
@@ -208,6 +232,7 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     if (url.pathname === "/api/list.json") return Response.json([{ name: "nodejs-20.17.0" }, { name: "nodejs-22.11.0" }, { name: "nodejs-head" }, { name: "php-8.3.12" }].filter((c) => !runner.retired.includes(c.name)));
     if (runner.retired.includes(String(body?.compiler))) return new Response(`Error: compiler ${body.compiler} not found`, { status: 500 });
     if (runner.busyOnce > 0) { runner.busyOnce--; return new Response("busy", { status: 503 }); }
+    if (runner.tooMany > 0) { runner.tooMany--; return new Response("Error: Too many requests", { status: 429 }); }
     return Response.json(wandboxLocal(body));
   }
   if (url.hostname === "godbolt.org") {
@@ -389,6 +414,12 @@ globalThis.fetch = (async (input: any, init: any = {}) => {
     leagueFake.calls++;
     return Response.json(leagueFake.status === 200 ? leagueFake.body : { error: "This class isn't in the league (or the link was renewed)." }, { status: leagueFake.status });
   }
+  // the whole repo as a .tar.gz (one request: review/gh.ts repoArchive)
+  if (url.hostname === "api.github.com" && /^\/repos\/[^/]+\/[^/]+\/tarball$/.test(url.pathname)) {
+    github.calls++;
+    const tb = github.tarballs[url.pathname.split("/").slice(2, 4).join("/")];
+    return tb ? new Response(tb as unknown as BodyInit, { status: 200, headers: { "content-type": "application/x-gzip" } }) : Response.json({ message: "Not Found" }, { status: 404 });
+  }
   if (url.hostname === "api.github.com") {
     // an installation: which repos the student lets the App see (github.sel[id], else all)
     const im = url.pathname.match(/^\/app\/installations\/(\d+)$/);
@@ -464,6 +495,8 @@ export const ai = {
   gen: "" as "" | "array" | "wrongOption" | "allOutside" | "comps" | "dups" | "plan",   // assessment questions: a bare list, Bootstrap in a wrong option only, everything about Tailwind
   miseJson: "", miseJson2: "", miseItems: "", qcmWeak: [] as any[][], sitEasy: [] as any[][], qcmJudge: [] as Record<number, number[]>[], qcmUnrelated: [] as any[][],   // the AI's review of the QCM: one answer per review   // Mises en situation written by the AI: its answer, then its answer when it gets its problems back
   miseDown: false,   // Mises en situation: the AI check fails (the page says "Vérification indisponible")
+  explainQs: [] as string[][],   // the next questions about a student's code (one list per call)
+  bugTr: null as any,   // the Bug Hunt translations
   planSum: "Écrire une page en Flexbox et répondre à une question sur Git.", planSumDown: false,   // the sheet's « Actions »: what a plan d'action asks, summed up
 };
 
@@ -682,6 +715,8 @@ function fakeAI() {
         return { output: [{ type: "reasoning", content: [] }, { type: "message", content: [{ type: "output_text", text: "```json\n" + JSON.stringify(p) + "\n```" }] }] };
       }
       if (sys.includes("really wrote and understands")) {
+        const q = ai.explainQs.shift();
+        if (q) return { response: JSON.stringify({ questions: q }) };
         return { response: JSON.stringify({ questions: ["What is the role of the variable `r` in your code?", "What does your solve return for an empty string, and why?"] }) };
       }
       if (sys.includes("grade a student's short answers")) {
@@ -787,6 +822,18 @@ function fakeAI() {
       }
       if (sys.includes("action plan for weak students")) return { response: "Bob est en difficulté mais progresse : il fait le travail donné. Prochaine étape : revoir les formulaires avec lui." };
       if (sys.includes("Réécris ce commentaire pour tout un squad")) return { response: JSON.stringify({ texte: user.replace(/\btu\b/g, "vous") }) };
+      if (sys.includes("translate the statements of small programming exercises")) {
+        if (ai.bugTr) return { response: JSON.stringify(ai.bugTr) };
+        const n = (user.match(/^#\d+$/gm) || []).length;
+        return { response: JSON.stringify({ items: Array.from({ length: n }, (_, i) => ({ i, en: { title: `EN ${i}`, text: `English ${i}` }, ar: { title: `AR ${i}`, text: `عربي ${i}` }, fr: { title: `FR ${i}`, text: `Français ${i}` } })) }) };
+      }
+      if (sys.includes('"Bug Hunt", a class game')) return { response: JSON.stringify({ items: [
+        { title: "Somme", text: "somme(t) additionne les nombres.", fn: "somme", params: ["t"], level: "easy", bugs: 1, tests: [{ args: [[1, 2, 3]], expect: 6 }, { args: [[]], expect: 0 }, { args: [[5]], expect: 5 }],
+          solution: "function somme(t) {\n  let s = 0;\n  for (let i = 0; i < t.length; i++) s += t[i];\n  return s;\n}", code: "function somme(t) {\n  let s = 0;\n  for (let i = 1; i < t.length; i++) s += t[i];\n  return s;\n}" },
+        { title: "Pas de bug", text: "…", fn: "id", params: ["x"], level: "medium", bugs: 1, tests: [{ args: [1], expect: 1 }, { args: [2], expect: 2 }], solution: "function id(x) { return x; }", code: "function id(x) { return x; }" },
+        { title: "Maximum", text: "maxi(t) donne le plus grand.", fn: "maxi", params: ["t"], level: "hard", bugs: 2, tests: [{ args: [[1, 5, 3]], expect: 5 }, { args: [[-4, -2]], expect: -2 }, { args: [[7]], expect: 7 }],
+          solution: "function maxi(t) {\n  let m = t[0];\n  for (const x of t) if (x > m) m = x;\n  return m;\n}", code: "function maxi(t) {\n  let m = 0;\n  for (const x of t) if (x < m) m = x;\n  return m;\n}" },
+      ] }) };
       if (sys.includes('"code relay" class game')) return { response: JSON.stringify({ title: "Le double", text: "Écris doubler(tableau) qui double chaque nombre.", fn: "doubler", params: ["tableau"], level: "medium",
         tests: [{ args: [[1, 2]], expect: [2, 4] }, { args: [[]], expect: [] }, { args: [[0]], expect: [0] }, { args: [[-3]], expect: [-6] }, { args: [[5, 5]], expect: [10, 10] }, { args: [[7]], expect: [99] }],
         solution: "def doubler(tableau):\n    return [x * 2 for x in tableau]\n" }) };

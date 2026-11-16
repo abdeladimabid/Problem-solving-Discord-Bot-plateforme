@@ -1,13 +1,14 @@
 // JSON API behind the teacher dashboard.
 import { pendingProposals } from "../shared/actpropose.ts";
 import { ConceptError, briefSprint, conceptsView, decideConcept, docIdOf, getConcepts, importFiche, masteryOf, readGoogleDoc, saveConceptChoices, suggestScope } from "../shared/concepts.ts";
-import { BlockError, blockVars, classBlocks, getBlocks, removeBlock, setBlock, typeName } from "../shared/practiceblock.ts";
+import { BlockError, blockDmVars, blockVars, classBlocks, getBlocks, removeBlock, setBlocks, typeName } from "../shared/practiceblock.ts";
 import { SeasonError, cancelSeasonPlan, planSeason, seasonPlan, startSeason } from "../shared/season.ts";
 import { IntranetError, intranetAutoLink, intranetClassOf, intranetClassrooms, intranetLogin, intranetLogout, intranetMatchView, intranetPing, intranetSetup, sendSquads, setIntranetClass, setIntranetLink, squadsPreview , intranetPhoto, intranetPhotos } from "../shared/intranet.ts";
 import type { ChallengeRow, ContestRow, Ctx, D1Stmt, Difficulty, Env, GuildRow } from "../shared/types.ts";
 import { addPoints, aiBudgetLeft, challengeCoins, all, confirmHackerRank, getGuild, now, one, playerStats, run } from "../shared/db.ts";
 import { DEFAULT_SCORING, SCORE_KINDS, dayKey, levelInfo, pointsFor, scoringOf, titleKey } from "../shared/game.ts";
 import { t } from "../shared/i18n.ts";
+import { MoveError, moveAccount } from "../shared/moveaccount.ts";
 import { btn, dapi, dm, linkBtn, mention, pingUsers, row, send, ts } from "../shared/discord.ts";
 import { forClass } from "../shared/aictx.ts";
 import { SearchKeyError, addSearchProvider, removeSearchProvider, searchView } from "../shared/websearch.ts";
@@ -51,9 +52,9 @@ import type { QuizRow } from "../shared/events.ts";
 import { SHOP, ShopError, activeTitle, changeCoins, clearCosmetic, cosmeticsOf, saveShop, settlePurchase, shopCfg, shopItems } from "../shared/shop.ts";
 import { HandError, handQueue, updateHand } from "../shared/hands.ts";
 import { FaqError, draftAnswer, faqList, saveFaq } from "../shared/faq.ts";
-import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setRoyaleQuestions, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
+import { GAME_KINDS, GameError, RELAY_TASKS, clearPlayers, postJoin, removePlayer, setBugItems, setRoyaleQuestions, setSquads, cleanSettings as cleanGameSettings, createGame, fromAssessment, getGame, joinUrl as gameJoinUrl, listGames, liveGame, royaleQuestions, hostTvUrl as gameTvUrl, tvView as gameTvView } from "../shared/games.ts";
 import { SQL_CASES } from "../shared/sqlcases.ts";
-import { RELAY_LANGS, buildCase, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
+import { RELAY_LANGS, buildCase, checkBug, cleanBug, cleanTr, generateBugs, generateCase, generateTask, starterFor } from "../shared/gamecontent.ts";
 import { BANK_TOPICS, BattleError, QKINDS, cleanSettings, createBattle, generateQuestions as generateBattleQuestions, getBattle, judgeUrl, listBattles, liveBattle, tvUrl, tvView, updateBattle } from "../shared/battle.ts";
 import { qrSvg } from "../shared/qr.ts";
 import { AiSettingsError, aiSettingsView, saveAiSettings } from "../shared/appsettings.ts";
@@ -399,12 +400,14 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const g = await guild(), id = m[1];
       if (method === "GET") return ok({ blocks: await getBlocks(env, g.id, id) });
       if (method === "PUT") {
+        // one type (`type`) or several (`types`): one DM for all of them
+        const types: string[] = Array.isArray(body.types) ? body.types : [body.type];
         let list;
-        try { list = await setBlock(env, g.id, id, body); } catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
+        try { list = await setBlocks(env, g.id, id, { ...body, types }); } catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
         let dmSent: boolean | null = null;
         if (body.notify) {
-          const b = list.find((x) => x.type === body.type)!;
-          dmSent = await dm(env, id, { content: t(g.lang, "blk.dm", blockVars(g.lang, b)) }).catch(() => false);
+          const set = list.filter((x) => types.includes(x.type));
+          dmSent = await dm(env, id, { content: t(g.lang, "blk.dm", set.length > 1 ? blockDmVars(g.lang, set) : blockVars(g.lang, set[0])) }).catch(() => false);
         }
         return ok({ blocks: list, dm: dmSent });
       }
@@ -417,6 +420,35 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       }
     }
     if (path === "/practice-blocks" && method === "GET") return ok({ students: await classBlocks(env, (await guild()).id) });
+    // the same block for several students at once (`students`: their ids, or "all" = every student of the class)
+    if (path === "/practice-blocks" && method === "POST") {
+      const g = await guild();
+      const types: string[] = Array.isArray(body.types) ? body.types : [body.type];
+      const cls = (await students(env, g)).map((x: any) => String(x.discord_id));
+      const who: string[] = body.students === "all" ? cls : (Array.isArray(body.students) ? body.students.map(String).filter((x: string) => cls.includes(x)) : []);
+      if (!who.length) throw new HttpError(400, "Choose at least one student of the class.");
+      let n = 0;
+      const dms: string[] = [];
+      for (const uid of who) {
+        try { await setBlocks(env, g.id, uid, { ...body, types }); n++; if (body.notify) dms.push(uid); }
+        catch (e) { if (e instanceof BlockError) throw new HttpError(400, e.message); throw e; }
+      }
+      if (dms.length) ctx.waitUntil((async () => {
+        for (const uid of dms) {
+          const set = (await getBlocks(env, g.id, uid)).filter((x) => types.includes(x.type));
+          if (set.length) await dm(env, uid, { content: t(g.lang, "blk.dm", set.length > 1 ? blockDmVars(g.lang, set) : blockVars(g.lang, set[0])) }).catch(() => false);
+        }
+      })());
+      return ok({ students: n, types: types.length, dm: dms.length > 0 });
+    }
+    // lift one type for every student of the class (no DM: it's a class-wide change)
+    if (path === "/practice-blocks" && method === "DELETE") {
+      const g = await guild(), type = url.searchParams.get("type");
+      if (!type) throw new HttpError(400, "Which type?");
+      let n = 0;
+      for (const s of await classBlocks(env, g.id)) if (s.blocks.some((b) => b.type === type)) { await removeBlock(env, g.id, s.uid, type); n++; }
+      return ok({ students: n });
+    }
     m = path.match(/^\/students\/(\d+)\/points$/);
     if (m && method === "POST") {
       const g = await guild();
@@ -433,6 +465,16 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
       const text = await workOnNote(env, g, m[1], String(body.skill ?? ""), p?.name ?? "");
       if (!text) throw new HttpError(503, "The AI couldn't write the note right now (the AI is used up or unavailable: see Settings → AI; or nothing to say on this skill). Write it yourself below.");
       return ok({ text });
+    }
+    // 🔁 the student changed Discord account (hacked, deleted…): move everything to the new one
+    m = path.match(/^\/students\/(\d+)\/move$/);
+    if (m && method === "POST") {
+      const g = await guild();
+      const to = await resolveAccount(env, g.id, String(body.to ?? ""), m[1]);
+      let rep;
+      try { rep = await moveAccount(env, g.id, m[1], to); } catch (e) { if (e instanceof MoveError) throw new HttpError(400, e.message); throw e; }
+      if (body.notify !== false) await dm(env, to, { content: t(g.lang, "move.dm") }).catch(() => false);
+      return ok({ to, ...rep });
     }
     m = path.match(/^\/students\/(\d+)\/message$/);
     if (m && method === "POST") {
@@ -784,7 +826,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
           await liveGame(env, x);
           return { id: x.id, kind: x.kind, mode: x.mode, title: x.title, settings: x.settings, squads: x.squads, status: x.status, created_at: x.created_at,
-            content: x.kind === "royale" ? { questions: x.content.questions } : x.kind === "relay" ? { task: x.content.task, starter: starterFor({ fn: x.content.task.fn, params: x.content.task.params || [] }, x.settings.codeLang || "javascript"), lang: RELAY_LANGS[x.settings.codeLang || "javascript"] }
+            content: x.kind === "royale" ? { questions: x.content.questions } : x.kind === "bugs" ? { items: x.content.items, lang: RELAY_LANGS[x.settings.codeLang || "javascript"] } : x.kind === "relay" ? { task: x.content.task, starter: starterFor({ fn: x.content.task.fn, params: x.content.task.params || [] }, x.settings.codeLang || "javascript"), lang: RELAY_LANGS[x.settings.codeLang || "javascript"] }
               : { caseId: x.content.caseId, case: x.content.case ?? SQL_CASES.find((c) => c.id === x.content.caseId) ?? null },
             tv: await gameTvUrl(env, x), join: gameJoinUrl(env, x), code: x.join_code, qr: qrSvg(gameJoinUrl(env, x), { dark: "#0b1020" }), live: await gameTvView(env, x) };
         };
@@ -796,19 +838,22 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
             tasks: RELAY_TASKS.map((t, i) => ({ i, title: t.title, text: t.text, fn: t.fn, tests: t.tests.length, level: t.level })), langs: RELAY_LANGS,
             ...(await (async () => {
               // what the teacher wrote or generated before: to play it again
-              const rows = await all<{ id: number; kind: string; content: string }>(env, "SELECT id, kind, content FROM games WHERE guild_id = ? AND kind IN ('sql', 'relay') ORDER BY id DESC LIMIT 80", g.id);
-              const myTasks: any[] = [], myCases: any[] = [], seen = new Set<string>();
+              const rows = await all<{ id: number; kind: string; content: string; settings: string }>(env, "SELECT id, kind, content, settings FROM games WHERE guild_id = ? AND kind IN ('sql', 'relay', 'bugs') ORDER BY id DESC LIMIT 80", g.id);
+              const myTasks: any[] = [], myCases: any[] = [], myBugs: any[] = [], seen = new Set<string>();
               for (const r of rows) {
                 let c: any = {};
                 try { c = JSON.parse(r.content); } catch { continue; }
                 if (r.kind === "relay" && c.task && c.task.by && c.task.by !== "builtin" && !seen.has("t" + c.task.fn + c.task.title)) { seen.add("t" + c.task.fn + c.task.title); myTasks.push(c.task); }
                 if (r.kind === "sql" && c.case && !seen.has("c" + c.case.title)) { seen.add("c" + c.case.title); myCases.push(c.case); }
+                // 🐞 the codes of the earlier hunts (in their language): to play them again
+                if (r.kind === "bugs") { let lang = "javascript"; try { lang = JSON.parse(r.settings).codeLang || lang; } catch { /* default */ }
+                  for (const it of c.items || []) if (!seen.has("b" + lang + it.fn + it.title)) { seen.add("b" + lang + it.fn + it.title); myBugs.push({ ...it, codeLang: lang }); } }
               }
               // the shared library's cases, challenges and question sets (from the other classes too)
               const libCases = (await libTemplates(env, g.id, "case")).filter((x) => x.data?.title && !seen.has("c" + x.data.title)).map((x) => ({ ...x.data, shared: x.by || true, libKey: x.key }));
               const libTasks = (await libTemplates(env, g.id, "task")).filter((x) => x.data?.fn && !seen.has("t" + x.data.fn + x.data.title)).map((x) => ({ ...x.data, shared: x.by || true, libKey: x.key }));
               const royaleSets = (await libTemplates(env, g.id, "royale")).filter((x) => Array.isArray(x.data?.questions)).map((x) => ({ key: x.key, title: x.title, by: x.by, n: x.data.questions.length, questions: x.data.questions }));
-              return { myTasks: [...myTasks.slice(0, 20), ...libTasks.slice(0, 30)], myCases: [...myCases.slice(0, 20), ...libCases.slice(0, 30)], royaleSets: royaleSets.slice(0, 30), library: !!(await libCfg(env, g.id)) };
+              return { myBugs: myBugs.slice(0, 80), myTasks: [...myTasks.slice(0, 20), ...libTasks.slice(0, 30)], myCases: [...myCases.slice(0, 20), ...libCases.slice(0, 30)], royaleSets: royaleSets.slice(0, 30), library: !!(await libCfg(env, g.id)) };
             })()),
             battles: await listBattles(env, g),
             assessments: assess.map((a) => { let qs: any[] = []; try { qs = JSON.parse(a.questions || "[]"); } catch { qs = []; } return { id: a.id, title: a.title, mcq: fromAssessment(qs).length }; }).filter((a) => a.mcq > 0),
@@ -830,6 +875,24 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (!r.task) throw new HttpError(400, r.error || "No challenge: try again.");
           return ok({ task: r.task });
         }
+        // 🐞 Bug Hunt: codes by the AI (each one checked by running it), or the teacher's / Claude's codes checked
+        if (path === "/games/bugs" && method === "POST") {
+          const codeLang = (body.codeLang in RELAY_LANGS ? body.codeLang : "javascript") as keyof typeof RELAY_LANGS;
+          const r = await generateBugs(env, { count: Number(body.count) || 3, level: String(body.level || "mix"), codeLang, prompt: String(body.prompt || ""), lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [] });
+          if (!r.items.length) throw new HttpError(400, r.error || "No code: try again.");
+          return ok(r);
+        }
+        if (path === "/games/bugs/check" && method === "POST") {
+          const codeLang = (body.codeLang in RELAY_LANGS ? body.codeLang : "javascript") as keyof typeof RELAY_LANGS;
+          const list = (Array.isArray(body.items) ? body.items : [body.item]).filter(Boolean).slice(0, 10);
+          if (!list.length) throw new HttpError(400, "No code to check.");
+          const results = [];
+          for (const x of list) {
+            const c = await checkBug(env, codeLang, x, "teacher");
+            results.push({ ok: c.ok, runner: !!c.runner, error: c.error ?? null, item: c.item, buggy: c.buggy ? { passed: c.buggy.passed, total: c.buggy.total, error: c.buggy.error ?? null } : null, fixed: c.fixed ? { passed: c.fixed.passed, total: c.fixed.total } : null });
+          }
+          return ok({ results });
+        }
         // SQL Detective: a case by the AI, or the teacher's own case checked (its queries run on its database)
         if (path === "/games/case" && method === "POST") {
           const r = body.case ? await buildCase(env, body.case, "teacher") : await generateCase(env, { prompt: String(body.prompt || ""), level: String(body.level || "easy"), lang: body.lang === "en" ? "en" : g.lang === "en" ? "en" : "fr", avoid: Array.isArray(body.avoid) ? body.avoid.map(String) : [] });
@@ -844,6 +907,29 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (x?.kind === "relay" && x.content.task && x.content.task.by && x.content.task.by !== "builtin") await libTemplate(env, g, "task", x.content.task.title, x.content.task).catch(() => null);
           if (x?.kind === "royale" && !body.fromLibrary && !body.fromAssessment) await libTemplate(env, g, "royale", String(body.setTitle || x.title).slice(0, 80), { questions: x.content.questions }).catch(() => null);
           return ok(await gview(id));
+        }
+        // 🐞 the codes' statements in French, English and Arabic, by the AI (the code itself never changes)
+        const gt = path.match(/^\/games\/(\d+)\/translate$/);
+        if (gt && method === "POST") {
+          const x = await getGame(env, Number(gt[1]), g.id);
+          if (!x || x.kind !== "bugs") throw new HttpError(404, "This hunt doesn't exist anymore.");
+          const langs = (["fr", "en", "ar"] as const).filter((k) => !Array.isArray(body.langs) || body.langs.includes(k));
+          const items: any[] = x.content.items;
+          const NAMES = { fr: "French", en: "English", ar: "Arabic (Modern Standard)" };
+          const j = await chatJson(env, [
+            { role: "system", content: `You translate the statements of small programming exercises for students. Keep code, function names, values and examples exactly as they are (in \`code\`), translate only the words. Reply ONLY with JSON: {"items":[{"i":0,${langs.map((k) => `"${k}":{"title":"…","text":"…"}`).join(",")}}]} — one entry per exercise, in ${langs.map((k) => NAMES[k]).join(", ")}.` },
+            { role: "user", content: items.map((it, i) => `#${i}\nTitle: ${it.title}\nText: ${it.text}`).join("\n\n") },
+          ], { maxTokens: 8000, temperature: 0.1, timeoutMs: 90000 }).catch(() => null);
+          if (!Array.isArray(j?.items)) throw new HttpError(503, "The AI didn't answer: try again in a minute.");
+          let n = 0;
+          for (const t of j.items) {
+            const it = items[Number(t?.i)];
+            if (!it) continue;
+            const tr = cleanTr({ ...(it.tr ?? {}), ...Object.fromEntries(langs.filter((k) => t[k]).map((k) => [k, t[k]])) });
+            if (tr) { it.tr = tr; n++; }
+          }
+          await setBugItems(env, x, items);
+          return ok({ ...(await gview(x.id)), translated: n });
         }
         // reuse a game: free everyone, remove one player, change the squads
         const gr = path.match(/^\/games\/(\d+)\/(clear|remove|squads|announce)$/);
@@ -863,6 +949,26 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
           if (method === "PUT") {
             const x = await getGame(env, id, g.id);
             if (!x) throw new HttpError(404, "This game doesn't exist anymore.");
+            if (x.kind === "bugs") {
+              // the codes as edited: the ones whose code, tests or correct version changed are checked again by running them
+              const lang = (x.settings.codeLang in RELAY_LANGS ? x.settings.codeLang : "javascript") as keyof typeof RELAY_LANGS;
+              const sig = (it: any) => JSON.stringify([it.fn, it.code, it.tests, it.solution ?? null, it.params]);
+              const before = new Map<string, any>((x.content.items || []).map((it: any) => [sig(it), it]));
+              const items: any[] = [], problems: string[] = [];
+              for (const [i, raw] of (Array.isArray(body.items) ? body.items : []).slice(0, 30).entries()) {
+                const it = cleanBug(raw);
+                if (!it) { problems.push(`${i + 1}: incomplete`); continue; }
+                const old = before.get(sig(it));
+                if (old) { items.push({ ...it, ...(old.unchecked ? { unchecked: true } : {}) }); continue; }
+                const c = await checkBug(env, lang, it, it.by);
+                if (c.ok && c.item) items.push(c.item);
+                else if (c.runner && c.item) items.push({ ...c.item, unchecked: true });
+                else problems.push(`${i + 1}. ${it.title}: ${c.error}`);
+              }
+              if (problems.length) throw new HttpError(400, `Not saved: ${problems.join(" · ")}`);
+              await setBugItems(env, x, items);
+              return ok(await gview(id));
+            }
             await setRoyaleQuestions(env, x, body.questions);
             return ok(await gview(id));
           }
@@ -2123,4 +2229,23 @@ async function coinsView(env: Env, g: GuildRow) {
     purchases: purchases.map((r) => ({ ...withName(r), label: label(r.item) })),
     log: log.map(withName),
   };
+}
+
+/** The new account of a student who changed: a Discord id, a mention <@id>, or the name of someone of the class (the
+ *  new account used ClassBot once), else a member of the server found by Discord (username or display name). */
+async function resolveAccount(env: Env, gid: string, raw: string, from: string): Promise<string> {
+  const v = raw.trim().replace(/^<@!?(\d+)>$/, "$1").replace(/^@/, "");
+  if (!v) throw new HttpError(400, "Give the new account: its Discord name or its Discord ID.");
+  if (/^\d{15,21}$/.test(v)) return v;
+  const low = v.toLowerCase();
+  const mine = (await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ? AND discord_id != ?", gid, from))
+    .filter((p) => (p.name || "").toLowerCase() === low);
+  if (mine.length === 1) return mine[0].discord_id;
+  try {
+    const found = await dapi<any[]>(env, "GET", `/guilds/${gid}/members/search?query=${encodeURIComponent(v)}&limit=10`);
+    const hit = (found || []).filter((x) => x?.user && x.user.id !== from && [x.user.username, x.user.global_name, x.nick].some((n) => (n || "").toLowerCase() === low));
+    if (hit.length === 1) return String(hit[0].user.id);
+    if (hit.length > 1) throw new HttpError(400, `Several members are called “${v}”: paste the Discord ID of the new account.`);
+  } catch (e) { if (e instanceof HttpError) throw e; }
+  throw new HttpError(400, `No member “${v}” found on the server. The new account must join the server first; or paste its Discord ID (right-click on it → Copy User ID).`);
 }

@@ -99,7 +99,120 @@ function pkcs1ToPkcs8(pkcs1) {
 }
 
 const ghHeaders = (token, accept) => ({ Accept: accept, Authorization: `Bearer ${token}`, 'User-Agent': 'classbot', 'X-GitHub-Api-Version': '2022-11-28' });
+
+// ---------- The whole repo in ONE request ----------
+// Cloudflare lets one request of the free plan make 50 calls to other sites. Reading a repo file by file (its tree,
+// 15 files, the W3C check, the commits, their code, then several AI calls) went over it on bigger projects:
+// « Too many subrequests ». So the repo is downloaded once as an archive (.tar.gz), read as it streams, and every file
+// read afterwards in the same analysis comes from it. Too big or unreachable: back to the file-by-file way.
+const ARCHIVE_MAX = 60 * 1024 * 1024;   // bytes read from the archive at most (unpacked)
+const ARCHIVE_KEEP = 8 * 1024 * 1024;   // text kept in memory at most
+const ARCHIVE_FILE = 400000;            // a file bigger than this is listed, not kept
+const ARCH = new Map();                 // repo -> { at, p: Promise<archive | null> }, for 90 s (one analysis)
+
+/** The repo's files (path, size) and the text of its source files, from one archive download; null if it can't. */
+export function repoArchive(token, repo) {
+  const k = String(repo).toLowerCase(), t = Date.now();
+  // nothing is written anywhere: the archive lives in memory during the analysis, then is dropped (expired ones
+  // first, and never more than 3 at once)
+  for (const [key, v] of ARCH) if (t - v.at >= 90000) ARCH.delete(key);
+  const hit = ARCH.get(k);
+  if (hit) return hit.p;
+  const p = loadArchive(token, repo).catch((e) => { console.error('archive', repo, e && e.message); return null; });
+  ARCH.set(k, { at: t, p });
+  while (ARCH.size > 3) ARCH.delete(ARCH.keys().next().value);
+  return p;
+}
+
+class ByteQueue {
+  r: any; chunks: Uint8Array[]; len: number; done: boolean; total: number;
+  constructor(reader) { this.r = reader; this.chunks = []; this.len = 0; this.done = false; this.total = 0; }
+  async fill(n) {
+    while (this.len < n && !this.done) {
+      const { done, value } = await this.r.read();
+      if (done) { this.done = true; break; }
+      if (value && value.length) { this.chunks.push(value); this.len += value.length; this.total += value.length; }
+    }
+    return this.len >= n;
+  }
+  async take(n) {
+    if (!(await this.fill(n))) return null;
+    const out = new Uint8Array(n);
+    let o = 0;
+    while (o < n) {
+      const c = this.chunks[0], k = Math.min(c.length, n - o);
+      out.set(c.subarray(0, k), o); o += k;
+      if (k === c.length) this.chunks.shift(); else this.chunks[0] = c.subarray(k);
+    }
+    this.len -= n;
+    return out;
+  }
+  async skip(n) {
+    while (n > 0) {
+      if (!this.len && !(await this.fill(1))) return false;
+      const c = this.chunks[0], k = Math.min(c.length, n);
+      if (k === c.length) this.chunks.shift(); else this.chunks[0] = c.subarray(k);
+      this.len -= k; n -= k;
+    }
+    return true;
+  }
+}
+
+async function loadArchive(token, repo) {
+  const res = await fetch(`${GH_API}/repos/${repo}/tarball`, { headers: ghHeaders(token, 'application/vnd.github+json'), redirect: 'follow' });
+  if (!res.ok || !res.body) return null;
+  const q = new ByteQueue(res.body.pipeThrough(new DecompressionStream('gzip')).getReader());
+  const dec = new TextDecoder();
+  const str = (b, a, z) => { let e = a; while (e < z && b[e]) e++; return dec.decode(b.subarray(a, e)); };
+  const files = new Map(), list = [];
+  let kept = 0, longName = null, paxPath = null;
+  for (;;) {
+    if (q.total > ARCHIVE_MAX) { try { await q.r.cancel(); } catch {} return null; }
+    const h = await q.take(512);
+    if (!h || h.every((x) => x === 0)) break;
+    const size = parseInt(str(h, 124, 136).trim() || '0', 8) || 0;
+    const type = String.fromCharCode(h[156] || 48);
+    const pad = Math.ceil(size / 512) * 512;
+    if (type === 'x' || type === 'g' || type === 'L') {
+      const body = await q.take(pad);
+      if (!body) break;
+      const text = dec.decode(body.subarray(0, size));
+      if (type === 'L') longName = text.replace(/\0+$/, '');
+      if (type === 'x') { const m = text.match(/\d+ path=([^\n]*)\n/); if (m) paxPath = m[1]; }
+      continue;
+    }
+    const ustar = str(h, 257, 263) === 'ustar';
+    let name = paxPath || longName || ((ustar && h[345] ? str(h, 345, 500) + '/' : '') + str(h, 0, 100));
+    paxPath = longName = null;
+    name = name.split('/').slice(1).join('/');   // GitHub puts everything in "<owner>-<repo>-<sha>/"
+    if ((type !== '0' && type !== '\0' && type !== '7') || !name) { if (!(await q.skip(pad))) break; continue; }
+    list.push({ path: name, size });
+    const want = size <= ARCHIVE_FILE && kept + size <= ARCHIVE_KEEP && !AI_SKIP_FILE.test(name) && !/(^|\/)(\.git|node_modules|vendor)\//.test(name);
+    if (want) {
+      const body = await q.take(pad);
+      if (!body) break;
+      files.set(name, dec.decode(body.subarray(0, size)));
+      kept += size;
+    } else if (!(await q.skip(pad))) break;
+  }
+  return { files, list };
+}
+
+/** A file of the repo's main branch as it is now, from the archive when it was downloaded. */
+async function fromArchive(path) {
+  const m = String(path).match(/^\/repos\/([^/]+\/[^/]+)\/contents\/([^?]+)$/);
+  if (!m) return undefined;
+  const hit = ARCH.get(m[1].toLowerCase());
+  if (!hit || Date.now() - hit.at >= 90000) return undefined;
+  const a = await hit.p;
+  if (!a) return undefined;
+  const f = m[2].split('/').map(decodeURIComponent).join('/');
+  return a.files.get(f);
+}
+
 export async function githubText(path, token, accept, max = 150000) {
+  const cached = await fromArchive(path);
+  if (cached !== undefined) return cached.length > max ? cached.slice(0, max) : cached;
   const res = await fetch(GH_API + path, { headers: ghHeaders(token, accept) });
   if (!res.ok) throw new Error(`GitHub ${path} returned ${res.status}`);
   return (await readLimited(res, max)).text;
@@ -114,9 +227,12 @@ export async function githubJsonLimited(path, token, max) {
 
 // Every file of the repo (path + size). A very big repo (node_modules pushed…) is read folder by folder.
 export async function repoFiles(token, repo) {
-  const full = await githubJsonLimited(`/repos/${repo}/git/trees/HEAD?recursive=1`, token, 600000);
+  // the archive first (one request for the whole repo, its files read from it afterwards)
+  const arch = await repoArchive(token, repo);
+  const full = arch ? null : await githubJsonLimited(`/repos/${repo}/git/trees/HEAD?recursive=1`, token, 600000);
   let entries;
-  if (full) entries = full.tree || [];
+  if (arch) entries = arch.list.map((f) => ({ type: 'blob', path: f.path, size: f.size }));
+  else if (full) entries = full.tree || [];
   else {
     const root = (await githubJsonLimited(`/repos/${repo}/git/trees/HEAD`, token, 300000)) || { tree: [] };
     entries = (root.tree || []).filter((t) => t.type === 'blob');

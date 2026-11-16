@@ -323,6 +323,8 @@ export const EN_MORE: Record<string, string> = {
   "assess.dm_title": "📝 Assessment: {title}",
   "assess.dm_body": "{n} questions{time}. Open it on a **computer**: it runs in full screen, and leaving full screen stops your session.\nOpen until {until}.",
   "assess.dm_time": ", {m} minutes",
+  "assess.complete_title": "📝 {title}: finish the questions you didn't answer",
+  "assess.complete_body": "Your teacher reopened your assessment: you get the **{n} question(s)** you didn't attempt{time} (counted from when you start). Your other answers are kept and can't change. Open it on a **computer**, in full screen.\nOpen until {until}.",
   "assess.dm_btn": "Start the assessment",
   "assess.result_title": "📝 {title}: {score}%",
   // ---- /activity (veilles and live codings)
@@ -697,6 +699,8 @@ export const FR_MORE: Record<string, string> = {
   "assess.dm_title": "📝 Évaluation : {title}",
   "assess.dm_body": "{n} questions{time}. Ouvre-la sur un **ordinateur** : elle se fait en plein écran, et quitter le plein écran arrête ta session.\nOuverte jusqu'au {until}.",
   "assess.dm_time": ", {m} minutes",
+  "assess.complete_title": "📝 {title} : termine les questions sans réponse",
+  "assess.complete_body": "Ton prof a rouvert ton évaluation : tu retrouves les **{n} question(s)** que tu n'as pas tentées{time} (à partir du moment où tu commences). Tes autres réponses sont gardées et ne changent plus. Ouvre-la sur un **ordinateur**, en plein écran.\nOuverte jusqu'au {until}.",
   "assess.dm_btn": "Commencer l'évaluation",
   "assess.result_title": "📝 {title} : {score} %",
   // ---- /activity (veilles et live codings)

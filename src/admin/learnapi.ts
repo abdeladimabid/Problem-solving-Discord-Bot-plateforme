@@ -26,7 +26,7 @@ import { appJwt, GH_API, githubGet, installationToken } from "../shared/review/g
 import { classCompetencies, competencyMap, finalizeReview, reopenReview, rewardsOf, setManualCompetency } from "../shared/learning.ts";
 import { aiLines, makeProbes, memberInsights, scanLinks } from "../shared/review/insights.ts";
 import { attemptsOf, reassign, resultPrint } from "../shared/assess.ts";
-import { AssessError, generateQuestions, gradeTaker, promptSet, sameAssessment, sameQuestions, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
+import { AssessError, completeMissing, generateQuestions, gradeTaker, promptSet, sameAssessment, sameQuestions, importPages, questionAi, invite, needsGrading, saveOptions, letBackIn, paperFor, questionsOf, releasedOf, retake, saveAssessment, sendResults, setGrade, settingsOf, takerLinks } from "../shared/assess.ts";
 import type { AssessRow, TakerRow } from "../shared/assess.ts";
 import { planLinkIn } from "../shared/review/engine.ts";
 import { perMinuteWait, aiStatus } from "../shared/aikeys.ts";
@@ -766,7 +766,7 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok({ ...r, papers: undefined, ...(await assessView(env, g, a.id)) });
     }
   }
-  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|reassign|unlock|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
+  if ((m = path.match(/^\/assessments\/(\d+)(?:\/(invite|retake|reassign|unlock|complete|grade|close|reopen|results|links|remove|share|link|options|reuse))?$/))) {
     const g = await guild();
     const id = Number(m[1]);
     const a = await one<AssessRow>(env, "SELECT * FROM assessments WHERE id = ? AND guild_id = ?", id, g.id);
@@ -824,6 +824,12 @@ async function route(env: Env, ctx: Ctx, path: string, method: string, body: any
       return ok(await assessView(env, g, id));
     }
     if (act === "unlock") { await letBackIn(env, g, Number(body.taker), Number(body.minutes) || 0); return ok(await assessView(env, g, id)); }
+    // sent too early or stopped by a problem: back to answer only the questions they didn't attempt
+    if (act === "complete" && method === "POST") {
+      const ids = (Array.isArray(body.takers) ? body.takers : [body.taker]).map(Number).filter(Boolean);
+      const r = await completeMissing(env, g, id, ids, { minutes: body.minutes === "" || body.minutes == null ? undefined : Number(body.minutes), days: Number(body.days) || 2, send: body.send !== false });
+      return ok({ ...(await assessView(env, g, id)), complete: r });
+    }
     if (act === "grade" && method === "PUT") { await setGrade(env, g, Number(body.taker), String(body.qid), body); return ok(await assessView(env, g, id)); }
     if (act === "grade" && method === "POST") {
       // the students whose debrief of the linked brief is finalized: their grade doesn't move anymore
