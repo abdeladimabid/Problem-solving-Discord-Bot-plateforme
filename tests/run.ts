@@ -3134,7 +3134,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/encore travailler en priorité[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/encore travailler en priorité[\s\S]*margin(?:\/| et )padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -4178,7 +4178,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const L2 = d2.toLearn.map((x: any) => x.notion);
     check(!/\n\d\. /.test(t2) && learnPs.length === L2.length && /^La différence entre margin et padding/.test(L2[0]) && /^Écrire la structure de base d’une page avec doctype, head et body/.test(L2[1]) && /^Sélectionner un élément du DOM avec querySelector/.test(L2[2])
       && learnPs.every((x: string, i: number) => x.startsWith(L2[i].replace(/[.\s]+$/, "").charAt(0).toUpperCase() + L2[i].replace(/[.\s]+$/, "").slice(1)))
-      && /margin est l’espace autour du bloc/i.test(learnPs[0]) && /MDN querySelector/.test(learnPs[2])
+      && /« MDN box model »/.test(learnPs[0]) && /« MDN querySelector »/.test(learnPs[2]) && learnPs.every((x: string) => !/ est l’espace| permet de |developer\.mozilla|Froggy|CSS-Tricks/.test(x))
       && /l'attribut alt/i.test(list) && /création branche/i.test(list) && /les événements JavaScript/i.test(list)
       && !/bouton supprimer|(HTML|CSS|JavaScript|Git) :/.test(list.split("\n\n").map((x: string) => x.slice(0, 40)).join(" ")),
       `what to learn: one paragraph per point, no numbers, what it is, what to do and what to look up (${learnPs.map((x: string) => x.slice(0, 60)).join(" / ")})`);
@@ -4197,8 +4197,8 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
     const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
     const ps3 = t3.split("\n\n"), pl = ps3.find((x: string) => /^La planification/.test(x)) || "", tw = ps3.find((x: string) => /^L’utilisation de Tailwind/i.test(x)) || "";
-    check(/user stories/.test(pl) && /tâches/.test(pl) && /Cherche «/.test(pl) && C.wordCount(pl) <= 90, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
-    check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
+    check(/user stor/.test(pl) && /tâche/.test(pl) && /Cherche «/.test(pl) && C.wordCount(pl) <= 60, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
+    check(/« Tailwind CSS utility classes »/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
     const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
     check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
   }
@@ -4209,14 +4209,14 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
       assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
     const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
-    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n\nLes relations Eloquent\. Dans chaque modèle, déclare la relation/.test(tl) && /\n\nÉcrire une migration\. Crée la table avec php artisan make:migration/.test(tl)
-      && /\n\nLes fonctions : écrire une fonction/.test(tl) && !/\n\d\. /.test(tl) && !/JavaScript|MDN|bonus|il manque|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 330,
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n\nLes relations Eloquent\. Cherche « Laravel Eloquent relationships »/.test(tl) && /\n\nÉcrire une migration\. Cherche « Laravel migrations »/.test(tl)
+      && /\n\nLes fonctions\. Cherche « fonction paramètres return »/.test(tl) && !/\n\d\. /.test(tl) && !/JavaScript|MDN|bonus|il manque|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 330,
       `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
     // never said mastered when it is also to learn (the same notion, from another source)
     const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
       assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
     const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
-    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n\nLa manipulation du DOM et les sélecteurs JavaScript/.test(th) && /\n\nFlexbox[^\n]*Flexbox Froggy/i.test(th),
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n\nLa manipulation du DOM et les sélecteurs JavaScript/.test(th) && /\n\nFlexbox[^\n]*« MDN flexbox »/i.test(th),
       `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
   }
   {
@@ -4234,6 +4234,19 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     check(C.aiCommentPrompt(dj).includes("SUJETS HORS DU SPRINT") && /HORS DU SPRINT[^\n]*CSS/.test(C.aiCommentPrompt(dj)) && /HORS DU SPRINT[^\n]*HTML/.test(C.aiCommentPrompt(dj)) && dj.off!.includes("css"), "…the AI is told which subjects are outside the sprint");
     const aiJ = (C.commentText(dj).split("\n\n").slice(1).join("\n\n"));
     check(C.aiCommentText(dj, { commentaire: aiJ }) !== null && C.aiCommentText(dj, { commentaire: aiJ.replace("Ce que tu dois", "Tu maîtrises bien les balises sémantiques. Ce que tu dois") }) === null, "…and its comment refused when it talks about HTML or CSS");
+  }
+  {
+    // the teacher's own notes come first, each fact they noted (never the AI's summary of them), with what to look up; then
+    // the assessment's and the mise en situation's gaps
+    const ra: any = { first: "Aya", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } },
+      sprintText: "Développement d’interfaces dynamiques avec JavaScript moderne",
+      remarks: { text: "planification a revoir, pas de description, user stories, taille, deadlines, seulement une seule sous tache ?\nelle doit revoir JD DOM, elle a pas pu acceder aux classes appliqué sur un element, elle a pas pu aussi recuperer une image qui existe deja dans un div. elle doit revoir les selecteurs, les evenements et la manipulation dom", toReview: ["planification de projet", "sélecteurs DOM, accès aux classes, récupération d'images et manipulation d'événements"], positive: "" },
+      assess: [{ members: { u1: { score: 51, ok: [], ko: ["les tableaux JavaScript (map, filter)", "les fonctions"], summary: "" } } }, { kind: "mise", members: { u1: { score: 26, ok: [], ko: ["addEventListener", "createElement"], summary: "" } } }], level: { lvl: "faible" } };
+    const ta = C.commentText(C.commentData({ first: "Aya", project: ra.brief, rec: ra, uid: "u1" }));
+    const pa = (ta.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x));
+    check(/^Planification : pas de description, user stories/.test(pa[0] || "") && pa.some((x: string) => /^Acceder aux classes[^\n]*« MDN classList contains »/.test(x)) && pa.some((x: string) => /^Recuperer une image qui existe deja dans un div[^\n]*« MDN getAttribute »/.test(x))
+      && pa.some((x: string) => /^Les tableaux JavaScript/.test(x)) && pa.findIndex((x: string) => /^Les tableaux/.test(x)) > pa.findIndex((x: string) => /^Recuperer une image/.test(x)) && !/insérer une image|developer\.mozilla|Froggy/.test(ta),
+      `the teacher's notes first, each fact, with what to look up; then the assessment's gaps (${pa.map((x: string) => x.slice(0, 40)).join(" / ")})`);
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
