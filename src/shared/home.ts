@@ -21,7 +21,7 @@ export async function classHome(env: Env, g: GuildRow, students: (PlanStudent & 
   const W0 = t0 - 8 * 7 * 86400, wk = 7 * 86400;
   const [pv, tlRows, plans, handsWaiting, oldestHand, faq, drafts, toDebrief, toGrade, flagged, briefRows, prog, handins, finals, att, act, PA] = await Promise.all([
     planView(env, g, students),
-    all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `stulevel:${g.id}:%`).catch(() => []),
+    all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `stulevel:${g.id}:`, `stulevel:${g.id};`).catch(() => []),
     plansSummary(env, g).catch(() => [] as Awaited<ReturnType<typeof plansSummary>>),
     n("SELECT COUNT(*) AS n FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id),
     one<{ t: number | null }>(env, "SELECT MIN(created_at) AS t FROM hands WHERE guild_id = ? AND status = 'waiting'", g.id).then((r) => r?.t ?? null).catch(() => null),

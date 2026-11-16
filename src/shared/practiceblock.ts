@@ -77,7 +77,7 @@ export async function removeBlock(env: Env, gid: string, uid: string, type: stri
 
 /** Every blocked student of the class, for the dashboard. */
 export async function classBlocks(env: Env, gid: string) {
-  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `pblock:${gid}:%`).catch(() => []);
+  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `pblock:${gid}:`, `pblock:${gid};`).catch(() => []);
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", gid)).map((p) => [p.discord_id, p.name]));
   const prefix = `pblock:${gid}:`;
   return rows.map((r) => ({ uid: r.k.slice(prefix.length), blocks: parse(r.v).filter((b) => live(b)) }))

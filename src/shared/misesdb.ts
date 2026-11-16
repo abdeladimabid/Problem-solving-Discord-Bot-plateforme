@@ -23,7 +23,7 @@ import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { N_QCM, N_SITUATIONS, QCM_RULES, QCM_SHARE, SIT_RULES, miseCounts, readJson } from "./mises.ts";
+import { N_QCM, N_SITUATIONS, QCM_RULES, QCM_SHARE, SIT_RULES, adviceChecks, miseCounts, readJson } from "./mises.ts";
 /** The barème asked: automatic (by difficulty, the QCM a share of the score; the default) or the file's own points. */
 const scoringOf = (b: any) => (b?.scoring === "file" ? undefined : { qcmShare: Number.isFinite(Number(b?.qcmShare)) && b?.qcmShare !== "" && b?.qcmShare != null ? Math.max(0, Math.min(50, Math.round(Number(b.qcmShare)))) : QCM_SHARE });
 
@@ -364,10 +364,11 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
   const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
   const count = miseCounts(b), scoring = scoringOf(b);
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count, scoring });
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count, scoring, free: true });
   const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
-  const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count }) : [];
+  // what isn't the week's scope (another week, a technology not seen yet…): told, never blocking
+  const checks = r.content ? [...adviceChecks(r.advice), ...miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count })] : [];
   if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
@@ -396,7 +397,7 @@ export async function saveMise(env: Env, g: GuildRow, id: number, b: any) {
     const p = await programOf(env, g);
     const w = week ? weekOf(p, week) : null;
     const cn = await conceptOpts(env, g, b, { suggest: false, file: b.json ? readJson(b.json).data : contentOf(m) });
-    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts } });
+    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts }, free: true });
     if (r.problems.length) return { problems: r.problems };
     sets.push("content = ?", "week = ?", "sprint = ?", "comps = ?"); args.push(JSON.stringify(r.content), w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps));
   }
@@ -463,7 +464,7 @@ async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: stri
     : m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
   return dm(env, tk.discord_id, {
     embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
-      description: [`${c.situations.length} mise${c.situations.length > 1 ? "s" : ""} en situation avec du code${c.qcm.length ? ` et ${c.qcm.length} QCM` : ""}, dans ton navigateur.`, when,
+      description: [`${c.situations.length ? `${c.situations.length} mise${c.situations.length > 1 ? "s" : ""} en situation avec du code${c.qcm.length ? ` et ${c.qcm.length} QCM` : ""}` : `${c.qcm.length} QCM`}, dans ton navigateur.`, when,
         late ? "" : m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
     components: [row(linkBtn("Ouvrir ma mise en situation", url, "🧪"))],
   });
@@ -473,7 +474,7 @@ async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: stri
 export async function launch(env: Env, g: GuildRow, id: number, b: any) {
   const m = await getMise(env, g, id);
   if (statusOf(m) === "closed") throw new MiseError("This mise en situation is closed.");
-  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  if (!itemIds(contentOf(m)).length) throw new MiseError("Import Claude's JSON first.");
   const t0 = now();
   const startsAt = b.startsAt ? Math.max(t0, Math.round(Number(b.startsAt))) : t0;
   const s = { ...settingsOf(m), ...pickSettings(b) };
@@ -529,7 +530,7 @@ export async function reuseMise(env: Env, g: GuildRow, id: number): Promise<{ id
 export async function addLate(env: Env, g: GuildRow, id: number, students: string[], minutes: unknown, sendDm = true) {
   const m = await getMise(env, g, id);
   if (m.status === "draft") throw new MiseError("Launch it first.");
-  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  if (!itemIds(contentOf(m)).length) throw new MiseError("Import Claude's JSON first.");
   const st = settingsOf(m);
   // their time: asked, else the session's (its minutes, or how long it was open), else an hour
   const was = m.ends_at && (m.starts_at ?? m.opened_at) ? Math.round((m.ends_at - (m.starts_at ?? m.opened_at)!) / 60) : 0;
@@ -975,7 +976,7 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
   const stats = { ...classStats(c, (testOnly ? takers.filter((t) => staff.has(t.discord_id) && started(t)) : learners).map((t) => ({ answers: parse(t.answers, {}), checks: parse(t.checks, {}), ai: parse(t.ai, {}), spent: parse(t.spent, {}) }))), testOnly };
   const p = await programOf(env, g);
   const w = m.week ? p.weeks.find((x) => x.n === m.week) ?? null : null;
-  const checks = c.situations.length ? miseChecks(c, { weekComps: weekComps(w), selected: parse<string[]>(m.comps, []), brief: settingsOf(m).brief?.title }) : [];
+  const checks = itemIds(c).length ? miseChecks(c, { weekComps: weekComps(w), selected: parse<string[]>(m.comps, []), brief: settingsOf(m).brief?.title }) : [];
   return { mise: { ...m, content: c, status: statusOf(m), comps: parse<string[]>(m.comps, []), target: parse<string[]>(m.target, []), settings: settingsOf(m), preview: previewOf(c), now: t0, checks }, takers: rows, stats };
 }
 

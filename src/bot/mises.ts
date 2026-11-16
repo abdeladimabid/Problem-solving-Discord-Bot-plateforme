@@ -102,7 +102,9 @@ button { font: inherit; }
 .btn.icon { padding: 8px 10px; }
 kbd { font: 11px "JetBrains Mono", monospace; padding: 1px 5px; border-radius: 5px; border: 1px solid currentColor; opacity: .75; }
 .prog { position: sticky; top: 57px; z-index: 19; background: var(--bg); padding: 10px 18px 8px; border-bottom: 1px solid var(--line); }
-.prog-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.prog-row { display: flex; align-items: center; gap: 6px 14px; }
+/* two rows at most (many QCM): the rest scrolls, the legend stays */
+.prog-items { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-height: 84px; overflow-y: auto; position: relative; padding: 3px; margin: -3px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .pi { min-width: 46px; height: 36px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--soft); font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
 .pi i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .pi.prog-on i { background: var(--warn); } .pi.prog-done i { background: var(--good); }
@@ -115,6 +117,12 @@ main { max-width: 1500px; margin: 0 auto; padding: 18px; }
 .card h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 0 0 10px; }
 h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .sit { display: grid; grid-template-columns: minmax(340px, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+/* wide screens: the brief and the editor each scroll on their own, in the height left under the sticky header (--stick: fitSit) */
+@media (min-width: 1051px) {
+  .sit { height: calc(100dvh - var(--stick, 120px) - 80px); min-height: 460px; align-items: stretch; }
+  .sit > .col { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; padding: 0 6px 2px 2px; margin: 0 -6px 0 -2px; }
+  .sit + .navbtns { margin: 10px 0 0; } main:has(> .sit) { padding-bottom: 12px; }
+}
 .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--soft); }
 .kicker { font-weight: 700; color: var(--blue-ink); }
 .diff { display: inline-flex; align-items: center; gap: 3px; } .diff i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); } .diff i.on { background: var(--blue); }
@@ -142,7 +150,7 @@ h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .otab .n { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--badbg); color: var(--bad); margin-left: 4px; }
 .frame { width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 10px; background: #fff; resize: vertical; display: block; }
 .console { font: 13px/1.5 "JetBrains Mono", monospace; background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 120px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
-.console .l-error { color: var(--bad); } .console .l-warn { color: var(--warn); } .console .l-info { color: var(--blue-ink); } .console .l-sys { color: var(--faint); font-style: italic; }
+.console .l-error { color: var(--bad); } .console .l-warn { color: var(--warn); } .console .l-info { color: var(--blue-ink); } .console .l-sys { color: var(--faint); font-style: italic; } .console .l-hint { color: var(--warn); font-size: 12.5px; }
 .checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
 .checks li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .checks li b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; flex: none; background: var(--line); color: var(--soft); }
@@ -286,8 +294,9 @@ function intro(info) {
   if (info.status === "submitted" && info.preview) return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Aperçu élève : ' + (info.score != null ? "score automatique <b>" + info.score + " / 100</b> (vérifications et QCM ; les situations à corriger à la main comptent 0 ici)." : "le score automatique arrive dans un instant, recharge la page.") + " Rien n’est compté pour la classe.</p>");
   if (info.status === "submitted") return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>');
   if (info.status === "closed" || info.status === "draft") return screen('<div class="big">🔒</div><h1>Cette mise en situation est fermée</h1><p class="muted">Demande à ton formateur si tu penses que c’est une erreur.</p>');
-  var rules = ["💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>",
-    "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>",
+  // (QCM only: no code to run)
+  var rules = [info.n.situations ? "💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>" : "📝 <span>" + info.n.qcm + " QCM : une seule bonne réponse par question.</span>",
+    info.n.situations ? "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>" : "",
     info.lockScreen ? "💾 <span>Tout est enregistré au fur et à mesure : tu peux revenir sur une question jusqu’à l’envoi.</span>" : "💾 <span>Tout est enregistré au fur et à mesure : tu peux recharger la page ou revenir sur une question jusqu’à l’envoi.</span>",
     info.lockScreen ? "🖥️ <span>Elle se passe <b>en plein écran</b>.</span>" : "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",
     info.lockScreen ? "🔒 <span>Si tu quittes le plein écran, changes d’onglet ou de fenêtre, <b>ta session s’arrête</b> : seul ton formateur peut te laisser revenir. Ton travail reste enregistré.</span>" : "",
@@ -347,10 +356,15 @@ function drawProg() {
     var st = stateOf(id), word = st === "done" ? "répondu" : st === "on" ? "en cours" : "pas commencé";
     return '<button type="button" class="pi ' + (st ? "prog-" + st : "") + (id === CUR ? " cur" : "") + '" data-go="' + id + '" aria-label="' + esc(label(id)) + ", " + word + '"' + (id === CUR ? ' aria-current="step"' : "") + "><i></i>" + shortLabel(id) + "</button>";
   };
-  $("#prog").innerHTML = '<div class="prog-row">' + P.situations.map(function (s) { return item(s.id); }).join("") + '<span class="pi-sep" aria-hidden="true"></span>' + P.qcm.map(function (q) { return item(q.id); }).join("")
+  var box = $(".prog-items", $("#prog")), keep = box ? box.scrollTop : 0;
+  $("#prog").innerHTML = '<div class="prog-row"><div class="prog-items">' + P.situations.map(function (s) { return item(s.id); }).join("") + (P.situations.length && P.qcm.length ? '<span class="pi-sep" aria-hidden="true"></span>' : "") + P.qcm.map(function (q) { return item(q.id); }).join("") + "</div>"
     + '<span class="prog-legend" aria-hidden="true"><span><i style="background:var(--line)"></i>Pas commencé</span><span><i style="background:var(--warn)"></i>En cours</span><span><i style="background:var(--good)"></i>Répondu</span></span></div>'
     + '<div class="bar" role="progressbar" aria-label="Questions répondues" aria-valuemin="0" aria-valuemax="' + ORDER.length + '" aria-valuenow="' + n + '"><span style="width:' + Math.round((100 * n) / ORDER.length) + '%"></span></div>';
   $$("[data-go]", $("#prog")).forEach(function (b) { b.onclick = function () { go(b.dataset.go); }; });
+  // where the learner had scrolled to, and the current item always in sight
+  box = $(".prog-items", $("#prog")); box.scrollTop = keep;
+  var cur = $(".pi.cur", box);
+  if (cur && (cur.offsetTop < box.scrollTop || cur.offsetTop + cur.offsetHeight > box.scrollTop + box.clientHeight)) box.scrollTop = cur.offsetTop - 3;
 }
 
 // ---------------------------------------------------------------- moving between items
@@ -491,9 +505,12 @@ function drawSituation(s) {
   $("#aicheck").onclick = aiCheck;
   $$("[data-ot]").forEach(function (b) { b.onclick = function () { OUTTAB[s.id] = b.dataset.ot; showOut(); }; });
   showOut(); drawChecks(); drawFeedback(); drawConsole();
-  wireNav(); wireTr(s);
+  wireNav(); wireTr(s); fitSit();
   setTimeout(function () { startEd.refresh(); }, 0);
 }
+/** The height of the sticky header (the top bar and the progress, which wraps on narrow screens): the two columns fit under it. */
+function fitSit() { var p = $("#prog"); document.documentElement.style.setProperty("--stick", ($(".top").offsetHeight + (p.hidden ? 0 : p.offsetHeight)) + "px"); }
+window.addEventListener("resize", fitSit);
 /** The code editor of the situation (Monaco when it loaded, else CodeMirror), on the learner's current file. */
 function mountEditor(s) {
   var box = $("#editor");
@@ -738,6 +755,8 @@ var HARNESS = function () {
 // The frame's page is ClassBot's helper, then the HTML file with the CSS and JS files put inside it: a line of that page
 // is not a line of their files. LINEMAP[runId] says, for each line of the page, which file and which line it is.
 var LINEMAP = {};
+// NOTES[runId]: what the preview did that a browser wouldn't (a module loaded as a plain script, or not linked)
+var NOTES = {};
 function buildDoc(s, files, runId) {
   var html = s.files.filter(function (f) { return f.lang === "html"; })[0];
   var doc = html ? String(files[html.name] || "") : "";
@@ -773,16 +792,30 @@ function buildDoc(s, files, runId) {
     if (stack.indexOf(n) >= 0) return "";   // imports in a circle: left to the browser's own error
     return (MODS[n] = "data:text/javascript;charset=utf-8," + encodeURIComponent("/*cbfile:" + n + "*/" + rewrite(files[n], stack.concat(n))).replace(/['()*!~]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); }));
   };
-  var isModule = function (t) { return /(^|\n)\s*(import\s*[\w$*{"']|export\s)/.test(String(t || "")); };
+  var isModule = function (t) { return /(^|\n)\s*(import\s*[\w$*{"']|export[\s{*])/.test(String(t || "")); };
+  var atEnd = function (b) { doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b; };
+  var notes = [], loose = [];
   js.forEach(function (f) {
     var re = new RegExp("<script([^>]*)src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"']([^>]*)>\\s*<\/script>", "i");
-    var tag = doc.match(re), module = !!tag && /type\s*=\s*["']?module/i.test(tag[1] + tag[2]);
+    var tag = doc.match(re), typed = !!tag && /type\s*=\s*["']?module/i.test(tag[1] + tag[2]);
+    // import / export in a file the page loads as a plain script: a browser stops at the first line, the preview runs
+    // it as a module and says what to write
+    var module = typed || (!!tag && isModule(files[f.name]));
+    if (module && !typed) notes.push(f.name + " utilise import / export : dans index.html, sa balise doit être <script type=\"module\" src=\"" + f.name + "\"><\/script> (un vrai navigateur refuserait de l’exécuter ; l’aperçu le fait quand même).");
+    if (!tag && isModule(files[f.name])) { loose.push(f); return; }
     var b = mark(f.name, module ? '<script type="module">\n' : "<script>\n", safeJs(module ? rewrite(files[f.name], [f.name]) : files[f.name]), "\n<\/script>");
     if (tag) doc = doc.replace(re, function () { return b; });
-    // a module not on the page is imported by another one (or not used): never put in as a plain script
-    else if (isModule(files[f.name])) return;
-    else doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b;
+    else atEnd(b);
   });
+  // a module not on the page is imported by another one (never put in as a plain script); one nothing imports is the
+  // page's entry the learner forgot to link: run as a module, with what to write
+  var texts = loose.map(function (f) { return rewrite(files[f.name], [f.name]); });
+  loose.forEach(function (f, i) {
+    if (MODS[f.name]) return;
+    notes.push(f.name + " n’est relié à aucune page : ajoute <script type=\"module\" src=\"" + f.name + "\"><\/script> avant </body> dans index.html (l’aperçu l’exécute quand même).");
+    atEnd(mark(f.name, '<script type="module">\n', safeJs(texts[i]), "\n<\/script>"));
+  });
+  NOTES[runId] = notes;
   var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
   var head = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><script>(' + HARNESS.toString().replace("__RUNID__", runId) + ")();</" + "script>";
   // the page, line by line: [file, its line] (ClassBot's helper: null)
@@ -815,6 +848,17 @@ function modNames(t) {
     try { var m = decodeURIComponent(u.slice(u.indexOf(",") + 1, u.indexOf(",") + 200)).match(/^\/\*cbfile:([^*]+)\*\//); return m ? "./" + m[1] : "(module)"; } catch (e) { return "(module)"; }
   });
 }
+/** The browser's module errors (in English), said in French with what to do: a failed import stops the whole file. */
+function modHint(t) {
+  var m = t.match(/module '([^']+)' (?:does not|doesn't) provide an export named:? '([^']+)'/) || t.match(/import not found: ([\w$]+)/) || t.match(/Importing binding name '([^']+)' is not found/);
+  if (m) {
+    var mod = m.length > 2 ? m[1] : "le fichier importé", name = m.length > 2 ? m[2] : m[1];
+    return "→ " + mod + " n’exporte pas « " + name + " » : écris export devant sa déclaration dans " + mod + " (ou vérifie que le nom est le même des deux côtés). Tant qu’un import échoue, aucune ligne du fichier qui importe ne s’exécute (même les console.log avant).";
+  }
+  if (/Cannot use import statement outside a module|import declarations may only appear at top level of a module/.test(t)) return "→ un fichier avec import se charge avec <script type=\"module\" src=\"…\"><\/script>, et import s’écrit tout en haut du fichier (pas dans une fonction ou un bloc).";
+  if (/Unexpected token 'export'|export declarations may only appear at top level of a module/.test(t)) return "→ ce fichier contient export : il ne se charge pas avec une balise <script> classique, il s’importe depuis un module (import { … } from \"./fichier.js\").";
+  return "";
+}
 /** « (panier.js, ligne 3) » for a line of the frame's page; nothing when it's ClassBot's helper. */
 function whereLine(runId, line) {
   var w = line > 0 && LINEMAP[runId] ? LINEMAP[runId][line - 1] : null;
@@ -830,21 +874,29 @@ function runWeb(s, files, visible) {
     if (host) { host.innerHTML = ""; host.appendChild(fr); } else { fr.style.cssText = "position:absolute;left:-9999px;width:800px;height:600px"; document.body.appendChild(fr); }
     var end = function (values) {
       if (finished) return; finished = true;
-      window.removeEventListener("message", onMsg);
-      setTimeout(function () { delete LINEMAP[runId]; }, 5000);
-      if (!host) fr.remove();
+      // the preview on screen keeps its console (a click on it later, a timer): it stops listening once replaced
+      if (!host) { window.removeEventListener("message", onMsg); fr.remove(); setTimeout(function () { delete LINEMAP[runId]; }, 5000); }
+      delete NOTES[runId];
       if (visible) { CONSOLE[s.id] = logs.length ? logs : [{ level: "sys", text: "(Rien dans la console.)" }]; drawConsole(); }
       LASTERR[s.id] = logs.filter(function (l) { return l.level === "error"; }).map(function (l) { return l.text; }).join("\n");
-      resolve({ probes: values || {}, console: logs.filter(function (l) { return l.level !== "sys"; }).map(function (l) { return l.text; }).join("\n") });
+      // the console the checks read: what the code wrote (not ClassBot's notes and hints)
+      resolve({ probes: values || {}, console: logs.filter(function (l) { return l.level !== "sys" && l.level !== "hint"; }).map(function (l) { return l.text; }).join("\n") });
     };
     var onMsg = function (e) {
+      if (finished && !fr.isConnected) { window.removeEventListener("message", onMsg); delete LINEMAP[runId]; return; }
       if (e.source !== fr.contentWindow || !e.data || e.data.__mes !== runId) return;
-      if (e.data.type === "log") { logs.push({ level: e.data.level, text: (modNames(String(e.data.text)) + (e.data.line ? (e.data.file ? " (" + String(e.data.file).slice(0, 40) + ", ligne " + Number(e.data.line) + ")" : whereLine(runId, Number(e.data.line))) : "")).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (e.data.type === "log") {
+        var lt = modNames(String(e.data.text)), hint = e.data.level === "error" ? modHint(lt) : "";
+        logs.push({ level: e.data.level, text: (lt + (e.data.line ? (e.data.file ? " (" + String(e.data.file).slice(0, 40) + ", ligne " + Number(e.data.line) + ")" : whereLine(runId, Number(e.data.line))) : "")).slice(0, 2000) });
+        if (hint) logs.push({ level: "hint", text: hint });
+        if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (finished) return;
       if (e.data.type === "ready") { if (probes.length) fr.contentWindow.postMessage({ __mes: runId, type: "probe", probes: probes.map(function (k) { return { id: k.id, probe: k.probe }; }) }, "*"); else end({}); }
       if (e.data.type === "probes") end(e.data.values);
     };
     window.addEventListener("message", onMsg);
     fr.srcdoc = buildDoc(s, files, runId);
+    (NOTES[runId] || []).forEach(function (n) { logs.push({ level: "hint", text: "⚠ " + n }); });
     // code that never ends (an infinite loop) or never loads: the checks run with what is there
     setTimeout(function () { if (!finished) { logs.push({ level: "error", text: "Le code n’a pas fini de s’exécuter en 6 secondes (une boucle infinie ?)." }); end({}); } }, 6000);
     if (visible) { OUTTAB[s.id] = logs.length && !host ? "console" : "preview"; showOut(); }

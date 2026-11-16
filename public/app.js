@@ -127,7 +127,7 @@ const codeView = (a) => {
 const ORIGIN = { practice: "Practice", daily: "Daily", assignment: "Assignment", duel: "Duel", session: "Class session", plan: "Daily plan", path: "Path", exam: "Exam", bounty: "Bounty", boss: "Boss battle" };
 const STATUS = { review: "Waiting for review", solved: "Solved", claimed: "Self-reported", failed: "Failed", expired: "Not finished", pending: "In progress", done: "Done", late: "Done late", missed: "Missed", open: "Open", active: "Live", finished: "Finished", cancelled: "Cancelled", flagged: "Reported", archived: "Archived" };
 const TREND = { up: "↑ improving", down: "↓ slipping", flat: "→ steady", inactive: "⏸ inactive", new: "✦ new" };
-const REASON = { activity: "Presentation", plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
+const REASON = { activity: "Presentation", plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team", game: "Class game", battle: "Squad battle" };
 const diffTag = (d) => `<span class="tag ${esc(d)}">${esc(DIFF[d] || d)}</span>`;
 const status = (s, label) => `<span class="status ${esc(s)}">${esc(label || STATUS[s] || s)}</span>`;
 const trend = (t) => `<span class="trend ${esc(t)}">${esc(TREND[t] || t)}</span>`;
@@ -394,8 +394,37 @@ const routes = {
   assignments: viewAssignments, plan: viewAssignments, contests: viewContests, contest: viewContest, teams: viewTeams, settings: viewSettings,
   daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
+// pages whose script is loaded the first time they are opened (index.html: #lazy-pages), in the order written there
+const lazyDone = new Set();
+function lazyScripts(name) {
+  const t = document.getElementById("lazy-pages");
+  return t ? [...t.content.querySelectorAll("script, link")].filter((s) => (s.dataset.for || "").split(" ").includes(name) && !lazyDone.has(s.getAttribute("src") || s.getAttribute("href"))).map((s) => s.getAttribute("src") || s.getAttribute("href")) : [];
+}
+async function lazyRoute(name) {
+  for (const src of lazyScripts(name)) await lazyLoad(src);
+}
+/** Call a function of a script loaded on demand (#lazy-pages, data-fn): the script is loaded the first time. */
+async function lazyCall(fn, ...args) {
+  if (typeof window[fn] !== "function") {
+    const t = document.getElementById("lazy-pages");
+    const els = t ? [...t.content.querySelectorAll("script, link")].filter((x) => (x.dataset.fn || "").split(" ").includes(fn)) : [];
+    if (!els.length) throw new Error(`${fn} is missing`);
+    for (const x of els) await lazyLoad(x.getAttribute("src") || x.getAttribute("href"));
+  }
+  return window[fn](...args);
+}
+async function lazyLoad(src) {
+  if (lazyDone.has(src)) return;
+  // a page's styles (.css) before its script, so it never shows unstyled
+  await new Promise((ok, ko) => { const css = /\.css(\?|$)/.test(src); const el = document.createElement(css ? "link" : "script"); if (css) { el.rel = "stylesheet"; el.href = src; } else el.src = src; el.onload = ok; el.onerror = () => ko(new Error("This page's script couldn't be loaded: check the connection and reload.")); document.head.append(el); });
+  lazyDone.add(src);
+}
 async function route() {
   const [name, ...more] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  if (!routes[name] && lazyScripts(name).length) {
+    view.innerHTML = `<p class="muted">Loading…</p>`;
+    try { await lazyRoute(name); } catch (e) { view.innerHTML = `<div class="notice"><b>Couldn't load this page.</b> ${esc(e.message)}</div>`; return; }
+  }
   // most pages take one segment; a page with tabs (#/sprints/3/review) gets the rest too
   const arg = name === "sprints" ? more.join("/") : more[0];
   const fn = routes[name] || viewOverview;

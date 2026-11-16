@@ -3134,7 +3134,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/Ce que tu dois apprendre en priorité :\n[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/encore travailler en priorité, c’est[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -3143,7 +3143,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  const notP = fb.split("\n\n").find((x: string) => /apprendre en priorité/.test(x)) || "";
+  const notP = fb.split("\n\n").find((x: string) => /encore travailler en priorité/.test(x)) || "";
   check(notP.toLowerCase().includes(o2.data.review.oral[2].notion.toLowerCase()) && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => notP.toLowerCase().includes(x.notion.toLowerCase())) && !/Cordialement|Notions à revoir/.test(fb) && !/\b(vous|votre|vos)\b/i.test(fb), "the comment: the oral question not answered is a notion to review, in « tu »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
@@ -4114,7 +4114,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il vous reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(sqm),
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
-  const not = paras.find((x) => /apprendre en priorité/.test(x)) || "";
+  const not = paras.find((x) => /encore travailler en priorité/.test(x)) || "";
   check(not.toLowerCase().includes("la différence entre margin et padding") && not.toLowerCase().includes("le rôle de la balise <main>") && !/flexbox|attribut alt|à l’oral|échange|évaluation/i.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
   check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
@@ -4139,7 +4139,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
   check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && !pr.includes("BONUS") && pr.includes("INDIVIDUEL, TECHNIQUE") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois apprendre en priorité :\n1. La différence entre margin et padding : la base de tout espacement autour et à l’intérieur d’un bloc.\n2. Le rôle de la balise <main> : choisir la balise qui correspond au rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois encore travailler en priorité, c’est la différence entre margin et padding (la base de tout espacement autour et à l’intérieur d’un bloc) et le rôle de la balise <main> (choisir la balise qui correspond au rôle de chaque zone).\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
@@ -4171,32 +4171,34 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     check(!d2.toLearn.some((x: any) => /Flexbox/.test(x.notion)), "a Fiche item kept before the brief check (no « seen »): never in the comment");
     // a good learner: the AI never adds points to learn, nor the « practise every day » advice
     const good = { ...d2, level: "bon", toLearn: d2.toLearn.slice(0, 1), notions: d2.notions.slice(0, 1) };
-    const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n2. Les listes et les tableaux HTML : choisir entre une liste et un tableau.\n3. Flexbox : aligner et répartir des éléments sur une ligne.\n\nContinue comme ça.";
+    const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", les fonctions asynchrones avec fetch et async/await, ainsi que les requêtes SQL avec jointure.\n\nContinue comme ça.";
     check(C.aiCommentText(good, { commentaire: padded }) === null, "a good learner's AI comment that adds points to learn: refused (the comment is written from the switches)");
-    check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois apprendre en priorité :\n1. " + good.toLearn[0].notion + " : revois ce point avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
-    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
-    check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
-      && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
-      && lines.filter((l: string) => /margin/.test(l)).length === 1 && !/bouton supprimer|^\d\. (HTML|CSS|JavaScript|Git) :/m.test(list),
-      `what to learn, directly: the remarks, the Fiche, the oral, the assessment; one notion once; never a category nor a feature (${lines.join(" | ")})`);
-    check(lines.every((l: string) => C.wordCount(l) <= 35) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list),
-      "…short lines, never where it was seen, the level or the Fiche");
+    check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", à revoir avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
+    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois encore travailler en priorité, c’est ")) || "";
+    const L2 = d2.toLearn.map((x: any) => x.notion);
+    check(!/\n\d\. /.test(t2) && list.split("\n").length === 1 && /^La différence entre margin et padding/.test(L2[0]) && /^Écrire la structure de base d’une page avec doctype, head et body/.test(L2[1]) && /^Sélectionner un élément du DOM avec querySelector/.test(L2[2])
+      && /la différence entre margin et padding \(la différence entre margin, padding et border/.test(list) && /sélectionner un élément du DOM avec querySelector \(sélectionner un élément, modifier son contenu/.test(list)
+      && /l'attribut alt/i.test(list) && /création branche/i.test(list) && /les événements JavaScript/i.test(list)
+      && (list.match(/margin et padding/g) || []).length === 1 && !/bouton supprimer|(HTML|CSS|JavaScript|Git) :/.test(list),
+      `what to learn, in one paragraph without numbers: the remarks, the Fiche, the oral, the assessment; one notion once; never a category nor a feature (${list})`);
+    check(!/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list), "…never where it was seen, the level or the Fiche");
     check(C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…in the scope: the AI may talk about them");
     const sq2 = C.buildComment("", { ...r2, squad: { name: "Les Pixels" } }, r2.final);
-    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez apprendre en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
-    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires : margin, padding, alt, main et le DOM. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
-    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment without the numbered list of what is still to learn is refused");
-    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre en priorité :\n${lines.join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
-    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. La différence, vue à l’oral,") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null
-      && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. CSS : la différence") }) === null,
-      "an AI comment that says where a point was seen, the learner's level, or a category head (« CSS : ») is refused");
+    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez encore travailler en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
+    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
+    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment that doesn't say what is still to learn is refused");
+    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\n${list}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    const numberedAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre :\n${L2.map((x: string, i: number) => `${i + 1}. ${x}, à bien revoir.`).join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: numberedAi }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("c’est la différence", "c’est, vu à l’oral, la différence") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null,
+      "an AI comment with a numbered list, that says where a point was seen, or the learner's level is refused");
     // a remark that only names a subject: its essentials, without what they showed they master
     check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
     const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
     const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
-    const pl = t3.split("\n").find((l: string) => /^1\. La planification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. L’utilisation de Tailwind/.test(l)) || "";
+    const p3 = t3.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois encore travailler")) || "";
+    const pl = (p3.match(/la planification[^)]*\)/) || [""])[0], tw = (p3.match(/l’utilisation de Tailwind.*$/i) || [""])[0];
     check(/user stories/.test(pl) && /tâches/.test(pl) && C.wordCount(pl) <= 40, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
-    check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/\(|a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
+    check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
     const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
     check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
   }
@@ -4207,15 +4209,31 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
       assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
     const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
-    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Les relations Eloquent : définir hasMany et belongsTo/.test(tl) && /\n2\. Écrire une migration : créer une table avec Schema::create\(\)/.test(tl)
-      && /\n\d\. Les fonctions : écrire une fonction/.test(tl) && !/JavaScript|bonus|il manque|articles|Mode sombre|\(hasMany/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /c’est les relations Eloquent \(définir hasMany et belongsTo/.test(tl) && /, écrire une migration \(créer une table avec Schema::create\(\)/.test(tl)
+      && /les fonctions \(écrire une fonction/.test(tl) && !/\n\d\. /.test(tl) && !/JavaScript|bonus|il manque|articles|Mode sombre|\(hasMany/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
       `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
     // never said mastered when it is also to learn (the same notion, from another source)
     const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
       assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
     const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
-    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n1\. La manipulation du DOM et les sélecteurs JavaScript : sélectionner un élément/.test(th) && /\n2\. Flexbox : aligner/.test(th),
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /c’est la manipulation du DOM et les sélecteurs JavaScript \(sélectionner un élément/.test(th) && /flexbox \(aligner/i.test(th),
       `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
+  }
+  {
+    // a JavaScript sprint: never HTML nor CSS in the comment (the assessment touched them, the sprint isn't about them);
+    // the teacher's own remark always stays
+    const SP2 = "Développement d’interfaces dynamiques avec JavaScript moderne\n• Développer une interface Web interactive en manipulant le DOM avec JavaScript moderne. • Gérer les événements, formulaires et validations côté client. • Structurer et modulariser le code JavaScript en appliquant les fonctionnalités ES6+.";
+    check(JSON.stringify([...(C.sprintFamilies(SP2) || [])]) === '["javascript"]' && C.sprintFamilies("") === null && C.familyOf("Les listes et les tableaux HTML") === "html" && C.familyOf("Le modèle de boîte et le centrage (margin, padding)") === "css" && C.familyOf("la manipulation du DOM") === "javascript" && C.familyOf("Git (commit, branches)") === null,
+      "the sprint's subjects, and each notion's");
+    const rj: any = { first: "Yassine", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, sprintText: SP2,
+      remarks: { text: "Ne sait pas centrer une div avec flexbox." },
+      assess: [{ members: { u1: { score: 74, ok: ["CSS Grid", "querySelector"], ko: ["la manipulation du DOM", "les listes et les tableaux HTML", "le modèle de boîte et le centrage (margin, padding)", "les sélecteurs CSS (balise, classe, id)", "Git (commit, branches)"], summary: "" } } }], level: { lvl: "moyen" } };
+    const dj = C.commentData({ first: "Yassine", project: rj.brief, rec: rj, uid: "u1" }), tj = C.commentText(dj);
+    check(/manipulation du DOM/.test(tj) && /Git/.test(tj) && /flexbox/i.test(tj) && !/tableaux HTML|modèle de boîte|sélecteurs CSS|CSS Grid/.test(tj) && !/\n\d\. /.test(tj),
+      `a JavaScript sprint: no HTML nor CSS point (but the teacher's own remark), in one paragraph (${tj.split("\n\n").slice(1, 3).join(" / ")})`);
+    check(C.aiCommentPrompt(dj).includes("SUJETS HORS DU SPRINT") && /HORS DU SPRINT[^\n]*CSS/.test(C.aiCommentPrompt(dj)) && /HORS DU SPRINT[^\n]*HTML/.test(C.aiCommentPrompt(dj)) && dj.off!.includes("css"), "…the AI is told which subjects are outside the sprint");
+    const aiJ = (C.commentText(dj).split("\n\n").slice(1).join("\n\n"));
+    check(C.aiCommentText(dj, { commentaire: aiJ }) !== null && C.aiCommentText(dj, { commentaire: aiJ.replace("Ce que tu dois", "Tu maîtrises bien les balises sémantiques. Ce que tu dois") }) === null, "…and its comment refused when it talks about HTML or CSS");
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
@@ -4242,7 +4260,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     { code: "S1.M6", text: "Le modèle de boîte et le centrage d’un bloc", level: "moyen", teacher: false, ev: [] },
     { code: "x", text: "Ignoré", level: "critique", ev: [{ ref: `b${bid}:o0`, got: 0 }] }] } });
   const fb0 = fgp.data.review.result.feedback;
-  check(/\n\d\. Écrire la structure de base d’une page/.test(fb0) && /\n\d\. (Le modèle de boîte|La différence entre margin)/.test(fb0) && !/niveau|fiche/i.test(fb0) && fgp.data.review.level.gaps.length === 2,
+  check(/écrire la structure de base d’une page/i.test(fb0) && /(le modèle de boîte|la différence entre margin)/i.test(fb0) && !/\n\d\. /.test(fb0) && !/niveau|fiche/i.test(fb0) && fgp.data.review.level.gaps.length === 2,
     `the Fiche's items go into the comment only when missed in THIS brief (or decided « not known » by the teacher) (${JSON.stringify(fgp.data.review.level.gaps.map((x: any) => x.code))})`);
   check(!/listes et les tableaux|positionnement|Flexbox/i.test(fb0), "…never an item never asked, missed in another brief, or mostly right here: no programme of the sprint for everyone");
   await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
@@ -4935,7 +4953,7 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   const qs = [1, 2, 3].map((i) => ({ type: "explain", prompt: `Question numéro ${i}`, expected: "x", points: 1 }));
   const mk = await api("POST", "/api/assessments", { g: G, title: "Options", questions: qs, settings: { minutes: 0 } });
   const aid = mk.data.assessment.id;
-  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "forward", "by default: copy-paste blocked, full screen, shuffled, no going back");
+  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, they can move between the questions");
   const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
@@ -4953,7 +4971,20 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   await quiz("event", { sid, what: "fullscreen" });
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).status === "active", "no full screen lock: leaving the page doesn't stop the session");
   const late = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "free", shuffle: true });
-  check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
+  check(late.data.assessment.settings.nav === "free" && late.data.assessment.settings.shuffle === false, "once a student started: the order doesn't change, going back can still be opened");
+  const opened = await quiz("answer", { sid, qid: st.paper[1].id, answer: "deux", pos: 2 });
+  check(opened.status === 200 && opened.d.nav === "free", "…the student's page is told with their next answer");
+  const again = await quiz("answer", { sid, qid: st.paper[0].id, answer: "changé", pos: 0 });
+  check(again.status === 200 && JSON.parse(q1("SELECT answers FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).answers)[st.paper[0].id] === "changé", "…and they can go back and change a passed answer");
+  const shut = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "forward" });
+  check(shut.data.assessment.settings.nav === "free", "going back can't be closed again once they've started");
+  // the student reloads the page: their session stops (as always), the teacher lets them back in, the page gets « free »
+  const sid2 = "sessionOPTOPTOPTOPTOPT02";
+  const re = (await quiz("start", { sid: sid2 })).d;
+  const tkId = q1("SELECT id FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).id;
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkId });
+  const back2 = (await quiz("start", { sid: sid2 })).d;
+  check(re.status === "locked" && back2.status === "active" && back2.rules.nav === "free" && back2.paper.length === 3, "after a reload: stopped until let back in, then the page moves freely between the questions");
 }
 
 section("assessments, no going back: a question passed without an answer comes back after a stop; « finish the missing » after sending");
@@ -7775,6 +7806,24 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
     const r12 = M.checkMise(d12, { ...opts, count: { situations: 12, qcm: 5 } });
     check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
     check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
+  // the teacher's own file: many situations, another week, a technology not seen yet: advice (the checklist), the format still checked
+  { const d31 = good(); d31.week = 9; d31.situations = Array.from({ length: 31 }, (_, i) => ({ ...good().situations[i % 5], context: good().situations[i % 5].context + " Ajoute les classes Bootstrap btn et btn-primary." }));
+    const fr = M.checkMise(d31, { ...opts, week: 3, free: true });
+    check(!fr.problems.length && fr.content!.situations.length === 31 && fr.content!.week === 3, "a teacher's file of 31 situations from week 9 with Bootstrap: accepted, saved in week 3 " + JSON.stringify(fr.problems.slice(0, 2)));
+    const adv = M.adviceChecks(fr.advice).map((c) => c.text).join("\n");
+    check(/"week" is 9, but you chose week 3/.test(adv) && /situation 1, situation 2, situation 3 and 28 more · out of scope: Bootstrap/.test(adv), "…what isn't the week's scope is told in the checklist, one line each " + adv);
+    check(has(M.checkMise(d31, { ...opts, week: 3 }).problems, "file", /1 to 15/), "…the AI's file is still held to 15 and to the week");
+    check(has(probs((d) => { d.situations[0].runtime = "nope"; }, { ...opts, free: true }), "situation 1", /"runtime": one of/), "…a broken format is still refused");
+    check(has(probs((d) => { d.situations = Array.from({ length: M.MAX_IMPORT_SITUATIONS + 1 }, () => good().situations[0]); }, { ...opts, free: true }), "file", new RegExp(`1 to ${M.MAX_IMPORT_SITUATIONS}`)), `…more than ${M.MAX_IMPORT_SITUATIONS}: refused`); }
+  // …or QCM only, many of them (no situations, or the list left out): 1 point each with the automatic barème
+  { const q203 = good(); q203.situations = []; q203.qcm = Array.from({ length: 203 }, (_, i) => ({ ...good().qcm[i % 5], question: `Question ${i + 1} : que renvoie document.querySelector(".prix") ?` }));
+    const rq = M.checkMise(q203, { ...opts, free: true, scoring: { qcmShare: 20 } });
+    check(!rq.problems.length && rq.content!.situations.length === 0 && rq.content!.qcm.length === 203 && rq.preview!.points === 203, "a teacher's file of 203 QCM and no situation: accepted, 1 point each " + JSON.stringify(rq.problems.slice(0, 2)));
+    const { situations: _s, ...noS } = q203;
+    check(!M.checkMise(noS, { ...opts, free: true }).problems.length, "…the situations list may be left out");
+    check(has(M.checkMise(q203, opts).problems, "file", /1 to 15 mises en situation \(found 0\)/), "…the AI's file still needs situations");
+    check(has(M.checkMise({ ...q203, qcm: [] }, { ...opts, free: true }).problems, "file", /"situations": 1 to/), "…nothing at all: refused");
+    check(!M.miseChecks(rq.content!).some((c) => /^Difficulty|automatic checks/.test(c.text)), "…its checklist says nothing of situations"); }
   const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
   // the automatic barème: situations by difficulty, the QCM a fixed share of the score, whatever their number
   { const r = M.checkMise(good(), { ...opts, scoring: { qcmShare: 20 } }); const c = r.content!;
@@ -7881,8 +7930,10 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     errorHints: ["selection", "syntax"] });
   const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
-  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
-  check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify({ ...file, qcm: file.qcm.map((q, i) => (i ? q : { ...q, choices: ["Il change le texte", "Il change le style"] })) }) });
+  check(bad.status === 200 && bad.data.problems.some((p: any) => p.where === "QCM 1" && /"choices": 3 or 4/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  { const fewer = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
+    check(!fewer.data.problems.length && fewer.data.preview && fewer.data.checks.some((c: any) => !c.ok && /4 QCM/.test(c.text)), "…but the teacher's own file isn't held to a count: 4 QCM instead of 5 is said in the checklist only"); }
   { const auto = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
     const fileP = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], scoring: "file", json: JSON.stringify(file) });
     check(auto.status === 200 && Math.abs(auto.data.preview.points - fileP.data.preview.points) > 0.01 && fileP.data.preview.points === file.situations.length * 3 + file.qcm.length, "import: the automatic barème by default, the file's points when asked"); }
@@ -8286,14 +8337,15 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
   }
-  // 📐 the Fiche niveaux: every item of its scope worked on by 5 of the 10 situations / QCM at least
+  // 📐 the Fiche niveaux: what the AI must cover (5 of the 10 per item); a teacher's own file is only shown its coverage
   {
     const sc = ["S2.M2", "S2.M4"];
     const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
-    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's items on its situations: refused, one by one");
+    check(!untagged.data.problems.length && untagged.data.preview, "a teacher's file without the Fiche's items on its situations: accepted (the coverage is advice)");
     const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.M2"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.M4"] : ["S2.M2"] })) });
     const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
-    check(four.data.problems.some((p: any) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…an item in 4 only: refused, with how many");
+    check(!four.data.problems.length && four.data.preview, "…an item in 4 only: accepted too");
+    check(M.checkMise(JSON.stringify(tagged(4)), { concepts: { known: new Set(["S2.M2", "S2.M4"]), scope: sc } }).problems.some((p) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…but the AI's file is held to it: an item in 4 only refused, with how many");
     const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
     const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
     check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.M2,S2.M4" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.M4", "…in 5 each: saved, with its items (the mise's and each situation's / QCM's)");

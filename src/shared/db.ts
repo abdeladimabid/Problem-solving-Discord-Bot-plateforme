@@ -176,7 +176,7 @@ export const inClass = (discordCol: string, guildCol: string) =>
 /** "guild:teacher" for every class whose teacher doesn't count in the league (the default). */
 export async function leagueHidden(env: Env): Promise<string[]> {
   const gs = await all<{ id: string; teacher_id: string }>(env, "SELECT id, teacher_id FROM guilds WHERE teacher_id IS NOT NULL AND teacher_id != ''").catch(() => []);
-  const on = new Set((await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE 'teacher-rank:%'").catch(() => []))
+  const on = new Set((await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= 'teacher-rank:' AND k < 'teacher-rank;'").catch(() => []))
     .filter((r) => { try { return JSON.parse(r.v)?.league === true; } catch { return false; } }).map((r) => r.k.slice("teacher-rank:".length)));
   return gs.filter((g) => !on.has(g.id)).map((g) => `${g.id}:${g.teacher_id}`);
 }

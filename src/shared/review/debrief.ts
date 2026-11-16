@@ -148,6 +148,8 @@ export async function getReview(env: Env, briefId: number, who: string): Promise
   // a finalized debrief keeps the assessment as it was when it was finalized (the link can change since: it never moves);
   // a draft reads the assessments linked to the brief now
   rec.assess = r.status === "final" && Array.isArray(rec.assess) ? rec.assess : await briefAssessments(env, briefId, who, rec);
+  // the brief's sprint (its title, objectives, technologies): the comment only teaches its subjects
+  if (r.status !== "final" || rec.sprintText == null) rec.sprintText = await sprintTextOf(env, r.guild_id, briefId).catch(() => "");
   await currentNames(env, r.guild_id, who, rec);
   return { ...r, rec };
 }
@@ -559,6 +561,7 @@ export async function analyze(env: Env, g: GuildRow, b: BriefCtx, o: { player?: 
     rec.suivi = await suiviFor(env, b.id, who, b.steps, rec.rhythm);
   }
   rec.assess = squad ? await briefAssessments(env, b.id, who, rec) : assess;
+  rec.sprintText = await sprintTextOf(env, g, b.id);
   result.feedback = buildComment(first, rec, undefined);
   await putReview(env, g, b.id, who, rec, "draft");
   return { ok: true, msg: squad ? `Squad review ready for ${squad.name}.` : `Review ready for ${lead.name ?? login}.`, who };
@@ -1373,4 +1376,17 @@ export function briefGaps(list: unknown, briefId: number, assess: unknown): { co
     if (out.length >= 6) break;
   }
   return out;
+}
+
+/** The brief's sprint in the programme — its title, objectives and situation (what it is about) — or "" when unknown. */
+export async function sprintTextOf(env: Env, g: GuildRow | string, briefId: number): Promise<string> {
+  const guild = typeof g === "string" ? await one<GuildRow>(env, "SELECT * FROM guilds WHERE id = ?", g) : g;
+  if (!guild) return "";
+  const b = await one<{ sprint: number | null; week: number | null; due_at: number | null }>(env, "SELECT sprint, week, due_at FROM briefs WHERE id = ? AND guild_id = ?", briefId, guild.id);
+  if (!b) return "";
+  const p = await programOf(env, guild);
+  const day = b.due_at ? new Date(b.due_at * 1000).toISOString().slice(0, 10) : "";
+  const n = b.sprint ?? p.weeks.find((w) => w.n === b.week)?.sprint ?? (day ? p.weeks.find((w) => w.start && w.end && day >= w.start && day <= w.end)?.sprint : undefined);
+  const sp = p.sprints.find((x) => x.n === n);
+  return sp ? [sp.title, sp.objectives, sp.situation].filter(Boolean).join("\n").slice(0, 4000) : "";
 }

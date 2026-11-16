@@ -308,7 +308,7 @@ function monacoEditor(el, o) {
   var ed = M.editor.create(el, {
     model: null, automaticLayout: true, minimap: { enabled: false }, fontFamily: '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace', fontSize: 14, lineHeight: 21,
     tabSize: 2, insertSpaces: true, detectIndentation: false, autoClosingBrackets: "always", autoClosingQuotes: "always", autoIndent: "full", formatOnType: true,
-    scrollBeyondLastLine: false, quickSuggestions: { other: true, comments: false, strings: true }, suggestOnTriggerCharacters: true, tabCompletion: "on", snippetSuggestions: "inline",
+    scrollBeyondLastLine: false, scrollbar: { alwaysConsumeMouseWheel: false }, quickSuggestions: { other: true, comments: false, strings: true }, suggestOnTriggerCharacters: true, tabCompletion: "on", snippetSuggestions: "inline",
     acceptSuggestionOnEnter: "on", fixedOverflowWidgets: true, bracketPairColorization: { enabled: true }, guides: { bracketPairs: true, indentation: true }, renderLineHighlight: "line",
     contextmenu: !o.noPaste, dragAndDrop: !o.noPaste, dropIntoEditor: { enabled: !o.noPaste }, copyWithSyntaxHighlighting: false, ariaLabel: "Éditeur de code", wordBasedSuggestions: "currentDocument"
   });

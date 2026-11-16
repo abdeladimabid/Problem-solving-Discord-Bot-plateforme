@@ -29,7 +29,7 @@ async function giveWorkDialog(preStudents = [], rows = []) {
         ${pickList}<button class="btn primary" id="gw-pl">${draft ? "Continue the draft" : "Build the plan"} →</button></div>
     </div>`);
   dlg.classList.add("wide");
-  $("#gw-ch", dlg).onclick = (e) => busy(e.currentTarget, () => mesGiveDialog(preStudents, students));
+  $("#gw-ch", dlg).onclick = (e) => busy(e.currentTarget, () => lazyCall("mesGiveDialog", preStudents, students));
   $("#gw-pl", dlg).onclick = (e) => busy(e.currentTarget, async () => {
     const sid = one ? one.discord_id : $("#gw-s", dlg).value;
     let id = draft?.id;
@@ -63,9 +63,9 @@ async function classPlanDialog() {
     </div>`);
   dlg.classList.add("wide");
   // a mise en situation: one already made (for everyone), or the wizard on the sprint
-  $("#cp-mes", dlg).onclick = (e) => busy(e.currentTarget, () => mesGiveDialog(all.map((s) => s.discord_id), all, { everyone: true }));
+  $("#cp-mes", dlg).onclick = (e) => busy(e.currentTarget, () => lazyCall("mesGiveDialog", all.map((s) => s.discord_id), all, { everyone: true }));
   $("#cp-mnew", dlg).onclick = () => { const n = Number($("#cp-msp", dlg).value) || null; dlg.close();
-    MSIT.openNew = n ? { sprint: n, wishes: `Pour toute la classe, sur ce qu'elle n'a pas atteint au sprint ${n}` } : true; location.hash = "#/mises-en-situation"; };
+    window.mesOpenNew = n ? { sprint: n, wishes: `Pour toute la classe, sur ce qu'elle n'a pas atteint au sprint ${n}` } : true; location.hash = "#/mises-en-situation"; };
   if ($("#cp-open", dlg)) $("#cp-open", dlg).onclick = (e) => busy(e.currentTarget, async () => {
     const id = $("#cp-from", dlg).value; dlg.close();
     location.hash = `#/wplan/${id}`;
@@ -384,7 +384,7 @@ function wireWorkPlan() {
   // 👥 the class: a mise en situation on the same lacunes (the wizard, from the sprint, with them as wishes)
   if ($("#wp-mise")) $("#wp-mise").onclick = () => {
     const lac = (p.diag?.lacunes || []).map((l) => l.notion);
-    MSIT.openNew = { sprint: p.sprint, wishes: lac.length ? `Sur les lacunes de la classe : ${lac.join(" ; ")}` : `Sur les objectifs non atteints du sprint ${p.sprint}` };
+    window.mesOpenNew = { sprint: p.sprint, wishes: lac.length ? `Sur les lacunes de la classe : ${lac.join(" ; ")}` : `Sur les objectifs non atteints du sprint ${p.sprint}` };
     location.hash = "#/mises-en-situation";
   };
   $("#wp-del").onclick = () => confirmDialog(draft ? "Delete this draft?" : `Delete ${p.name}'s plan?`, draft ? "Its diagnosis and actions are lost." : "Their page stops working and its open challenges are cancelled. What they did stays in their history.", "Delete",

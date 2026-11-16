@@ -824,7 +824,7 @@ function wireDebriefTools(root) {
       await api(`/mises/${v}`, { method: "PUT", body: { settings: { brief: { id: Number(id), title: B.brief.data.title } } } });
       toast("Linked: the draft debriefs use its results"); await reload();
     });
-    $("#dbt-mnew", root).onclick = () => { MSIT.openNew = { brief: Number(id) }; location.hash = "#/mises-en-situation"; };
+    $("#dbt-mnew", root).onclick = () => { window.mesOpenNew = { brief: Number(id) }; location.hash = "#/mises-en-situation"; };
   }
   $$("[data-msunlink]", root).forEach((b) => b.onclick = () => busy(b, async () => {
     await api(`/mises/${b.dataset.msunlink}`, { method: "PUT", body: { settings: { brief: null } } });
@@ -2540,7 +2540,7 @@ function renderAssessment() {
     tabs[k]($("#aa-tab"));
   };
   $$("[data-at]").forEach((x) => x.onclick = () => show(x.dataset.at));
-  if ($("#aa-slides") && typeof assessSlides === "function") $("#aa-slides").onclick = () => assessSlides(AS.A, 0);
+  if ($("#aa-slides")) $("#aa-slides").onclick = () => lazyCall("assessSlides", AS.A, 0).catch((e) => toast(e.message, true));
   show(AS.tab);
   $("#aa-inv").onclick = () => inviteDialog();
   if ($("#aa-retake")) $("#aa-retake").onclick = () => retakeDialog();
@@ -2782,11 +2782,11 @@ function assessOptionsDialog(next = null) {
       ${opt("op-fs", o.lockScreen, "Full screen lock", "The test runs in full screen. Leaving it, the tab or the window stops the session until you let them back in.")}
       ${opt("op-paste", o.noPaste, "Block copy-paste", "No pasting in the answers (and no right click).")}
       ${opt("op-shuf", o.shuffle, "Shuffle the questions", "Each student gets the questions and the choices in their own order.", started)}
-      ${opt("op-back", o.nav === "forward", "Disable going back", "One question at a time: once a question is passed they can't come back to it. Untick to let them go back and change their answers.", started)}
+      ${opt("op-back", o.nav === "forward", "Disable going back", "One question at a time: once a question is passed they can't come back to it. Untick to let them go back and change their answers (even once they've started: from their next question).", started && o.nav !== "forward")}
       ${opt("op-od", o.oneDevice, "One device per paper", "The browser that signed in with Discord is the paper's device. Signing in on another computer or phone while working stops their session until you let them back in.")}
       ${opt("op-net", o.netAlerts, "Network alerts", "The Live tab flags a paper opened outside the class's network (where most of the class is), or from several networks. Nothing is blocked.")}
       <p class="muted small" style="margin:6px 0 0">🔐 <b>Sign in with Discord</b> is always required: the link only opens for the Discord account it was sent to.</p>
-      ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order and going back can't change anymore.</p>` : ""}</div>`,
+      ${started ? `<p class="muted small" style="margin:6px 0 0">Students have started: the order can't change anymore. Going back can still be opened (not closed).</p>` : ""}</div>`,
     [{ label: next ? "Next: choose the students →" : "Save", primary: true, action: async (d) => {
       AS.A = await api(`/assessments/${a.id}/options`, { method: "POST", body: { lockScreen: $("#op-fs", d).checked, noPaste: $("#op-paste", d).checked, shuffle: $("#op-shuf", d).checked, nav: $("#op-back", d).checked ? "forward" : "free", oneDevice: $("#op-od", d).checked, netAlerts: $("#op-net", d).checked } });
       AS.optsAsked = a.id;
