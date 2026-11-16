@@ -271,7 +271,9 @@ function progressPanelHtml(st) {
     <div class="wp-ring"><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${r}" class="bg"/><circle cx="55" cy="55" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct / 100)}"/></svg>
       <div><b>${pct}%</b><span>${st?.done ?? 0}/${st?.total ?? p.steps.length} action${(st?.total ?? p.steps.length) > 1 ? "s" : ""} done${st?.objTotal ? `<br>${st.objDone}/${st.objTotal} objectives ticked` : ""}</span></div></div>
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
-    <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
+    <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}${p.status === "sent" && p.due_at < Date.now() / 1000 ? ` <span class="wp-state warn">passed</span>` : ""}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
+    ${(p.extensions || []).length ? `<details class="wp-fold small"><summary>⏳ Extended ${p.extensions.length} time${p.extensions.length > 1 ? "s" : ""}</summary><ul class="wp-ext">${p.extensions.slice().reverse().map((x) => `<li>${x.from ? `${esc(fmtDateTime(x.from))} → ` : ""}<b>${esc(fmtDateTime(x.to))}</b> <span class="muted">· ${esc(fmtAgo(x.at))}${x.reopened ? ` · ${x.reopened} challenge(s) reopened` : ""}</span>${x.reason ? `<br><span class="muted">${esc(x.reason)}</span>` : ""}</li>`).join("")}</ul></details>` : ""}
+    ${p.status === "sent" ? `<button class="btn small" id="wp-extend" title="More time for this plan: a new due date, its challenges pushed back">⏳ Extend the time</button>` : ""}
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
     ${p.message ? `<blockquote class="ap-note"><p>${esc(p.message)}</p></blockquote>` : ""}
     <label class="wp-f wide" style="margin-top:12px"><span>Feedback <span class="muted">(your word on the plan · goes to the « Feedback » column of Suivi Formateur)</span></span>
@@ -377,6 +379,7 @@ function wireWorkPlan() {
     async () => { await api(`/wplans/${p.id}`, { method: "DELETE", confirmed: true }); toast("Plan deleted"); location.hash = "#/assignments"; }, true);
   $$("[data-toggle]").forEach((b) => b.onclick = () => { const id = b.dataset.toggle; WPS.open.has(id) ? WPS.open.delete(id) : WPS.open.add(id); drawWorkPlan(); });
   if ($("#wp-copy")) $("#wp-copy").onclick = () => { navigator.clipboard?.writeText(WPS.url); toast("Link copied"); };
+  if ($("#wp-extend")) $("#wp-extend").onclick = () => wpExtendDialog();
   // the teacher's feedback on the plan: saved as they type (then in the sheet, 2 minutes later)
   if ($("#wp-fb")) {
     let t = null;
@@ -497,6 +500,28 @@ function wireWorkPlan() {
     toast(r.dm ? `Sent: ${p.name} got their page by DM` : `Sent, but the DM couldn't go (closed DMs?): copy their link`, !r.dm);
     drawWorkPlan();
   });
+}
+
+// ------------------------------------------------------------------ ⏳ more time for a sent plan
+const wpLocal = (t) => new Date(t * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+function wpExtendDialog() {
+  const p = WPS.plan, t0 = Math.floor(Date.now() / 1000), base = Math.max(p.due_at || 0, t0);
+  const pick = (d) => wpLocal(base + d * 86400);
+  openDialog("⏳ Extend the plan's time", `<p class="muted small">${p.due_at ? `Due now: <b>${esc(fmtDateTime(p.due_at))}</b>${p.due_at < t0 ? " (passed)" : ""}.` : "No due date yet."} The plan's challenges get the new date: the open ones are pushed back, the ones missed in time are open again.</p>
+    <div class="wp-sumk" style="margin:8px 0">${[3, 7, 14].map((d) => `<button type="button" class="btn small" data-ext="${d}">+${d} days</button>`).join("")}</div>
+    <label class="wp-f wide"><span>New due date</span><input type="datetime-local" id="wp-ext-to" value="${pick(7)}" min="${wpLocal(base + 60)}"></label>
+    <label class="wp-f wide"><span>Why <span class="muted">(optional · in their DM)</span></span><textarea id="wp-ext-why" rows="2" maxlength="500" placeholder="e.g. Tu as été absent cette semaine : prends le temps de finir le mini-projet."></textarea></label>
+    <label class="small"><input type="checkbox" id="wp-ext-dm" checked> Tell ${wpFirst()} by DM</label>`,
+    [{ label: "Cancel", action: async () => dlg.close() },
+     { label: "⏳ Extend", primary: true, action: async () => {
+        const v = $("#wp-ext-to").value, to = v ? Math.floor(new Date(v).getTime() / 1000) : 0;
+        const r = await api(`/wplans/${p.id}/extend`, { method: "POST", body: { due_at: to, reason: $("#wp-ext-why").value, notify: $("#wp-ext-dm").checked } });
+        dlg.close();
+        Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
+        toast(`Extended to ${fmtDateTime(r.plan.due_at)}${r.reopened ? ` · ${r.reopened} challenge(s) reopened` : ""}${r.dm === false ? " · the DM couldn't go" : ""}`, r.dm === false);
+        drawWorkPlan();
+      } }]);
+  $$("[data-ext]", dlg).forEach((b) => (b.onclick = () => { $("#wp-ext-to").value = pick(Number(b.dataset.ext)); }));
 }
 
 // ------------------------------------------------------------------ the same plan for other students, actions from JSON
