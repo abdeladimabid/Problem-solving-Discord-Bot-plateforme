@@ -6782,6 +6782,19 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   check(q1("SELECT COUNT(*) AS n FROM assignments WHERE discord_id = ?", B).n === a0 + 1, "its challenge becomes an assignment (solved in Discord as usual)");
   const locked = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps: [] });
   check(locked.status === 400, "a sent plan's actions don't change anymore");
+  // ⏳ more time: the plan's challenge missed in time opens again with the new date, the student is told
+  const asgId = S2.data.plan.steps.find((s: any) => s.asg_id)?.asg_id;
+  run1("UPDATE assignments SET status = 'missed', due_at = ? WHERE id = ?", Math.floor(Date.now() / 1000) - 3600, asgId);
+  const badExt = await api("POST", `/api/wplans/${id}/extend?g=${G}`, { due_at: Math.floor(Date.now() / 1000) - 60 });
+  check(badExt.status === 400, "a plan isn't extended to a date already passed");
+  const cx = discordCalls.length;
+  const EX = await api("POST", `/api/wplans/${id}/extend?g=${G}`, { days: 7, reason: "Absent cette semaine", notify: true });
+  const asgAfter = q1("SELECT status, due_at FROM assignments WHERE id = ?", asgId);
+  check(EX.status === 200 && EX.data.plan.due_at > Date.now() / 1000 + 6 * 86400 && EX.data.plan.extensions?.length === 1 && EX.data.reopened === 1, `extended by 7 days, the extension kept (${EX.status} ${EX.data.error ?? ""})`);
+  check(asgAfter.status === "open" && asgAfter.due_at === EX.data.plan.due_at, "its missed challenge is open again, with the new due date");
+  check(EX.data.dm === true && discordCalls.slice(cx).some((c) => JSON.stringify(c.body ?? {}).includes("prolongé")), "the student is told by DM");
+  const shorter = await api("POST", `/api/wplans/${id}/extend?g=${G}`, { due_at: EX.data.plan.due_at - 3600 });
+  check(shorter.status === 400, "an extension only gives more time");
   // their page
   const tok = S2.data.url.split("/wp/")[1];
   const wp = async (action = "", body?: any) => {

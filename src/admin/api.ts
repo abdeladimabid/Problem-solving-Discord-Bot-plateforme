@@ -38,7 +38,7 @@ import { pendingStudentChallenges, reviewStudentChallenge } from "../shared/crea
 import { focusSkills } from "../shared/plan.ts";
 import { PlanError, aiPlanNote, gapsOf, niveaux, planView, savePlan } from "../shared/actionplan.ts";
 import { ChatError, chatCheck, chatFeedback, chatSuggestions, classChat, runChatAction, undoChatAction } from "../shared/classchat.ts";
-import { WorkPlanError, copyPlan, createClassPlan, createPlan, deletePlan, diagnose, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
+import { WorkPlanError, copyPlan, createClassPlan, createPlan, deletePlan, diagnose, extendPlan, plansSummary, reviewStep, savePlanEdits, sendPlan, stepAi, teacherCheck, planView as workPlanView } from "../shared/workplan.ts";
 import { classReport, reportCsv } from "../shared/classreport.ts";
 import { studentSprints } from "../shared/sprints.ts";
 import { staffIds, withoutStaff } from "../shared/staff.ts";
@@ -541,7 +541,7 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
     if (path === "/wplans" && method === "GET") return ok(await plansSummary(env, await guild(), url.searchParams.get("student") || undefined));
     // 👥 a plan for the whole class: on a sprint's objectives not reached (then copied to each student)
     if (path === "/wplans" && method === "POST") return ok(body.sprint != null ? await createClassPlan(env, await guild(), Number(body.sprint)) : await createPlan(env, await guild(), String(body.student ?? "")));
-    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy))?$/);
+    m = path.match(/^\/wplans\/(\d{10,16})(?:\/(diagnose|ai|send|review|check|guide|copy|extend))?$/);
     if (m) {
       const g = await guild(), pid = Number(m[1]);
       if (!m[2] && method === "GET") return ok(await workPlanView(env, g, pid));
@@ -558,6 +558,12 @@ export async function handleApi(request: Request, env: Env, ctx: Ctx, user: { em
         // 📚 their guide (each lacune explained, with resources) is made in the background: ready when they open it
         ctx.waitUntil(makeGuide(forClass(env, g.id), g, pid).catch((e) => console.error("guide", e)));
         return ok({ ...(await workPlanView(env, g, pid)), dm: r.dm });
+      }
+      // ⏳ more time for a sent plan: a new due date, its challenges pushed back (the missed ones open again)
+      if (m[2] === "extend" && method === "POST") {
+        const r = await extendPlan(env, g, pid, body, { dm: (sid, text, link) => dm(env, sid, { content: text, components: [row(linkBtn("Ouvrir mon plan d'action", link, "🧭"))] }) });
+        await markSheetDirty(env, g.id);
+        return ok({ ...(await workPlanView(env, g, pid)), reopened: r.reopened, dm: r.dm });
       }
       if (m[2] === "guide" && method === "POST") { await makeGuide(forClass(env, g.id), g, pid); return ok(await workPlanView(env, g, pid)); }
       // the same plan for other students: a draft each, or sent at once (each gets their page by DM, and their guide)
