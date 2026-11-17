@@ -56,6 +56,8 @@ export interface WorkPlan {
   sumup?: { h: string; text: string; by: "ai" | "calc" } | null;
   /** a course in parts (each lesson and the actions after it): a part opens once every action of the one before is done */
   gated?: boolean;
+  /** the extensions of a sent plan's time (from: the due date before, to: the new one) */
+  extensions?: { at: number; from: number | null; to: number; reason: string; reopened: number }[];
 }
 
 const KEY = (gid: string, id: number) => `wplan:${gid}:${id}`;
@@ -444,6 +446,50 @@ export async function sendPlan(env: Env, g: GuildRow, id: number, o: { dm: (sid:
   const text = `🧭 **Ton plan d'action est prêt** : ${what}${p.due_at ? `, à faire avant <t:${p.due_at}:f>` : ""}.${p.message ? `\n\n${p.message}` : ""}`;
   const sent = await o.dm(p.sid, text, url).catch(() => false);
   return { plan: p, url, dm: sent };
+}
+
+/**
+ * More time for a sent plan: a new due date (or N more days from the current one, or from now if it has passed).
+ * Its challenges get the new date too: the open ones are pushed back, the missed ones (not done in time) are open again.
+ * The student is told by DM when asked (notify).
+ */
+export async function extendPlan(env: Env, g: GuildRow, id: number, b: any, o: { dm?: (sid: string, text: string, url: string) => Promise<boolean> } = {}) {
+  const p = await getPlan(env, g.id, id);
+  if (!p) throw new WorkPlanError("This plan doesn't exist anymore.");
+  if (p.status === "draft") throw new WorkPlanError("This plan isn't sent yet: change its due date directly.");
+  if (p.status === "done") throw new WorkPlanError("This plan is done: no more time is needed.");
+  const t0 = now();
+  let to: number;
+  if (b?.days != null) {
+    const d = Math.round(Number(b.days));
+    if (!(d >= 1 && d <= 90)) throw new WorkPlanError("Give between 1 and 90 days.");
+    to = Math.max(p.due_at || 0, t0) + d * 86400;
+  } else {
+    to = Math.floor(Number(b?.due_at));
+    if (!(to > 0)) throw new WorkPlanError("Choose the new due date.");
+  }
+  if (to <= t0) throw new WorkPlanError("The new due date must be in the future.");
+  if (p.due_at && to <= p.due_at) throw new WorkPlanError("The new due date must be after the current one.");
+  const reason = str(b?.reason, 500);
+  // the plan's challenges: open → new date (reminded again before it), missed → open again
+  const ids = p.steps.map((s) => s.asg_id).filter(Boolean) as number[];
+  let reopened = 0;
+  if (ids.length) {
+    const inIds = `id IN (${ids.map(() => "?").join(",")})`;
+    await run(env, `UPDATE assignments SET due_at = ?, reminded = 0 WHERE guild_id = ? AND status = 'open' AND ${inIds}`, to, g.id, ...ids);
+    const r = await run(env, `UPDATE assignments SET status = 'open', due_at = ?, reminded = 0, completed_at = NULL WHERE guild_id = ? AND status = 'missed' AND ${inIds}`, to, g.id, ...ids);
+    reopened = Number(r.meta?.changes || 0);
+  }
+  p.extensions = [...(p.extensions || []), { at: t0, from: p.due_at, to, reason, reopened }].slice(-20);
+  p.due_at = to;
+  await putPlan(env, p);
+  let dm: boolean | null = null;
+  if (b?.notify && o.dm && p.sid !== CLASS) {
+    const url = planUrl(env, await planToken(env, p));
+    const text = `⏳ **Ton plan d'action est prolongé** : tu as maintenant jusqu'au <t:${to}:f> (<t:${to}:R>).${reason ? `\n\n${reason}` : ""}${reopened ? `\n\n${reopened} défi${reopened > 1 ? "s" : ""} non fait${reopened > 1 ? "s" : ""} à temps ${reopened > 1 ? "sont" : "est"} de nouveau ouvert${reopened > 1 ? "s" : ""}.` : ""}`;
+    dm = await o.dm(p.sid, text, url).catch(() => false);
+  }
+  return { plan: p, reopened, dm };
 }
 
 /** Where the plan stands: each action done or not (challenges: their assignment), and the plan done when all are. */
