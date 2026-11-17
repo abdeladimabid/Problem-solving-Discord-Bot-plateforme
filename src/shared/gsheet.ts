@@ -210,11 +210,11 @@ export function planResult(st: { done: number; total: number; pct: number }, due
   return st.done > 0 || st.pct > 0 ? "partly" : "not";
 }
 
-const KIND_SUM: Record<string, [string, string]> = { challenge: ["défi", "défis"], code: ["exercice de code", "exercices de code"], answer: ["question", "questions"], mcq: ["QCM", "QCM"], brief: ["mini-projet", "mini-projets"] };
+const KIND_SUM: Record<string, [string, string]> = { challenge: ["défi", "défis"], code: ["exercice de code", "exercices de code"], answer: ["question", "questions"], mcq: ["QCM", "QCM"], brief: ["mini-projet", "mini-projets"], lesson: ["partie de cours", "parties de cours"] };
 const stepWhat = (s: Step) => (s.kind === "brief" ? `« ${s.title || s.notion} »${s.brief?.hours ? ` (≈ ${s.brief.hours} h)` : ""}` : s.notion && s.title && norm(s.title) !== norm(s.notion) ? `${s.notion} : ${s.title}` : s.title || s.notion || "");
 /** What the plan asks, summed up without the AI: the actions by kind, with their notions. */
 export function sumupCalc(steps: Step[]): string {
-  const kinds = ["challenge", "code", "answer", "mcq", "brief"].map((k) => steps.filter((s) => s.kind === k)).filter((l) => l.length);
+  const kinds = ["lesson", "challenge", "code", "answer", "mcq", "brief"].map((k) => steps.filter((s) => s.kind === k)).filter((l) => l.length);
   const parts = kinds.map((l) => { const w = KIND_SUM[l[0].kind] || [l[0].kind, l[0].kind]; const what = l.map(stepWhat).filter(Boolean); return `${l.length} ${l.length > 1 ? w[1] : w[0]}${what.length ? ` (${what.join(", ")})` : ""}`; });
   return parts.length ? `À faire : ${parts.join(" ; ")}.` : "";
 }
