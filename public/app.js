@@ -114,7 +114,7 @@ const codeView = (a) => {
 const ORIGIN = { practice: "Practice", daily: "Daily", assignment: "Assignment", duel: "Duel", session: "Class session", plan: "Daily plan", path: "Path", exam: "Exam", bounty: "Bounty", boss: "Boss battle" };
 const STATUS = { review: "Waiting for review", solved: "Solved", claimed: "Self-reported", failed: "Failed", expired: "Not finished", pending: "In progress", done: "Done", late: "Done late", missed: "Missed", open: "Open", active: "Live", finished: "Finished", cancelled: "Cancelled", flagged: "Reported", archived: "Archived" };
 const TREND = { up: "↑ improving", down: "↓ slipping", flat: "→ steady", inactive: "⏸ inactive", new: "✦ new" };
-const REASON = { activity: "Presentation", plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team" };
+const REASON = { activity: "Presentation", plan: "Daily plan", plan_bonus: "Plan bonus", path: "Path", session: "Class session", exam: "Exam", bounty: "Bounty", boss: "Boss battle", quiz: "Live quiz", review: "Peer review", author: "Challenge author", shop: "Shop", practice: "Practice", daily: "Daily challenge", assignment: "Assignment", duel: "Duel", contest: "Contest", award: "Contest award", bonus: "Teacher bonus", adjust: "Teacher adjustment", regrade: "Regrade", team: "Team", game: "Class game", battle: "Squad battle" };
 const diffTag = (d) => `<span class="tag ${esc(d)}">${esc(DIFF[d] || d)}</span>`;
 const status = (s, label) => `<span class="status ${esc(s)}">${esc(label || STATUS[s] || s)}</span>`;
 const trend = (t) => `<span class="trend ${esc(t)}">${esc(TREND[t] || t)}</span>`;
@@ -381,8 +381,37 @@ const routes = {
   assignments: viewAssignments, plan: viewAssignments, contests: viewContests, contest: viewContest, teams: viewTeams, settings: viewSettings,
   daily: viewDaily, points: viewPoints, integrity: viewIntegrity, sessions: viewSessions, session: viewSession, skills: viewSkills, events: viewEvents,   // path: see extras.js
 };
+// pages whose script is loaded the first time they are opened (index.html: #lazy-pages), in the order written there
+const lazyDone = new Set();
+function lazyScripts(name) {
+  const t = document.getElementById("lazy-pages");
+  return t ? [...t.content.querySelectorAll("script, link")].filter((s) => (s.dataset.for || "").split(" ").includes(name) && !lazyDone.has(s.getAttribute("src") || s.getAttribute("href"))).map((s) => s.getAttribute("src") || s.getAttribute("href")) : [];
+}
+async function lazyRoute(name) {
+  for (const src of lazyScripts(name)) await lazyLoad(src);
+}
+/** Call a function of a script loaded on demand (#lazy-pages, data-fn): the script is loaded the first time. */
+async function lazyCall(fn, ...args) {
+  if (typeof window[fn] !== "function") {
+    const t = document.getElementById("lazy-pages");
+    const els = t ? [...t.content.querySelectorAll("script, link")].filter((x) => (x.dataset.fn || "").split(" ").includes(fn)) : [];
+    if (!els.length) throw new Error(`${fn} is missing`);
+    for (const x of els) await lazyLoad(x.getAttribute("src") || x.getAttribute("href"));
+  }
+  return window[fn](...args);
+}
+async function lazyLoad(src) {
+  if (lazyDone.has(src)) return;
+  // a page's styles (.css) before its script, so it never shows unstyled
+  await new Promise((ok, ko) => { const css = /\.css(\?|$)/.test(src); const el = document.createElement(css ? "link" : "script"); if (css) { el.rel = "stylesheet"; el.href = src; } else el.src = src; el.onload = ok; el.onerror = () => ko(new Error("This page's script couldn't be loaded: check the connection and reload.")); document.head.append(el); });
+  lazyDone.add(src);
+}
 async function route() {
   const [name, ...more] = (location.hash.replace(/^#\//, "") || "overview").split("/");
+  if (!routes[name] && lazyScripts(name).length) {
+    view.innerHTML = `<p class="muted">Loading…</p>`;
+    try { await lazyRoute(name); } catch (e) { view.innerHTML = `<div class="notice"><b>Couldn't load this page.</b> ${esc(e.message)}</div>`; return; }
+  }
   // most pages take one segment; a page with tabs (#/sprints/3/review) gets the rest too
   const arg = name === "sprints" ? more.join("/") : more[0];
   const fn = routes[name] || viewOverview;
@@ -724,6 +753,7 @@ async function viewStudent(arg) {
           <button class="btn small" id="assign">🎯 Assign a challenge</button><button class="btn small" id="give">🎁 Give points</button>
           <button class="btn small" id="st-name">✏️ Edit name</button>
           ${p.hr_display ? `${!p.hr_verified ? `<button class="btn small" id="hr-ok" title="Only if you checked it's really their account">Mark HackerRank verified</button>` : ""}<button class="btn small" id="hr-unlink">Unlink HackerRank</button>` : ""}
+          <button class="btn small" id="st-move" title="Hacked or deleted account: everything moves to the new one">🔁 New Discord account</button>
           <button class="btn small danger" id="st-del">Remove from class</button></div></details>
       </div>
     </div>
@@ -849,6 +879,28 @@ async function viewStudent(arg) {
         dlg.close(); S.students = null; toast(r.name ? "Name saved" : "Back to the Discord name"); viewStudent(id);
       } }]);
     setTimeout(() => $("#st-nm")?.focus(), 0);
+  };
+  $("#st-move").onclick = () => {
+    // the newest accounts of the class first: the new one has often used ClassBot once already
+    const fresh = list.filter((r) => r.discord_id !== id).sort((a, b) => (b.created_at || 0) - (a.created_at || 0)).slice(0, 6);
+    openDialog(`${p.name || "This student"} has a new Discord account`, `
+      <p class="small muted">Hacked, lost or deleted account: everything moves to the new account (points, coins, challenges, briefs, assessments, mises en situation, squads, competencies, GitHub, HackerRank, VS Code, notes). The old account keeps nothing. The new account must be on the server.</p>
+      <label for="mv-to">New account <span class="muted">(Discord name or Discord ID)</span></label>
+      <input type="text" id="mv-to" placeholder="e.g. ayoub_boussih2 or 123456789012345678" style="width:100%" autocomplete="off">
+      ${fresh.length ? `<div class="small muted" style="margin-top:6px">Newest in the class: ${fresh.map((r) => `<a href="#" data-mv="${esc(r.discord_id)}">${esc(r.name || r.discord_id)}</a>`).join(" · ")}</div>` : ""}
+      <p class="small muted">Discord ID: in Discord, Settings → Advanced → Developer mode, then right-click on the account → Copy User ID.</p>
+      <label class="check"><input type="checkbox" id="mv-dm" checked> Tell the student on the new account by Discord DM</label>`,
+      [{ label: "🔁 Move everything", primary: true, action: async () => {
+        const to = $("#mv-to").value.trim();
+        if (!to) { toast("Give the new account first", true); $("#mv-to").focus(); return; }
+        if (!confirm("Move all the data to the new account? The old account keeps nothing.")) return;
+        const r = await api(`/students/${id}/move`, { method: "POST", body: { to, notify: $("#mv-dm").checked } });
+        dlg.close(); S.students = null; await loadPhotos();
+        toast(r.merged ? "Moved · the new account's own points were added" : "Moved to the new account");
+        location.hash = `#/student/${r.to}`;
+      } }]);
+    $$("[data-mv]").forEach((a) => a.onclick = (e) => { e.preventDefault(); $("#mv-to").value = a.dataset.mv; });
+    setTimeout(() => $("#mv-to")?.focus(), 0);
   };
   $("#st-del").onclick = () => confirmDialog(`Remove ${p.name || "this student"} from the class?`,
     "Their profile goes, with their links (GitHub, HackerRank), team, brief hand-ins and debriefs, GitHub activity, competencies and assessments. The class's past statistics keep their answers, without a name. Their points stay in the history but no longer count in the leaderboards, the certificates or the league. If they use ClassBot again, they start a new profile. This can't be undone.",
@@ -2524,7 +2576,7 @@ function replayShow(d, meta = null) {
       const [t, from, removed, text, origin] = c;
       if (origin === "setValue" || origin === "template") doc = String(text ?? "");
       else doc = doc.slice(0, from) + String(text ?? "") + doc.slice(from + (removed || 0));
-      return { t, doc, from, len: origin === "setValue" ? 0 : String(text ?? "").length, origin, big: String(text ?? "").length >= 40 && origin !== "setValue" && origin !== "undo" && origin !== "redo" };
+      return { t, doc, from, len: origin === "setValue" ? 0 : String(text ?? "").length, origin, big: String(text ?? "").length >= 40 && !["setValue", "undo", "redo", "complete", "format", "auto"].includes(origin) };
     });
     const end = Math.max(1, s.openMs || 0, steps.at(-1)?.t || 0);
     const marks = steps.filter((x) => x.origin !== "setValue").map((x) => `<i class="${x.big ? "big" : ""}" style="left:${(100 * x.t) / end}%"></i>`);

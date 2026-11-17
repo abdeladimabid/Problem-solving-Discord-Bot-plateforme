@@ -54,6 +54,20 @@ export async function setBlock(env: Env, gid: string, uid: string, b: { type: un
   await save(env, gid, uid, list);
   return list;
 }
+/** Block several types at once (same levels, days and reason): each one replaces that type's block. */
+export async function setBlocks(env: Env, gid: string, uid: string, b: { types: unknown; levels?: unknown; days?: unknown; reason?: unknown }): Promise<Block[]> {
+  const types = [...new Set(Array.isArray(b.types) ? b.types : [b.types])];
+  if (!types.length || !types.every(isType)) throw new BlockError("Unknown challenge type");
+  let list: Block[] = [];
+  for (const type of types) list = await setBlock(env, gid, uid, { ...b, type });
+  return list;
+}
+/** The DM for several types blocked together: one message, the types joined ("Find the bug, Predict the output"). */
+export function blockDmVars(L: string, blocks: Block[]) {
+  const v = blockVars(L, blocks[0]);
+  return { ...v, type: blocks.map((x) => typeName(L, x.type)).join(", ") };
+}
+
 /** Lift a block (type null: all of them). */
 export async function removeBlock(env: Env, gid: string, uid: string, type: string | null): Promise<Block[]> {
   const list = type ? (await getBlocks(env, gid, uid)).filter((x) => x.type !== type) : [];
@@ -63,7 +77,7 @@ export async function removeBlock(env: Env, gid: string, uid: string, type: stri
 
 /** Every blocked student of the class, for the dashboard. */
 export async function classBlocks(env: Env, gid: string) {
-  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE ?", `pblock:${gid}:%`).catch(() => []);
+  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= ? AND k < ?", `pblock:${gid}:`, `pblock:${gid};`).catch(() => []);
   const names = new Map((await all<{ discord_id: string; name: string | null }>(env, "SELECT discord_id, name FROM players WHERE guild_id = ?", gid)).map((p) => [p.discord_id, p.name]));
   const prefix = `pblock:${gid}:`;
   return rows.map((r) => ({ uid: r.k.slice(prefix.length), blocks: parse(r.v).filter((b) => live(b)) }))

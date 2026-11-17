@@ -1,5 +1,6 @@
 // 🚫 Practice blocks (practiceblock.ts): what the student reads, and the teacher's /teacher block · unblock.
 export const EN_BLK: Record<string, string> = {
+  "blk.nopoints": "🚫 Well done, but **{type}**{levels} is paused for you{until}: no points and no coins for it.{reason}",
   "blk.blocked": "🚫 Your teacher has paused **{type}**{levels} for you{until}.{reason}\nThe other types are still open: try `/practice type:` something else 💪",
   "blk.quick_all": "🚫 Your teacher has paused the quick challenges for you{levels}.{reason}\nTry `/practice type:` Write code, SQL, Regex or Git 💪",
   "blk.until": " until {when}",
@@ -15,6 +16,7 @@ export const EN_BLK: Record<string, string> = {
   "blk.all_levels": "every level",
 };
 export const FR_BLK: Record<string, string> = {
+  "blk.nopoints": "🚫 Bravo, mais **{type}**{levels} est en pause pour toi{until} : ni points ni pièces pour ce défi.{reason}",
   "blk.blocked": "🚫 Ton enseignant a mis en pause **{type}**{levels} pour toi{until}.{reason}\nLes autres types restent ouverts : essaie `/practice type:` autre chose 💪",
   "blk.quick_all": "🚫 Ton enseignant a mis en pause les défis rapides pour toi{levels}.{reason}\nEssaie `/practice type:` Écrire du code, SQL, Regex ou Git 💪",
   "blk.until": " jusqu'au {when}",

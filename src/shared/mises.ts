@@ -15,6 +15,8 @@ import { SKILL_KEYS } from "./skills.ts";
 export const MISE_FORMAT = "classbot-mise-en-situation@1";
 // how many situations and QCM: the teacher's choice (the defaults: 5 and 5); at least one situation, QCM may be none
 export const N_SITUATIONS = 5, N_QCM = 5, AI_CHECKS_PER_ITEM = 3, MAX_SITUATIONS = 15, MAX_QCM = 30;
+// the teacher's own file (imported) may hold many more
+export const MAX_IMPORT_SITUATIONS = 60, MAX_IMPORT_QCM = 300;
 /**
  * The automatic barème: each situation by its difficulty (1 → 2 points, 2 → 3, 3 → 4, 4 → 6, 5 → 8), and the QCM
  * together a fixed share of the score (20 % by default), whatever their number. Points may have decimals (0.05).
@@ -25,7 +27,8 @@ export function autoScore(c: Pick<MiseContent, "situations" | "qcm">, qcmShare =
   const share = Math.max(0, Math.min(50, Math.round(qcmShare)));
   for (const x of c.situations) x.points = AUTO_POINTS[x.difficulty] ?? 3;
   const sit = c.situations.reduce((t, x) => t + x.points, 0);
-  const each = c.qcm.length && share ? Math.round((20 * (sit * share)) / (100 - share) / c.qcm.length) / 20 : 0;
+  // (QCM only: 1 point each)
+  const each = !sit ? 1 : c.qcm.length && share ? Math.round((20 * (sit * share)) / (100 - share) / c.qcm.length) / 20 : 0;
   for (const q of c.qcm) q.points = Math.max(0.05, each);
   return c;
 }
@@ -35,7 +38,7 @@ export function miseCounts(b: any): { situations: number; qcm: number } | undefi
   if (!Number.isFinite(sn) && !Number.isFinite(qn)) return undefined;
   return { situations: Number.isFinite(sn) ? Math.max(1, Math.min(MAX_SITUATIONS, Math.round(sn))) : N_SITUATIONS, qcm: Number.isFinite(qn) ? Math.max(0, Math.min(MAX_QCM, Math.round(qn))) : N_QCM };
 }
-const MAX_BYTES = 400_000;
+const MAX_BYTES = 1_000_000;
 
 // ------------------------------------------------------------------ the fixed list of problem categories
 /** What the AI may answer about a learner's code: a category, nothing else. The learner sees these labels only. */
@@ -147,6 +150,10 @@ export interface CheckOpts {
   count?: { situations: number; qcm: number };
   /** the automatic barème (by difficulty, the QCM a fixed share): the file's points are replaced */
   scoring?: { qcmShare: number };
+  /** the teacher's own file (pasted or uploaded): how many situations / QCM (up to MAX_IMPORT_*), the Fiche niveaux
+   *  coverage, the difficulty curve, the week and its scope (technologies, competencies chosen) are advice (returned in
+   *  `advice`, shown in the checklist), not requirements — those are for the AI. The format is still checked. */
+  free?: boolean;
 }
 /** An item's capacities of the Fiche niveaux: checked against the codes known (and required when there's a scope). */
 function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): string[] {
@@ -155,7 +162,7 @@ function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): strin
   const cs = [...new Set((Array.isArray(v) ? v : []).map((c: unknown) => String(c).trim().toUpperCase()))];
   const unknown = o.concepts ? cs.filter((c) => !o.concepts!.known.has(c)) : cs.filter((c) => !/^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c));
   if (unknown.length) { bad(`concept(s) ${unknown.join(", ")} unknown: use the codes of the Fiche niveaux (like S2.M3).`); return []; }
-  if (o.concepts?.scope.length && !cs.some((c) => o.concepts!.scope.includes(c))) bad(`"concepts": the items of the Fiche niveaux it really works on (among ${o.concepts.scope.join(", ")}).`);
+  if (!o.free && o.concepts?.scope.length && !cs.some((c) => o.concepts!.scope.includes(c))) bad(`"concepts": the items of the Fiche niveaux it really works on (among ${o.concepts.scope.join(", ")}).`);
   return cs.slice(0, 6);
 }
 
@@ -163,37 +170,44 @@ function itemConcepts(v: unknown, o: CheckOpts, bad: (m: string) => void): strin
  * A classbot-mise-en-situation@1 file, checked strictly: every problem with where it is (situation 2, QCM 4…) and
  * the field. Returns the cleaned content (what is stored) and a preview.
  */
-export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[]; content?: MiseContent; preview?: MisePreview } {
+export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[]; advice: Problem[]; content?: MiseContent; preview?: MisePreview } {
   const { data, error } = readJson(raw);
-  if (error) return { problems: [{ where: "file", msg: error }] };
-  if (!data || typeof data !== "object" || Array.isArray(data)) return { problems: [{ where: "file", msg: "The file must be one JSON object." }] };
-  const p: Problem[] = [];
+  if (error) return { problems: [{ where: "file", msg: error }], advice: [] };
+  if (!data || typeof data !== "object" || Array.isArray(data)) return { problems: [{ where: "file", msg: "The file must be one JSON object." }], advice: [] };
+  const p: Problem[] = [], advice: Problem[] = [];
   const top = (msg: string) => p.push({ where: "file", msg });
+  // the week's scope: a requirement for the AI, advice on the teacher's own file
+  const soft = (where: string, msg: string) => (o.free ? advice : p).push({ where, msg });
+  const maxS = o.free ? MAX_IMPORT_SITUATIONS : MAX_SITUATIONS, maxQ = o.free ? MAX_IMPORT_QCM : MAX_QCM;
   if (data.format !== MISE_FORMAT) top(`"format" must be "${MISE_FORMAT}"${data.format ? ` (found "${String(data.format).slice(0, 60)}")` : ""}.`);
   const title = text(data.title);
   if (title.length < 3 || title.length > 120) top(`"title": 3 to 120 characters.`);
   const week = data.week == null || data.week === "" ? null : Number(data.week);
   if (week !== null && (!Number.isInteger(week) || week < 1 || week > 80)) top(`"week": the number of the programme week.`);
-  if (o.week && week !== null && week !== o.week) top(`"week" is ${week}, but you chose week ${o.week}: generate the prompt again for the right week.`);
+  if (o.week && week !== null && week !== o.week) soft("file", o.free ? `"week" is ${week}, but you chose week ${o.week}: it is saved in week ${o.week}.` : `"week" is ${week}, but you chose week ${o.week}: generate the prompt again for the right week.`);
   const metier = text(data.metier).slice(0, 120);
   const techs = o.techs ?? [];
   const langs = techs.length ? langsAllowed(techs) : FILE_LANGS;
   const runtimes = runtimesAllowed(langs);
   const selected = new Set((o.selected ?? []).map((c) => normComp(c)).filter(Boolean) as string[]);
 
-  const comps = (v: unknown, bad: (m: string) => void, field = "competencies"): string[] => {
+  const comps = (v: unknown, bad: (m: string) => void, where = "file", field = "competencies"): string[] => {
     if (!Array.isArray(v) || !v.length) { bad(`"${field}": a list of 1 to 4 competencies, like ["C3N1"] or ["CT2N1"].`); return []; }
     const out: string[] = [];
     for (const c of v.slice(0, 6)) {
       const s = normComp(c);
       if (!s) { bad(`"${field}": "${String(c).slice(0, 20)}" isn't written like C3N1 or CT2N1.`); continue; }
       const pc = parseComp(s)!;
-      if (o.known?.size && !o.known.has(pc.code)) { bad(`"${field}": ${s} isn't in the class's programme.`); continue; }
-      if (selected.size && !selected.has(s) && ![...selected].some((x) => parseComp(x)?.code === pc.code)) { bad(`"${field}": ${s} isn't one of the competencies you chose (${[...selected].join(", ")}).`); continue; }
+      // (on the teacher's file: left out, said)
+      if (o.known?.size && !o.known.has(pc.code)) { if (o.free) soft(where, `"${field}": ${s} isn't in the class's programme (left out).`); else bad(`"${field}": ${s} isn't in the class's programme.`); continue; }
+      if (selected.size && !selected.has(s) && ![...selected].some((x) => parseComp(x)?.code === pc.code)) {
+        if (!o.free) { bad(`"${field}": ${s} isn't one of the competencies you chose (${[...selected].join(", ")}).`); continue; }
+        soft(where, `"${field}": ${s} isn't one of the competencies you chose (${[...selected].join(", ")}).`);
+      }
       if (!out.includes(s)) out.push(s);
     }
-    if (v.length > 4) bad(`"${field}": 4 at most.`);
-    return out;
+    if (v.length > 4) { if (o.free) soft(where, `"${field}": 4 at most (the first 4 kept).`); else bad(`"${field}": 4 at most.`); }
+    return out.slice(0, 4);
   };
   const skills = (v: unknown, bad: (m: string) => void) => {
     if (v == null) return [];
@@ -208,11 +222,15 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
   // ---- the situations (as many as the teacher asked: 1 to MAX_SITUATIONS)
   const sits: Situation[] = [];
   const rawSits: any[] = Array.isArray(data.situations) ? data.situations : [];
-  const nS = o.count?.situations;
-  if (!Array.isArray(data.situations)) top(`"situations" must be a list of ${nS ?? "1 to " + MAX_SITUATIONS} mises en situation.`);
-  else if (nS != null && rawSits.length !== nS) top(`"situations": exactly ${nS} mises en situation (found ${rawSits.length}).`);
-  else if (!rawSits.length || rawSits.length > MAX_SITUATIONS) top(`"situations": 1 to ${MAX_SITUATIONS} mises en situation (found ${rawSits.length}).`);
-  rawSits.slice(0, MAX_SITUATIONS).forEach((s, i) => {
+  const nS = o.free ? undefined : o.count?.situations;
+  // the teacher's file may be QCM only (no situations, or the list left out)
+  const qcmOnly = !!o.free && (data.situations == null || (Array.isArray(data.situations) && !rawSits.length)) && Array.isArray(data.qcm) && data.qcm.length > 0;
+  if (!qcmOnly) {
+    if (!Array.isArray(data.situations)) top(`"situations" must be a list of ${nS ?? "1 to " + maxS} mises en situation${o.free ? " (or left out, with QCM only)" : ""}.`);
+    else if (nS != null && rawSits.length !== nS) top(`"situations": exactly ${nS} mises en situation (found ${rawSits.length}).`);
+    else if (!rawSits.length || rawSits.length > maxS) top(`"situations": 1 to ${maxS} mises en situation (found ${rawSits.length})${o.free ? ", or none with QCM only" : ""}.`);
+  }
+  rawSits.slice(0, maxS).forEach((s, i) => {
     const where = `situation ${i + 1}`;
     const bad = (msg: string) => p.push({ where, msg });
     if (!s || typeof s !== "object" || Array.isArray(s)) { bad("must be an object."); return; }
@@ -223,7 +241,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     if (!Number.isInteger(diff) || diff < 1 || diff > 5) bad(`"difficulty": a whole number from 1 (very easy) to 5.`);
     const runtime = s.runtime as Runtime;
     if (!RUNTIMES.includes(runtime)) { bad(`"runtime": one of ${RUNTIMES.join(", ")} (found ${JSON.stringify(s.runtime ?? null)}).`); return; }
-    if (!runtimes.includes(runtime)) bad(`"runtime": "${runtime}" isn't possible this week (the class has seen: ${techs.join(", ") || "—"}).`);
+    if (!runtimes.includes(runtime)) soft(where, `"runtime": "${runtime}" isn't possible this week (the class has seen: ${techs.join(", ") || "—"}).`);
     // files: what the learner edits (pre-filled with the starter code)
     const files: MiseFile[] = [];
     const rawFiles: any[] = Array.isArray(s.files) ? s.files : [];
@@ -234,7 +252,7 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
       if (files.some((x) => x.name === name)) bad(`files[${k + 1}]: two files are named "${name}".`);
       if (!FILE_LANGS.includes(lang)) bad(`files[${k + 1}] "lang": one of ${FILE_LANGS.join(", ")}.`);
       else if (!LANGS_FOR[runtime].includes(lang)) bad(`files[${k + 1}] "lang": ${lang} can't run with runtime "${runtime}" (${LANGS_FOR[runtime].join(", ")}).`);
-      else if (!langs.includes(lang)) bad(`files[${k + 1}] "lang": ${lang} isn't seen yet at this week.`);
+      else if (!langs.includes(lang)) soft(where, `files[${k + 1}] "lang": ${lang} isn't seen yet at this week.`);
       if (starter.length > 6000) bad(`files[${k + 1}] "starter": 6000 characters at most.`);
       files.push({ name, lang, starter });
     });
@@ -283,14 +301,14 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     if (techs.length) {
       const all = [t, ctx, ...qs, expected, ...files.map((f) => f.starter), ...sol.map((f: { content: string }) => f.content)].join("\n");
       const out = outOfScope(all, techs);
-      if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
+      if (out.length) soft(where, `out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
     const sc = itemConcepts(s.concepts, o, bad);
-    sits.push({ id: `m${i + 1}`, title: t, context: ctx, difficulty: diff, competencies: comps(s.competencies, bad), notions: notions.slice(0, 5), skills: skills(s.skills, bad),
+    sits.push({ id: `m${i + 1}`, title: t, context: ctx, difficulty: diff, competencies: comps(s.competencies, bad, where), notions: notions.slice(0, 5), skills: skills(s.skills, bad),
       runtime, files, ...(schema ? { schema } : {}), questions: qs, expected, solution: sol, checks, errorHints: [...new Set(hints.filter((h: string) => CAT_IDS.has(h)))] as string[], points: pts, ...(sc.length ? { concepts: sc } : {}) });
   });
   // increasing difficulty: never going down; from 3 situations on, it starts very easy and ends harder
-  if (sits.length === rawSits.length && sits.length > 1 && sits.every((s) => s.difficulty >= 1 && s.difficulty <= 5)) {
+  if (!o.free && sits.length === rawSits.length && sits.length > 1 && sits.every((s) => s.difficulty >= 1 && s.difficulty <= 5)) {
     const d = sits.map((s) => s.difficulty);
     if (d.some((x, i) => i && x < d[i - 1])) top(`"difficulty" must go up from the first situation to the last (found ${d.join(", ")}).`);
     else if (d.length >= 3 && (d[0] > 2 || d[d.length - 1] < 4)) top(`"difficulty": start very easy (1 or 2) and end harder (4 or 5) (found ${d.join(", ")}).`);
@@ -298,14 +316,14 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
 
   // ---- the QCM (as many as the teacher asked: none to MAX_QCM)
   const qcm: Qcm[] = [];
-  const nQ = o.count?.qcm;
+  const nQ = o.free ? undefined : o.count?.qcm;
   // no QCM asked: the list may be left out
   const rawQ: any[] = Array.isArray(data.qcm) ? data.qcm : [];
   if (data.qcm != null && !Array.isArray(data.qcm)) top(`"qcm" must be a list of questions.`);
   else if (data.qcm == null && nQ) top(`"qcm" must be a list of ${nQ} questions.`);
   else if (nQ != null && rawQ.length !== nQ) top(`"qcm": exactly ${nQ} questions (found ${rawQ.length}).`);
-  else if (rawQ.length > MAX_QCM) top(`"qcm": ${MAX_QCM} questions at most (found ${rawQ.length}).`);
-  rawQ.slice(0, MAX_QCM).forEach((q, i) => {
+  else if (rawQ.length > maxQ) top(`"qcm": ${maxQ} questions at most (found ${rawQ.length}).`);
+  rawQ.slice(0, maxQ).forEach((q, i) => {
     const where = `QCM ${i + 1}`;
     const bad = (msg: string) => p.push({ where, msg });
     if (!q || typeof q !== "object" || Array.isArray(q)) { bad("must be an object."); return; }
@@ -326,22 +344,23 @@ export function checkMise(raw: unknown, o: CheckOpts = {}): { problems: Problem[
     if (!Number.isFinite(pts) || pts < 0.05 || pts > 10) bad(`"points": a number from 1 to 5 (1 if left out).`);
     if (techs.length) {
       const out = outOfScope([question, c, choices[k] ?? ""].join("\n"), techs);
-      if (out.length) bad(`out of scope: ${out.join(", ")} (not seen yet at this week).`);
+      if (out.length) soft(where, `out of scope: ${out.join(", ")} (not seen yet at this week).`);
     }
     const qc = itemConcepts(q.concepts, o, bad);
-    qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad), notion, skills: skills(q.skills, bad), points: pts, ...(qc.length ? { concepts: qc } : {}) });
+    qcm.push({ id: `q${i + 1}`, question, ...(c ? { code: c } : {}), choices, correct: k, competencies: comps(q.competencies, bad, where), notion, skills: skills(q.skills, bad), points: pts, ...(qc.length ? { concepts: qc } : {}) });
   });
   // the Fiche niveaux: every capacity of the scope touched by at least 5 of the items (all of them when there are fewer)
   const declared = Array.isArray(data.concepts) ? [...new Set(data.concepts.map((c: unknown) => String(c).trim().toUpperCase()))] as string[] : [];
   const cscope = o.concepts?.scope.length ? o.concepts.scope : declared.filter((c) => !o.concepts || o.concepts.known.has(c));
-  if (cscope.length && !p.length) for (const cc of cscope) {
+  if (cscope.length && !p.length && !o.free) for (const cc of cscope) {
     const k = [...sits, ...qcm].filter((x) => (x.concepts ?? []).includes(cc)).length, need = Math.min(5, sits.length + qcm.length);
     if (k < need) top(`item ${cc} of the Fiche niveaux: worked on by ${k} situation(s) / QCM, at least ${need} of the ${sits.length + qcm.length} must work on it (add it to the ones that REALLY work on it, or change them so they do).`);
   }
-  if (p.length) return { problems: p };
-  const content: MiseContent = { format: MISE_FORMAT, title, week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
+  if (p.length) return { problems: p, advice };
+  // (the teacher's file in another week: saved in the week they chose)
+  const content: MiseContent = { format: MISE_FORMAT, title, week: o.free && o.week ? o.week : week, metier, competencies: topComps, situations: sits, qcm, ...(cscope.length ? { concepts: cscope } : {}) };
   if (o.scoring) autoScore(content, o.scoring.qcmShare);
-  return { problems: [], content, preview: previewOf(content) };
+  return { problems: [], advice, content, preview: previewOf(content) };
 }
 /** What's out of scope, with the words that gave it away (the AI needs them to fix it). JSON.parse / JSON.stringify
  *  is plain JavaScript: not « Fetch / API » when JavaScript was seen. */
@@ -542,7 +561,75 @@ export function attempted(c: MiseContent, id: string, ans: any): boolean {
   if (id.startsWith("q")) return picked(ans) != null;
   const s = c.situations.find((x) => x.id === id);
   if (!s || !ans?.files) return false;
-  return s.files.some((f) => ans.files[f.name] != null && squash(ans.files[f.name]) !== squash(f.starter));
+  // a starter file changed, or a file of their own with something in it
+  return s.files.some((f) => ans.files[f.name] != null && squash(ans.files[f.name]) !== squash(f.starter))
+    || Object.entries(ans.files).some(([name, v]) => !s.files.some((f) => f.name === name) && squash(String(v ?? "")) !== "");
+}
+
+// ------------------------------------------------------------------ the learner's own files
+// In a situation the learner can add files next to the starter ones (the teacher allows it, on by default): their
+// names follow the runtime's extensions, a number and a size cap. Starter files can be changed, never removed.
+/** The extensions a learner's own file can have, by runtime (node and sql run one file: none). */
+export const FILE_EXTS: Record<Runtime, string[]> = { web: [".html", ".css", ".js"], php: [".php", ".blade.php", ".html", ".css", ".js"], node: [], sql: [] };
+export interface FileRules { allow: boolean; max: number; kb: number; exts: string[] }
+export const FILE_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,39}$/;
+/** ".blade.php" for a Blade view, else the last extension (".js"); "" without one. */
+export function extOf(name: string): string {
+  const n = String(name).toLowerCase();
+  if (n.endsWith(".blade.php")) return ".blade.php";
+  const i = n.lastIndexOf(".");
+  return i > 0 ? n.slice(i) : "";
+}
+/** The rules of a situation's files: the teacher's settings and the runtime (max counts the starter files too). */
+export function fileRules(runtime: Runtime, o: { files?: boolean; maxFiles?: number; fileKB?: number }): FileRules {
+  const exts = FILE_EXTS[runtime] ?? [];
+  return { allow: o.files !== false && exts.length > 0, max: Math.max(1, Math.min(20, Math.round(Number(o.maxFiles) || 8))), kb: Math.max(5, Math.min(100, Math.round(Number(o.fileKB) || 20))), exts };
+}
+/** Why a new (or renamed) file name is refused, in the learner's words ("" when it's fine). */
+export function fileNameProblem(name: string, files: string[], starters: string[], r: FileRules, renaming?: string): string {
+  const n = String(name ?? "").trim();
+  if (!r.allow) return "La création de fichiers n’est pas autorisée pour cet exercice.";
+  if (renaming != null && starters.includes(renaming)) return "Un fichier de départ ne peut pas être renommé.";
+  if (!FILE_NAME.test(n) || n.includes("..")) return "Nom invalide : lettres, chiffres, - _ et . seulement (40 caractères au plus).";
+  if (!r.exts.includes(extOf(n))) return `Extension non autorisée. Autorisées : ${r.exts.join(" ")}`;
+  if (files.some((f) => f.toLowerCase() === n.toLowerCase() && f !== renaming)) return "Un fichier porte déjà ce nom.";
+  if (renaming == null && files.length >= Math.max(r.max, starters.length)) return `${Math.max(r.max, starters.length)} fichiers au plus.`;
+  return "";
+}
+/**
+ * The files of a situation as the learner sent them: every starter file (its text, or the starter when missing), then
+ * their own files that follow the rules, in the order sent (each one capped at the size limit).
+ */
+export function workspaceOf(s: Pick<Situation, "files">, raw: unknown, r: FileRules): Record<string, string> {
+  const src = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const cap = r.kb * 1024, out: Record<string, string> = {};
+  for (const f of s.files) { const v = src[f.name]; out[f.name] = typeof v === "string" ? v.slice(0, Math.max(cap, 20000)) : f.starter; }
+  if (!r.allow) return out;
+  const starters = s.files.map((f) => f.name);
+  for (const [name, v] of Object.entries(src)) {
+    if (name in out || typeof v !== "string") continue;
+    if (fileNameProblem(name, Object.keys(out), starters, r)) continue;
+    out[name] = v.slice(0, cap);
+  }
+  return out;
+}
+/**
+ * PHP with several files runs as one script on the runner: each `require` / `include` (`_once`) of one of the learner's
+ * files is replaced by that file (nested ones too, 3 levels; a `_once` file only the first time).
+ */
+export function phpWithIncludes(files: Record<string, string>, main: string): string {
+  const seen = new Set<string>();
+  const body = (name: string) => {
+    const t = String(files[name] ?? "");
+    return /^\s*<\?php/.test(t) ? t.replace(/^\s*<\?php/, "").replace(/\?>\s*$/, "") : `?>${t}<?php `;
+  };
+  const expand = (code: string, depth: number): string => code.replace(/\b(require|include)(_once)?\s*\(?\s*(['"])(?:\.\/)?([\w.-]+)\3\s*\)?\s*;/g, (all, _k, once, _q, name) => {
+    if (!(name in files) || name === main || depth > 3 || !/\.php$/i.test(name) || /\.blade\.php$/i.test(name)) return all;
+    if (once && seen.has(name)) return "";
+    seen.add(name);
+    return `\n${expand(body(name), depth + 1)}\n`;
+  });
+  return expand(String(files[main] ?? ""), 1);
 }
 /** Each item's score (the teacher's when they changed it), and the total in % weighted by the points. */
 export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string, { auto: number | null; score: number | null; teacher: boolean; attempted: boolean }>; total: number; toGrade: number } {
@@ -570,7 +657,7 @@ export function scoreMise(c: MiseContent, d: TakerData): { items: Record<string,
 // ------------------------------------------------------------------ live statistics
 /** An event of the learner page: [t (s), kind, item, n, extra]. */
 export type MiseEvent = [number, string, string, number, unknown?];
-export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock", "reopen"];
+export const EVENT_KINDS = ["start", "item", "leave", "back", "paste", "paste-blocked", "run", "check", "submit", "lock", "unlock", "reopen", "file"];
 export interface LiveStats { leaves: number; awaySec: number; away: boolean; pastes: number; pasteChars: number; blockedPastes: number; runs: number; checks: number; lastAt: number | null }
 /** Leaving the page (times, total time away), pastes (times, characters), runs and AI checks of one learner. */
 export function liveStats(events: MiseEvent[], nowSec: number): LiveStats {
@@ -791,7 +878,7 @@ export function aiCheckUser(s: Situation, files: Record<string, string>, o: { fa
     o.failed?.length ? `Vérifications automatiques qui échouent : ${o.failed.join(" ; ")}` : s.checks.length ? "Vérifications automatiques : aucune n'échoue (ou pas encore lancées)." : "",
     o.errors ? `Erreurs à l'exécution (données) :\n<<<\n${fence(o.errors).slice(0, 800)}\n>>>` : "",
     `Solution de référence (pour toi seulement) :\n${s.solution.map((f) => `--- ${f.name}\n${f.content.slice(0, 3000)}`).join("\n")}`,
-    `Code de l'apprenant :\n${s.files.map((f) => `--- ${f.name}\n<<<\n${fence(String(files[f.name] ?? "")).slice(0, 5000)}\n>>>`).join("\n")}`,
+    `Code de l'apprenant :\n${Object.keys(files).slice(0, 12).map((name) => `--- ${name}\n<<<\n${fence(String(files[name] ?? "")).slice(0, 5000)}\n>>>`).join("\n")}`,
   ].filter(Boolean).join("\n\n");
 }
 
@@ -824,6 +911,12 @@ export function detectMise(raw: unknown): { week: number | null; comps: string[]
 
 // ------------------------------------------------------------------ the teacher's checklist (like the brief's)
 export interface MiseCheck { ok: boolean; text: string; tip?: boolean }
+/** checkMise's advice on a teacher's file, for the checklist: one line per message, with where it is. */
+export function adviceChecks(advice: Problem[]): MiseCheck[] {
+  const by = new Map<string, string[]>();
+  for (const a of advice) by.set(a.msg, [...(by.get(a.msg) ?? []), a.where]);
+  return [...by].map(([msg, wh]) => ({ ok: false, text: `${wh.length > 4 ? `${wh.slice(0, 3).join(", ")} and ${wh.length - 3} more` : wh.join(", ")} · ${msg}` }));
+}
 /**
  * Warnings and reminders on a mise en situation that passed checkMise (which blocks what can't work): what a
  * teacher should look at before giving it — the competencies of the week, the ones chosen and not tested, situations
@@ -851,10 +944,10 @@ export function miseChecks(c: MiseContent, o: { weekComps?: string[]; selected?:
   const sameRight = right.length >= 4 && new Set(right).size === 1;
   const out: MiseCheck[] = [
     { ok: !o.count || (c.situations.length === o.count.situations && c.qcm.length === o.count.qcm), text: `${c.situations.length} situation${c.situations.length > 1 ? "s" : ""} and ${c.qcm.length} QCM${o.count && (c.situations.length !== o.count.situations || c.qcm.length !== o.count.qcm) ? ` (asked: ${o.count.situations} and ${o.count.qcm})` : ""}` },
-    { ok: !d.some((x, i) => i && x < d[i - 1]), text: `Difficulty ${d.join(" → ")}` },
+    ...(d.length ? [{ ok: !d.some((x, i) => i && x < d[i - 1]), text: `Difficulty ${d.join(" → ")}` }] : []),
     { ok: !untested.length, text: untested.length ? `Chosen but never tested: ${untested.join(", ")}` : `Every competency chosen is tested (${chosen.join(", ") || "—"})` },
     ...(week.length ? [{ ok: !missing.length, text: missing.length ? `Competencies of the week not in it: ${missing.join(", ")}` : "All the technical competencies of the week are in it" }] : []),
-    { ok: !manual.length, text: manual.length ? `No automatic check in ${manual.join(", ")}: you grade ${manual.length > 1 ? "them" : "it"} by hand` : "Every situation has automatic checks" },
+    ...(c.situations.length ? [{ ok: !manual.length, text: manual.length ? `No automatic check in ${manual.join(", ")}: you grade ${manual.length > 1 ? "them" : "it"} by hand` : "Every situation has automatic checks" }] : []),
     ...(few.length ? [{ ok: false, text: `Only one check in ${few.join(", ")}: a learner can pass it without doing everything` }] : []),
     ...(onlySource.length ? [{ ok: false, text: `${onlySource.join(", ")} only look${onlySource.length > 1 ? "" : "s"} for words in the code: add a check of what the page shows` }] : []),
     { ok: !dupNotions.length, text: dupNotions.length ? `The same notion in several situations: ${dupNotions.slice(0, 3).join(", ")}` : "One main notion per situation" },

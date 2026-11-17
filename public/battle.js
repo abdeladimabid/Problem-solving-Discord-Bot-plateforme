@@ -2,7 +2,6 @@
    the teacher judges from their phone (QR code). Loaded after learning.js (uses its tag picker). */
 "use strict";
 
-Object.assign(REASON, { battle: "Squad battle" });
 const BT_EMOJI = ["🦈", "🔥", "🐍", "🦄", "🦁", "🐬", "🚀", "⚡", "🐉", "🦅", "🤖", "👾", "🌪️", "🧠", "🐺", "🍀"];
 const BT_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#a855f7", "#f59e0b", "#06b6d4", "#ec4899", "#14b8a6"];
 const BT_PHASE = { lobby: ["pending", "Ready"], countdown: ["active", "Starting"], playing: ["active", "Live"], paused: ["pending", "Paused"], over: ["solved", "Finished"] };

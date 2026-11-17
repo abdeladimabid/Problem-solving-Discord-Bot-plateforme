@@ -385,11 +385,17 @@ Web tests in full screen. Create one from **✨ Generate with AI** (a topic and 
 - **Invite:** each student gets their own link by DM, open for N days, with the order and going back set in Options.
 - **Live:** refreshes every 5 s. Who is answering, progress, who was stopped and why, **Let back in** (with extra minutes), and Remove.
 - **🔁 Retake:** for the students who missed it (not invited, never started, or handed in an empty paper). Their own link stays open for N days, even when the assessment is closed for the others. An empty paper is replaced; a paper with answers is never touched. Their paper is graded like the others' and counts in the results. **Send results by DM** then offers to send only to the new papers.
+- **🔄 Reassign:** for students who already took it (in the header for several at once, or **Reassign** on a row in Live and Results). After the confirmation (« Sa copie actuelle sera remplacée par une nouvelle tentative »):
+  - their current attempt is archived (table `assessment_attempts`) and shows read-only in their paper as « Attempt 1 », with its answers, grades, events and sign-in record;
+  - what it gave their record goes; the new attempt is the only one that counts (score, competencies, skills, points, the linked debrief, the grading export);
+  - their old link stops working (the attempt is in the link's signature from the 2nd one on), a new link goes by DM and stays open for N days, even when the assessment is closed;
+  - leaving, pastes and the sign-in belong to each attempt.
 - **Results:**
   - multiple choice is graded at once; code and explanations by the AI with your expected answer (spelling and language mistakes are ignored)
   - **↻ Grade with AI** grades what's left, keeping your changes
   - click a student to read their paper, or a score to change it
   - also: the average per question, the hardest questions, an AI summary per student, and **Send results by DM**
+  - per student: **Send** (or **Resend**) on their row, or tick some and **Send to selected**: the same message as the global send. The row says « ✓ sent 7 Nov, 14:02 », or « ⚠ changed since it was sent » when a grade changed after.
 - **🔗 Share:** a link to the questions (never the papers). Another teacher imports a draft copy. **New link** stops the old one.
 
 Scores feed the skills and competencies of each question.
@@ -456,6 +462,7 @@ Live practical tests for the whole class (or some learners), written with Claude
 - start now or at a set time;
 - a duration, or open until you close it;
 - **Block copy-paste**: off by default, so pastes are allowed and recorded with what was pasted;
+- **Allow creating files** (on by default) and **Files at most** (8, the starter files count): see the editor below;
 - a short message in the class channel (optional);
 - each learner gets their personal link by DM.
 
@@ -463,7 +470,17 @@ Once it's running: **＋ Add learners**, **Resend** one learner's link, **⏱ Mo
 
 **The learner's page** is in French, light or dark, and works on a laptop and a tablet.
 - **Progress:** a bar of the 10 items (not started / in progress / answered). They move with Previous / Next (Alt+← / Alt+→) or by clicking any item, and can come back to any item until they hand in.
-- **A situation** shows its context and difficulty, then the **starter code as code** (highlighted, with line numbers and a tab per file), then the numbered sub-questions. Below is a **code editor** (CodeMirror, like the practice editor), pre-filled with the starter code.
+- **A situation** shows its context and difficulty, then the **starter code as code** (highlighted, with line numbers and a tab per file), then the numbered sub-questions. Below is the **code editor**, pre-filled with the starter code.
+- **The editor is Monaco, the editor of VS Code** (version 0.52.2 from cdnjs, Emmet 5.5.0 from jsDelivr; `src/bot/codeeditor.ts`, shared by the learner pages). It loads while the learner reads the rules. If it can't load (an old browser, the CDN blocked), the page uses CodeMirror instead, with the same saving, runs and records.
+  - **JavaScript:** suggestions that know the DOM (`document.` lists its methods and properties). After two letters following a `.`, the common calls come first with their parentheses and placeholders: `addEv` + Enter gives `addEventListener('click', (e) => { … })`. Snippets: `log`, `for`, `forof`, `if`, `function`, `arrow`, `fetch`, `try`… Syntax errors are underlined, as in VS Code.
+  - **HTML:** tag and attribute completion, the closing tag added when a tag is typed, **Emmet** (`ul>li*3` then Tab). **CSS:** property and value completion.
+  - **PHP:** highlighting, bracket matching and snippets (`function`, `class`, `foreach`, `pdo`, `prepare` for a PDO prepared statement…). **Blade** (`.blade.php`): highlighting and snippets for `@if`, `@foreach`, `@extends`, `@section`, `@yield`, `{{ }}`. The language follows the file's extension.
+  - Auto-closing brackets and quotes, auto-indent, **Shift+Alt+F** to format (JavaScript, HTML, CSS; Monaco has no PHP formatter), multi-cursor, find / replace (Ctrl+F / Ctrl+H), no minimap, light or dark like the page. **Ctrl+Enter** runs, **Ctrl+S** saves.
+- **Their own files:** **＋ Fichier** creates a file, ✎ renames it, ✕ deletes it (with a confirmation). The starter files can be changed, never renamed or deleted.
+  - Extensions: `.html .css .js` (HTML/CSS/JS), `.php .blade.php .html .css .js` (PHP). Node.js and SQL run a single file: no new files there.
+  - Limits: the teacher's maximum number of files, 20 KB per file; the server checks names, extensions, number and sizes again.
+  - A new CSS or JS file goes into the preview when `index.html` links it (`<link href="mon.css">`, `<script src="app.js">`). In PHP, `require` / `include` of their own `.php` files are put in place before the code runs.
+  - Their files are saved with the others, read by the checks and the AI check, shown in your learner detail (« their file ») and in the grading export. Creating, renaming and deleting a file show in their timeline.
 - **▶ Exécuter** (Ctrl+Entrée) runs the code:
   - HTML/CSS/JS runs in a sandboxed frame with scripts only and its own empty origin: no cookies, no access to the page or the dashboard, and a CSP that blocks all network access. The console and errors show as the browser gives them.
   - PHP and Node.js run on the code runner.
@@ -476,7 +493,7 @@ Once it's running: **＋ Add learners**, **Resend** one learner's link, **⏱ Mo
 - **QCM:** radio choices.
 - **Saving:** everything is saved as they go (and kept on the device while offline), and a reload continues where they were. **Terminer et envoyer** first lists the items without an answer.
 - **Leaving the page** is **never** blocked: it's only recorded.
-- **Typing** is recorded per situation and per file, for your replay.
+- **Typing** is recorded per situation and per file (their own files too), for your replay, in the same format with either editor: old papers replay as before. What a suggestion, Emmet, a closing tag or formatting inserts is marked as such, so the replay doesn't flag it like a paste.
 
 **Live** (refreshes every 5 s) shows one row per learner:
 - status: not started, working, done, or absent (away from the page, or silent for 2 minutes);
@@ -507,7 +524,7 @@ The success by competency and by notion (weakest first) shows the class's lacune
 - **The record:** once nothing is left to grade, the results go to their competencies (source `mise`) and skills, like an assessment.
 - **By DM:** **Send the results by DM** sends only when you click (to everyone, or one learner). **⬇ CSV** exports the results.
 
-Code: `src/shared/mises.ts` (pure: format, checks, prompt, scoring, the AI filter, statistics), `src/shared/misesdb.ts` (D1), `src/bot/mises.ts` (the learner page), `src/admin/misesapi.ts`, `public/mises.js`. Migration `0075_mises.sql`.
+Code: `src/bot/codeeditor.ts` (the editor), `src/shared/mises.ts` (pure: format, checks, prompt, scoring, the AI filter, statistics, the learner's files), `src/shared/misesdb.ts` (D1), `src/bot/mises.ts` (the learner page), `src/admin/misesapi.ts`, `public/mises.js`. Migration `0075_mises.sql`.
 
 #### Competencies
 - The whole class on the référentiel: the highest level each student validated, and the % of the class that validated each competency.

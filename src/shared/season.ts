@@ -93,7 +93,7 @@ export async function planSeason(env: Env, g: GuildRow, b: { name?: unknown; at?
 export async function cancelSeasonPlan(env: Env, gid: string) { await run(env, "DELETE FROM app_settings WHERE k = ?", planKey(gid)); }
 /** Cron: the seasons whose time has come start. */
 export async function seasonCron(env: Env, at = now()) {
-  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k LIKE 'season-next:%'").catch(() => []);
+  const rows = await all<{ k: string; v: string }>(env, "SELECT k, v FROM app_settings WHERE k >= 'season-next:' AND k < 'season-next;'").catch(() => []);
   let n = 0;
   for (const r of rows) {
     let p: SeasonPlan | null = null;

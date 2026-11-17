@@ -1,0 +1,8 @@
+/* proposals: loaded with its page (app.js lazyLoad), the classes only its page uses */
+.pp-list { display: grid; gap: 12px; }
+.pp-card { margin: 0; }
+.pp-card.denied { opacity: .7; }
+.pp-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pp-title { font-size: 15px; }
+.pp-details { margin: 8px 0 0; white-space: pre-wrap; }
+.pp-plans { margin: 8px 0 0; color: var(--ink-soft); }

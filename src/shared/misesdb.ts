@@ -14,8 +14,8 @@ import type { Program, ProgramWeek } from "./program.ts";
 import { nextProgrammeWeek, techSoFar } from "./activities.ts";
 import { RunnerUnavailable, runOnce } from "./runner.ts";
 import {
-  AI_CHECKS_PER_ITEM, EVENT_KINDS, aiCheckSystem, aiCheckUser, attempted, buildPrompt, categoryLabel, checkMise, classStats, defaultComment, detectMise,
-  evaluateChecks, filterCategories, itemIds, liveStats, liveStatus, miseChecks, normComp, paperOf, previewOf, scoreMise, toCsv,
+  AI_CHECKS_PER_ITEM, EVENT_KINDS, FILE_EXTS, aiCheckSystem, aiCheckUser, attempted, buildPrompt, categoryLabel, checkMise, classStats, defaultComment, detectMise,
+  evaluateChecks, fileRules, filterCategories, itemIds, phpWithIncludes, workspaceOf, liveStats, liveStatus, miseChecks, normComp, paperOf, previewOf, scoreMise, toCsv,
 } from "./mises.ts";
 import { chat, extractJson } from "./ai.ts";
 import { netFlags } from "./identity.ts";
@@ -23,7 +23,7 @@ import { cleanConcepts, conceptsPrompt, getConcepts, knownConcepts, suggestScope
 import { aiBudgetOk, aiBudgetUse } from "./db.ts";
 import { getBrief, simplonText } from "./briefs.ts";
 import type { MiseContent, MiseEvent, Situation, TakerData } from "./mises.ts";
-import { N_QCM, N_SITUATIONS, QCM_RULES, QCM_SHARE, SIT_RULES, miseCounts, readJson } from "./mises.ts";
+import { N_QCM, N_SITUATIONS, QCM_RULES, QCM_SHARE, SIT_RULES, adviceChecks, miseCounts, readJson } from "./mises.ts";
 /** The barème asked: automatic (by difficulty, the QCM a share of the score; the default) or the file's own points. */
 const scoringOf = (b: any) => (b?.scoring === "file" ? undefined : { qcmShare: Number.isFinite(Number(b?.qcmShare)) && b?.qcmShare !== "" && b?.qcmShare != null ? Math.max(0, Math.min(50, Math.round(Number(b.qcmShare)))) : QCM_SHARE });
 
@@ -36,8 +36,10 @@ export interface MiseTakerRow { id: number; mise_id: number; guild_id: string; d
 // testers: staff who take it to try it (never "the class") · lockScreen: in full screen, leaving it stops the session until
 // the teacher lets them back (like an assessment) · brief: the brief it was written for
 // oneDevice: the browser that signed in with Discord is the paper's device (another one stops it) · netAlerts: the
-// teacher sees papers opened outside the class's network, or from several networks
+// teacher sees papers opened outside the class's network, or from several networks · files: the learner can add their own
+// files (on by default), maxFiles of them at most (starter files included), fileKB each
 export interface MiseSettings { minutes: number; noPaste: boolean; channel: boolean; testers: string[]; lockScreen: boolean; brief: { id: number; title: string } | null; oneDevice: boolean; netAlerts: boolean;
+  files: boolean; maxFiles: number; fileKB: number;
   /** its scope in the Fiche niveaux: the capacities it covers (5 items each at least) */
   concepts: string[] }
 
@@ -48,6 +50,7 @@ export const settingsOf = (m: Pick<MiseRow, "settings">): MiseSettings => {
   const s = parse<any>(m.settings, {});
   return { minutes: Math.max(0, Math.min(600, Math.round(Number(s.minutes) || 0))), noPaste: s.noPaste === true, channel: s.channel === true, testers: ids(s.testers).slice(0, 10),
     lockScreen: s.lockScreen === true, brief: briefRef(s.brief), oneDevice: s.oneDevice !== false, netAlerts: s.netAlerts !== false,
+    files: s.files !== false, maxFiles: Math.max(1, Math.min(20, Math.round(Number(s.maxFiles) || 8))), fileKB: Math.max(5, Math.min(100, Math.round(Number(s.fileKB) || 20))),
     concepts: (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30) };
 };
 /**
@@ -361,10 +364,11 @@ export async function importMise(env: Env, g: GuildRow, b: any) {
   // the Fiche niveaux: the capacities ticked, else the file's own list (a file from an older prompt has none)
   const cn = await conceptOpts(env, g, b, { week: w?.n ?? null, brief: br?.id ?? null, suggest: false, file: readJson(b.json).data });
   const count = miseCounts(b), scoring = scoringOf(b);
-  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count, scoring });
+  const r = checkMise(b.json, { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope }, count, scoring, free: true });
   const detected = { week: w?.n ?? null, sprint: w?.sprint ?? null, comps, title: det.title, concepts: cn.scope };
   const brief = br?.id ? { id: br.id, title: br.title } : null;
-  const checks = r.content ? miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count }) : [];
+  // what isn't the week's scope (another week, a technology not seen yet…): told, never blocking
+  const checks = r.content ? [...adviceChecks(r.advice), ...miseChecks(r.content, { weekComps: weekComps(w), selected: comps, brief: brief?.title, count })] : [];
   if (r.problems.length || !b.save) return { problems: r.problems, preview: r.problems.length ? null : r.preview, checks, detected, brief };
   const c = r.content!;
   const res = await run(env, "INSERT INTO mises (guild_id, title, week, sprint, comps, target, settings, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
@@ -393,7 +397,7 @@ export async function saveMise(env: Env, g: GuildRow, id: number, b: any) {
     const p = await programOf(env, g);
     const w = week ? weekOf(p, week) : null;
     const cn = await conceptOpts(env, g, b, { suggest: false, file: b.json ? readJson(b.json).data : contentOf(m) });
-    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts } });
+    const r = checkMise(b.json ?? contentOf(m), { known: new Set(p.referential.map((c) => c.code)), selected: comps, techs: w ? techSoFar(p, w) : [], week: w?.n ?? null, concepts: { known: cn.known, scope: cn.scope.length ? cn.scope : settingsOf(m).concepts }, free: true });
     if (r.problems.length) return { problems: r.problems };
     sets.push("content = ?", "week = ?", "sprint = ?", "comps = ?"); args.push(JSON.stringify(r.content), w?.n ?? null, w?.sprint ?? null, JSON.stringify(comps));
   }
@@ -410,6 +414,9 @@ const pickSettings = (s: any) => {
   if (s && "brief" in s) o.brief = briefRef(s.brief);
   if (s && "oneDevice" in s) o.oneDevice = !!s.oneDevice;
   if (s && "netAlerts" in s) o.netAlerts = !!s.netAlerts;
+  if (s && "files" in s) o.files = !!s.files;
+  if (s && "maxFiles" in s) o.maxFiles = Math.max(1, Math.min(20, Math.round(Number(s.maxFiles) || 8)));
+  if (s && "fileKB" in s) o.fileKB = Math.max(5, Math.min(100, Math.round(Number(s.fileKB) || 20)));
   if (s && "concepts" in s) o.concepts = (Array.isArray(s.concepts) ? s.concepts : []).map(String).filter((c: string) => /^S\d{1,2}\.[CFMBE]\d{1,2}$/.test(c)).slice(0, 30);
   return o;
 };
@@ -457,7 +464,7 @@ async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: stri
     : m.starts_at && m.starts_at > now() ? `Elle commence <t:${m.starts_at}:F>.` : "Elle est ouverte maintenant.";
   return dm(env, tk.discord_id, {
     embeds: [{ title: `🧪 Mise en situation : ${m.title}`, color: 0x2563eb,
-      description: [`${c.situations.length} mise${c.situations.length > 1 ? "s" : ""} en situation avec du code${c.qcm.length ? ` et ${c.qcm.length} QCM` : ""}, dans ton navigateur.`, when,
+      description: [`${c.situations.length ? `${c.situations.length} mise${c.situations.length > 1 ? "s" : ""} en situation avec du code${c.qcm.length ? ` et ${c.qcm.length} QCM` : ""}` : `${c.qcm.length} QCM`}, dans ton navigateur.`, when,
         late ? "" : m.ends_at ? `À rendre avant <t:${m.ends_at}:F>.` : st.minutes ? `Durée : ${st.minutes} minutes.` : "", "Ce lien est personnel : ne le partage pas."].filter(Boolean).join("\n") }],
     components: [row(linkBtn("Ouvrir ma mise en situation", url, "🧪"))],
   });
@@ -467,7 +474,7 @@ async function sendLink(env: Env, m: MiseRow, tk: { id: number; discord_id: stri
 export async function launch(env: Env, g: GuildRow, id: number, b: any) {
   const m = await getMise(env, g, id);
   if (statusOf(m) === "closed") throw new MiseError("This mise en situation is closed.");
-  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  if (!itemIds(contentOf(m)).length) throw new MiseError("Import Claude's JSON first.");
   const t0 = now();
   const startsAt = b.startsAt ? Math.max(t0, Math.round(Number(b.startsAt))) : t0;
   const s = { ...settingsOf(m), ...pickSettings(b) };
@@ -523,7 +530,7 @@ export async function reuseMise(env: Env, g: GuildRow, id: number): Promise<{ id
 export async function addLate(env: Env, g: GuildRow, id: number, students: string[], minutes: unknown, sendDm = true) {
   const m = await getMise(env, g, id);
   if (m.status === "draft") throw new MiseError("Launch it first.");
-  if (!contentOf(m).situations.length) throw new MiseError("Import Claude's JSON first.");
+  if (!itemIds(contentOf(m)).length) throw new MiseError("Import Claude's JSON first.");
   const st = settingsOf(m);
   // their time: asked, else the session's (its minutes, or how long it was open), else an hour
   const was = m.ends_at && (m.starts_at ?? m.opened_at) ? Math.round((m.ends_at - (m.starts_at ?? m.opened_at)!) / 60) : 0;
@@ -691,6 +698,7 @@ export async function startTaker(env: Env, takerId: number) {
     checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, (v.results ?? []).map((r) => ({ id: r.id, ok: r.ok }))])),
     ai: Object.fromEntries(Object.entries(ai).map(([k, v]) => [k, { left: Math.max(0, AI_CHECKS_PER_ITEM - v.filter((x: any) => !x.submit).length), last: (v.filter((x: any) => !x.submit).at(-1)?.categories ?? []).map((id) => ({ id, label: categoryLabel(id) })) }])),
     endsAt: ends, now: t0, noPaste: settingsOf(m).noPaste, lockScreen: settingsOf(m).lockScreen, status: "active",
+    files: { allow: settingsOf(m).files, max: settingsOf(m).maxFiles, kb: settingsOf(m).fileKB, exts: FILE_EXTS },
   };
 }
 
@@ -725,11 +733,10 @@ async function pushEvent(env: Env, takerId: number, e: MiseEvent) {
   await run(env, "UPDATE mise_takers SET events = json_insert(COALESCE(events, '[]'), '$[#]', json(?)) WHERE id = ? AND COALESCE(json_array_length(events), 0) < 1500", JSON.stringify(e), takerId);
 }
 const itemOf = (c: MiseContent, id: unknown) => { const s = String(id ?? ""); return itemIds(c).includes(s) ? s : null; };
-/** The files of a situation as the learner sent them (only its own file names, sizes capped). */
-function filesOf(s: Situation, raw: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const f of s.files) { const v = raw && typeof raw === "object" ? (raw as any)[f.name] : undefined; out[f.name] = typeof v === "string" ? v.slice(0, 20000) : f.starter; }
-  return out;
+/** The files of a situation as the learner sent them: the starter files, then their own files when the teacher allows them
+ *  (names, extensions, number and sizes checked: mises.ts workspaceOf). */
+function filesOf(m: Pick<MiseRow, "settings">, s: Situation, raw: unknown): Record<string, string> {
+  return workspaceOf(s, raw, fileRules(s.runtime, settingsOf(m)));
 }
 /** Autosave: an answer (the files of a situation, the choice of a QCM), the time spent, the typing record. */
 export async function saveItem(env: Env, takerId: number, b: any) {
@@ -740,7 +747,7 @@ export async function saveItem(env: Env, takerId: number, b: any) {
   if (item && b.answer !== undefined) {
     const s = c.situations.find((x) => x.id === item);
     const q = c.qcm.find((x) => x.id === item);
-    const ans = s ? { files: filesOf(s, b.answer?.files) } : { choice: Number.isInteger(Number(b.answer?.choice)) && Number(b.answer.choice) >= 0 && Number(b.answer.choice) < (q?.choices.length ?? 0) ? Number(b.answer.choice) : null };
+    const ans = s ? { files: filesOf(m, s, b.answer?.files) } : { choice: Number.isInteger(Number(b.answer?.choice)) && Number(b.answer.choice) >= 0 && Number(b.answer.choice) < (q?.choices.length ?? 0) ? Number(b.answer.choice) : null };
     sets.push("answers = json_set(COALESCE(answers, '{}'), ?, json(?))"); args.push(`$.${item}`, JSON.stringify(ans));
   }
   // the typing record of this visit of the page (a reload is a new visit: the earlier ones stay)
@@ -763,7 +770,7 @@ function cleanLog(raw: any, at: number) {
   if (!raw.files || typeof raw.files !== "object") return null;
   const files: Record<string, { changes: [number, number, number, string, string][]; pastes: number }> = {};
   let size = 0;
-  for (const [name, f] of Object.entries(raw.files).slice(0, 4) as [string, any][]) {
+  for (const [name, f] of Object.entries(raw.files).slice(0, 20) as [string, any][]) {
     if (!/^[\w.-]{1,40}$/.test(name) || !Array.isArray(f?.changes)) continue;
     const changes: [number, number, number, string, string][] = [];
     for (const x of f.changes.slice(-3000)) {
@@ -788,7 +795,7 @@ export async function learnerEvent(env: Env, takerId: number, b: any) {
   const item = itemOf(c, b.item) ?? "";
   const n = Math.max(0, Math.min(10_000_000, Math.round(Number(b.n) || 0)));
   // what was pasted, for the teacher (the start of it)
-  const extra = kind === "paste" || kind === "paste-blocked" ? str(b.text, 400) : undefined;
+  const extra = kind === "paste" || kind === "paste-blocked" ? str(b.text, 400) : kind === "file" ? str(b.text, 100) : undefined;
   await pushEvent(env, x.t.id, [now(), kind, item, n, ...(extra ? [extra] : [])] as MiseEvent);
   await run(env, "UPDATE mise_takers SET last_seen = ? WHERE id = ?", now(), x.t.id);
   return { ok: true };
@@ -804,7 +811,7 @@ export async function runItem(env: Env, takerId: number, b: any) {
   const c = contentOf(m);
   const s = c.situations.find((x) => x.id === String(b.item));
   if (!s) throw new MiseError("unknown item");
-  const files = filesOf(s, b.files);
+  const files = filesOf(m, s, b.files);
   const measure: any = { probes: b.measured?.probes && typeof b.measured.probes === "object" ? b.measured.probes : {}, console: str(b.measured?.console, 20000),
     rows: Array.isArray(b.measured?.rows) ? b.measured.rows.slice(0, 200) : null };
   let output: string | null = null, error: string | null = null;
@@ -815,7 +822,8 @@ export async function runItem(env: Env, takerId: number, b: any) {
     const main = s.files.find((f) => f.lang === lang) ?? s.files[0];
     const stdins = [...new Set(["", ...s.checks.filter((k) => k.type === "output" && k.stdin).map((k) => k.stdin!)])].slice(0, 3);
     try {
-      const outs = await Promise.all(stdins.map((x) => runOnce(env, lang, files[main.name], x)));
+      const code = lang === "php" ? phpWithIncludes(files, main.name) : files[main.name];
+      const outs = await Promise.all(stdins.map((x) => runOnce(env, lang, code, x)));
       output = outs[0].out; error = outs[0].ok ? null : outs[0].err || null;
       // each output check with the input it asks for
       const byStdin = new Map(stdins.map((x, i) => [x, outs[i].out]));
@@ -853,7 +861,7 @@ export async function aiCheck(env: Env, takerId: number, b: any, o: { submit?: b
   const ai = parse<Record<string, any[]>>(t.ai, {});
   const used = (ai[s.id] ?? []).filter((y) => !y.submit).length;
   if (!o.submit && used >= AI_CHECKS_PER_ITEM) return { error: "Tu as utilisé tes 3 vérifications pour cette mise en situation.", left: 0 };
-  const files = b.files ? filesOf(s, b.files) : filesOf(s, parse<any>(t.answers, {})[s.id]?.files);
+  const files = filesOf(m, s, b.files ? b.files : parse<any>(t.answers, {})[s.id]?.files);
   const last = parse<TakerData["checks"]>(t.checks, {})[s.id]?.results ?? [];
   const failed = last.filter((r) => !r.ok).map((r) => s.checks.find((k) => k.id === r.id)?.label ?? "").filter(Boolean);
   let ask: Awaited<ReturnType<typeof askReview>>;
@@ -965,7 +973,7 @@ export async function miseView(env: Env, g: GuildRow, id: number) {
   const stats = { ...classStats(c, (testOnly ? takers.filter((t) => staff.has(t.discord_id) && started(t)) : learners).map((t) => ({ answers: parse(t.answers, {}), checks: parse(t.checks, {}), ai: parse(t.ai, {}), spent: parse(t.spent, {}) }))), testOnly };
   const p = await programOf(env, g);
   const w = m.week ? p.weeks.find((x) => x.n === m.week) ?? null : null;
-  const checks = c.situations.length ? miseChecks(c, { weekComps: weekComps(w), selected: parse<string[]>(m.comps, []), brief: settingsOf(m).brief?.title }) : [];
+  const checks = itemIds(c).length ? miseChecks(c, { weekComps: weekComps(w), selected: parse<string[]>(m.comps, []), brief: settingsOf(m).brief?.title }) : [];
   return { mise: { ...m, content: c, status: statusOf(m), comps: parse<string[]>(m.comps, []), target: parse<string[]>(m.target, []), settings: settingsOf(m), preview: previewOf(c), now: t0, checks }, takers: rows, stats };
 }
 

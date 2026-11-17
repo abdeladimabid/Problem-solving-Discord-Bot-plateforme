@@ -329,7 +329,7 @@ async function viewSprints(arg) {
     <div id="sp-body"></div>`;
   $("#sp-sel").onchange = (e) => { location.hash = `#/sprints/${e.target.value}${e.target.value !== "year" && tab === "review" ? "/review" : ""}`; };
   if (n === null) return sprintYear(O);
-  if (tab === "diag" && typeof renderDiag === "function") return renderDiag(n, $("#sp-body"));
+  if (tab === "diag") return lazyCall("renderDiag", n, $("#sp-body"));
   SPR = { D: await api(`/sprints/${n}`), n, filter: "all", sort: "name" };
   renderSprint();
 }

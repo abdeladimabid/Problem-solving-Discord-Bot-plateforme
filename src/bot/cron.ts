@@ -45,22 +45,25 @@ export async function runCron(env: Env) {
   // AI generation first: students are waiting for it (one job per minute keeps
   // us inside the free plan's limits)
   let generated = false;
+  // what isn't urgent (weekly or daily messages, roles, the shop, the seasons…: each knows what it already did) runs
+  // every 5 minutes, not every minute: 5 times fewer database reads at night, on weekends and between classes
+  const slow = new Date().getUTCMinutes() % 5 === 1 || env.CRON_EVERY_MINUTE === "1";
   await safe("queue", async () => { generated = (await processQueue(env, 1)) > 0; });
-  await safe("commands", () => syncCommands(env));
+  if (slow) await safe("commands", () => syncCommands(env));
   if (new Date().getUTCMinutes() % 10 === 0) await safe("skills", () => backfillSkills(env, 80));   // new challenges are tagged when picked anyway
   await safe("contests", () => pollDueContests(env));
   await safe("sessions", () => endDueSessions(env));
   await safe("duels", () => sweepDuels(env));
   await safe("assignments", () => sweepAssignments(env));
-  await safe("practice", () => run(env, "UPDATE attempts SET status = 'expired', finished_at = ? WHERE status = 'pending' AND origin = 'practice' AND started_at < ?", now(), now() - 86400));
+  if (slow) await safe("practice", () => run(env, "UPDATE attempts SET status = 'expired', finished_at = ? WHERE status = 'pending' AND origin = 'practice' AND started_at < ?", now(), now() - 86400));
   await safe("daily", () => postDailies(env, !generated));
-  await safe("digest", () => weeklyDigests(env));
-  if (!generated) await safe("roles", () => syncDueRoles(env));
-  await safe("plans", () => sendMorningPlans(env));
-  if (!generated) await safe("reports", () => sendWeeklyReports(env));
-  await safe("teacher summary", () => sendTeacherSummaries(env));
+  if (slow) await safe("digest", () => weeklyDigests(env));
+  if (!generated && slow) await safe("roles", () => syncDueRoles(env));
+  if (slow) await safe("plans", () => sendMorningPlans(env));
+  if (!generated && slow) await safe("reports", () => sendWeeklyReports(env));
+  if (slow) await safe("teacher summary", () => sendTeacherSummaries(env));
   await safe("events", () => sweepEvents(env));
-  await safe("shop", () => expireShop(env));
+  if (slow) await safe("shop", () => expireShop(env));
   await safe("github", () => githubCron(env));
   await safe("assessments", () => assessCron(env));
   await safe("mises en situation", () => miseCron(env));
@@ -68,12 +71,16 @@ export async function runCron(env: Env) {
   await safe("idle", () => idleCron(env, (uid, payload) => dm(env, uid, payload)));
   // VS Code activity: once a night, the raw heartbeats past each class's retention days go (the day totals stay)
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 17) await safe("vscode retention", () => purgeRaw(env)); }
+  // the editor replays (every keystroke of an attempt): 90 days are kept, the attempts and their points stay
+  { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 21) await safe("replays retention", () => run(env, "DELETE FROM attempt_logs WHERE created_at < ?", now() - 90 * 86400)); }
+  // the connector's journal (Settings → Claude connector shows the last calls): 90 days are kept
+  { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 19) await safe("connector journal", () => run(env, "DELETE FROM mcp_log WHERE at < ?", now() - 90 * 86400)); }
   { const d = new Date(); if (d.getUTCHours() === 2 && d.getUTCMinutes() === 23) await safe("intranet profiles", () => syncIntranetProfiles(env)); }
   // the trainers' Google Sheets: after a change, every Monday, the day after a sprint ends
   if (!generated) await safe("google sheet", () => sheetCron(env));
-  await safe("seasons", () => seasonCron(env));
+  if (slow) await safe("seasons", () => seasonCron(env));
   if (new Date().getUTCMinutes() % 30 === 0) await safe("league links", () => refreshRemotes(env));
-  await safe("league", () => announceLeague(env));
+  if (slow) await safe("league", () => announceLeague(env));
 }
 
 // ------------------------------------------------------- slash commands

@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { intranetFake, googleFake, googleDocFake } from "./harness.ts";
 import { getPortfolio, _test as _pf } from "../src/shared/portfolio.ts";
-import { access, ai, aiFake, clock, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
+import { access, ai, aiFake, clock, paiza, d1, discordCalls, discordFake, discordRoles, github, gtrans, hr, leagueFake, makeCtx, makeEnv, runner, signedRequest } from "./harness.ts";
 import botRaw from "../src/bot/index.ts";
 // Papers (/quiz, /mes) open only after « Sign in with Discord »: the old tests act as an already signed-in browser
 // (device "testdev-0000000000"), unless they send x-test-noident (the sign-in tests).
@@ -37,12 +37,15 @@ import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
-import { assessForAi } from "../src/shared/review/debrief.ts";
+import { assessForAi, paperFacts } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
 import { cleanLive as actCleanLive, cleanVeille as actCleanVeille, dataItems as actDataItems, cleanPlan as actCleanPlan, cleanProposal as actCleanProposal, dayInfo as actDayInfo, holidayOf as actHolidayOf, INSPIRATION as actInspiration, proposalOutside as actProposalOutside, renderWeek as actRenderWeek, topicsFor as actTopicsFor, veillePrompt as actVeillePrompt, livePrompt as actLivePrompt, weekContext as actWeekContext, weekLabels as actWeekLabels, formFields as actFormFields, linkOk as actLinkOk, namedFunctions as actNamedFunctions, rangeDays as actRangeDays, renderLive as actRenderLive, renderVeille as actRenderVeille, splitWeeks as actSplitWeeks, stackOf as actStackOf, techSoFar, validateLive as actValidateLive, validateVeille as actValidateVeille, weekFacts as actWeekFacts } from "../src/shared/activities.ts";
 import { pushStatus } from "../src/shared/github.ts";
+import { _wandboxCool, runHarness, wandboxPace } from "../src/shared/runner.ts";
+wandboxPace.waits = [5, 5, 5, 5];   // the waits when Wandbox is busy: short in the tests
+import { explainQuestions } from "../src/shared/ai.ts";
 import { allowedLevel, blockSql, getBlocks, quickKindFor, setBlock } from "../src/shared/practiceblock.ts";
 import { pickChallenge as pickForTest } from "../src/shared/challenges.ts";
 import { contribution as memberContribution, memberLevel, memberLevelOf, memberLevels } from "../src/shared/review/members.ts";
@@ -51,6 +54,7 @@ import { cleanWorkshop, renderWorkshop, slotOf, slotTaken, validateWorkshop, wor
 import { checkUrl, matchNames, toSign } from "../src/shared/intranet.ts";
 import { matchNames as sheetMatch, findTabs, sheetIdOf, weekKey, sheetCron } from "../src/shared/gsheet.ts";
 import * as M from "../src/shared/mises.ts";
+import { MONACO_VERSION, changeEntries } from "../src/bot/codeeditor.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 contestConfig.revealPause = 0;
@@ -1150,6 +1154,19 @@ section("anti-cheat: function mode, code editor, typing record, explain your cod
   check(JSON.parse(at.integrity).level === 0 && q1("SELECT COUNT(*) AS n FROM attempt_logs WHERE attempt_id = ?", aid).n === 1, "honest typing: no flag, replay stored");
   const ex: any = await (await ed("/explain", {})).json();
   check(ex.explain?.questions?.length === 2 && ex.explain.deadline > clock.now(), "2 questions about their own code");
+  {
+    // never a question about the starter's lines: the AI asking one is asked again; only starter code → no questions
+    const given = ["const data = require(\"fs\").readFileSync(0, \"utf8\").split(/\\s+/);", "let pos = 0;", "const next = () => data[pos++];", "console.log(solve(next()));"];
+    const code = [...given.slice(0, 3), "function solve(s) {", "  let r = \"\";", "  for (const ch of s) r = ch + r;", "  return r;", "}", given[3]].join("\n");
+    ai.explainQs.push(["What does `next()` do?", "Why is `pos` set to 0 on line 2?"], ["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]);
+    const qs = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(JSON.stringify(qs) === JSON.stringify(["What is the role of `r`?", "Why does the loop on line 6 go over each character?"]), `explain: questions about the starter refused, asked again (${JSON.stringify(qs)})`);
+    ai.explainQs.push(["What does `solve` return?", "What is `data`?"], ["How does line 1 read the input?"]);
+    const qs2 = await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "Reverse the string s.", code, given });
+    check(qs2 === null, "explain: no 2 good questions → none (the points aren't held over the starter)");
+    check(await explainQuestions(env, { lang: "en", codeLang: "javascript", statement: "x", code: given.join("\n"), given }) === null, "explain: only the starter code → nothing to explain");
+    ai.explainQs.length = 0;
+  }
   const ans: any = await (await ed("/answer", { answers: ["r builds the encoded string", "an empty string, because the loop never runs"] })).json();
   check(ans.explain.done && ans.explain.score === 0.75, "answers graded (75%)");
   const after = q1("SELECT points, held FROM attempts WHERE id = ?", aid);
@@ -3133,7 +3150,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   void askedU;
   const rm = await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "Ne sait pas expliquer margin/padding.", ai: true });
   check(rm.status === 200 && rm.data.review.remarks.advice.length === 1 && rm.data.review.remarks.advice[0].code === "C3" && rm.data.review.remarks.advice[0].avis === "ko", "one-to-one remarks: the AI says which competency they question (only the brief's)");
-  check(/Ce que tu dois apprendre en priorité :\n[\s\S]*la différence entre margin et padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
+  check(/encore travailler en priorité[\s\S]*margin(?:\/| et )padding/i.test(rm.data.review.result.feedback), "…and they go into the comment, as notions to review (sorted by the AI)");
   const lv = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, ai: true });
   check(lv.status === 200 && ai.users[ai.users.length - 1].includes("REMARQUES DU FACE-À-FACE"), "…and into the level the AI proposes");
   await api("POST", `/api/briefs/${id}/review/remarks`, { g: G, who, text: "" });
@@ -3142,7 +3159,7 @@ section("debriefs: oral questions (5 max, on the brief only), the level proposed
   run1("DELETE FROM ai_usage");   // these extra AI calls don't count against the next tests' daily AI budget
   const s1 = await api("POST", `/api/briefs/${id}/review/states`, { g: G, who, states: { oral: [true, true, false, true] } });
   const fb = s1.data.review.result.feedback;
-  const notP = fb.split("\n\n").find((x: string) => /apprendre en priorité/.test(x)) || "";
+  const notP = (fb.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x)).join("\n\n");
   check(notP.toLowerCase().includes(o2.data.review.oral[2].notion.toLowerCase()) && !o2.data.review.oral.filter((x: any, i: number) => i !== 2).some((x: any) => notP.toLowerCase().includes(x.notion.toLowerCase())) && !/Cordialement|Notions à revoir/.test(fb) && !/\b(vous|votre|vos)\b/i.test(fb), "the comment: the oral question not answered is a notion to review, in « tu »");
   check(!!s1.data.review.level?.prop && q1("SELECT plevel FROM brief_reviews WHERE brief_id = ? AND who = ?", id, who).plevel === s1.data.review.level.prop, "a level proposed from the switches");
   const l1 = await api("POST", `/api/briefs/${id}/review/level`, { g: G, who, level: "moyen" });
@@ -4113,7 +4130,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(miss.includes("le point « Documenter la planification du projet dans le README »") === false && /il manque encore|Il vous reste/.test(miss) && miss.includes("permettre à l’utilisateur de voir une page contact avec un formulaire") && miss.includes("rendre le site adaptatif aux points de rupture 768 px et 1024 px") && miss.includes("documenter la planification du projet dans le README") && !/Compléter le point du brief/.test(sqm),
     "what is missing: in a sentence, never « Compléter le point du brief »");
   check(!/indenté|commit|branche|page en cours/i.test(fb), "…never the performance criteria nor the other automatic checks");
-  const not = paras.find((x) => /apprendre en priorité/.test(x)) || "";
+  const not = (fb.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x)).join("\n\n");
   check(not.toLowerCase().includes("la différence entre margin et padding") && not.toLowerCase().includes("le rôle de la balise <main>") && !/flexbox|attribut alt|à l’oral|échange|évaluation/i.test(not),
     "notions to review: from the one-to-one remarks (not what went well) and the oral questions not answered");
   check(!/C3|C4|niveau|%|compétence/i.test(fb), "no competency codes or names, no score");
@@ -4138,7 +4155,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   // ✨ the AI writes it like the teacher, from the debrief only; its answer is checked
   const pr = C.aiCommentPrompt(d);
   check(!pr.includes("Sara") && pr.includes("REMARQUES DU FORMATEUR") && !pr.includes("BONUS") && pr.includes("INDIVIDUEL, TECHNIQUE") && !pr.includes("mode sombre") && pr.includes("NIVEAU DÉCIDÉ PAR LE FORMATEUR") && !/commits|branches/i.test(pr) && C.AI_COMMENT_SYSTEM.includes("Tutoiement"), "the AI gets the decisions (no name, the bonus counted not listed, no automatic checks)");
-  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois apprendre en priorité :\n1. La différence entre margin et padding : la base de tout espacement autour et à l’intérieur d’un bloc.\n2. Le rôle de la balise <main> : choisir la balise qui correspond au rôle de chaque zone.\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
+  const body = "Ton travail est correct dans l’ensemble, et le menu est bien présent sur toutes les pages grâce à une mise en page avec Flexbox maîtrisée.\n\nCe que tu dois encore travailler en priorité, c’est la différence entre margin et padding (la base de tout espacement autour et à l’intérieur d’un bloc) et le rôle de la balise <main> (choisir la balise qui correspond au rôle de chaque zone).\n\n{prénom}, en reprenant ces points, tu vas rapidement gagner en solidité.";
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
@@ -4158,31 +4175,46 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     // notion once; never where it was seen, the level, the Fiche, a feature of the project
     const r2: any = { ...rec, oral: [{ q: "À quoi sert alt ?", notion: "L'attribut alt", a: "Décrire l’image pour ceux qui ne la voient pas." }, { q: "Quelle commande Git crée une branche ?", notion: "Création branche", a: "git checkout -b <nom>" }], final: { ...rec.final, oral: [false, false], mes: { r: "non_valide", note: "Elle n'a pas su ajouter le bouton supprimer du panier." } },
       assess: [{ members: { u9: { score: 40, ok: ["les fonctions"], ko: ["les événements JavaScript (addEventListener)", "le modèle de boîte et le centrage (margin, padding)"], summary: "" } } }],
-      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen" }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }] } };
+      level: { lvl: "faible", gaps: [{ text: "Sélectionner un élément du DOM avec querySelector", level: "moyen", seen: true }, { text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", seen: true }, { text: "Flexbox : aligner et répartir des éléments", level: "bon" }] } };
+    {
+      // an assessment's notions from what was really scored: one partly right answer among good ones isn't a gap
+      const qs = [{ id: "a", prompt: "Quelle commande Git crée une nouvelle branche ?" }, { id: "b", prompt: "Quelle commande Git envoie les commits sur le dépôt distant ?" }, { id: "c", prompt: "Que fait git merge sur une branche ?" },
+        { id: "d", prompt: "Quelle est la différence entre margin et padding ?" }, { id: "e", prompt: "Comment centrer un bloc avec margin auto ?" }];
+      const pf = paperFacts(qs, { g: { a: { verdict: "correct" }, b: { verdict: "correct" }, c: { verdict: "partial", score: 60 }, d: { verdict: "incorrect", score: 0 }, e: { verdict: "partial", score: 50 } }, an: {} });
+      check(pf.ok.some((x) => /Git/.test(x)) && !pf.ko.some((x) => /Git/.test(x)) && pf.ko.some((x) => /boîte/.test(x)), `assessment: Git mostly right → mastered, not to relearn; the box model missed → to learn (${JSON.stringify(pf)})`);
+    }
     const d2 = C.commentData({ first: "Sara", project: rec.brief, rec: r2, uid: "u9" });
-    const t2 = C.commentText(d2), list = t2.split("\n\n").find((x: string) => x.startsWith("Ce que tu dois apprendre en priorité :")) || "", lines = list.split("\n").filter((l: string) => /^\d\. /.test(l));
-    check(/^1\. La différence entre margin et padding : la différence entre margin, padding et border/.test(lines[0]) && /^2\. Écrire la structure de base d’une page avec doctype, head et body/.test(lines[1]) && /^3\. Sélectionner un élément du DOM avec querySelector : sélectionner un élément, modifier son contenu/.test(lines[2])
-      && lines.some((l: string) => /^\d\. L'attribut alt : insérer une image/.test(l)) && lines.some((l: string) => /^\d\. Création branche/.test(l)) && lines.some((l: string) => /^\d\. Les événements JavaScript : réagir à un clic/.test(l))
-      && lines.filter((l: string) => /margin/.test(l)).length === 1 && !/bouton supprimer|^\d\. (HTML|CSS|JavaScript|Git) :/m.test(list),
-      `what to learn, directly: the remarks, the Fiche, the oral, the assessment; one notion once; never a category nor a feature (${lines.join(" | ")})`);
-    check(lines.every((l: string) => C.wordCount(l) <= 35) && !/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list),
-      "…short lines, never where it was seen, the level or the Fiche");
+    check(!d2.toLearn.some((x: any) => /Flexbox/.test(x.notion)), "a Fiche item kept before the brief check (no « seen »): never in the comment");
+    // a good learner: the AI never adds points to learn, nor the « practise every day » advice
+    const good = { ...d2, level: "bon", toLearn: d2.toLearn.slice(0, 1), notions: d2.notions.slice(0, 1) };
+    const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", les fonctions asynchrones avec fetch et async/await, ainsi que les requêtes SQL avec jointure.\n\nContinue comme ça.";
+    check(C.aiCommentText(good, { commentaire: padded }) === null, "a good learner's AI comment that adds points to learn: refused (the comment is written from the switches)");
+    check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", à revoir avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
+    const t2 = C.commentText(d2), learnPs = (t2.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x)), list = learnPs.join("\n\n");
+    const L2 = d2.toLearn.map((x: any) => x.notion);
+    check(!/\n\d\. /.test(t2) && learnPs.length === L2.length && /^La différence entre margin et padding/.test(L2[0]) && /^Écrire la structure de base d’une page avec doctype, head et body/.test(L2[1]) && /^Sélectionner un élément du DOM avec querySelector/.test(L2[2])
+      && learnPs.every((x: string, i: number) => x.startsWith(L2[i].replace(/[.\s]+$/, "").charAt(0).toUpperCase() + L2[i].replace(/[.\s]+$/, "").slice(1)))
+      && /« box model »/.test(learnPs[0]) && /« querySelector »/.test(learnPs[2]) && learnPs.every((x: string) => !/ est l’espace| permet de |developer\.mozilla|Froggy|CSS-Tricks/.test(x))
+      && /l'attribut alt/i.test(list) && /création branche/i.test(list) && /les événements JavaScript/i.test(list)
+      && !/bouton supprimer|(HTML|CSS|JavaScript|Git) :/.test(list.split("\n\n").map((x: string) => x.slice(0, 40)).join(" ")),
+      `what to learn: one paragraph per point, no numbers, what it is, what to do and what to look up (${learnPs.map((x: string) => x.slice(0, 60)).join(" / ")})`);
+    check(!/à l’oral|la question|évaluation|échange|face à face|mise en situation|niveau|fiche|a\)/i.test(list), "…never where it was seen, the level or the Fiche");
     check(C.outsideNotions(d2, t2.split("\n\n").slice(1).join("\n\n")).length === 0, "…in the scope: the AI may talk about them");
     const sq2 = C.buildComment("", { ...r2, squad: { name: "Les Pixels" } }, r2.final);
-    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez apprendre en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
-    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires : margin, padding, alt, main et le DOM. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
-    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment without the numbered list of what is still to learn is refused");
-    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre en priorité :\n${lines.join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
-    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. La différence, vue à l’oral,") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null
-      && C.aiCommentText(d2, { commentaire: okAi.replace("1. La différence", "1. CSS : la différence") }) === null,
-      "an AI comment that says where a point was seen, the learner's level, or a category head (« CSS : ») is refused");
+    check(!/Sélectionner un élément du DOM/.test(sq2) && /Ce que vous devez encore travailler en priorité/.test(sq2) && !/\b(tu|ton|tes)\b|-toi\b/.test(sq2), "a squad: « vous », and no learner's Fiche items");
+    const flat = "Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCertaines notions ne sont pas claires. Revois-les bien avant la suite.\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.";
+    check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment that doesn't say what is still to learn is refused");
+    const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois encore travailler en priorité, point par point :\n\n${list}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    const numberedAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre :\n${L2.map((x: string, i: number) => `${i + 1}. ${x}, à bien revoir.`).join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
+    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: numberedAi }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("La différence entre margin", "Vu à l’oral, la différence entre margin") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null,
+      "an AI comment with a numbered list, that says where a point was seen, or the learner's level is refused");
     // a remark that only names a subject: its essentials, without what they showed they master
     check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
     const r3: any = { ...rec, result: { ...rec.result, exigences: [] }, oral: [{ q: "Comment centrer avec flex ?", notion: "Flexbox", a: "justify-content et align-items" }], final: { oral: [true] }, remarks: { text: "Plannification à revoir. Elle doit revoir tailwind." }, level: { lvl: "faible" } };
     const t3 = C.commentText(C.commentData({ first: "Sara", project: rec.brief, rec: r3 }));
-    const pl = t3.split("\n").find((l: string) => /^1\. La planification/.test(l)) || "", tw = t3.split("\n").find((l: string) => /^2\. L’utilisation de Tailwind/.test(l)) || "";
-    check(/user stories/.test(pl) && /tâches/.test(pl) && C.wordCount(pl) <= 40, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
-    check(/classes utilitaires/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/\(|a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
+    const ps3 = t3.split("\n\n"), pl = ps3.find((x: string) => /^La planification/.test(x)) || "", tw = ps3.find((x: string) => /^L’utilisation de Tailwind/i.test(x)) || "";
+    check(/user stor/.test(pl) && /tâche/.test(pl) && /Cherche «/.test(pl) && C.wordCount(pl) <= 60, `a vague « planification à revoir »: what planning well is, shortly (${pl})`);
+    check(/« Tailwind CSS utility classes »/.test(tw) && /responsive/.test(tw) && !/Flexbox/.test(tw) && !/a\)/.test(tw), `« revoir Tailwind »: its essentials, without what they showed (Flexbox answered), no list of options (${tw})`);
     const d3 = C.commentData({ first: "Sara", project: rec.brief, rec: r3 });
     check(C.outsideNotions(d3, t3).length === 0 && !/bonus/i.test(t3), "…and the AI may talk about these points (in the scope)");
   }
@@ -4193,15 +4225,44 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
       assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
     const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
-    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n1\. Les relations Eloquent : définir hasMany et belongsTo/.test(tl) && /\n2\. Écrire une migration : créer une table avec Schema::create\(\)/.test(tl)
-      && /\n\d\. Les fonctions : écrire une fonction/.test(tl) && !/JavaScript|bonus|il manque|articles|Mode sombre|\(hasMany/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 200,
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n\nLes relations Eloquent\. Cherche « Laravel Eloquent relationships »/.test(tl) && /\n\nÉcrire une migration\. Cherche « Laravel migrations »/.test(tl)
+      && /\n\nLes fonctions\. Cherche « fonction paramètres return »/.test(tl) && !/\n\d\. /.test(tl) && !/JavaScript|MDN|bonus|il manque|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 330,
       `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
     // never said mastered when it is also to learn (the same notion, from another source)
     const rh: any = { first: "Hiba", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, remarks: { text: "Ne maîtrise pas la manipulation du DOM et les sélecteurs JavaScript." },
       assess: [{ members: { u1: { score: 38, ok: ["CSS Grid"], ko: ["Flexbox"], summary: "" } } }, { members: { u1: { score: 22, ok: ["querySelector et HTMLCollection et NodeList"], ko: [], summary: "" } } }], level: { lvl: "critique" } };
     const th = C.commentText(C.commentData({ first: "Hiba", project: rh.brief, rec: rh, uid: "u1" }));
-    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n1\. La manipulation du DOM et les sélecteurs JavaScript : sélectionner un élément/.test(th) && /\n2\. Flexbox : aligner/.test(th),
+    check(/Tu maîtrises déjà CSS Grid\./.test(th) && !/querySelector et HTMLCollection/.test(th) && /\n\nLa manipulation du DOM et les sélecteurs JavaScript/.test(th) && /\n\nFlexbox[^\n]*« flexbox »/i.test(th),
       `what they master never contradicts what to learn; the DOM is never a CSS point (${th.split("\n\n").slice(1, 3).join(" / ")})`);
+  }
+  {
+    // a JavaScript sprint: never HTML nor CSS in the comment (the assessment touched them, the sprint isn't about them);
+    // the teacher's own remark always stays
+    const SP2 = "Développement d’interfaces dynamiques avec JavaScript moderne\n• Développer une interface Web interactive en manipulant le DOM avec JavaScript moderne. • Gérer les événements, formulaires et validations côté client. • Structurer et modulariser le code JavaScript en appliquant les fonctionnalités ES6+.";
+    check(JSON.stringify([...(C.sprintFamilies(SP2) || [])]) === '["javascript"]' && C.sprintFamilies("") === null && C.familyOf("Les listes et les tableaux HTML") === "html" && C.familyOf("Le modèle de boîte et le centrage (margin, padding)") === "css" && C.familyOf("la manipulation du DOM") === "javascript" && C.familyOf("Git (commit, branches)") === null,
+      "the sprint's subjects, and each notion's");
+    const rj: any = { first: "Yassine", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, sprintText: SP2,
+      remarks: { text: "Ne sait pas centrer une div avec flexbox." },
+      assess: [{ members: { u1: { score: 74, ok: ["CSS Grid", "querySelector"], ko: ["la manipulation du DOM", "les listes et les tableaux HTML", "le modèle de boîte et le centrage (margin, padding)", "les sélecteurs CSS (balise, classe, id)", "Git (commit, branches)"], summary: "" } } }], level: { lvl: "moyen" } };
+    const dj = C.commentData({ first: "Yassine", project: rj.brief, rec: rj, uid: "u1" }), tj = C.commentText(dj);
+    check(/manipulation du DOM/.test(tj) && /Git/.test(tj) && /flexbox/i.test(tj) && !/tableaux HTML|modèle de boîte|sélecteurs CSS|CSS Grid/.test(tj) && !/\n\d\. /.test(tj),
+      `a JavaScript sprint: no HTML nor CSS point (but the teacher's own remark), in one paragraph (${tj.split("\n\n").slice(1, 3).join(" / ")})`);
+    check(C.aiCommentPrompt(dj).includes("SUJETS HORS DU SPRINT") && /HORS DU SPRINT[^\n]*CSS/.test(C.aiCommentPrompt(dj)) && /HORS DU SPRINT[^\n]*HTML/.test(C.aiCommentPrompt(dj)) && dj.off!.includes("css"), "…the AI is told which subjects are outside the sprint");
+    const aiJ = (C.commentText(dj).split("\n\n").slice(1).join("\n\n"));
+    check(C.aiCommentText(dj, { commentaire: aiJ }) !== null && C.aiCommentText(dj, { commentaire: aiJ.replace("Ce que tu dois", "Tu maîtrises bien les balises sémantiques. Ce que tu dois") }) === null, "…and its comment refused when it talks about HTML or CSS");
+  }
+  {
+    // the teacher's own notes come first, each fact they noted (never the AI's summary of them), with what to look up; then
+    // the assessment's and the mise en situation's gaps
+    const ra: any = { first: "Aya", brief: "Mythoria", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } },
+      sprintText: "Développement d’interfaces dynamiques avec JavaScript moderne",
+      remarks: { text: "planification a revoir, pas de description, user stories, taille, deadlines, seulement une seule sous tache ?\nelle doit revoir JD DOM, elle a pas pu acceder aux classes appliqué sur un element, elle a pas pu aussi recuperer une image qui existe deja dans un div. elle doit revoir les selecteurs, les evenements et la manipulation dom", toReview: ["planification de projet", "sélecteurs DOM, accès aux classes, récupération d'images et manipulation d'événements"], positive: "" },
+      assess: [{ members: { u1: { score: 51, ok: [], ko: ["les tableaux JavaScript (map, filter)", "les fonctions"], summary: "" } } }, { kind: "mise", members: { u1: { score: 26, ok: [], ko: ["addEventListener", "createElement"], summary: "" } } }], level: { lvl: "faible" } };
+    const ta = C.commentText(C.commentData({ first: "Aya", project: ra.brief, rec: ra, uid: "u1" }));
+    const pa = (ta.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x));
+    check(/^Planification : pas de description, user stories/.test(pa[0] || "") && pa.some((x: string) => /^Acceder aux classes[^\n]*« classList contains »/.test(x)) && pa.some((x: string) => /^Recuperer une image qui existe deja dans un div[^\n]*« getAttribute »/.test(x))
+      && pa.some((x: string) => /^Les tableaux JavaScript/.test(x)) && pa.findIndex((x: string) => /^Les tableaux/.test(x)) > pa.findIndex((x: string) => /^Recuperer une image/.test(x)) && !/insérer une image|developer\.mozilla|Froggy/.test(ta),
+      `the teacher's notes first, each fact, with what to look up; then the assessment's gaps (${pa.map((x: string) => x.slice(0, 40)).join(" / ")})`);
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });
@@ -4220,8 +4281,17 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   check(k.data.review.result.feedback === wf, "…kept when a switch changes");
   const rb = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: {} });
   check(rb.data.review.result.feedback.startsWith("Carol,\n\n") && !rb.data.review.result.feedback.includes("Ton projet est bien structuré") && !rb.data.review.edited && !rb.data.review.commentBy, "↻ Rebuild: written again from the switches");
-  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [{ code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible" }, { code: "x", text: "Ignoré", level: "critique" }] } });
-  check(/\n\d\. Écrire la structure de base d’une page/.test(fgp.data.review.result.feedback) && !/niveau|fiche/i.test(fgp.data.review.result.feedback) && fgp.data.review.level.gaps.length === 1, "the Fiche's items not known, sent with the switches, go into the comment (never a Critique one)");
+  const fgp = await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [
+    { code: "S1.F2", text: "Écrire la structure de base d’une page avec doctype, head et body", level: "faible", ev: [{ ref: `b${bid}:o0`, got: 0 }, { ref: "a999:q1", got: 1 }] },
+    { code: "S1.M4", text: "Les listes et les tableaux HTML", level: "moyen", ev: [] },
+    { code: "S1.M5", text: "Le positionnement en CSS", level: "moyen", ev: [{ ref: "b99999:o1", got: 0 }, { ref: "a999:q2", got: 0 }] },
+    { code: "S1.B1", text: "Flexbox : aligner et répartir des éléments sur une ligne", level: "bon", ev: [{ ref: `b${bid}:o1`, got: 1 }, { ref: `b${bid}:c2`, got: 0 }, { ref: `b${bid}:t`, got: 1 }] },
+    { code: "S1.M6", text: "Le modèle de boîte et le centrage d’un bloc", level: "moyen", teacher: false, ev: [] },
+    { code: "x", text: "Ignoré", level: "critique", ev: [{ ref: `b${bid}:o0`, got: 0 }] }] } });
+  const fb0 = fgp.data.review.result.feedback;
+  check(/écrire la structure de base d’une page/i.test(fb0) && /(le modèle de boîte|la différence entre margin)/i.test(fb0) && !/\n\d\. /.test(fb0) && !/niveau|fiche/i.test(fb0) && fgp.data.review.level.gaps.length === 2,
+    `the Fiche's items go into the comment only when missed in THIS brief (or decided « not known » by the teacher) (${JSON.stringify(fgp.data.review.level.gaps.map((x: any) => x.code))})`);
+  check(!/listes et les tableaux|positionnement|Flexbox/i.test(fb0), "…never an item never asked, missed in another brief, or mostly right here: no programme of the sprint for everyone");
   await api("POST", `/api/briefs/${bid}/review/states`, { g: G, who, states: { ficheGaps: [] } });
   // the one-to-one counts: « ils ont répondu à toutes les questions » (as typed, with mistakes) switches the oral questions
   // on, goes in the strengths, and no oral notion is left to review
@@ -4912,7 +4982,7 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   const qs = [1, 2, 3].map((i) => ({ type: "explain", prompt: `Question numéro ${i}`, expected: "x", points: 1 }));
   const mk = await api("POST", "/api/assessments", { g: G, title: "Options", questions: qs, settings: { minutes: 0 } });
   const aid = mk.data.assessment.id;
-  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "forward", "by default: copy-paste blocked, full screen, shuffled, no going back");
+  check(mk.data.assessment.settings.noPaste === true && mk.data.assessment.settings.lockScreen === true && mk.data.assessment.settings.shuffle === true && mk.data.assessment.settings.nav === "free", "by default: copy-paste blocked, full screen, shuffled, they can move between the questions");
   const op = await api("POST", `/api/assessments/${aid}/options`, { g: G, noPaste: false, lockScreen: false, shuffle: false, nav: "forward" });
   await api("PUT", `/api/assessments/${aid}`, { g: G, title: "Options", questions: mk.data.assessment.questions, settings: { minutes: 30 } });
   check(q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"nav":"forward"') && q1("SELECT settings FROM assessments WHERE id = ?", aid).settings.includes('"minutes":30'), "saving the questions keeps the options");
@@ -4930,7 +5000,72 @@ section("assessments: options before inviting (copy-paste, full screen, shuffle,
   await quiz("event", { sid, what: "fullscreen" });
   check(q1("SELECT status FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).status === "active", "no full screen lock: leaving the page doesn't stop the session");
   const late = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "free", shuffle: true });
-  check(late.data.assessment.settings.nav === "forward" && late.data.assessment.settings.shuffle === false, "once a student started, the order and going back don't change anymore");
+  check(late.data.assessment.settings.nav === "free" && late.data.assessment.settings.shuffle === false, "once a student started: the order doesn't change, going back can still be opened");
+  const opened = await quiz("answer", { sid, qid: st.paper[1].id, answer: "deux", pos: 2 });
+  check(opened.status === 200 && opened.d.nav === "free", "…the student's page is told with their next answer");
+  const again = await quiz("answer", { sid, qid: st.paper[0].id, answer: "changé", pos: 0 });
+  check(again.status === 200 && JSON.parse(q1("SELECT answers FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).answers)[st.paper[0].id] === "changé", "…and they can go back and change a passed answer");
+  const shut = await api("POST", `/api/assessments/${aid}/options`, { g: G, nav: "forward" });
+  check(shut.data.assessment.settings.nav === "free", "going back can't be closed again once they've started");
+  // the student reloads the page: their session stops (as always), the teacher lets them back in, the page gets « free »
+  const sid2 = "sessionOPTOPTOPTOPTOPT02";
+  const re = (await quiz("start", { sid: sid2 })).d;
+  const tkId = q1("SELECT id FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, who).id;
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkId });
+  const back2 = (await quiz("start", { sid: sid2 })).d;
+  check(re.status === "locked" && back2.status === "active" && back2.rules.nav === "free" && back2.paper.length === 3, "after a reload: stopped until let back in, then the page moves freely between the questions");
+}
+
+section("assessments, no going back: a question passed without an answer comes back after a stop; « finish the missing » after sending");
+{
+  const qs = [1, 2, 3, 4].map((i) => ({ type: "explain", prompt: `Retour ${i}`, expected: "x", points: 1 }));
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Retour", questions: qs, settings: { minutes: 40 } });
+  const aid = mk.data.assessment.id;
+  await api("POST", `/api/assessments/${aid}/options`, { g: G, shuffle: true, nav: "forward" });
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.bob.id], send: false });
+  const tok = (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[U.bob.id].split("/quiz/")[1];
+  const quiz = async (action: string, body: any) => { const ctx = makeCtx(); const r = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }), env, ctx); await ctx.flush(); return { status: r.status, d: await r.json() as any }; };
+  const tkOf = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  const s1 = "sessionRETOURRETOUR0001";
+  const st = (await quiz("start", { sid: s1 })).d;
+  const P = st.paper.map((p: any) => p.id);
+  // q1 answered and validated, q2 passed empty, q3 answered (being typed)
+  await quiz("answer", { sid: s1, qid: P[0], answer: "réponse un", pos: 1, close: true });
+  await quiz("answer", { sid: s1, qid: P[1], answer: "", pos: 2, close: true });
+  await quiz("answer", { sid: s1, qid: P[2], answer: "réponse trois", pos: 2 });
+  check((await quiz("answer", { sid: s1, qid: P[0], answer: "changé", pos: 2 })).d.error === "passed", "a question validated with an answer: closed");
+  // out of full screen → stopped; the teacher lets them back in
+  await quiz("event", { sid: s1, what: "fullscreen" });
+  await api("POST", `/api/assessments/${aid}/unlock`, { g: G, taker: tkOf().id });
+  const s2 = "sessionRETOURRETOUR0002";
+  const back = (await quiz("start", { sid: s2 })).d;
+  check(back.status === "active" && back.paper.map((p: any) => p.id).join() === P.join() && back.closed.join() === P[0],
+    `back in: the same order, only the question validated with an answer is closed (${JSON.stringify(back.closed)})`);
+  const r2 = await quiz("answer", { sid: s2, qid: P[1], answer: "réponse deux après le retour", pos: 2, close: true });
+  check(r2.status === 200 && JSON.parse(tkOf().answers)[P[1]] === "réponse deux après le retour", "…the question passed without an answer can be answered now");
+  // a paper from before (no list): what was answered before their position stays closed, the rest is open
+  run1("UPDATE assessment_takers SET closed = NULL, pos = 3 WHERE id = ?", tkOf().id);
+  const { closedOf, questionsOf, settingsOf } = await import("../src/shared/assess.ts");
+  const ar = q1("SELECT * FROM assessments WHERE id = ?", aid);
+  check(closedOf({ ...tkOf(), answers: JSON.stringify({ [P[0]]: "a", [P[2]]: "c" }) }, questionsOf(ar), settingsOf(ar)).sort().join() === [P[0], P[2]].sort().join(), "a paper from before: only the answered questions before their position are closed");
+  // sent with a question not attempted
+  await quiz("submit", { sid: s2 });
+  check(["submitted", "graded"].includes(tkOf().status), "sent with question 4 not attempted");
+  const n0 = discordCalls.length;
+  const cm = await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id], minutes: "", days: 2 });
+  const tk2 = tkOf();
+  check(cm.status === 200 && cm.data.complete.opened === 1 && tk2.status === "locked" && tk2.lock_reason === "complete" && tk2.resume_ok === 1 && tk2.extra_min === 10 && !tk2.deadline
+    && discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${U.bob.id}/messages` && /didn't answer|non tentées|tentées/.test(text(c.body))),
+    `↩️ finish the missing: their link opens again, 10 min for 1 question of 4 (40 min), a DM (${JSON.stringify(cm.data.complete)})`);
+  const s3 = "sessionRETOURRETOUR0003";
+  const again = (await quiz("start", { sid: s3 })).d;
+  const miss = P.filter((id: string) => !again.closed.includes(id));
+  check(again.status === "active" && miss.length === 1 && again.deadline > clock.now() + 9 * 60, `…only the question not attempted is open, the time starts now (${miss.length} open)`);
+  check((await quiz("answer", { sid: s3, qid: P[0], answer: "changé", pos: 0 })).d.error === "passed", "…the others can't change");
+  await quiz("answer", { sid: s3, qid: miss[0], answer: "la dernière", pos: 3 });
+  await quiz("submit", { sid: s3 });
+  check(["submitted", "graded"].includes(tkOf().status) && Object.keys(JSON.parse(tkOf().answers)).length === 4, "…sent again: every question answered, graded again");
+  check((await api("POST", `/api/assessments/${aid}/complete`, { g: G, takers: [tkOf().id] })).data.complete.none === 1, "nothing missing any more: nothing to reopen");
 }
 
 section("AI limits: grading in small requests, waiting out a per-minute limit");
@@ -5035,6 +5170,13 @@ ${createHash("sha256").update(body, "utf8").digest("hex")}`, "the signed string:
   const img = await api("GET", `/api/intranet/photo/${U.carol.id}?g=${G}`);
   check(img.status === 200 && intranetFake.photoCalls === calls0 + 1, `…a photo is fetched from the intranet with the signed access (${img.status})`);
   check((await api("GET", `/api/intranet/photo/${U.bob.id}?g=${G}`)).status === 404 && intranetFake.photoCalls === calls0 + 1, "…no photo: nothing asked, 404");
+  {
+    // a shared portfolio shows it too (bot worker)
+    run1("UPDATE players SET share_key = 'carolpf12345' WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    const ph = await bot.fetch(new Request("https://bot.example.workers.dev/u/carolpf12345/photo"), env, makeCtx());
+    check(ph.status === 200 && /^image\//.test(ph.headers.get("content-type") || ""), `…and on the student's shared portfolio (${ph.status})`);
+    run1("UPDATE players SET share_key = NULL WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+  }
   // the squads of a sprint → a group distribution on the intranet (all or nothing; sent again: the same groups)
   run1("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'Sprint intranet', ?, 0, ?, ?)", G,
     JSON.stringify([{ id: "aa1111", name: "Squad A", members: [U.alice.id, U.bob.id], sm: U.alice.id }, { id: "bb2222", name: "Squad B", members: [U.carol.id], sm: U.carol.id }]), clock.now(), clock.now());
@@ -5889,6 +6031,105 @@ section("🎮 class games: Battle Royale, SQL Detective, Code Relay (TV + studen
   await rg.tv("state");
   const rt = await rg.tv("act", { a: "runtests" });
   check(rt.status === 200 && rt.data.phase === "over" && rt.data.results[rgs.data.teams[0].squad].passed === 5 && rt.data.winSquad === rgs.data.teams[0].squad, "the end of a Python relay: the server runs every squad's code, the most tests passed wins");
+  // ---------------------------------------------------------------- 🐞 bug hunt (solo, JavaScript)
+  {
+    const gen = await api("POST", `/api/games/bugs?g=${G}`, { count: 3, level: "mix", codeLang: "javascript" });
+    check(gen.status === 200 && gen.data.items.length === 2 && gen.data.dropped === 1 && gen.data.items[0].fn === "somme" && gen.data.items[1].bugs === 2,
+      `AI codes: each one checked by running it (the one without a real bug is left out) (${JSON.stringify(gen.data).slice(0, 160)})`);
+    const own = { title: "Pair", text: "estPair(n)", fn: "estPair", params: ["n"], level: "easy", bugs: 1, tests: [{ args: [2], expect: true }, { args: [3], expect: false }, { args: [0], expect: true }], code: "function estPair(n) { return n % 2 === 1; }", solution: "function estPair(n) { return n % 2 === 0; }" };
+    const ck = await api("POST", `/api/games/bugs/check?g=${G}`, { codeLang: "javascript", items: [own, { ...own, code: own.solution }, { ...own, solution: "function estPair(n) { return true; }" }, { fn: "x" }] });
+    check(ck.status === 200 && ck.data.results.map((r: any) => r.ok).join() === "true,false,false,false" && /no bug|passes every test/.test(ck.data.results[1].error) && /correct version fails/.test(ck.data.results[2].error),
+      "the teacher's (or Claude's) codes checked: a real bug, a correct version that passes, complete");
+    const items = [own, ...gen.data.items];
+    const B = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 600, lockScreen: true, noPaste: true, reward: 25 } });
+    check(B.status === 200 && B.data.kind === "bugs" && B.data.content.items.length === 3 && B.data.settings.bugTime === 600, "Bug Hunt created (solo, 3 codes, 10 min)");
+    const bh = game(B.data);
+    let parsedB = true;
+    try { for (const u of [B.data.tv, B.data.join]) new Function(scriptOf(await (await bot.fetch(new Request(u), env, makeCtx())).text())); } catch (e) { parsedB = false; console.log(e); }
+    check(parsedB, "Bug Hunt pages: valid scripts");
+    for (const [k, pid] of [[1, U.alice.id], [2, U.bob.id], [3, U.carol.id]] as [number, string][]) await bh.join(k, pid);
+    const bs = await bh.tv("act", { a: "start" });
+    check(bs.data.phase === "playing" && bs.data.board.length === 3 && bs.data.endAt === bs.data.now - (bs.data.now - bs.data.endAt), "the hunt starts: everyone on the board");
+    const a0 = await bh.play("state", dev(1));
+    check(a0.data.item.n === 1 && a0.data.item.code === own.code && a0.data.item.shown.length === 2 && !JSON.stringify(a0.data).includes("n % 2 === 0") && a0.data.top.length === 3 && a0.data.lockScreen,
+      "a student gets the first code (with its bugs), 2 examples, never the correct version nor the hidden tests; the top 3");
+    // a wrong fix: the tests say so (the visible ones in detail, the hidden ones counted)
+    const bad = await bh.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n > 1; }" });
+    check(bad.status === 200 && !bad.data.ok && bad.data.passed === 1 && bad.data.visible.length === 2 && bad.data.hiddenFailed === 1, "a wrong fix: what fails (shown and hidden)");
+    check((await bh.play("fix", dev(1), { idx: 0, code: own.solution })).status === 409, "one try every few seconds");
+    clock.advance(5);
+    const good = await bh.play("fix", dev(1), { idx: 0, code: own.solution });
+    const a1 = await bh.play("state", dev(1));
+    check(good.data.ok && good.data.next === 1 && a1.data.item.n === 2 && a1.data.item.title === "Somme" && a1.data.solved === 1 && a1.data.top[0].me && a1.data.top[0].solved === 1, "fixed: the next code comes; Alice leads the top 3");
+    const b1 = await bh.play("state", dev(2));
+    check(b1.data.top[0].name !== b1.data.me.name && b1.data.top[0].solved === 1 && b1.data.rank >= 2, "the others see the top 3 move");
+    // a draft kept; a stale index ignored
+    await bh.play("draft", dev(2), { idx: 0, code: "function estPair(n) { // en cours" });
+    check((await bh.play("state", dev(2))).data.item.code.includes("en cours") && (await bh.play("fix", dev(2), { idx: 1, code: "x" })).data.stale, "the code being typed is kept (a reload), an old index is ignored");
+    // anti-cheat: leaving full screen stops Bob until the teacher lets him back in
+    await bh.play("cheat", dev(2), { what: "fullscreen" });
+    const bl = await bh.play("state", dev(2));
+    check(bl.data.locked === "fullscreen" && (await bh.play("fix", dev(2), { idx: 0, code: own.solution })).status === 409 && Object.keys((await bh.tv("state")).data.teams.find((t: any) => t.locks[U.bob.id])?.locks || {}).length === 1, "anti-cheat: out of full screen, stopped (the TV sees it)");
+    await bh.tv("act", { a: "letin", pid: U.bob.id });
+    check(!(await bh.play("state", dev(2))).data.locked, "the teacher lets him back in");
+    // the anti-cheat off: nothing stops
+    // Alice fixes the 2 others: she wins, the hunt ends
+    clock.advance(5);
+    const f2 = await bh.play("fix", dev(1), { idx: 1, code: gen.data.items[0].solution });
+    clock.advance(5);
+    const f3 = await bh.play("fix", dev(1), { idx: 2, code: gen.data.items[1].solution });
+    const end = await bh.tv("state");
+    const winPts = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ? AND reason = 'game' AND ref = ?", G, U.alice.id, String(B.data.id)).s;
+    check(f2.data.ok && f3.data.done && end.data.phase === "over" && end.data.winSquad === end.data.board[0].squad && end.data.board[0].name === q1("SELECT name FROM players WHERE guild_id = ? AND discord_id = ?", G, U.alice.id).name && winPts === 25,
+      `the first to fix them all wins: the hunt ends, +25 points (${winPts})`);
+    const bo = await bh.play("state", dev(2));
+    check(bo.data.phase === "over" && bo.data.review.length === 3 && (bo.data.rank === 2 || bo.data.rank === 3), "the others see the result and their rank");
+    // time up with nobody done: the most codes fixed wins
+    const B2 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items, settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh2 = game(B2.data);
+    await bh2.join(1, U.alice.id); await bh2.join(2, U.bob.id);
+    await bh2.tv("act", { a: "start" });
+    check((await bh2.play("cheat", dev(1), { what: "fullscreen" })).data.ignored, "anti-cheat off: leaving full screen stops nobody");
+    // Wandbox saturated by the class ("429 Too many requests" three times): the fix waits and goes through
+    runner.tooMany = 3;
+    const pz0 = paiza.calls, wb0 = runner.calls;
+    const busyFix = await bh2.play("fix", dev(2), { idx: 0, code: own.solution + "\n// corrigé" });
+    check(busyFix.status === 200 && busyFix.data.ok && paiza.calls > pz0, `Wandbox saturated (429): the backup runner (paiza.io) runs the fix, it counts (${JSON.stringify(busyFix.data).slice(0, 80)})`);
+    const wb1 = runner.calls, pz1 = paiza.calls;
+    const next = await bh2.play("fix", dev(1), { idx: 0, code: "function estPair(n) { return n % 2 == 0; }" });
+    check(next.data.ok && runner.calls === wb1 && paiza.calls > pz1 && wb1 - wb0 === 2, "for a minute the runs go straight to the backup (Wandbox gets a rest)");
+    // a whole test run (a write challenge) on the backup too, the same rows as on Wandbox
+    const hz = await runHarness(env, "javascript", "const l = require('fs').readFileSync(0, 'utf8').trim(); console.log(l.split(' ').map(Number).reduce((a, b) => a + b, 0));", [{ input: "2 3", gen: null }, { input: "10 -4", gen: null }], 2);
+    check(hz.rows.length === 2 && hz.rows.every((r: any) => r.s === "ok") && hz.rows[1].o.trim() === "6" && runner.calls === wb1, "a write challenge's tests judged on the backup runner while Wandbox rests");
+    // both saturated: an honest « try again », nothing counted
+    paiza.down = true; runner.tooMany = 50;
+    clock.advance(6);
+    const both = await bh2.play("fix", dev(1), { idx: 1, code: "function somme(t) { return t.reduce((a, b) => a + b, 0); }" });
+    check(both.status === 409 && /runner/.test(both.data.error || ""), `both runners saturated: « try again », nothing counted (${both.status} ${both.data.error})`);
+    paiza.down = false; runner.tooMany = 0; _wandboxCool(0);
+    clock.advance(301);
+    const e2 = await bh2.tv("state");
+    check(e2.data.phase === "over" && e2.data.board[0].pid === U.bob.id && e2.data.winSquad === e2.data.board[0].squad, "the time is up: the one who fixed the most wins");
+    // the codes edited after a hunt: a statement or a translation saved as it is, a changed code checked again, a wrong one refused
+    const ed1 = B2.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, text: "estPair(n) dit si n est pair.", tr: { en: { title: "Even", text: "estPair(n) tells if n is even." } } } : x);
+    const pe = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: ed1 });
+    check(pe.status === 200 && pe.data.content.items[0].text.includes("dit si") && pe.data.content.items[0].tr.en.title === "Even", "Bug Hunt edited: a statement and a translation saved");
+    const pb = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [...ed1, { ...own, title: "Faux", code: own.solution }] });
+    check(pb.status === 400 && pb.data.error.includes("Faux") && (await api("GET", `/api/games/${B2.data.id}?g=${G}`)).data.content.items.length === 3, "a code without a bug added: refused, nothing saved");
+    const pa = await api("PUT", `/api/games/${B2.data.id}?g=${G}`, { items: [ed1[1], ed1[0], ed1[2], { ...own, title: "Pair 2", tests: [...own.tests, { args: [8], expect: true }] }] });
+    check(pa.status === 200 && pa.data.content.items.length === 4 && pa.data.content.items[1].title === ed1[0].title && pa.data.content.items[3].title === "Pair 2", "reordered and a code added (checked)");
+    const tr = await api("POST", `/api/games/${B2.data.id}/translate?g=${G}`, { langs: ["en", "ar"] });
+    const t0 = tr.data.content?.items?.[0]?.tr;
+    check(tr.status === 200 && tr.data.translated === 4 && t0?.ar?.title === "AR 0" && t0?.en?.title === "EN 0" && !t0?.fr, `🌍 translated by the AI into the languages asked (${JSON.stringify(t0)})`);
+    const B3 = await api("POST", `/api/games?g=${G}`, { kind: "bugs", mode: "solo", items: pa.data.content.items.map((x: any, i: number) => i === 0 ? { ...x, tr: { ar: { title: "زوجي", text: "هل العدد زوجي" } } } : x), settings: { codeLang: "javascript", bugTime: 300, lockScreen: false, noPaste: false } });
+    const bh3 = game(B3.data);
+    await bh3.join(1, U.carol.id);
+    await bh3.tv("act", { a: "start" });
+    check((await bh3.play("state", dev(1))).data.item.tr?.ar?.title === "زوجي", "a student gets the translations of the code (to switch the language)");
+    check((await api("PUT", `/api/games/${B3.data.id}?g=${G}`, { items: pa.data.content.items })).status !== 200, "during the hunt: the codes can't change");
+    const lst = await api("GET", `/api/games?g=${G}`);
+    check(lst.data.kinds.bugs.modes.join() === "solo" && lst.data.myBugs.some((x: any) => x.fn === "estPair" && x.codeLang === "javascript"), "the games page: Bug Hunt, the codes made before (to play again)");
+  }
   const list = await api("GET", `/api/games?g=${G}`);
   check(list.data.items.some((x: any) => x.id === R.data.id && x.players === 1) && list.data.myTasks.some((t: any) => t.fn === "doubler") && list.data.myCases.some((c: any) => c.title === "Le cookie disparu") && Array.isArray(list.data.battles) && list.data.langs.python, "the games page: the games, the challenges and cases made before (to play again), the squad battles");
 }
@@ -6778,6 +7019,21 @@ section("💼 portfolio: /portfolio (projects from GitHub or links, about me, co
   check(page.includes("Développeur web junior") && page.includes("Rabat") && page.includes("opengraph.githubassets.com/1/bob-gh/portfolio-site") && page.includes("https://bob-gh.github.io/portfolio-site")
     && page.includes("Mon blog") && page.includes("mailto:bob@example.com") && page.includes("linkedin.com/in/bob") && page.includes("avatars.githubusercontent.com/bob-gh"), "the portfolio: headline, city, projects with their image and demo, contacts, GitHub avatar");
   check(/internship|stage/.test(page) && !page.includes('class="badges"'), "…what they look for; a hidden part isn't there");
+  // the intranet photo first (the student can hide it: /portfolio show photo)
+  {
+    const lk = q1("SELECT learner_id, photo FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, U.carol.id);
+    run1("INSERT OR REPLACE INTO intranet_links (guild_id, discord_id, learner_id, learner_name, at, photo) VALUES (?, ?, ?, 'Bob', 0, ?)", G, B, lk?.learner_id ?? 501, lk?.photo ?? "501-1700000000.jpg");
+    const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    const ph = await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx());
+    check(pg.includes(`/u/${key}/photo?v=`) && !pg.includes('class="ava" src="https://avatars.githubusercontent.com') && ph.status === 404,
+      "the portfolio shows the intranet photo (here the intranet is disconnected: the link answers nothing, the initials show)");
+    await pf("show", { part: "photo", visible: false });
+    const pg2 = await (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}`), env, makeCtx())).text();
+    check(!pg2.includes("/photo?v=") && pg2.includes("avatars.githubusercontent.com/bob-gh") && (await bot.fetch(new Request(`https://bot.example.workers.dev/u/${key}/photo`), env, makeCtx())).status === 404,
+      "…hidden by the student: the GitHub photo again, and the photo link answers nothing");
+    await pf("show", { part: "photo", visible: true });
+    run1("DELETE FROM intranet_links WHERE guild_id = ? AND discord_id = ?", G, B);
+  }
   check(!/<script/i.test(page), "no script on the page");
   const rm = P.projects.find((x) => !x.repo)!;
   await pf("remove", { project: rm.id });
@@ -6870,6 +7126,56 @@ section("🚫 practice blocks: one student, one type (some levels, some days), n
   const del = await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=output`);
   check(del.status === 200 && !del.data.blocks.some((b: any) => b.type === "output"), "lifting one block from the dashboard");
   check((await api("GET", `/api/students/${D.id}/blocks?g=${G}`)).data.blocks.length === 2, "the student's page reads their blocks");
+
+  // several types at once: one DM naming them all
+  {
+    const n0 = discordCalls.length;
+    const pm = await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["git", "complexity"], levels: ["hard"], days: 7, reason: "brief first", notify: true });
+    const dmT = discordCalls.slice(n0).filter((c) => c.path === `/channels/dm-${D.id}/messages`).map((c) => text(c.body));
+    check(pm.status === 200 && ["git", "complexity"].every((k) => pm.data.blocks.find((b: any) => b.type === k)?.levels.join() === "hard") && dmT.length === 1 && /Git/.test(dmT[0]) && /Complexity/i.test(dmT[0]),
+      `several types blocked in one go, one DM for all of them (${dmT.length} DM)`);
+    check((await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: [], notify: false })).status === 400 && (await api("PUT", `/api/students/${D.id}/blocks`, { g: G, types: ["mcq", "nope"] })).status === 400,
+      "…no type, or an unknown one: refused");
+    // 👥 every student of the class at once (not the teacher)
+    const n1 = discordCalls.length;
+    const all = await api("POST", "/api/practice-blocks", { g: G, students: "all", types: ["sql", "regex"], days: 3, reason: "cours SQL demain", notify: true });
+    const cls = (await api("GET", `/api/students?g=${G}`)).data;
+    const blocked = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    const both = blocked.filter((x: any) => ["sql", "regex"].every((k) => x.blocks.some((b: any) => b.type === k)));
+    await new Promise((r) => setTimeout(r, 30));
+    const dmN = discordCalls.slice(n1).filter((c) => /^\/channels\/dm-.*\/messages$/.test(c.path)).length;
+    check(all.status === 200 && all.data.students === cls.length && both.length === cls.length && !both.some((x: any) => x.uid === U.prof.id),
+      `👥 all my students: the same block for every student of the class, not the teacher (${all.data.students}/${cls.length})`);
+    check(dmN <= cls.length, "…at most one DM per student");
+    check((await api("POST", "/api/practice-blocks", { g: G, students: ["999999"], types: ["sql"] })).status === 400, "…nobody of the class chosen: refused");
+    const la = await api("DELETE", `/api/practice-blocks?g=${G}&type=regex`);
+    const after = (await api("GET", `/api/practice-blocks?g=${G}`)).data.students;
+    check(la.status === 200 && la.data.students === cls.length && !after.some((x: any) => x.blocks.some((b: any) => b.type === "regex")) && after.some((x: any) => x.blocks.some((b: any) => b.type === "sql")),
+      "lift one type for everyone (the other blocks stay)");
+    await api("DELETE", `/api/practice-blocks?g=${G}&type=sql`);
+    for (const k of ["git", "complexity"]) await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=${k}`);
+    // the sql block of D from the test above comes back as it was
+    await setBlock(env, G, D.id, { type: "sql", days: 3 });
+  }
+
+  // solved anyway through /today, the path or the daily: no points, no coins
+  {
+    await setBlock(env, G, D.id, { type: "mcq", levels: ["easy"], reason: "projet d'abord" });
+    const cm = q1("SELECT * FROM challenges WHERE guild_id = ? AND kind = 'mcq' AND difficulty = 'easy' AND status = 'active' LIMIT 1", G)
+      || q1("SELECT * FROM challenges WHERE kind = 'mcq' AND difficulty = 'easy' LIMIT 1");
+    const gRow = q1("SELECT * FROM guilds WHERE id = ?", G);
+    const p0 = q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins;
+    const l0 = q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s;
+    for (const origin of ["path", "daily"]) {
+      const id = Number(db.prepare("INSERT INTO attempts (guild_id, discord_id, challenge_id, origin, status, started_at, tries) VALUES (?, ?, ?, ?, 'pending', ?, 1)").run(G, D.id, cm.id, origin, clock.now() - 30).lastInsertRowid);
+      const out = await finish(env, gRow, q1("SELECT * FROM attempts WHERE id = ?", id), cm, true, { verified: 1 });
+      check(out.solved && q1("SELECT points FROM attempts WHERE id = ?", id).points === 0 && /paused for you|en pause pour toi/.test(JSON.stringify(out.payload)),
+        `a blocked type solved through ${origin}: counted as solved, 0 points, the student is told why`);
+    }
+    check(q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, D.id).coins === p0 && q1("SELECT COALESCE(SUM(amount), 0) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, D.id).s === l0,
+      "…no point and no coin at all (not even the daily's bonus)");
+    await api("DELETE", `/api/students/${D.id}/blocks?g=${G}&type=mcq`);
+  }
 
   // it ends by itself
   await setBlock(env, G, D.id, { type: "regex", days: 1 });
@@ -7472,6 +7778,24 @@ section("mises en situation: Claude's JSON checked strictly, the prompt, the pap
     const r12 = M.checkMise(d12, { ...opts, count: { situations: 12, qcm: 5 } });
     check(!r12.problems.length && r12.content!.situations.length === 12 && r12.content!.situations[11].id === "m12", "12 situations, as asked " + JSON.stringify(r12.problems.slice(0, 2)));
     check(has(probs((d) => { d.situations = Array.from({ length: 16 }, () => good().situations[0]); }), "file", /1 to 15/), "…16: more than the limit"); }
+  // the teacher's own file: many situations, another week, a technology not seen yet: advice (the checklist), the format still checked
+  { const d31 = good(); d31.week = 9; d31.situations = Array.from({ length: 31 }, (_, i) => ({ ...good().situations[i % 5], context: good().situations[i % 5].context + " Ajoute les classes Bootstrap btn et btn-primary." }));
+    const fr = M.checkMise(d31, { ...opts, week: 3, free: true });
+    check(!fr.problems.length && fr.content!.situations.length === 31 && fr.content!.week === 3, "a teacher's file of 31 situations from week 9 with Bootstrap: accepted, saved in week 3 " + JSON.stringify(fr.problems.slice(0, 2)));
+    const adv = M.adviceChecks(fr.advice).map((c) => c.text).join("\n");
+    check(/"week" is 9, but you chose week 3/.test(adv) && /situation 1, situation 2, situation 3 and 28 more · out of scope: Bootstrap/.test(adv), "…what isn't the week's scope is told in the checklist, one line each " + adv);
+    check(has(M.checkMise(d31, { ...opts, week: 3 }).problems, "file", /1 to 15/), "…the AI's file is still held to 15 and to the week");
+    check(has(probs((d) => { d.situations[0].runtime = "nope"; }, { ...opts, free: true }), "situation 1", /"runtime": one of/), "…a broken format is still refused");
+    check(has(probs((d) => { d.situations = Array.from({ length: M.MAX_IMPORT_SITUATIONS + 1 }, () => good().situations[0]); }, { ...opts, free: true }), "file", new RegExp(`1 to ${M.MAX_IMPORT_SITUATIONS}`)), `…more than ${M.MAX_IMPORT_SITUATIONS}: refused`); }
+  // …or QCM only, many of them (no situations, or the list left out): 1 point each with the automatic barème
+  { const q203 = good(); q203.situations = []; q203.qcm = Array.from({ length: 203 }, (_, i) => ({ ...good().qcm[i % 5], question: `Question ${i + 1} : que renvoie document.querySelector(".prix") ?` }));
+    const rq = M.checkMise(q203, { ...opts, free: true, scoring: { qcmShare: 20 } });
+    check(!rq.problems.length && rq.content!.situations.length === 0 && rq.content!.qcm.length === 203 && rq.preview!.points === 203, "a teacher's file of 203 QCM and no situation: accepted, 1 point each " + JSON.stringify(rq.problems.slice(0, 2)));
+    const { situations: _s, ...noS } = q203;
+    check(!M.checkMise(noS, { ...opts, free: true }).problems.length, "…the situations list may be left out");
+    check(has(M.checkMise(q203, opts).problems, "file", /1 to 15 mises en situation \(found 0\)/), "…the AI's file still needs situations");
+    check(has(M.checkMise({ ...q203, qcm: [] }, { ...opts, free: true }).problems, "file", /"situations": 1 to/), "…nothing at all: refused");
+    check(!M.miseChecks(rq.content!).some((c) => /^Difficulty|automatic checks/.test(c.text)), "…its checklist says nothing of situations"); }
   const prN = M.buildPrompt({ program: P0, week: P0.weeks.find((w) => w.n === 3)!, next: null, techs: ["HTML", "CSS", "JavaScript"], comps: ["C3N1"], count: { situations: 8, qcm: 0 } } as any);
   // the automatic barème: situations by difficulty, the QCM a fixed share of the score, whatever their number
   { const r = M.checkMise(good(), { ...opts, scoring: { qcmShare: 20 } }); const c = r.content!;
@@ -7578,8 +7902,10 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
     errorHints: ["selection", "syntax"] });
   const file = { format: "classbot-mise-en-situation@1", title: "Tifawin", week: 3, metier: "Coopérative d'argan", competencies: ["C3N1", "C4N1"], situations: [1, 2, 3, 4, 5].map(sit),
     qcm: [1, 2, 3, 4, 5].map((i) => ({ question: `QCM ${i} : que fait textContent ?`, choices: ["Il change le texte", "Il change le style", "Il supprime l'élément"], correct: 0, competencies: ["C4N1"], notion: "textContent" })) };
-  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
-  check(bad.status === 200 && bad.data.problems.some((p: any) => /exactly 5 questions/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  const bad = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify({ ...file, qcm: file.qcm.map((q, i) => (i ? q : { ...q, choices: ["Il change le texte", "Il change le style"] })) }) });
+  check(bad.status === 200 && bad.data.problems.some((p: any) => p.where === "QCM 1" && /"choices": 3 or 4/.test(p.msg)) && !bad.data.preview, "import: a broken file shows its problems, no preview");
+  { const fewer = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], nSituations: 5, nQcm: 5, json: JSON.stringify({ ...file, qcm: file.qcm.slice(0, 4) }) });
+    check(!fewer.data.problems.length && fewer.data.preview && fewer.data.checks.some((c: any) => !c.ok && /4 QCM/.test(c.text)), "…but the teacher's own file isn't held to a count: 4 QCM instead of 5 is said in the checklist only"); }
   { const auto = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], json: JSON.stringify(file) });
     const fileP = await api("POST", "/api/mises/import", { g: G, week: 3, comps: ["C3N1", "C4N1"], scoring: "file", json: JSON.stringify(file) });
     check(auto.status === 200 && Math.abs(auto.data.preview.points - fileP.data.preview.points) > 0.01 && fileP.data.preview.points === file.situations.length * 3 + file.qcm.length, "import: the automatic barème by default, the file's points when asked"); }
@@ -7606,10 +7932,11 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   const page = await mes(U.alice.id);
   check(page.status === 200 && page.headers.get("cache-control") === "no-store" && page.headers.get("x-frame-options") === "DENY", "the learner page (not cached, not framable)");
   const h = String(page.data);
-  const js = h.slice(h.indexOf("(function () {"), h.lastIndexOf("</script>"));
-  let parsed = true;
-  try { new Function(js); } catch (e) { parsed = false; console.log(e); }
-  check(parsed && !js.includes("</script"), "its script is valid JavaScript (and never closes its own tag)");
+  // the editor's script and the page's: each one valid on its own (one that closed its own tag would be cut here)
+  const blocks = [...h.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((x) => x[1]);
+  let parsed = blocks.length === 2;
+  for (const js of blocks) { try { new Function(js); } catch (e) { parsed = false; console.log(e); } }
+  check(parsed, "its scripts (the editor's, the page's) are valid JavaScript (and never close their own tag)");
   check(h.includes('sandbox", "allow-scripts allow-modals"') && h.includes("connect-src 'none'") && !h.includes("allow-same-origin"), "the code runs in a sandboxed frame: scripts only, no same origin, no network");
   check((await bot.fetch(new Request("https://bot.example.workers.dev/mes/1.99999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/info"), env, makeCtx())).status === 404, "a forged link is refused");
   const info = await mes(U.alice.id, "info");
@@ -7907,6 +8234,10 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     const i0 = await raw(`/mes/${tk4}/info`);
     check(i0.status === 200 && i0.data.ident === false && i0.data.title && !i0.data.n && String(i0.data.signIn).startsWith("https://discord.com/oauth2/authorize?") && String(i0.data.signIn).includes("scope=identify") && String(i0.data.signIn).includes(encodeURIComponent("mes~" + tk4)) && String(i0.data.signIn).includes(encodeURIComponent("/auth/discord")), "not signed in: only the title and the « Sign in with Discord » address");
     check((await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}" })).data.error === "identify" && (await raw(`/mes/${tk4}/start`, { method: "POST", body: "{}", headers: { "x-cb-dev": devA } })).status === 401, "…nothing else opens (not even with a made-up device)");
+    // the teacher's own test paper: no Discord sign-in
+    const tkP = (await api("GET", `/api/mises/${sv3.data.id}/links?g=${G}`)).data.links[U.prof.id].split("/mes/")[1];
+    const iP = await raw(`/mes/${tkP}/info`);
+    check(iP.status === 200 && iP.data.ident === undefined && iP.data.status === "live" && !!(await raw(`/mes/${tkP}/start`, { method: "POST", body: "{}" })).data.paper, "a teacher's test paper opens without the Discord sign-in");
     const ap = await raw("/auth/discord");
     check(ap.status === 200 && String(ap.data).includes("access_token") && String(ap.data).includes("cb-dev"), "/auth/discord: the page Discord sends back to");
     const auth = (token: string, dev: string, ip = "10.1.1.5", state = "mes~" + tk4) => raw("/auth/discord", { method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": ip }, body: JSON.stringify({ state, token, dev }) });
@@ -7978,14 +8309,15 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     check((await api("POST", `/api/mises/${M6}/reset`, { g: G, taker: 999999, invite: true })).status === 404, "…an unknown paper: said");
     await api("DELETE", `/api/mises/${M6}?g=${G}`);
   }
-  // 📐 the Fiche niveaux: every item of its scope worked on by 5 of the 10 situations / QCM at least
+  // 📐 the Fiche niveaux: what the AI must cover (5 of the 10 per item); a teacher's own file is only shown its coverage
   {
     const sc = ["S2.M2", "S2.M4"];
     const untagged = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(file), concepts: sc });
-    check(untagged.data.problems.some((p: any) => p.where === "situation 1" && /"concepts"/.test(p.msg)) && !untagged.data.preview, "a mise en situation without the Fiche's items on its situations: refused, one by one");
+    check(!untagged.data.problems.length && untagged.data.preview, "a teacher's file without the Fiche's items on its situations: accepted (the coverage is advice)");
     const tagged = (n: number) => ({ ...file, situations: file.situations.map((x: any) => ({ ...x, concepts: ["S2.M2"] })), qcm: file.qcm.map((q: any, i: number) => ({ ...q, concepts: i < n ? ["S2.M4"] : ["S2.M2"] })) });
     const four = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(4)), concepts: sc });
-    check(four.data.problems.some((p: any) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…an item in 4 only: refused, with how many");
+    check(!four.data.problems.length && four.data.preview, "…an item in 4 only: accepted too");
+    check(M.checkMise(JSON.stringify(tagged(4)), { concepts: { known: new Set(["S2.M2", "S2.M4"]), scope: sc } }).problems.some((p) => /item S2\.M4 of the Fiche niveaux: worked on by 4 situation\(s\) \/ QCM, at least 5/.test(p.msg)), "…but the AI's file is held to it: an item in 4 only refused, with how many");
     const five = await api("POST", "/api/mises/import", { g: G, json: JSON.stringify(tagged(5)), concepts: sc, save: true });
     const sm = q1("SELECT settings, content FROM mises WHERE id = ?", five.data.id);
     check(five.status === 200 && !five.data.problems.length && JSON.parse(sm.settings).concepts.join() === "S2.M2,S2.M4" && JSON.parse(sm.content).qcm[0].concepts[0] === "S2.M4", "…in 5 each: saved, with its items (the mise's and each situation's / QCM's)");
@@ -8046,6 +8378,154 @@ section("mises en situation: made like a brief (upload, AI for a brief or the sp
     await api("DELETE", `/api/mises/${M7}?g=${G}`);
   }
   for (const id of [mid, sv2.data.id, sv3.data.id]) await api("DELETE", `/api/mises/${id}?g=${G}`);
+}
+
+section("mises en situation: a VS Code–like editor (Monaco) and the learner's own files");
+{
+  // the rules of their files (pure)
+  const R = M.fileRules("web", {});
+  check(R.allow && R.max === 8 && R.kb === 20 && R.exts.join(" ") === ".html .css .js" && !M.fileRules("node", {}).allow && !M.fileRules("sql", {}).allow && !M.fileRules("web", { files: false }).allow && M.fileRules("php", {}).exts.includes(".blade.php"),
+    "file rules: by runtime (none for Node.js and SQL: one file runs), on by default, the teacher can turn them off");
+  check(M.extOf("welcome.blade.php") === ".blade.php" && M.extOf("app.JS") === ".js" && M.extOf("Makefile") === "", "extensions (a Blade view is .blade.php)");
+  const st = ["index.html", "style.css", "script.js"];
+  check(M.fileNameProblem("app.js", st, st, R) === "" && /Extension/.test(M.fileNameProblem("notes.txt", st, st, R)) && /invalide/.test(M.fileNameProblem("../x.js", st, st, R))
+    && /invalide/.test(M.fileNameProblem("a b.js", st, st, R)) && /déjà/.test(M.fileNameProblem("Script.js", st, st, R)), "a new file: an allowed extension, a clean name, never the same name twice");
+  check(/au plus/.test(M.fileNameProblem("x.js", [...st, "a.js", "b.js", "c.js", "d.js", "e.js"], st, R)) && /départ/.test(M.fileNameProblem("main.js", st, st, R, "script.js"))
+    && M.fileNameProblem("app2.js", [...st, "app.js"], st, R, "app.js") === "" && /autorisée/.test(M.fileNameProblem("x.js", st, st, M.fileRules("web", { files: false }))),
+    "8 files at most (the starter ones count), a starter file can't be renamed (their own can), nothing when the teacher turned it off");
+  const sw = { files: st.map((name) => ({ name, lang: "html" as const, starter: "S:" + name })) };
+  const ws = M.workspaceOf(sw, { "index.html": "<p>moi</p>", "app.js": "let a = 1;", "notes.txt": "x", "../hack.js": "x", "big.js": "y".repeat(30 * 1024) }, R);
+  check(Object.keys(ws).join(",") === "index.html,style.css,script.js,app.js,big.js" && ws["style.css"] === "S:style.css" && ws["app.js"] === "let a = 1;" && ws["big.js"].length === 20 * 1024,
+    "their workspace: every starter file (never removed), then their own files that follow the rules, each one capped");
+  const many: Record<string, string> = {}; for (let i = 0; i < 10; i++) many[`f${i}.js`] = "x";
+  check(Object.keys(M.workspaceOf(sw, { "app.js": "x" }, M.fileRules("web", { files: false }))).length === 3 && Object.keys(M.workspaceOf(sw, many, R)).length === 8, "…none of their own when it's off, and never more files than allowed");
+  // PHP: their included files run with the main one
+  const php = M.phpWithIncludes({ "index.php": "<?php\nrequire_once 'fonctions.php';\nrequire_once './fonctions.php';\ninclude('vue.php');\nrequire 'absent.php';\necho total(2);",
+    "fonctions.php": "<?php\nrequire 'outils.php';\nfunction total($n) { return double($n) + 1; }\n", "outils.php": "<?php function double($n) { return $n * 2; }", "vue.php": "<h1>Titre</h1>", "page.blade.php": "x" }, "index.php");
+  check(php.includes("function total") && php.includes("function double") && (php.match(/function total/g) || []).length === 1 && php.includes("?><h1>Titre</h1><?php") && php.includes("require 'absent.php';") && !php.includes("require_once"),
+    "PHP with several files: require / include of their files put in place (nested, _once only once, HTML kept), the others left as they are");
+  // the editor's changes → the typing record
+  check(JSON.stringify(changeEntries([{ rangeOffset: 2, rangeLength: 0, text: "a" }, { rangeOffset: 9, rangeLength: 3, text: "" }], 7, "")) === JSON.stringify([[7, 9, 3, "", "+delete"], [7, 2, 0, "a", "+input"]])
+    && changeEntries([{ rangeOffset: 0, rangeLength: 0, text: "addEventListener('click', (e) => {\n  \n})" }], 9, "complete")[0][4] === "complete",
+    "the editor's changes → typing-record entries (multi-cursor: the last one first, so the replay applies them in order; a suggestion says it is one)");
+  let doc = "0123456789ab";
+  for (const [, from, removed, text] of changeEntries([{ rangeOffset: 1, rangeLength: 1, text: "X" }, { rangeOffset: 5, rangeLength: 2, text: "YY" }, { rangeOffset: 10, rangeLength: 0, text: "Z" }], 1, "")) doc = doc.slice(0, from) + text + doc.slice(from + removed);
+  check(doc === "0X234YY789Zab", "…replayed like the teacher's replay does, they give the text after the edit");
+  // a paper: their own file saved, run with the others, its typing record kept, shown to the teacher
+  const fw = { format: M.MISE_FORMAT, title: "Les fichiers", week: 3, metier: "Coopérative", competencies: ["C3N1"], qcm: [],
+    situations: [{ title: "Le message", context: "Fatima gère la page de la coopérative Tifawin à Agadir. Elle veut un message dans la console.", difficulty: 1, competencies: ["C3N1"], notions: ["console.log"], runtime: "web",
+      files: [{ name: "index.html", lang: "html", starter: "<h1>Bienvenue</h1>\n<script src=\"script.js\"></script>" }, { name: "script.js", lang: "javascript", starter: "// ici\n" }],
+      questions: ["1. Écris un message dans la console."], expected: "Le message s'affiche.", solution: [{ name: "script.js", content: "console.log('ok');" }],
+      checks: [{ type: "source", pattern: "console\\.log", label: "Un message est écrit" }], errorHints: ["syntax"] }] };
+  const ckF = M.checkMise(JSON.stringify(fw), {});
+  check(!ckF.problems.length, "a one-situation mise for the files " + JSON.stringify(ckF.problems).slice(0, 300));
+  const t0 = clock.now();
+  run1("INSERT INTO mises (guild_id, title, week, comps, target, settings, content, status, starts_at, ends_at, created_at) VALUES (?, 'Les fichiers', 3, '[\"C3N1\"]', '[]', ?, ?, 'live', ?, ?, ?)", G, JSON.stringify({ minutes: 60, maxFiles: 4 }), JSON.stringify(ckF.content), t0, t0 + 3600, t0);
+  const fid = q1("SELECT MAX(id) AS id FROM mises").id as number;
+  run1("INSERT INTO mise_takers (mise_id, guild_id, discord_id, invited_at) VALUES (?, ?, ?, ?)", fid, G, U.alice.id, t0);
+  const sidF = ckF.content!.situations[0].id;
+  const tkF = (await api("GET", `/api/mises/${fid}/links?g=${G}`)).data.links[U.alice.id].split("/mes/")[1];
+  // the learner page
+  const pg = await (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}`), env, makeCtx())).text();
+  check(pg.includes("script-src 'unsafe-inline' 'unsafe-eval' data:") && pg.includes("/*cbfile:") && pg.includes('<script type="module">'), "the preview runs ES modules (import / export between their files), an error says its file");
+  check(pg.includes("window.CBEditor") && pg.includes(`monaco-editor/${MONACO_VERSION}/min`) && pg.includes("emmet-monaco-es@5.5.0") && pg.includes("Nouveau fichier") && pg.includes("CodeMirror"), "the learner page: the editor (Monaco pinned, Emmet, CodeMirror if it can't load) and their files");
+  const mesF = async (a: string, b: any) => (await bot.fetch(new Request(`https://bot.example.workers.dev/mes/${tkF}/${a}`, { method: "POST", body: JSON.stringify(b) }), env, makeCtx())).json() as Promise<any>;
+  const stF = await mesF("start", {});
+  check(stF.files?.allow === true && stF.files.max === 4 && stF.files.exts.web.includes(".js") && !stF.files.exts.node.length, "the page is told the rules of their files");
+  await mesF("save", { item: sidF, answer: { files: { "index.html": "<h1>Bienvenue</h1>\n<script src=\"app.js\"></script>", "script.js": "// ici\n", "app.js": "console.log('ok');", "evil.php": "x", "../x.js": "y" } },
+    visit: "abcdef12", log: { files: { "app.js": { changes: [[10, 0, 0, "", "setValue"], [12, 0, 0, "console.log('ok');", "complete"]], pastes: 0 } }, focus: [], openMs: 100 } });
+  const ansF = () => JSON.parse(q1("SELECT answers FROM mise_takers WHERE mise_id = ?", fid).answers)[sidF].files;
+  check(Object.keys(ansF()).join(",") === "index.html,script.js,app.js" && ansF()["app.js"] === "console.log('ok');", "saved: their new file with the starter ones (a wrong extension or name is dropped)");
+  const logF = JSON.parse(q1("SELECT logs FROM mise_takers WHERE mise_id = ?", fid).logs)[`${sidF}_abcdef12`];
+  check(logF?.files["app.js"]?.changes.length === 2 && logF.files["app.js"].changes[1][4] === "complete", "…its typing record too (the teacher's replay)");
+  await mesF("event", { kind: "file", item: sidF, text: "new:app.js" });
+  check(JSON.parse(q1("SELECT events FROM mise_takers WHERE mise_id = ?", fid).events).some((e: any) => e[1] === "file" && e[4] === "new:app.js"), "creating a file is written down for the teacher");
+  const runF = await mesF("run", { item: sidF, files: ansF(), measured: {} });
+  check(runF.checks?.[0]?.ok === true, "run: the checks read their own files too (console.log is in app.js)");
+  const five: Record<string, string> = { "index.html": "x", "script.js": "y" }; for (const n of ["a.js", "b.js", "c.js"]) five[n] = "z";
+  await mesF("save", { item: sidF, answer: { files: five } });
+  check(Object.keys(ansF()).length === 4, "the teacher's maximum (4 files with the starter ones) is kept on the server");
+  const detF = await api("GET", `/api/mises/${fid}/taker/${q1("SELECT id FROM mise_takers WHERE mise_id = ?", fid).id}?g=${G}`);
+  check(Object.keys(detF.data.answers[sidF].files).includes("a.js") && detF.data.items[sidF].attempted, "the teacher sees their files; a file of their own counts as attempted");
+  await api("PUT", `/api/mises/${fid}`, { g: G, settings: { files: false } });
+  await mesF("save", { item: sidF, answer: { files: { "index.html": "x", "script.js": "y", "app.js": "z" } } });
+  check(Object.keys(ansF()).join(",") === "index.html,script.js", "files turned off by the teacher: only the starter files are kept");
+  await api("DELETE", `/api/mises/${fid}?g=${G}`);
+}
+
+section("assessments: Reassign (a new attempt replaces the paper, the earlier one archived), results sent per student");
+{
+  // multiple choice only: graded at once, no AI needed
+  const QS0 = [
+    { type: "mcq", prompt: "Quelle propriété aligne les éléments sur l’axe principal ?", choices: ["align-items", "justify-content", "gap"], answer: [1], points: 1, comps: [{ code: "C3", level: 1 }] },
+    { type: "mcq", prompt: "Quelle balise pour le titre principal d’une page ?", choices: ["<p>", "<div>", "<h1>"], answer: [2], points: 1, comps: [{ code: "C3", level: 1 }] },
+  ];
+  const mk = await api("POST", "/api/assessments", { g: G, title: "Flexbox (réassigner)", questions: QS0, settings: { minutes: 30, passAt: 60, nav: "free", lockScreen: false } });
+  const aid = mk.data.assessment.id, QS = mk.data.assessment.questions;
+  check((await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id] })).status === 400, "a draft has nothing to reassign");
+  await api("POST", `/api/assessments/${aid}/invite`, { g: G, students: [U.alice.id, U.bob.id], send: false });
+  const linkOf = async (u: string) => (await api("GET", `/api/assessments/${aid}/links?g=${G}`)).data.links[u].split("/quiz/")[1];
+  const quiz = async (tok: string, action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/quiz/${tok}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const explQ = QS[0];
+  // a paper: every answer right, or every answer the first (wrong) choice
+  const take = async (tok: string, sid: string, good: boolean) => {
+    await quiz(tok, "start", { sid });
+    for (const [i, q] of QS.entries()) await quiz(tok, "answer", { sid, qid: q.id, answer: good ? q.answer : [0], pos: i + 1 });
+    await quiz(tok, "submit", { sid });
+  };
+  const tokA1 = await linkOf(U.alice.id);
+  await take(tokA1, "sessionREASSIGNAAAAAAA1", false);
+  await take(await linkOf(U.bob.id), "sessionREASSIGNBBBBBBB1", true);
+  const rowA = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  const rowB = () => q1("SELECT * FROM assessment_takers WHERE assessment_id = ? AND discord_id = ?", aid, U.bob.id);
+  const scoreA1 = rowA().score;
+  const compsA = () => q("SELECT * FROM competency_results WHERE source = 'assessment' AND ref = ? AND discord_id = ?", aid, U.alice.id);
+  check(rowA().status === "graded" && rowB().status === "graded" && scoreA1 < rowB().score && rowA().attempt === 1, "two papers graded (Alice's low, Bob's high), first attempt");
+  const compsBefore = compsA().length;
+  // results sent to one student only, with when
+  const r1 = await api("POST", `/api/assessments/${aid}/results`, { g: G, takers: [rowB().id] });
+  check(r1.data.sent === 1 && rowB().sent_at > 0 && !rowA().sent_at, "« Send » on one row: only that student gets their result");
+  let vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent === true && vB.sent_at === rowB().sent_at && vB.sent_changed === false, "…the row says when it was sent");
+  await api("PUT", `/api/assessments/${aid}/grade`, { g: G, taker: rowB().id, qid: explQ.id, verdict: "partial", score: 50, comment: "À préciser" });
+  vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent_changed === true, "a grade changed after sending: « changed since it was sent »");
+  await api("POST", `/api/assessments/${aid}/results`, { g: G, takers: [rowB().id] });
+  vB = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.bob.id);
+  check(vB.sent_changed === false, "…sent again, it's up to date");
+  // Reassign Alice: her paper archived, a new attempt, the old link refused
+  const dm0 = discordCalls.length;
+  const ra = await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id], days: 2 });
+  check(ra.status === 200 && ra.data.reassigned === 1 && ra.data.archived === 1 && ra.data.sent === 1 && discordCalls.slice(dm0).some((c) => JSON.stringify(c.body ?? {}).includes("/quiz/")), "« Réassigner »: a new attempt, its link by DM");
+  const arch = q("SELECT * FROM assessment_attempts WHERE assessment_id = ? AND discord_id = ?", aid, U.alice.id);
+  check(arch.length === 1 && arch[0].n === 1 && arch[0].score === scoreA1 && arch[0].answers && JSON.parse(arch[0].events).length > 0, "the earlier attempt is archived (answers, grades, score, its events)");
+  check(rowA().attempt === 2 && rowA().status === "invited" && rowA().score == null && rowA().answers == null && JSON.parse(rowA().events).length === 1, "the paper starts again (attempt 2, its own events)");
+  check(compsBefore > 0 && compsA().length === 0, "what the old attempt gave her record is removed");
+  check((await quiz(tokA1, "info")).status === 404, "the old link is refused");
+  const tokA2 = await linkOf(U.alice.id);
+  check(tokA2 !== tokA1 && (await quiz(tokA2, "info")).data.status === "invited", "the new link opens the new attempt");
+  let vA = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+  check(vA.attempt === 2 && vA.attempts.length === 1 && vA.attempts[0].n === 1 && vA.attempts[0].score === scoreA1 && Object.keys(vA.attempts[0].answers).length > 0, "the teacher reads « Attempt 1 » in her paper");
+  // the new attempt: it's the one that counts
+  await take(tokA2, "sessionREASSIGNAAAAAAA2", true);
+  vA = (await api("GET", `/api/assessments/${aid}?g=${G}`)).data.takers.find((t: any) => t.discord_id === U.alice.id);
+  check(rowA().status === "graded" && rowA().score > scoreA1 && vA.score === rowA().score, "her new paper is graded: its score replaces the old one");
+  check(compsA().length > 0 && compsA().every((c: any) => c.note.includes(`(${rowA().score}%)`) || /\(\d+%\)/.test(c.note)) && compsA().length === compsBefore, "her competencies come from the new attempt only");
+  // the grading export: two papers (Alice's is her new attempt: her code answer is there, her old wrong choice isn't)
+  const exp = await api("POST", `/api/assessments/${aid}/claude-export`, { g: G });
+  const papers = exp.data.file?.papers ?? [];
+  check(exp.status === 200 && papers.length === 2 && papers.every((p: any) => JSON.stringify(p.answers).includes("justify-content")) && !papers.some((p: any) => JSON.stringify(p.answers).includes("align-items")),
+    "exports carry the attempt that counts (one paper per student, not her old wrong answers)");
+  check(q("SELECT * FROM assessment_attempts WHERE assessment_id = ?", aid).length === 1, "…and the archive keeps the earlier one");
+  // several at once
+  const ra2 = await api("POST", `/api/assessments/${aid}/reassign`, { g: G, students: [U.alice.id, U.bob.id], send: false });
+  check(ra2.data.reassigned === 2 && ra2.data.archived === 2 && q("SELECT * FROM assessment_attempts WHERE assessment_id = ?", aid).length === 3 && rowA().attempt === 3 && rowB().attempt === 2 && !rowB().sent_at, "« Réassigner » several students at once");
+  await api("DELETE", `/api/assessments/${aid}?g=${G}`).catch(() => null);
 }
 
 section("papers: Sign in with Discord, one device per paper, network alerts");
@@ -8356,6 +8836,139 @@ section("🔌 the Claude connector (MCP): reads the classes live, writes drafts 
   await api("DELETE", `/api/mcp-keys/${fk.data.keys.find((k: any) => k.label === "Tout").id}?g=${G}`);
   await api("DELETE", `/api/mcp-keys/${mk.data.keys[0].id}?g=${G}`);
   check((await mcp({ jsonrpc: "2.0", id: 6, method: "tools/list" })).status === 401 && (await api("GET", `/api/mcp-keys?g=${G}`)).data.keys.length === 0, "revoked: refused at once");
+}
+
+section("✍️ the starter code reads each challenge's input as its samples show it (never « n, then n numbers » for all)");
+{
+  const { inputStarter, readPlan } = await import("../src/shared/inputstarter.ts");
+  const { loadTests } = await import("../src/shared/challenges.ts");
+  const { execFileSync } = await import("node:child_process");
+  const fs = await import("node:fs"), os = await import("node:os"), path = await import("node:path");
+  const plan = (ins: string[]) => { const p = readPlan(ins); return p ? p.map((x: any) => (x.t === "one" ? `${x.name}:${x.kind}` : `${x.name}:${x.kind}[${x.len}]`)).join(" ") : "neutral"; };
+  check(plan(["0", "5\nababa"]) === "n:int s:word" && plan(["5\n1 2 3 4 5", "0"]) === "n:int a:int[n]" && plan(["2 3", "10 -4"]) === "n:int m:int"
+    && plan(["4\n1.5 2 3 4"]) === "n:int a:num[n]" && plan(["3\nabc\nde\nf", "1\nz"]) === "n:int a:word[n]" && plan(["4 2\n1 2 3 4\n5 6"]) === "n:int m:int a:int[n] b:int[m]",
+    "the reading plan from the samples: a number then a word, n numbers, two numbers, decimals, n words (one per line), two lists");
+  check(plan(["1 2 3 4 5 6 7"]) === "neutral" && plan(["2\n1 2\n3 4", "3\n1 2 3\n4 5 6\n7 8 9"]) === "neutral" && plan([]) === "neutral", "…unsure (a long line, a grid, no sample): a neutral starter, assuming nothing");
+  // every challenge with samples: the JavaScript and Python starters run on every sample (and an empty input) without crashing
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "starter-"));
+  const ws = db.prepare("SELECT * FROM challenges WHERE kind = 'write' AND (signature IS NULL OR signature = '')").all() as any[];
+  let crashed = 0, ran = 0;
+  for (const c of ws) {
+    const ins = (await loadTests(env, c)).filter((x: any) => x.sample).map((x: any) => x.input ?? "");
+    if (!ins.length) continue;
+    for (const [lang, cmd, ext] of [["javascript", "node", "js"], ["python", "python3", "py"]] as const) {
+      const f = path.join(dir, "s." + ext); fs.writeFileSync(f, inputStarter(ins, lang));
+      for (const inp of [...ins, ""]) { ran++; try { execFileSync(cmd, [f], { input: inp, stdio: "pipe" }); } catch (e: any) { crashed++; if (crashed < 4) console.log("starter crash", c.title, lang, JSON.stringify(inp).slice(0, 60), String(e.stderr).slice(0, 160)); } }
+    }
+  }
+  check(ran > 20 && !crashed, `every challenge's starter reads its samples without crashing (${ran} runs, ${crashed} crashes)`);
+}
+
+section("GitHub: the whole repo in one request (an archive), not file by file (Cloudflare's 50 calls per request)");
+{
+  const { gzipSync } = await import("node:zlib");
+  // a small .tar.gz like GitHub's: everything inside "<owner>-<repo>-<sha>/", a long name through a pax header
+  const enc = new TextEncoder();
+  const block = (name: string, size: number, type = "0") => {
+    const h = new Uint8Array(512);
+    h.set(enc.encode(name).slice(0, 100), 0);
+    h.set(enc.encode("0000644\0"), 100);
+    h.set(enc.encode(size.toString(8).padStart(11, "0") + "\0"), 124);
+    h[156] = type.charCodeAt(0);
+    h.set(enc.encode("ustar\0"), 257);
+    h.set(enc.encode("        "), 148);
+    let sum = 0; for (const x of h) sum += x;
+    h.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+    return h;
+  };
+  const parts: Uint8Array[] = [];
+  const add = (name: string, body: string, type = "0") => { const b = enc.encode(body); parts.push(block(name, b.length, type), b, new Uint8Array((512 - (b.length % 512)) % 512)); };
+  const long = "src/" + "dossier-très-profond/".repeat(6) + "page.html";
+  add("pax_global_header", "52 comment=0123456789abcdef0123456789abcdef01234567\n", "g");
+  parts.push(block("stu-proj-abc123/", 0, "5"));
+  add("stu-proj-abc123/index.html", "<!doctype html><title>Accueil</title>");
+  add("stu-proj-abc123/css/style.css", "body { color: red }");
+  add("stu-proj-abc123/img/logo.png", "PNGDATA");
+  const rec = ` path=stu-proj-abc123/${long}\n`;
+  const ln = Buffer.byteLength(rec) + 4;
+  add("PaxHeader", `${ln}${rec}`, "x");
+  add("stu-proj-abc123/" + long.slice(0, 90), "<p>tout au fond</p>");
+  parts.push(new Uint8Array(1024));
+  github.tarballs["stu/proj"] = gzipSync(Buffer.concat(parts));
+  const { repoFiles, githubText } = await import("../src/shared/review/gh.ts");
+  const c0 = github.calls;
+  const files: any = await repoFiles("tok", "stu/proj");
+  const idx = await githubText("/repos/stu/proj/contents/index.html", "tok", "application/vnd.github.raw");
+  const deep = await githubText(`/repos/stu/proj/contents/${long.split("/").map(encodeURIComponent).join("/")}`, "tok", "application/vnd.github.raw");
+  const css = await githubText("/repos/stu/proj/contents/css/style.css", "tok", "application/vnd.github.raw", 5);
+  check(files.map((f: any) => f.path).sort().join() === ["css/style.css", "index.html", long].sort().join() && files.media.join() === "img/logo.png",
+    `the files of the repo from the archive (the long name too; the picture as a deliverable) (${files.map((f: any) => f.path).join(", ")})`);
+  check(idx.includes("Accueil") && deep === "<p>tout au fond</p>" && css === "body " && github.calls - c0 === 1, `…and their text, all in ONE call to GitHub (${github.calls - c0})`);
+  // no archive (too big, refused): file by file as before
+  const c1 = github.calls;
+  github.files["stu/other/HEAD/index.html"] = "<h1>Autre</h1>";
+  check((await githubText("/repos/stu/other/contents/index.html", "tok", "application/vnd.github.raw")) === "<h1>Autre</h1>" && github.calls - c1 === 1, "no archive for a repo: its file is read from GitHub as before");
+  delete github.tarballs["stu/proj"];
+}
+
+section("🔁 a student changes Discord account (hacked, deleted): everything moves to the new one");
+{
+  const OLD = "154972381424858728", NEW = "155972381424858729", OTHER = "166972381424858720", t0 = clock.now();
+  const ex = (sql: string, ...a: any[]) => db.prepare(sql).run(...a);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at, hr_username, hr_display, hr_verified) VALUES (?, ?, 'Ayoub', 50, 1000, ?, 'ayoubhr', 'ayoubhr', 1)", G, OLD, t0 - 9e5);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Ayoub2', 7, 1000, ?)", G, NEW, t0);
+  ex("INSERT INTO players (guild_id, discord_id, name, coins, rating, created_at) VALUES (?, ?, 'Other', 1, 1000, ?)", G, OTHER, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 120, 'practice', ?)", G, OLD, t0);
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES (?, ?, 'S', 5, 'daily', ?)", G, NEW, t0);
+  ex("INSERT INTO badges (guild_id, discord_id, badge, created_at) VALUES (?, ?, 'first_solve', ?), (?, ?, 'streak7', ?), (?, ?, 'first_solve', ?)", G, OLD, t0, G, OLD, t0, G, NEW, t0);
+  ex("INSERT INTO duels (guild_id, channel_id, challenger_id, opponent_id, mode, difficulty, created_at, winner_id) VALUES (?, 'c', ?, ?, 'quick', 'easy', ?, ?)", G, OTHER, OLD, t0, OLD);
+  ex("INSERT INTO squad_sets (guild_id, name, squads, active, created_at, updated_at) VALUES (?, 'S1', ?, 0, ?, ?)", G, JSON.stringify([{ name: "A", members: [OTHER, OLD] }]), t0, t0);
+  const qz = Number(ex("INSERT INTO quizzes (guild_id, title, questions, created_at) VALUES (?, 'q', '[]', ?)", G, t0).lastInsertRowid);
+  ex("INSERT INTO quiz_answers (quiz_id, q_idx, discord_id, answer, correct, ms, score) VALUES (?, 0, ?, 'A', 1, 100, 10)", qz, OLD);
+  // what the app keeps per student under a key: practice blocks, the teacher's level, plans d'action…
+  const { setBlock: setBl, getBlocks: getBl } = await import("../src/shared/practiceblock.ts");
+  await setBl(env, G, OLD, { type: "bug" });
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${OLD}`, JSON.stringify({ level: "moyen", by: OLD }), t0);
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, ?, ?)", `stulevel:${G}:${NEW}`, JSON.stringify({ level: "faible" }), t0);
+  // the same account in another class is not this teacher's: it stays
+  ex("INSERT INTO ledger (guild_id, discord_id, season, amount, reason, created_at) VALUES ('other-guild', ?, 'S', 9, 'practice', ?)", OLD, t0);
+
+  check((await api("POST", `/api/students/${OLD}/move`, { g: G, to: OLD })).status === 400 && (await api("POST", `/api/students/${OLD}/move`, { g: G, to: "nobody_here" })).status === 400,
+    "the same account, or a name nobody has: refused");
+  const n0 = discordCalls.length;
+  const mv = await api("POST", `/api/students/${OLD}/move`, { g: G, to: "Ayoub2" });
+  check(mv.status === 200 && mv.data.to === NEW && mv.data.merged, `found by the new account's name (${mv.status} ${JSON.stringify(mv.data).slice(0, 120)})`);
+  const pl = q1("SELECT * FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW);
+  check(!q1("SELECT 1 AS x FROM players WHERE guild_id = ? AND discord_id = ?", G, OLD) && pl.coins === 57 && pl.hr_username === "ayoubhr" && pl.hr_verified === 1 && pl.name === "Ayoub2",
+    "one profile left, on the new account: the old one's links (HackerRank), coins added together, the new Discord name");
+  check(q1("SELECT SUM(amount) AS s FROM ledger WHERE guild_id = ? AND discord_id = ?", G, NEW).s === 125, "every point is on the new account (old and new)");
+  check(db.prepare("SELECT badge FROM badges WHERE guild_id = ? AND discord_id = ? ORDER BY badge").all(G, NEW).map((r: any) => r.badge).join() === "first_solve,streak7", "badges: all kept, a badge both had only once");
+  check(q1("SELECT winner_id, opponent_id FROM duels WHERE guild_id = ? AND challenger_id = ?", G, OTHER).winner_id === NEW && JSON.parse(q1("SELECT squads FROM squad_sets WHERE guild_id = ? AND name = 'S1'", G).squads)[0].members.join() === `${OTHER},${NEW}`,
+    "…in every column (a duel won) and inside texts (the squads)");
+  check(q1("SELECT discord_id FROM quiz_answers WHERE quiz_id = ?", qz).discord_id === NEW, "…also in the tables that belong to the class through another (quiz answers)");
+  check((await getBl(env, G, NEW)).some((b) => b.type === "bug") && !(await getBl(env, G, OLD)).length, "…the practice blocks too");
+  check(JSON.parse(q1("SELECT v FROM app_settings WHERE k = ?", `stulevel:${G}:${NEW}`).v).level === "moyen" && !q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `stulevel:${G}:${OLD}`),
+    "…and the teacher's level (the old account's wins over the new one's)");
+  // nothing of the class still names the old account; another class's data is untouched
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r: any) => r.name);
+  const leftIn = tables.filter((tb: string) => db.prepare(`PRAGMA table_info("${tb}")`).all().some((c: any) => c.name === "guild_id")
+    && (db.prepare(`SELECT COUNT(*) AS n FROM "${tb}" WHERE guild_id = ? AND instr(${db.prepare(`PRAGMA table_info("${tb}")`).all().map((c: any) => `COALESCE(CAST("${c.name}" AS TEXT), '')`).join(" || '|' || ")}, ?) > 0`).get(G, OLD) as any).n > 0);
+  check(!leftIn.length && q1("SELECT discord_id FROM ledger WHERE guild_id = 'other-guild'").discord_id === OLD, `nothing of the class names the old account any more (${leftIn.join(", ")}); another class's data untouched`);
+  check(discordCalls.slice(n0).some((c) => c.path === `/channels/dm-${NEW}/messages` && /moved your ClassBot profile/.test(text(c.body))), "the student gets a DM on the new account");
+  const st = (await api("GET", `/api/students/${NEW}?g=${G}`)).data;
+  check(st.player.discord_id === NEW && st.badges.length === 2, "the new account's page shows everything");
+  // by Discord ID too, with no profile yet on the new account
+  const NEW2 = "177972381424858731";
+  const mv2 = await api("POST", `/api/students/${NEW}/move`, { g: G, to: `<@${NEW2}>`, notify: false });
+  check(mv2.status === 200 && !mv2.data.merged && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57, "by Discord ID (or mention), to an account that never used ClassBot");
+  // a move done before the settings moved: run again from the old id, it finishes (the profile stays as it is)
+  ex("INSERT INTO app_settings (k, v, updated_at) VALUES (?, '[]', ?)", `pf:${G}:${OLD}`, t0);
+  const again = await api("POST", `/api/students/${OLD}/move`, { g: G, to: NEW2, notify: false });
+  check(again.status === 200 && !again.data.merged && q1("SELECT 1 AS x FROM app_settings WHERE k = ?", `pf:${G}:${NEW2}`) && q1("SELECT coins FROM players WHERE guild_id = ? AND discord_id = ?", G, NEW2).coins === 57,
+    "run again on an account already moved: the rest of its settings follow");
+  for (const tb of ["players", "ledger", "badges", "duels", "squad_sets"]) ex(`DELETE FROM ${tb} WHERE guild_id = ? AND ${tb === "duels" ? "challenger_id" : tb === "squad_sets" ? "name" : "discord_id"} IN (?, ?, ?)`, G, ...(tb === "squad_sets" ? ["S1", "S1", "S1"] : [NEW2, OTHER, NEW]));
+  ex("DELETE FROM ledger WHERE guild_id = 'other-guild'");
+  ex("DELETE FROM app_settings WHERE k LIKE ?", `%${NEW2}%`);
 }
 
 section("the assistant knows the app: its pages and how to set up");

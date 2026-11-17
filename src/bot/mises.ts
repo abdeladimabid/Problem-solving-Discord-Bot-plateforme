@@ -12,8 +12,9 @@
 import type { Ctx, Env } from "../shared/types.ts";
 import { forClass } from "../shared/aictx.ts";
 import { TR_LANGS, translateTexts } from "../shared/webtranslate.ts";
-import { identOk, noteIp, signInUrl } from "../shared/identity.ts";
+import { identOk, noteIp, signInUrl, staffPaper } from "../shared/identity.ts";
 import type { TrLang } from "../shared/webtranslate.ts";
+import { CODE_EDITOR_JS } from "./codeeditor.ts";
 import { MiseError, aiCheck, learnerEvent, learnerInfo, readTakerToken, runItem, saveItem, startTaker, submitTaker } from "../shared/misesdb.ts";
 
 const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -25,8 +26,9 @@ export async function handleMise(request: Request, env: Env, ctx: Ctx, token: st
   const tk = await env.DB.prepare("SELECT guild_id FROM mise_takers WHERE id = ?").bind(takerId).first<{ guild_id: string }>().catch(() => null);
   if (!tk) return json({ error: "expired" }, 404);
   env = forClass(env, tk.guild_id);   // the AI check uses this class's keys
-  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title
-  if (!(await identOk(env, "mes", takerId, request))) {
+  // signed in with Discord, with the account the link was sent to (mandatory): before that, only the title.
+  // A teacher's own test paper opens without it.
+  if (!(await identOk(env, "mes", takerId, request)) && !(await staffPaper(env, "mes", takerId))) {
     if (request.method === "GET" && action === "info") { const i = await learnerInfo(env, takerId); return json({ ident: false, signIn: signInUrl(env, "mes", token), title: i?.title ?? "", metier: i?.metier ?? "", status: i?.status ?? "closed" }); }
     return json({ error: "identify" }, 401);
   }
@@ -100,7 +102,9 @@ button { font: inherit; }
 .btn.icon { padding: 8px 10px; }
 kbd { font: 11px "JetBrains Mono", monospace; padding: 1px 5px; border-radius: 5px; border: 1px solid currentColor; opacity: .75; }
 .prog { position: sticky; top: 57px; z-index: 19; background: var(--bg); padding: 10px 18px 8px; border-bottom: 1px solid var(--line); }
-.prog-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.prog-row { display: flex; align-items: center; gap: 6px 14px; }
+/* two rows at most (many QCM): the rest scrolls, the legend stays */
+.prog-items { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; max-height: 84px; overflow-y: auto; position: relative; padding: 3px; margin: -3px; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .pi { min-width: 46px; height: 36px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--soft); font-weight: 700; font-size: 13px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
 .pi i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
 .pi.prog-on i { background: var(--warn); } .pi.prog-done i { background: var(--good); }
@@ -113,6 +117,12 @@ main { max-width: 1500px; margin: 0 auto; padding: 18px; }
 .card h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 0 0 10px; }
 h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .sit { display: grid; grid-template-columns: minmax(340px, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+/* wide screens: the brief and the editor each scroll on their own, in the height left under the sticky header (--stick: fitSit) */
+@media (min-width: 1051px) {
+  .sit { height: calc(100dvh - var(--stick, 120px) - 80px); min-height: 460px; align-items: stretch; }
+  .sit > .col { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; padding: 0 6px 2px 2px; margin: 0 -6px 0 -2px; }
+  .sit + .navbtns { margin: 10px 0 0; } main:has(> .sit) { padding-bottom: 12px; }
+}
 .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--soft); }
 .kicker { font-weight: 700; color: var(--blue-ink); }
 .diff { display: inline-flex; align-items: center; gap: 3px; } .diff i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); } .diff i.on { background: var(--blue); }
@@ -125,6 +135,10 @@ h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .CodeMirror { font: 14px/1.55 "JetBrains Mono", ui-monospace, monospace; height: auto; }
 .starter .CodeMirror { background: var(--code); } .starter .CodeMirror-cursors { display: none; }
 .editor .CodeMirror { height: 380px; }
+.cb-monaco { height: 420px; } .edload { height: 420px; display: grid; place-items: center; color: var(--faint); font-size: 13px; background: var(--code); }
+.ftab.own { display: inline-flex; align-items: center; gap: 6px; padding-right: 6px; } .ftab .fx { border: 0; background: none; color: var(--faint); cursor: pointer; padding: 0 3px; font: 13px system-ui; border-radius: 5px; }
+.ftab .fx:hover, .ftab .fx:focus-visible { color: var(--ink); background: var(--line); } .ftab.add { font-family: system-ui; color: var(--blue-ink); }
+#dlg input[type=text] { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink); font: 14px "JetBrains Mono", monospace; margin-top: 4px; }
 .cm-s-default .CodeMirror-gutters { background: var(--code); border-right: 1px solid var(--line); }
 .empty-file { padding: 12px 14px; color: var(--faint); font-size: 13px; background: var(--code); }
 .etop { display: flex; align-items: flex-end; gap: 8px; } .spacer { flex: 1; }
@@ -136,7 +150,7 @@ h1 { font-size: 22px; margin: 4px 0 8px; letter-spacing: -.01em; }
 .otab .n { font-size: 11px; padding: 0 6px; border-radius: 99px; background: var(--badbg); color: var(--bad); margin-left: 4px; }
 .frame { width: 100%; height: 340px; border: 1px solid var(--line); border-radius: 10px; background: #fff; resize: vertical; display: block; }
 .console { font: 13px/1.5 "JetBrains Mono", monospace; background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; min-height: 120px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
-.console .l-error { color: var(--bad); } .console .l-warn { color: var(--warn); } .console .l-info { color: var(--blue-ink); } .console .l-sys { color: var(--faint); font-style: italic; }
+.console .l-error { color: var(--bad); } .console .l-warn { color: var(--warn); } .console .l-info { color: var(--blue-ink); } .console .l-sys { color: var(--faint); font-style: italic; } .console .l-hint { color: var(--warn); font-size: 12.5px; }
 .checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }
 .checks li { display: flex; gap: 10px; align-items: flex-start; padding: 9px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .checks li b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; flex: none; background: var(--line); color: var(--soft); }
@@ -162,7 +176,7 @@ dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--c
 dialog::backdrop { background: #0b122299; }
 dialog h2 { margin: 0 0 8px; font-size: 19px; } dialog ul { margin: 8px 0 14px; padding-left: 20px; } .dlg-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-@media (max-width: 1050px) { .sit { grid-template-columns: 1fr; } .editor .CodeMirror { height: 320px; } .prog { top: 57px; } .prog-legend { display: none; } }
+@media (max-width: 1050px) { .sit { grid-template-columns: 1fr; } .editor .CodeMirror { height: 320px; } .cb-monaco, .edload { height: 360px; } .prog { top: 57px; } .prog-legend { display: none; } }
 @media (max-width: 560px) { .top { gap: 8px; padding: 8px 12px; } .saved { display: none; } main { padding: 12px; } .pi { min-width: 40px; padding: 0 7px; } #finish span { display: none; } }
 </style>
 </head>
@@ -189,6 +203,7 @@ dialog h2 { margin: 0 0 8px; font-size: 19px; } dialog ul { margin: 8px 0 14px; 
 <script src="` + CM + String.raw`/mode/sql/sql.min.js"></script>
 <script src="` + CM + String.raw`/addon/edit/matchbrackets.min.js"></script>
 <script src="` + CM + String.raw`/addon/edit/closebrackets.min.js"></script>
+<script>` + CODE_EDITOR_JS + String.raw`</script>
 <script>
 (function () {
 "use strict";
@@ -208,6 +223,7 @@ function dark() { var t = store.get("cb-mes-theme"); return t ? t === "dark" : !
 function applyTheme() {
   document.documentElement.dataset.theme = dark() ? "dark" : "light";
   CMS.forEach(function (c) { c.setOption("theme", dark() ? "material-darker" : "default"); });
+  if (ED) ED.theme(dark());
 }
 var CMS = [];
 $("#theme").onclick = function () { store.set("cb-mes-theme", dark() ? "light" : "dark"); applyTheme(); };
@@ -244,14 +260,17 @@ var FS_OK = !!(document.fullscreenEnabled && document.documentElement.requestFul
 var LOGS = {}, DIRTY = {}, RAN = {}, LASTERR = {}, CONSOLE = {}, OUTTAB = {}, FILE = {}, SFILE = {}, DOCS = {}, VISITED = {};
 // the starter code shown or folded (remembered on this device)
 var STARTOPEN = store.get("cb-mes-start") !== "closed";
-var ed = null, startEd = null, saveTimer = null, logTimer = null;
+// ED: the code editor (Monaco, else CodeMirror: codeeditor.ts) · FILESET: the rules of the learner's own files
+var ED = null, startEd = null, saveTimer = null, logTimer = null, FILESET = { allow: false, max: 8, kb: 20, exts: {} };
+var fkey = function (sid, name) { return sid + "/" + name; };
 try { VISITED = JSON.parse(store.get(KEY + ":visited") || "{}") || {}; } catch (e) { VISITED = {}; }
 var sit = function (id) { return P.situations.filter(function (s) { return s.id === id; })[0] || null; };
 var qcm = function (id) { return P.qcm.filter(function (q) { return q.id === id; })[0] || null; };
 var squash = function (s) { return String(s || "").replace(/\s+/g, ""); };
 function changed(id) {
   var s = sit(id);
-  if (s) return s.files.some(function (f) { var a = A[id] && A[id].files && A[id].files[f.name]; return a != null && squash(a) !== squash(f.starter); });
+  if (s) return s.files.some(function (f) { var a = A[id] && A[id].files && A[id].files[f.name]; return a != null && squash(a) !== squash(f.starter); })
+    || ownFiles(s).some(function (n) { return squash(A[id].files[n]) !== ""; });
   return !!(A[id] && A[id].choice != null);
 }
 function stateOf(id) {
@@ -273,8 +292,9 @@ function intro(info) {
   if (info.status === "live" && info.taker === "active" && LOCK) return start();
   if (info.status === "submitted") return screen('<div class="big">🎉</div><h1>Copie envoyée</h1><p class="muted">Ton formateur te transmettra les résultats. Tu peux fermer cette page.</p>');
   if (info.status === "closed" || info.status === "draft") return screen('<div class="big">🔒</div><h1>Cette mise en situation est fermée</h1><p class="muted">Demande à ton formateur si tu penses que c’est une erreur.</p>');
-  var rules = ["💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>",
-    "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>",
+  // (QCM only: no code to run)
+  var rules = [info.n.situations ? "💻 <span>" + info.n.situations + (info.n.situations > 1 ? " mises en situation avec du code (de la plus facile à la plus difficile)" : " mise en situation avec du code") + (info.n.qcm ? ", puis " + info.n.qcm + " QCM." : ".") + "</span>" : "📝 <span>" + info.n.qcm + " QCM : une seule bonne réponse par question.</span>",
+    info.n.situations ? "▶️ <span>Le bouton <b>Exécuter</b> lance ton code et les vérifications automatiques. <b>Vérifier mon code</b> te dit seulement le type de problème (3 fois par exercice).</span>" : "",
     info.lockScreen ? "💾 <span>Tout est enregistré au fur et à mesure : tu peux revenir sur une question jusqu’à l’envoi.</span>" : "💾 <span>Tout est enregistré au fur et à mesure : tu peux recharger la page ou revenir sur une question jusqu’à l’envoi.</span>",
     info.lockScreen ? "🖥️ <span>Elle se passe <b>en plein écran</b>.</span>" : "🔎 <span>Tu peux chercher dans la documentation dans un autre onglet. Ton formateur voit quand tu quittes la page" + (info.noPaste ? "." : " et ce que tu colles.") + "</span>",
     info.lockScreen ? "🔒 <span>Si tu quittes le plein écran, changes d’onglet ou de fenêtre, <b>ta session s’arrête</b> : seul ton formateur peut te laisser revenir. Ton travail reste enregistré.</span>" : "",
@@ -312,6 +332,7 @@ function start() {
     }
     LOCKED = false; LOCK = !!r.lockScreen;
     P = r.paper; A = r.answers || {}; SPENT = r.spent || {}; ENDS = r.endsAt; OFFSET = Date.now() / 1000 - r.now; NOPASTE = !!r.noPaste;
+    if (r.files) FILESET = r.files;
     Object.keys(r.checks || {}).forEach(function (k) { CHECKS[k] = r.checks[k]; });
     Object.keys(r.ai || {}).forEach(function (k) { AI[k] = r.ai[k]; });
     ORDER = P.situations.map(function (s) { return s.id; }).concat(P.qcm.map(function (q) { return q.id; }));
@@ -333,10 +354,15 @@ function drawProg() {
     var st = stateOf(id), word = st === "done" ? "répondu" : st === "on" ? "en cours" : "pas commencé";
     return '<button type="button" class="pi ' + (st ? "prog-" + st : "") + (id === CUR ? " cur" : "") + '" data-go="' + id + '" aria-label="' + esc(label(id)) + ", " + word + '"' + (id === CUR ? ' aria-current="step"' : "") + "><i></i>" + shortLabel(id) + "</button>";
   };
-  $("#prog").innerHTML = '<div class="prog-row">' + P.situations.map(function (s) { return item(s.id); }).join("") + '<span class="pi-sep" aria-hidden="true"></span>' + P.qcm.map(function (q) { return item(q.id); }).join("")
+  var box = $(".prog-items", $("#prog")), keep = box ? box.scrollTop : 0;
+  $("#prog").innerHTML = '<div class="prog-row"><div class="prog-items">' + P.situations.map(function (s) { return item(s.id); }).join("") + (P.situations.length && P.qcm.length ? '<span class="pi-sep" aria-hidden="true"></span>' : "") + P.qcm.map(function (q) { return item(q.id); }).join("") + "</div>"
     + '<span class="prog-legend" aria-hidden="true"><span><i style="background:var(--line)"></i>Pas commencé</span><span><i style="background:var(--warn)"></i>En cours</span><span><i style="background:var(--good)"></i>Répondu</span></span></div>'
     + '<div class="bar" role="progressbar" aria-label="Questions répondues" aria-valuemin="0" aria-valuemax="' + ORDER.length + '" aria-valuenow="' + n + '"><span style="width:' + Math.round((100 * n) / ORDER.length) + '%"></span></div>';
   $$("[data-go]", $("#prog")).forEach(function (b) { b.onclick = function () { go(b.dataset.go); }; });
+  // where the learner had scrolled to, and the current item always in sight
+  box = $(".prog-items", $("#prog")); box.scrollTop = keep;
+  var cur = $(".pi.cur", box);
+  if (cur && (cur.offsetTop < box.scrollTop || cur.offsetTop + cur.offsetHeight > box.scrollTop + box.clientHeight)) box.scrollTop = cur.offsetTop - 3;
 }
 
 // ---------------------------------------------------------------- moving between items
@@ -367,7 +393,7 @@ document.addEventListener("keydown", function (e) {
 });
 
 // ---------------------------------------------------------------- a QCM
-function release() { if (ed) { ed.swapDoc(CodeMirror.Doc("")); ed = null; } }
+function release() { if (ED) { ED.dispose(); ED = null; } }
 function drawQcm(q) {
   release();
   var i = P.qcm.indexOf(q), mine = A[q.id] && A[q.id].choice;
@@ -434,6 +460,7 @@ function drawSituation(s) {
   SFILE[s.id] = SFILE[s.id] || FILE[s.id];
   // two sets of tabs: the starter code and the editor each show their own file
   var tabs = function (pfx) { var cur = pfx === "sf" ? SFILE[s.id] : FILE[s.id]; return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-' + pfx + '="' + esc(f.name) + '" aria-selected="' + (f.name === cur) + '">' + esc(f.name) + "</button>"; }).join("") + "</div>"; };
+  var etabs = '<div id="etabs">' + editorTabs(s) + "</div>";
   var left = AI[s.id] ? AI[s.id].left : 3;
   var hasPreview = s.runtime === "web" || s.runtime === "php";
   OUTTAB[s.id] = OUTTAB[s.id] || (hasPreview ? "preview" : "console");
@@ -444,8 +471,8 @@ function drawSituation(s) {
     + '<div class="card"><h2>Ce que tu dois faire</h2><ol class="qs" translate="no">' + qs + '</ol><div id="trq"></div></div>'
     + (s.checks.length ? '<div class="card"><h2>Vérifications automatiques</h2><ul class="checks" id="cklist"></ul><p class="muted small" style="margin:8px 0 0">Elles se lancent à chaque exécution.</p></div>' : "")
     + '</div><div class="col">'
-    + '<div class="card editor"><div class="etop">' + tabs("ef") + '<span class="spacer"></span><button class="btn icon" type="button" id="reset" title="Repartir du code de départ (ce fichier)" aria-label="Repartir du code de départ pour ce fichier">↺</button></div>'
-    + '<div class="cmbox" id="editor"></div>'
+    + '<div class="card editor"><div class="etop">' + etabs + '<span class="spacer"></span><button class="btn icon" type="button" id="reset" title="Repartir du code de départ (ce fichier)" aria-label="Repartir du code de départ pour ce fichier">↺</button></div>'
+    + '<div class="cmbox" id="editor"><div class="edload">Chargement de l’éditeur…</div></div>'
     + '<div class="actions"><button class="btn primary" type="button" id="run">▶ Exécuter <kbd>Ctrl+Entrée</kbd></button>'
     + '<button class="btn" type="button" id="aicheck"' + (left <= 0 ? " disabled" : "") + '>Vérifier mon code <span class="left-n" id="aileft">' + left + "</span></button>"
     + '<span class="muted small" id="runinfo"></span></div></div>'
@@ -461,39 +488,131 @@ function drawSituation(s) {
   startEd = CodeMirror($("#starter"), { value: "", readOnly: true, lineNumbers: true, theme: dark() ? "material-darker" : "default", tabSize: 2 });
   CMS.push(startEd);
   if (s.schema) CMS.push(CodeMirror($("#schema"), { value: s.schema, readOnly: true, lineNumbers: true, mode: "text/x-sql", theme: dark() ? "material-darker" : "default" }));
-  ed = CodeMirror($("#editor"), { value: "", lineNumbers: true, indentUnit: 2, tabSize: 2, indentWithTabs: false, matchBrackets: true, autoCloseBrackets: true, dragDrop: !NOPASTE, theme: dark() ? "material-darker" : "default",
-    extraKeys: { Tab: function (c) { if (c.somethingSelected()) c.indentSelection("add"); else c.replaceSelection("  "); }, "Shift-Tab": function (c) { c.indentSelection("subtract"); } } });
-  CMS.push(ed);
-  DOCS[s.id] = DOCS[s.id] || {};
   showStarter(s, SFILE[s.id]);
-  showFile(s, FILE[s.id]);
+  mountEditor(s);
   $("#sdet").addEventListener("toggle", function () { STARTOPEN = $("#sdet").open; store.set("cb-mes-start", STARTOPEN ? "open" : "closed"); $(".sdet-h").textContent = STARTOPEN ? "masquer" : "afficher"; if (STARTOPEN) setTimeout(function () { startEd.refresh(); }, 0); });
-  ed.on("beforeChange", function (c, ch) {
-    if (ch.origin === "paste" || ch.origin === "drop") {
-      var txt = ch.text.join("\n");
-      if (NOPASTE) { ch.cancel(); toast("Le copier-coller est désactivé pour cette mise en situation."); logOf(s.id, FILE[s.id]).pastes++; call("/event", { kind: "paste-blocked", item: s.id, n: txt.length, text: txt.slice(0, 400) }); }
-      else if (txt.length >= 2) call("/event", { kind: "paste", item: s.id, n: txt.length, text: txt.slice(0, 400) });
-    }
-  });
-  ed.on("change", function (c, ch) {
-    if (ch.origin === "setValue") return;
-    logOf(s.id, FILE[s.id]).changes.push([ms(), c.indexFromPos(ch.from), ch.removed.join("\n").length, ch.text.join("\n"), ch.origin || ""]);
-    A[s.id].files[FILE[s.id]] = c.getValue();
-    DIRTY[s.id] = true; RAN[s.id] = false;
-    queueSave(s.id);
-  });
   $$("[data-sf]").forEach(function (b) { b.onclick = function () { showStarter(s, b.dataset.sf); }; });
-  $$("[data-ef]").forEach(function (b) { b.onclick = function () { showFile(s, b.dataset.ef); }; });
   $("#reset").onclick = function () {
     var f = s.files.filter(function (x) { return x.name === FILE[s.id]; })[0];
-    if (f && confirm("Remettre le code de départ dans " + f.name + " ? Ton code actuel de ce fichier sera remplacé.")) { ed.setValue(f.starter); A[s.id].files[f.name] = f.starter; logOf(s.id, f.name).changes.push([ms(), 0, 0, f.starter, "setValue"]); DIRTY[s.id] = true; queueSave(s.id); }
+    if (!f || !ED) return;
+    askDialog("Repartir du code de départ ?", "Ton code actuel de " + f.name + " sera remplacé par le code de départ.", "Remettre le code de départ", function () {
+      ED.reset(fkey(s.id, f.name), f.starter); A[s.id].files[f.name] = f.starter; logOf(s.id, f.name).changes.push([ms(), 0, 0, f.starter, "setValue"]); DIRTY[s.id] = true; RAN[s.id] = false; queueSave(s.id);
+    });
   };
   $("#run").onclick = runCode;
   $("#aicheck").onclick = aiCheck;
   $$("[data-ot]").forEach(function (b) { b.onclick = function () { OUTTAB[s.id] = b.dataset.ot; showOut(); }; });
   showOut(); drawChecks(); drawFeedback(); drawConsole();
-  wireNav(); wireTr(s);
-  setTimeout(function () { ed.refresh(); startEd.refresh(); }, 0);
+  wireNav(); wireTr(s); fitSit();
+  setTimeout(function () { startEd.refresh(); }, 0);
+}
+/** The height of the sticky header (the top bar and the progress, which wraps on narrow screens): the two columns fit under it. */
+function fitSit() { var p = $("#prog"); document.documentElement.style.setProperty("--stick", ($(".top").offsetHeight + (p.hidden ? 0 : p.offsetHeight)) + "px"); }
+window.addEventListener("resize", fitSit);
+/** The code editor of the situation (Monaco when it loaded, else CodeMirror), on the learner's current file. */
+function mountEditor(s) {
+  var box = $("#editor");
+  CBEditor.load().then(function () {
+    if (CUR !== s.id || !document.body.contains(box) || ED) return;
+    box.innerHTML = "";
+    ED = CBEditor.create(box, {
+      dark: dark(), noPaste: NOPASTE, now: ms,
+      onChange: function (key, entries, value) {
+        var i = key.indexOf("/"), sid = key.slice(0, i), name = key.slice(i + 1);
+        if (!A[sid] || !A[sid].files || !(name in A[sid].files)) return;
+        var lg = logOf(sid, name); entries.forEach(function (e) { lg.changes.push(e); });
+        A[sid].files[name] = value; DIRTY[sid] = true; RAN[sid] = false; queueSave(sid);
+      },
+      onPaste: function (t) { if (t.length >= 2) call("/event", { kind: "paste", item: s.id, n: t.length, text: t.slice(0, 400) }); },
+      onBlocked: function (t) { toast("Le copier-coller est désactivé pour cette mise en situation."); logOf(s.id, FILE[s.id]).pastes++; call("/event", { kind: "paste-blocked", item: s.id, n: t.length, text: t.slice(0, 400) }); },
+      onRun: function () { runCode(); },
+      onSave: function () { saveNow(s.id); }
+    });
+    showFile(s, FILE[s.id]);
+  });
+}
+/** The learner's own files (not the starter ones), in the order they made them. */
+function ownFiles(s) { var st = s.files.map(function (f) { return f.name; }); return Object.keys((A[s.id] && A[s.id].files) || {}).filter(function (n) { return st.indexOf(n) < 0; }); }
+function rulesFor(s) { var ex = FILESET.exts || {}; return { allow: !!FILESET.allow && (ex[s.runtime] || []).length > 0, max: Math.max(FILESET.max || 8, s.files.length), kb: FILESET.kb || 20, exts: ex[s.runtime] || [] }; }
+function extOf(n) { n = String(n).toLowerCase(); if (/\.blade\.php$/.test(n)) return ".blade.php"; var i = n.lastIndexOf("."); return i > 0 ? n.slice(i) : ""; }
+/** Why a file name is refused (the server checks the same rules: mises.ts fileNameProblem). */
+function nameProblem(s, n, renaming) {
+  var R = rulesFor(s), names = Object.keys(A[s.id].files), st = s.files.map(function (f) { return f.name; });
+  if (!R.allow) return "La création de fichiers n’est pas autorisée pour cet exercice.";
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,39}$/.test(n) || n.indexOf("..") >= 0) return "Nom invalide : lettres, chiffres, - _ et . seulement (40 caractères au plus).";
+  if (R.exts.indexOf(extOf(n)) < 0) return "Extension non autorisée. Autorisées : " + R.exts.join(" ");
+  if (names.some(function (f) { return f.toLowerCase() === n.toLowerCase() && f !== renaming; })) return "Un fichier porte déjà ce nom.";
+  if (renaming == null && names.length >= R.max) return R.max + " fichiers au plus.";
+  if (renaming != null && st.indexOf(renaming) >= 0) return "Un fichier de départ ne peut pas être renommé.";
+  return "";
+}
+function editorTabs(s) {
+  var R = rulesFor(s), own = ownFiles(s), cur = FILE[s.id];
+  return '<div class="ftabs" role="tablist" aria-label="Fichiers">' + s.files.map(function (f) { return '<button type="button" role="tab" class="ftab" data-ef="' + esc(f.name) + '" aria-selected="' + (f.name === cur) + '" title="Fichier de départ (ne peut pas être supprimé)">' + esc(f.name) + "</button>"; }).join("")
+    + own.map(function (n) { return '<span class="ftab own" role="tab" data-ef="' + esc(n) + '" aria-selected="' + (n === cur) + '" tabindex="0">' + esc(n) + '<button type="button" class="fx" data-fren="' + esc(n) + '" aria-label="Renommer ' + esc(n) + '" title="Renommer">✎</button><button type="button" class="fx" data-fdel="' + esc(n) + '" aria-label="Supprimer ' + esc(n) + '" title="Supprimer">✕</button></span>'; }).join("")
+    + (R.allow && s.files.length + own.length < R.max ? '<button type="button" class="ftab add" id="fnew" title="Nouveau fichier (' + esc(R.exts.join(" ")) + ')" aria-label="Nouveau fichier">＋ Fichier</button>' : "") + "</div>";
+}
+function wireTabs(s) {
+  $$("[data-ef]", $("#etabs")).forEach(function (b) {
+    b.onclick = function (e) { if (e.target.closest("[data-fren],[data-fdel]")) return; showFile(s, b.dataset.ef); };
+    b.onkeydown = function (e) { if ((e.key === "Enter" || e.key === " ") && e.target === b) { e.preventDefault(); showFile(s, b.dataset.ef); } };
+  });
+  $$("[data-fren]", $("#etabs")).forEach(function (b) { b.onclick = function () { fileDialog(s, b.dataset.fren); }; });
+  $$("[data-fdel]", $("#etabs")).forEach(function (b) { b.onclick = function () { var n = b.dataset.fdel; askDialog("Supprimer " + n + " ?", "Son contenu sera perdu.", "Supprimer", function () { deleteFile(s, n); }); }; });
+  if ($("#fnew")) $("#fnew").onclick = function () { fileDialog(s, null); };
+}
+function redrawTabs(s) { if ($("#etabs")) { $("#etabs").innerHTML = editorTabs(s); wireTabs(s); } }
+/** A small question in the page's dialog (not confirm(): a native box could stop a full-screen session). */
+function askDialog(title, text, ok, fn) {
+  var d = $("#dlg");
+  d.innerHTML = "<h2>" + esc(title) + '</h2><p class="muted">' + esc(text) + '</p><div class="dlg-foot"><button class="btn" type="button" id="ano">Annuler</button><button class="btn primary" type="button" id="ayes">' + esc(ok) + "</button></div>";
+  d.showModal();
+  $("#ano", d).onclick = function () { d.close(); };
+  $("#ayes", d).onclick = function () { d.close(); fn(); };
+  $("#ano", d).focus();
+}
+function fileDialog(s, renaming) {
+  var d = $("#dlg"), R = rulesFor(s), n0 = renaming || "";
+  d.innerHTML = "<h2>" + (renaming ? "Renommer " + esc(renaming) : "Nouveau fichier") + '</h2><form id="ff" novalidate><label for="fname" class="small">Nom du fichier</label><input type="text" id="fname" value="' + esc(n0) + '" autocomplete="off" spellcheck="false" placeholder="ex. ' + esc(R.exts[R.exts.length - 1] === ".js" ? "app.js" : "fichier" + (R.exts[0] || "")) + '">'
+    + '<p class="muted small">Extensions : ' + esc(R.exts.join(" ")) + (renaming ? "" : " · " + Object.keys(A[s.id].files).length + "/" + R.max + " fichiers") + '</p><p class="small" id="ferr" role="alert" style="color:var(--bad);min-height:1em;margin:0"></p>'
+    + '<div class="dlg-foot"><button class="btn" type="button" id="fno">Annuler</button><button class="btn primary" type="submit">' + (renaming ? "Renommer" : "Créer") + "</button></div></form>";
+  d.showModal();
+  var inp = $("#fname", d); inp.focus(); if (renaming) inp.setSelectionRange(0, Math.max(0, renaming.length - extOf(renaming).length));
+  $("#fno", d).onclick = function () { d.close(); };
+  $("#ff", d).onsubmit = function (e) {
+    e.preventDefault();
+    var n = inp.value.trim(), err = renaming === n ? "" : nameProblem(s, n, renaming);
+    if (err) { $("#ferr", d).textContent = err; inp.focus(); return; }
+    d.close();
+    if (renaming === n) return;
+    if (renaming) renameFile(s, renaming, n); else newFile(s, n);
+  };
+}
+function fileSaved(s, what) { call("/event", { kind: "file", item: s.id, text: what }); DIRTY[s.id] = true; RAN[s.id] = false; saveNow(s.id, true); redrawTabs(s); drawProgSoon(); }
+function newFile(s, n) {
+  A[s.id].files[n] = "";
+  logOf(s.id, n).changes.push([ms(), 0, 0, "", "setValue"]);
+  FILE[s.id] = n;
+  fileSaved(s, "new:" + n);
+  showFile(s, n);
+  if (ED) ED.focus();
+}
+function renameFile(s, a, b) {
+  var files = {}, v = A[s.id].files[a];
+  Object.keys(A[s.id].files).forEach(function (k) { files[k === a ? b : k] = A[s.id].files[k]; });
+  A[s.id].files = files;
+  if (ED) ED.rename(fkey(s.id, a), fkey(s.id, b), b);
+  logOf(s.id, b).changes.push([ms(), 0, 0, v, "setValue"]);
+  if (FILE[s.id] === a) FILE[s.id] = b;
+  fileSaved(s, "rename:" + a + ">" + b);
+  showFile(s, FILE[s.id]);
+}
+function deleteFile(s, n) {
+  delete A[s.id].files[n];
+  if (ED) ED.drop(fkey(s.id, n));
+  if (FILE[s.id] === n) FILE[s.id] = s.files[0].name;
+  fileSaved(s, "delete:" + n);
+  showFile(s, FILE[s.id]);
 }
 /** The starter code panel: its own file (independent of the editor's). */
 function showStarter(s, name) {
@@ -510,15 +629,15 @@ function showStarter(s, name) {
 }
 /** The editor: the learner's file. */
 function showFile(s, name) {
+  if (!A[s.id] || !(name in A[s.id].files)) name = s.files[0].name;
   FILE[s.id] = name;
-  var f = s.files.filter(function (x) { return x.name === name; })[0];
-  if (!f) return;
-  $$("[data-ef]").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.ef === name)); });
-  var doc = DOCS[s.id][name];
-  if (!doc) { doc = DOCS[s.id][name] = CodeMirror.Doc(A[s.id].files[name] != null ? A[s.id].files[name] : f.starter, MODES[f.lang]); var lg = logOf(s.id, name); if (!lg.changes.length) lg.changes.push([ms(), 0, 0, doc.getValue(), "setValue"]); }
-  ed.swapDoc(doc);
-  ed.setOption("mode", MODES[f.lang]);
-  setTimeout(function () { ed.refresh(); }, 0);
+  redrawTabs(s);
+  if ($("#reset")) $("#reset").hidden = !s.files.some(function (f) { return f.name === name; });
+  if (!ED) return;
+  var key = fkey(s.id, name), first = !ED.has(key);
+  ED.open(key, name, A[s.id].files[name]);
+  // the typing record of a file starts with its text (a reload: what was saved)
+  if (first) { var lg = logOf(s.id, name); if (!lg.changes.length) lg.changes.push([ms(), 0, 0, A[s.id].files[name], "setValue"]); }
 }
 function showOut() {
   var t = OUTTAB[CUR];
@@ -595,7 +714,11 @@ var HARNESS = function () {
   var fmt = function (v) { try { if (typeof v === "string") return v; if (v instanceof Element) return v.outerHTML.slice(0, 300); if (typeof v === "function") return "ƒ " + (v.name || "anonymous") + "()"; if (v === undefined) return "undefined"; var s = JSON.stringify(v); return s === undefined ? String(v) : s; } catch (e) { return String(v); } };
   var LOG = [];
   ["log", "info", "warn", "error", "debug", "table"].forEach(function (k) { var o = console[k]; console[k] = function () { var a = Array.prototype.slice.call(arguments).map(fmt).join(" "); LOG.push(a); send({ type: "log", level: k === "debug" || k === "table" ? "log" : k, text: a }); try { o.apply(console, arguments); } catch (e) {} }; });
-  window.addEventListener("error", function (e) { send({ type: "log", level: "error", text: e.message || "Erreur", line: e.lineno || 0 }); });
+  window.addEventListener("error", function (e) {
+    var file = "";
+    try { var fn = String(e.filename || ""); if (fn.indexOf("data:") === 0) { var m = decodeURIComponent(fn.slice(fn.indexOf(",") + 1, fn.indexOf(",") + 200)).match(/^\/\*cbfile:([^*]+)\*\//); if (m) file = m[1]; } } catch (x) {}
+    send({ type: "log", level: "error", text: e.message || "Erreur", line: e.lineno || 0, file: file });
+  });
   window.addEventListener("unhandledrejection", function (e) { send({ type: "log", level: "error", text: "Uncaught (in promise) " + fmt(e.reason && e.reason.message || e.reason) }); });
   document.addEventListener("click", function (e) { var a = e.target && e.target.closest && e.target.closest("a[href]"); if (a && !/^#/.test(a.getAttribute("href") || "")) { e.preventDefault(); send({ type: "log", level: "info", text: "Lien « " + a.getAttribute("href") + " » : la navigation est désactivée dans l’aperçu." }); } }, true);
   document.addEventListener("submit", function (e) { e.preventDefault(); send({ type: "log", level: "info", text: "Formulaire envoyé (l’envoi est désactivé dans l’aperçu)." }); }, true);
@@ -630,6 +753,8 @@ var HARNESS = function () {
 // The frame's page is ClassBot's helper, then the HTML file with the CSS and JS files put inside it: a line of that page
 // is not a line of their files. LINEMAP[runId] says, for each line of the page, which file and which line it is.
 var LINEMAP = {};
+// NOTES[runId]: what the preview did that a browser wouldn't (a module loaded as a plain script, or not linked)
+var NOTES = {};
 function buildDoc(s, files, runId) {
   var html = s.files.filter(function (f) { return f.lang === "html"; })[0];
   var doc = html ? String(files[html.name] || "") : "";
@@ -637,19 +762,59 @@ function buildDoc(s, files, runId) {
   var safeJs = function (t) { return String(t || "").replace(/<\/script/gi, "<\\/script"); };
   // each file put in the page is first a mark (\u0001n\u0001), replaced at the end while counting the lines
   var blocks = [], mark = function (name, open, text, close) { blocks.push({ name: name, open: open, text: String(text || ""), close: close }); return "\u0001" + (blocks.length - 1) + "\u0001"; };
+  // their own files: only when the page links them (<link href="mon.css">, <script src="app.js">)
+  Object.keys(files).filter(function (n) { return !s.files.some(function (f) { return f.name === n; }); }).forEach(function (n) {
+    var lang = /\.css$/i.test(n) ? "css" : /\.m?js$/i.test(n) ? "javascript" : "";
+    var linked = new RegExp((lang === "css" ? "<link[^>]*href=" : "<script[^>]*src=") + "[\"']\\.?/?" + n.replace(/[.]/g, "\\.") + "[\"']", "i").test(doc);
+    if (lang && linked) (lang === "css" ? css : js).push({ name: n, lang: lang });
+  });
   css.forEach(function (f) {
     var re = new RegExp("<link[^>]*href=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>", "i");
     var b = mark(f.name, "<style>\n", files[f.name], "\n</style>");
     if (re.test(doc)) doc = doc.replace(re, function () { return b; });
     else doc = /<\/head>/i.test(doc) ? doc.replace(/<\/head>/i, function () { return b + "</head>"; }) : b + doc;
   });
+  // ES modules (import / export), as a browser does with a server: a <script type="module" src> stays a module, and each
+  // file it imports becomes a module in memory (data:), its own imports rewritten the same way. The frame can't fetch
+  // ./utils.js (no network, no address of its own). Each module starts with /*cbfile:name*/: an error in it says which file.
+  var MODS = {};
+  var modName = function (spec) { var n = String(spec).replace(/^\.\//, ""); return n in files && /\.m?js$/i.test(n) ? n : (n + ".js") in files ? n + ".js" : ""; };
+  var rewrite = function (text, stack) {
+    return String(text || "").replace(/(\bimport\s*(?:[\w$*{}\s,]+?\s*from\s*)?|\bexport\s*(?:\*(?:\s*as\s+[\w$]+)?|\{[^}]*\})\s*from\s*|\bimport\s*\(\s*)(["'])([^"'\n]+)\2/g, function (all, head, q, spec) {
+      var n = modName(spec), url = n ? modUrl(n, stack) : "";
+      return url ? head + q + url + q : all;
+    });
+  };
+  var modUrl = function (n, stack) {
+    if (MODS[n]) return MODS[n];
+    if (stack.indexOf(n) >= 0) return "";   // imports in a circle: left to the browser's own error
+    return (MODS[n] = "data:text/javascript;charset=utf-8," + encodeURIComponent("/*cbfile:" + n + "*/" + rewrite(files[n], stack.concat(n))).replace(/['()*!~]/g, function (c) { return "%" + c.charCodeAt(0).toString(16).toUpperCase(); }));
+  };
+  var isModule = function (t) { return /(^|\n)\s*(import\s*[\w$*{"']|export[\s{*])/.test(String(t || "")); };
+  var atEnd = function (b) { doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b; };
+  var notes = [], loose = [];
   js.forEach(function (f) {
-    var re = new RegExp("<script[^>]*src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"'][^>]*>\\s*<\/script>", "i");
-    var b = mark(f.name, "<script>\n", safeJs(files[f.name]), "\n<\/script>");
-    if (re.test(doc)) doc = doc.replace(re, function () { return b; });
-    else doc = /<\/body>/i.test(doc) ? doc.replace(/<\/body>(?![\s\S]*<\/body>)/i, function () { return b + "</body>"; }) : doc + "\n" + b;
+    var re = new RegExp("<script([^>]*)src=[\"']\\.?/?" + f.name.replace(/[.]/g, "\\.") + "[\"']([^>]*)>\\s*<\/script>", "i");
+    var tag = doc.match(re), typed = !!tag && /type\s*=\s*["']?module/i.test(tag[1] + tag[2]);
+    // import / export in a file the page loads as a plain script: a browser stops at the first line, the preview runs
+    // it as a module and says what to write
+    var module = typed || (!!tag && isModule(files[f.name]));
+    if (module && !typed) notes.push(f.name + " utilise import / export : dans index.html, sa balise doit être <script type=\"module\" src=\"" + f.name + "\"><\/script> (un vrai navigateur refuserait de l’exécuter ; l’aperçu le fait quand même).");
+    if (!tag && isModule(files[f.name])) { loose.push(f); return; }
+    var b = mark(f.name, module ? '<script type="module">\n' : "<script>\n", safeJs(module ? rewrite(files[f.name], [f.name]) : files[f.name]), "\n<\/script>");
+    if (tag) doc = doc.replace(re, function () { return b; });
+    else atEnd(b);
   });
-  var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
+  // a module not on the page is imported by another one (never put in as a plain script); one nothing imports is the
+  // page's entry the learner forgot to link: run as a module, with what to write
+  var texts = loose.map(function (f) { return rewrite(files[f.name], [f.name]); });
+  loose.forEach(function (f, i) {
+    if (MODS[f.name]) return;
+    notes.push(f.name + " n’est relié à aucune page : ajoute <script type=\"module\" src=\"" + f.name + "\"><\/script> avant </body> dans index.html (l’aperçu l’exécute quand même).");
+    atEnd(mark(f.name, '<script type="module">\n', safeJs(texts[i]), "\n<\/script>"));
+  });
+  NOTES[runId] = notes;
+  var csp = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; frame-src 'none'; base-uri 'none'";
   var head = '<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="' + csp + '"><script>(' + HARNESS.toString().replace("__RUNID__", runId) + ")();</" + "script>";
   // the page, line by line: [file, its line] (ClassBot's helper: null)
   var map = [], out = head, lines = function (t) { return t.split("\n").length - 1; };
@@ -675,6 +840,23 @@ function buildDoc(s, files, runId) {
   LINEMAP[runId] = map;
   return out;
 }
+/** A message that names a module by its address in memory (data:…, see buildDoc): named by its file, « ./utils.js ». */
+function modNames(t) {
+  return t.replace(/data:text\/javascript;charset=utf-8,[^\s'"\x60]+/g, function (u) {
+    try { var m = decodeURIComponent(u.slice(u.indexOf(",") + 1, u.indexOf(",") + 200)).match(/^\/\*cbfile:([^*]+)\*\//); return m ? "./" + m[1] : "(module)"; } catch (e) { return "(module)"; }
+  });
+}
+/** The browser's module errors (in English), said in French with what to do: a failed import stops the whole file. */
+function modHint(t) {
+  var m = t.match(/module '([^']+)' (?:does not|doesn't) provide an export named:? '([^']+)'/) || t.match(/import not found: ([\w$]+)/) || t.match(/Importing binding name '([^']+)' is not found/);
+  if (m) {
+    var mod = m.length > 2 ? m[1] : "le fichier importé", name = m.length > 2 ? m[2] : m[1];
+    return "→ " + mod + " n’exporte pas « " + name + " » : écris export devant sa déclaration dans " + mod + " (ou vérifie que le nom est le même des deux côtés). Tant qu’un import échoue, aucune ligne du fichier qui importe ne s’exécute (même les console.log avant).";
+  }
+  if (/Cannot use import statement outside a module|import declarations may only appear at top level of a module/.test(t)) return "→ un fichier avec import se charge avec <script type=\"module\" src=\"…\"><\/script>, et import s’écrit tout en haut du fichier (pas dans une fonction ou un bloc).";
+  if (/Unexpected token 'export'|export declarations may only appear at top level of a module/.test(t)) return "→ ce fichier contient export : il ne se charge pas avec une balise <script> classique, il s’importe depuis un module (import { … } from \"./fichier.js\").";
+  return "";
+}
 /** « (panier.js, ligne 3) » for a line of the frame's page; nothing when it's ClassBot's helper. */
 function whereLine(runId, line) {
   var w = line > 0 && LINEMAP[runId] ? LINEMAP[runId][line - 1] : null;
@@ -690,21 +872,29 @@ function runWeb(s, files, visible) {
     if (host) { host.innerHTML = ""; host.appendChild(fr); } else { fr.style.cssText = "position:absolute;left:-9999px;width:800px;height:600px"; document.body.appendChild(fr); }
     var end = function (values) {
       if (finished) return; finished = true;
-      window.removeEventListener("message", onMsg);
-      setTimeout(function () { delete LINEMAP[runId]; }, 5000);
-      if (!host) fr.remove();
+      // the preview on screen keeps its console (a click on it later, a timer): it stops listening once replaced
+      if (!host) { window.removeEventListener("message", onMsg); fr.remove(); setTimeout(function () { delete LINEMAP[runId]; }, 5000); }
+      delete NOTES[runId];
       if (visible) { CONSOLE[s.id] = logs.length ? logs : [{ level: "sys", text: "(Rien dans la console.)" }]; drawConsole(); }
       LASTERR[s.id] = logs.filter(function (l) { return l.level === "error"; }).map(function (l) { return l.text; }).join("\n");
-      resolve({ probes: values || {}, console: logs.filter(function (l) { return l.level !== "sys"; }).map(function (l) { return l.text; }).join("\n") });
+      // the console the checks read: what the code wrote (not ClassBot's notes and hints)
+      resolve({ probes: values || {}, console: logs.filter(function (l) { return l.level !== "sys" && l.level !== "hint"; }).map(function (l) { return l.text; }).join("\n") });
     };
     var onMsg = function (e) {
+      if (finished && !fr.isConnected) { window.removeEventListener("message", onMsg); delete LINEMAP[runId]; return; }
       if (e.source !== fr.contentWindow || !e.data || e.data.__mes !== runId) return;
-      if (e.data.type === "log") { logs.push({ level: e.data.level, text: (String(e.data.text) + (e.data.line ? whereLine(runId, Number(e.data.line)) : "")).slice(0, 2000) }); if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (e.data.type === "log") {
+        var lt = modNames(String(e.data.text)), hint = e.data.level === "error" ? modHint(lt) : "";
+        logs.push({ level: e.data.level, text: (lt + (e.data.line ? (e.data.file ? " (" + String(e.data.file).slice(0, 40) + ", ligne " + Number(e.data.line) + ")" : whereLine(runId, Number(e.data.line))) : "")).slice(0, 2000) });
+        if (hint) logs.push({ level: "hint", text: hint });
+        if (visible && s.id === CUR) { CONSOLE[s.id] = logs.slice(); drawConsole(); } }
+      if (finished) return;
       if (e.data.type === "ready") { if (probes.length) fr.contentWindow.postMessage({ __mes: runId, type: "probe", probes: probes.map(function (k) { return { id: k.id, probe: k.probe }; }) }, "*"); else end({}); }
       if (e.data.type === "probes") end(e.data.values);
     };
     window.addEventListener("message", onMsg);
     fr.srcdoc = buildDoc(s, files, runId);
+    (NOTES[runId] || []).forEach(function (n) { logs.push({ level: "hint", text: "⚠ " + n }); });
     // code that never ends (an infinite loop) or never loads: the checks run with what is there
     setTimeout(function () { if (!finished) { logs.push({ level: "error", text: "Le code n’a pas fini de s’exécuter en 6 secondes (une boucle infinie ?)." }); end({}); } }, 6000);
     if (visible) { OUTTAB[s.id] = logs.length && !host ? "console" : "preview"; showOut(); }
@@ -717,8 +907,9 @@ function loadSql() {
   if (SQLJS) return SQLJS;
   SQLJS = new Promise(function (res, rej) {
     var sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js";
-    sc.onload = function () { initSqlJs({ locateFile: function (f) { return "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/" + f; } }).then(res, rej); };
-    sc.onerror = rej; document.head.appendChild(sc);
+    var amd = window.define; window.define = undefined;
+    sc.onload = function () { window.define = amd; initSqlJs({ locateFile: function (f) { return "https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/" + f; } }).then(res, rej); };
+    sc.onerror = function (e) { window.define = amd; rej(e); }; document.head.appendChild(sc);
   });
   SQLJS.catch(function () { SQLJS = null; });
   return SQLJS;
@@ -875,6 +1066,8 @@ function finish(timeUp) {
 }
 $("#finish").onclick = confirmFinish;
 
+// the code editor loads while they read the rules
+CBEditor.load();
 call("/info").then(function (i) { if (i && i.ident === false) return signInScreen(i); if (!i || i.error) { if (i && i.error === "identify") return; return screen('<div class="big">🔗</div><h1>Ce lien a expiré ou n’existe pas</h1><p class="muted">Demande un nouveau lien à ton formateur.</p>'); } intro(i); });
 })();
 </script>
