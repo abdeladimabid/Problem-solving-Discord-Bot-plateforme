@@ -45,7 +45,7 @@ const PAGE = (token: string) => `<!doctype html><html lang="fr"><head><meta char
 <meta name="robots" content="noindex"><title>Mon plan d'action · ClassBot</title>
 <style>
 :root{--bg:#f4f7fc;--card:#fff;--ink:#0f1d3a;--soft:#4a5878;--faint:#8391ad;--line:#e3e9f4;--blue:#2563eb;--blue50:#eff5ff;--good:#059669;--good50:#e8f8f1;--bad:#dc2626;--bad50:#fdeeee;--warn:#b45309;--warn50:#fdf4e3;--code:#0f172a;
-  --k-challenge:#7c3aed;--k-code:#2563eb;--k-answer:#0891b2;--k-mcq:#db2777;--k-brief:#ea580c}
+  --k-challenge:#7c3aed;--k-code:#2563eb;--k-answer:#0891b2;--k-mcq:#db2777;--k-brief:#ea580c;--k-lesson:#0d9488}
 @media (prefers-color-scheme:dark){:root{--bg:#0b1222;--card:#111a2e;--ink:#e7edf8;--soft:#aab6cf;--faint:#7c89a6;--line:#1f2b45;--blue50:#16223d;--good50:#0f2a22;--bad50:#2c1518;--warn50:#2b2111;--code:#0a1020}}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
 .wrap{max-width:820px;margin:0 auto;padding:22px 16px 60px}
@@ -63,7 +63,18 @@ const PAGE = (token: string) => `<!doctype html><html lang="fr"><head><meta char
 .state{margin-left:auto;font-size:13px;font-weight:700;padding:4px 11px;border-radius:99px;background:var(--bg);color:var(--soft)}
 .state.done{background:var(--good50);color:var(--good)}.state.partial,.state.redo{background:var(--warn50);color:var(--warn)}.state.failed{background:var(--bad50);color:var(--bad)}.state.submitted{background:var(--blue50);color:var(--blue)}
 .step h2{font-size:19px;margin:12px 0 4px}.why{color:var(--soft);font-size:14px;margin:0 0 12px}
-.prompt{white-space:pre-wrap;font-size:16.5px;margin:10px 0 14px}
+.doc{font-size:16px;margin:10px 0 14px}.doc p{margin:6px 0}
+.sec{border:1px solid var(--line);border-radius:14px;padding:12px 16px 8px;margin:12px 0;background:var(--bg)}
+.sec-h{font-size:12.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin:0 0 8px}
+.sec.learn{background:var(--blue50);border-color:transparent}.sec.learn .sec-h{color:var(--blue)}
+.sec.ex{background:var(--card);border:2px solid var(--kc)}.sec.ex .sec-h{color:var(--kc)}
+pre.code{background:#0b1020;color:#e2e8f0;border:1px solid #1e293b;border-radius:12px;padding:12px 14px;margin:8px 0 10px;overflow:auto;font:13.5px/1.6 "JetBrains Mono",ui-monospace,Menlo,monospace;tab-size:2}
+pre.code code{background:none;padding:0;color:inherit;font-size:inherit;border-radius:0}
+ul.pts{margin:4px 0 8px;padding-left:22px}ul.pts li{margin:3px 0}ul.pts li.sub{margin-left:20px;list-style:circle}
+ol.steps{list-style:none;padding:0;margin:6px 0 8px;display:grid;gap:8px}
+ol.steps li{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:12px;background:var(--bg);border:1px solid var(--line)}
+ol.steps .n{flex:none;width:24px;height:24px;border-radius:50%;background:var(--kc);color:#fff;font-weight:800;font-size:13px;display:grid;place-items:center;margin-top:1px}
+textarea.code-in{background:#0b1020;color:#e2e8f0;border-color:#1e293b}
 pre,code{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace}code{background:var(--blue50);border-radius:6px;padding:1px 6px;font-size:.92em}
 textarea,input[type=url],input[type=text]{width:100%;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font:15px/1.5 "JetBrains Mono",ui-monospace,Menlo,monospace;background:var(--card);color:var(--ink)}
 textarea{min-height:170px;resize:vertical;tab-size:2}textarea.prose,input[type=text]{font:16px/1.55 Inter,system-ui,sans-serif}textarea.prose{min-height:120px}
@@ -93,7 +104,18 @@ textarea:focus,input:focus{outline:2px solid var(--blue);outline-offset:1px}
 .err{color:var(--bad);font-size:14px}.muted{color:var(--soft)}.center{text-align:center}
 .full{min-height:80vh;display:grid;place-items:center;text-align:center}.full .big{font-size:52px}
 details.mine summary{cursor:pointer;color:var(--soft);font-size:14px;margin-top:10px}details.mine pre{white-space:pre-wrap;background:var(--bg);border-radius:12px;padding:12px;margin:8px 0 0;font-size:14px}
-.k-challenge{--kc:var(--k-challenge)}.k-code{--kc:var(--k-code)}.k-answer{--kc:var(--k-answer)}.k-mcq{--kc:var(--k-mcq)}.k-brief{--kc:var(--k-brief)}
+.k-challenge{--kc:var(--k-challenge)}.k-code{--kc:var(--k-code)}.k-answer{--kc:var(--k-answer)}.k-mcq{--kc:var(--k-mcq)}.k-brief{--kc:var(--k-brief)}.k-lesson{--kc:var(--k-lesson)}
+.step.k-lesson{margin-top:26px;background:linear-gradient(180deg,var(--card),var(--bg));border-left-width:8px}.step.k-lesson h2{font-size:22px}
+.lesson{font-size:15.5px}.lesson h3{font-size:16px;margin:16px 0 6px;color:var(--kc)}.lesson h3:first-child{margin-top:4px}.lesson p{margin:6px 0}
+.lesson ul{margin:4px 0 8px;padding-left:22px}.lesson li{margin:3px 0}.lesson ul ul{margin:2px 0 4px}
+.step.locked{opacity:.75;box-shadow:none}.step.locked .num{background:var(--faint)}.lock{color:var(--soft);font-size:14.5px;margin:8px 0 0}
+details.peek summary{cursor:pointer;color:var(--kc);font-weight:700;font-size:14.5px;margin-top:8px}
+.route{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 20px;margin:0 0 16px;box-shadow:0 4px 18px #0f1d3a0c}
+.route h2{font-size:18px;margin:0 0 4px}.route ol{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:6px}
+.route a{display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:12px;background:var(--bg);color:var(--ink);text-decoration:none;border:1px solid transparent}
+.route a:hover{border-color:var(--k-lesson)}.route .ri{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:800;flex:none;background:var(--line);color:var(--soft)}
+.route .done .ri{background:var(--good);color:#fff}.route .open .ri{background:var(--k-lesson);color:#fff}.route .locked{opacity:.65}
+.route .rt{flex:1;font-weight:600}.route .rn{font-size:13px;color:var(--soft);white-space:nowrap}
 .ctx{margin:10px 0 6px;padding:14px 16px;border-radius:14px;background:var(--bg);font-size:15.5px}.ctx h3{font-size:15px;margin:14px 0 6px}.ctx h3:first-child{margin-top:0}.ctx p{margin:4px 0}.ctx ul{margin:4px 0;padding-left:20px}.ctx li{margin:3px 0}
 .confetti{font-size:15px;margin-top:10px;font-weight:700}
 .tabs{display:flex;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:5px;margin:0 0 16px}
@@ -148,11 +170,65 @@ function ctxHtml(text) {
   });
   return out + (list ? "</ul>" : "");
 }
+// A line of code (HTML, CSS, JS, PHP, SQL), not a sentence: what goes in a dark code block.
+function isCode(raw) {
+  var t = raw.trim(), prose = t.replace(/\\/\\/.*$/, "");
+  if (!t || /^\\x60/.test(t)) return false;
+  if (/^(<\\/?[a-zA-Z!?][^>]*>|\\/\\/|\\/\\*|\\*\\/|[}\\])]|@media|<\\?php)/.test(t)) return true;
+  if (/^(const|let|var|function|return|if|else|for|while|switch|class|import|export|async|await|try|catch|SELECT|INSERT|UPDATE|DELETE|CREATE)\\b/.test(t)) return true;
+  if (/[;{]\\s*(\\/\\/.*)?$/.test(t) && !/[àâçéèêëîïôûùü]/i.test(prose)) return true;
+  return /^[\\w$.\\[\\]"'()]+\\s*\\([^)]*\\)\\s*;?\\s*(\\/\\/.*)?$/.test(t);
+}
+function codeBlock(lines) {
+  var pad = Math.min.apply(null, lines.filter(function (l) { return l.trim(); }).map(function (l) { return l.match(/^\\s*/)[0].length; }).concat([99]));
+  return '<pre class="code"><code>' + esc(lines.map(function (l) { return l.slice(pad === 99 ? 0 : pad); }).join("\\n")) + "</code></pre>";
+}
+// An exercise or a part of the course, structured: a line starting with an emoji (or "## ") opens a section (the lesson,
+// the page, the exercise…), code lines go in a dark block (or between \x60\x60\x60), "1. " lines are the questions, "- " / "• " lists
+function docHtml(text) {
+  var L = String(text || "").replace(/\\r/g, "").split("\\n"), html = "", body = "", head = null, kind = "", tag = "";
+  var endList = function () { if (tag) { body += "</" + tag + ">"; tag = ""; } };
+  var list = function (t) { if (tag !== t) { endList(); body += "<" + t + ' class="' + (t === "ol" ? "steps" : "pts") + '">'; tag = t; } };
+  var flush = function () { endList(); html += head !== null ? '<section class="sec ' + kind + '"><div class="sec-h">' + rich(head) + "</div>" + body + "</section>" : body; body = ""; head = null; kind = ""; };
+  for (var i = 0; i < L.length; i++) {
+    var raw = L[i], t = raw.trim(), m;
+    if (/^\\x60\\x60\\x60/.test(t)) { endList(); var fenced = []; i++; while (i < L.length && !/^\\x60\\x60\\x60/.test(L[i].trim())) fenced.push(L[i++]); body += codeBlock(fenced); continue; }
+    if (!t) { endList(); continue; }
+    if (/^#{1,3}\\s/.test(t) || (/^\\p{Extended_Pictographic}/u.test(t) && t.length <= 90)) {
+      flush(); head = t.replace(/^#+\\s*/, "").replace(/\\s*:$/, "");
+      // (« la page utilisée dans les exercices » is the page, not the exercise)
+      kind = /\\bpage\\b|\\.html|fichier/i.test(head) ? "file" : /exercice|à toi|consigne|question|ta mission/i.test(head) ? "ex" : /leçon|retenir|important|astuce/i.test(head) ? "learn" : "";
+      continue;
+    }
+    if ((m = t.match(/^(\\d+)[.)]\\s+(.*)$/))) { list("ol"); body += '<li><span class="n">' + m[1] + "</span><span>" + rich(m[2]) + "</span></li>"; continue; }
+    if ((m = raw.match(/^(\\s*)[-•*○●–]\\s+(.*)$/))) { list("ul"); body += "<li" + (m[1].length >= 2 ? ' class="sub"' : "") + ">" + rich(m[2]) + "</li>"; continue; }
+    endList();
+    if (isCode(raw)) {
+      var code = [raw];
+      while (i + 1 < L.length && L[i + 1].trim() && (isCode(L[i + 1]) || /^\\s+\\S/.test(L[i + 1]))) code.push(L[++i]);
+      body += codeBlock(code); continue;
+    }
+    body += "<p>" + rich(t) + "</p>";
+  }
+  flush();
+  return html;
+}
+var PARTN = 0;
 function stepHtml(s, i) {
   var done = s.state === "done", h = "";
-  h += '<article class="step k-' + s.kind + (done ? " done" : "") + '" id="s-' + s.id + '"><div class="sh"><span class="num">' + (done ? "✓" : i + 1) + '</span><span class="kind">' + esc(s.kindLabel) + '</span>'
-    + (s.notion ? '<span class="notion">' + esc(s.notion) + '</span>' : "") + '<span class="state ' + s.state + '">' + (STATE[s.state] || "") + '</span></div>';
+  if (s.kind === "lesson") PARTN++;
+  // a locked part: its questions hidden until the part before is passed
+  if (s.locked && s.kind !== "lesson") return '<article class="step locked k-' + s.kind + '" id="s-' + s.id + '"><div class="sh"><span class="num">🔒</span><span class="kind">' + esc(s.kindLabel) + '</span>'
+    + (s.notion ? '<span class="notion">' + esc(s.notion) + '</span>' : "") + '</div><p class="lock">Se débloque quand tu as réussi les questions de la partie d\\'avant.</p></article>';
+  h += '<article class="step k-' + s.kind + (done ? " done" : "") + (s.locked ? " locked" : "") + '" id="s-' + s.id + '"><div class="sh"><span class="num">' + (s.locked ? "🔒" : done ? "✓" : s.kind === "lesson" ? PARTN : i + 1) + '</span><span class="kind">' + esc(s.kindLabel) + (s.kind === "lesson" ? " " + PARTN : "") + '</span>'
+    + (s.notion ? '<span class="notion">' + esc(s.notion) + '</span>' : "") + (s.locked ? "" : '<span class="state ' + s.state + '">' + (s.kind === "lesson" && done ? "✓ Étudiée" : STATE[s.state] || "") + '</span>') + '</div>';
   h += '<h2>' + esc(s.title) + '</h2>' + (s.why ? '<p class="why">' + rich(s.why) + '</p>' : "");
+  if (s.kind === "lesson") {
+    if (s.locked) return h + '<p class="lock">🔒 Cette partie s\\'ouvre quand tu as réussi toutes les questions de la partie d\\'avant.</p><details class="peek"><summary>Voir ce qu\\'elle contient</summary><div class="doc lesson">' + docHtml(s.prompt) + '</div></details></article>';
+    h += '<div class="doc lesson">' + docHtml(s.prompt) + '</div>';
+    if (!done) h += '<div class="row"><button class="btn" data-send="' + s.id + '">✓ J\\'ai étudié cette partie</button><span class="muted" style="font-size:14px">Puis réponds aux questions juste après.</span><span class="err" data-err></span></div>';
+    return h + '</article>';
+  }
   if (s.kind === "challenge") {
     var c = s.challenge || {};
     h += '<div class="hint">Ce défi' + (c.difficulty ? ' (' + esc({ easy: "facile", medium: "moyen", hard: "difficile" }[c.difficulty] || c.difficulty) + ')' : "") + ' se fait dans <b>Discord</b> : tape <code>/assignments</code> sur le serveur de la classe, ou appuie sur <b>Start</b> dans le message que ClassBot t\\'a envoyé. Il est validé ici tout seul quand tu le réussis.</div>';
@@ -168,7 +244,7 @@ function stepHtml(s, i) {
       + '<div class="row"><button class="btn" data-send="' + s.id + '">' + (s.work ? "Renvoyer" : "Rendre mon travail") + '</button><span class="err" data-err></span></div>';
     else if (s.work) h += '<p class="muted">Rendu : <a href="' + esc(s.work.link) + '" target="_blank" rel="noopener">' + esc(s.work.link) + '</a></p>';
   } else {
-    h += '<p class="prompt">' + rich(s.prompt) + '</p>';
+    h += '<div class="doc">' + docHtml(s.prompt) + '</div>';
     if (!done) {
       if (s.kind === "mcq") {
         var mine = s.work && Array.isArray(s.work.answer) ? s.work.answer : [];
@@ -176,7 +252,7 @@ function stepHtml(s, i) {
           return '<label class="choice"><input type="' + (s.multi ? "checkbox" : "radio") + '" name="c-' + s.id + '" value="' + k + '"' + (mine.indexOf(k) >= 0 ? " checked" : "") + '><span>' + rich(c) + '</span></label>'; }).join("") + '</div>';
       } else {
         var val = s.work && typeof s.work.answer === "string" ? s.work.answer : (s.kind === "code" ? s.starter || "" : "");
-        h += '<textarea data-ans class="' + (s.kind === "code" ? "" : "prose") + '" spellcheck="' + (s.kind === "code" ? "false" : "true") + '" placeholder="' + (s.kind === "code" ? "Écris ton code ici" : "Ta réponse, avec tes mots") + '">' + esc(val) + '</textarea>';
+        h += '<div class="lbl">' + (s.kind === "code" ? "💻 Ton code" : "✍️ Ta réponse") + '</div><textarea data-ans class="' + (s.kind === "code" ? "code-in" : "prose") + '" spellcheck="' + (s.kind === "code" ? "false" : "true") + '" placeholder="' + (s.kind === "code" ? "Écris ton code ici" : "Ta réponse, avec tes mots") + '">' + esc(val) + '</textarea>';
       }
       h += '<div class="row"><button class="btn" data-send="' + s.id + '">' + (s.work ? "Vérifier à nouveau" : "Vérifier ma réponse") + '</button>' + (s.work && s.work.tries ? '<span class="muted" style="font-size:14px">Essai ' + s.work.tries + '</span>' : "") + '<span class="err" data-err></span></div>';
     } else if (s.work && s.work.answer != null) {
@@ -234,11 +310,12 @@ function loadGuide(l) {
 function draw() {
   var pct = P.pct != null ? P.pct : P.total ? Math.round(100 * P.done / P.total) : 0;
   app.innerHTML = '<header class="hero"><div class="eyebrow">🧭 Mon plan d\\'action</div><h1>' + esc(P.title) + '</h1>'
-    + '<div>' + P.total + ' action' + (P.total > 1 ? "s" : "") + ' choisie' + (P.total > 1 ? "s" : "") + ' pour toi' + (P.due_at ? ', à faire avant le ' + esc(when(P.due_at)) : "") + '.</div>'
+    + '<div>' + (P.parts.length ? P.parts.length + ' partie' + (P.parts.length > 1 ? "s" : "") + ' de cours, chacune avec ses questions' + (P.gated ? " : la suivante s\\'ouvre quand tu as tout réussi" : "")
+      : P.total + ' action' + (P.total > 1 ? "s" : "") + ' choisie' + (P.total > 1 ? "s" : "") + ' pour toi') + (P.due_at ? ', à faire avant le ' + esc(when(P.due_at)) : "") + '.</div>'
     + (P.message ? '<div class="msg">' + rich(P.message) + '</div>' : "")
     + '<div class="prog"><div class="bar"><i style="width:' + pct + '%"></i></div><b data-pct>' + pct + ' %</b></div><div style="font-size:14px;opacity:.9;margin-top:6px">' + P.done + ' / ' + P.total + ' action' + (P.total > 1 ? "s" : "") + ' validée' + (P.done > 1 ? "s" : "") + (P.objTotal ? ' · <span data-objall>' + P.objDone + ' / ' + P.objTotal + '</span> objectifs cochés' : "") + '</div>'
     + (P.status === "done" ? '<div class="confetti">🎉 Bravo, tout est fait !</div>' : "") + '</header>'
-    + tabsHtml() + (TAB === "guide" ? guideHtml() : P.steps.map(stepHtml).join("") + helpHtml()) + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
+    + tabsHtml() + (TAB === "guide" ? guideHtml() : routeHtml() + (PARTN = 0, P.steps.map(stepHtml).join("")) + helpHtml()) + '<p class="muted center" style="font-size:13px">Tu peux revenir sur cette page quand tu veux : ton travail est gardé.</p>';
   Array.prototype.forEach.call(app.querySelectorAll("[data-chk]"), function (c) { c.onchange = function () { tick(c); }; });
   var ab = document.getElementById("ask-go"); if (ab) ab.onclick = function () { ask(ab); };
   Array.prototype.forEach.call(app.querySelectorAll("[data-tab]"), function (b) { b.onclick = function () { TAB = b.getAttribute("data-tab"); try { history.replaceState(null, "", TAB === "guide" ? "#notions" : location.pathname); } catch (e) {} if (TAB === "guide") loadGuide(GL); draw(); }; });
@@ -247,6 +324,14 @@ function draw() {
   Array.prototype.forEach.call(app.querySelectorAll("textarea[data-ans]"), function (t) {
     t.addEventListener("keydown", function (e) { if (e.key === "Tab" && !t.classList.contains("prose")) { e.preventDefault(); var a = t.selectionStart; t.value = t.value.slice(0, a) + "  " + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = a + 2; } });
   });
+}
+// 🗺️ the course's parts, where they are in it (a gated plan: the next one opens when the one before is passed)
+function routeHtml() {
+  if (!P.parts.length) return "";
+  var ICO = { done: "✓", open: "▶", locked: "🔒" };
+  return '<section class="route"><h2>🗺️ Mon parcours</h2><p class="muted" style="margin:0;font-size:14.5px">' + (P.gated ? "Étudie chaque partie puis réussis ses questions : la partie suivante s\\'ouvre alors." : "Étudie chaque partie puis réponds à ses questions.") + '</p><ol>'
+    + P.parts.map(function (x, k) { return '<li class="' + x.state + '"><a href="#s-' + x.first + '"><span class="ri">' + (x.state === "open" ? k + 1 : ICO[x.state]) + '</span><span class="rt">' + esc(x.title) + '</span><span class="rn">' + (x.state === "locked" ? "fermée" : x.done + " / " + x.total) + '</span></a></li>'; }).join("")
+    + '</ol></section>';
 }
 var ASK_ST = { waiting: "⏳ En attente", helping: "🙋 Ton formateur s'en occupe", done: "✓ Répondu", cancelled: "Annulée" };
 function helpHtml() {
@@ -281,11 +366,19 @@ function tick(c) {
 }
 function send(b) {
   var id = b.getAttribute("data-send"), card = document.getElementById("s-" + id), s = P.steps.filter(function (x) { return x.id === id; })[0], body = { step: id };
-  if (s.kind === "brief") { body.link = card.querySelector("[data-link]").value.trim(); body.note = card.querySelector("[data-note]").value; }
+  if (s.kind === "lesson") body.read = true;
+  else if (s.kind === "brief") { body.link = card.querySelector("[data-link]").value.trim(); body.note = card.querySelector("[data-note]").value; }
   else if (s.kind === "mcq") body.answer = Array.prototype.map.call(card.querySelectorAll("input:checked"), function (i) { return Number(i.value); });
   else body.answer = card.querySelector("[data-ans]").value;
   b.disabled = true; var old = b.textContent; b.textContent = s.kind === "code" || s.kind === "answer" ? "Correction en cours…" : "Envoi…";
-  api("/answer", body).then(function () { return api("/data"); }).then(function (d) { P = d; draw(); var el = document.getElementById("s-" + id); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" }); })
+  var opened = function (d) { return d.parts.filter(function (x) { return x.state !== "locked"; }).length; }, was = opened(P);
+  api("/answer", body).then(function () { return api("/data"); }).then(function (d) {
+    P = d; draw();
+    // a part just passed: the next one opens, it's shown
+    var nx = opened(d) > was ? d.parts[opened(d) - 1] : null, el = document.getElementById("s-" + (nx ? nx.first : id));
+    if (el) el.scrollIntoView({ block: nx ? "start" : "nearest", behavior: "smooth" });
+    if (nx && el) { var n = document.createElement("div"); n.className = "fb correct"; n.innerHTML = "<b>🎉 Partie suivante ouverte</b>Bravo, tu as réussi toutes les questions de la partie d\\'avant."; el.insertBefore(n, el.children[1]); }
+  })
     .catch(function (e) { b.disabled = false; b.textContent = old; card.querySelector("[data-err]").textContent = e.message; });
 }
 load();

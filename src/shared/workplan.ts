@@ -16,8 +16,11 @@ import { sprintDiagnosis } from "./sprintdiag.ts";
 
 export class WorkPlanError extends Error {}
 
-export type StepKind = "challenge" | "code" | "answer" | "mcq" | "brief";
-export const STEP_KINDS: StepKind[] = ["challenge", "code", "answer", "mcq", "brief"];
+// "lesson": a part of a course (its objective and concepts); the actions after it, until the next lesson, test it
+export type StepKind = "challenge" | "code" | "answer" | "mcq" | "brief" | "lesson";
+export const STEP_KINDS: StepKind[] = ["challenge", "code", "answer", "mcq", "brief", "lesson"];
+/** a plan's actions at most (a course in parts holds many) */
+export const MAX_STEPS = 80;
 export interface MiniBrief { context: string; tasks: string[]; deliverable: string; hours: number }
 export interface StepWork { at: number; answer?: string | number[]; link?: string; note?: string; verdict?: "correct" | "partial" | "wrong" | "submitted"; score?: number; comment?: string; tries: number }
 export interface Step {
@@ -51,6 +54,8 @@ export interface WorkPlan {
   feedback?: string;
   /** what the plan asks of the student, summed up for the sheet's « Actions » column (h = its actions, to redo it when they change) */
   sumup?: { h: string; text: string; by: "ai" | "calc" } | null;
+  /** a course in parts (each lesson and the actions after it): a part opens once every action of the one before is done */
+  gated?: boolean;
 }
 
 const KEY = (gid: string, id: number) => `wplan:${gid}:${id}`;
@@ -69,7 +74,7 @@ export function cleanStep(x: any): Step | null {
   return {
     id: /^[a-z0-9]{4,10}$/.test(String(x.id || "")) ? String(x.id) : rid(), kind,
     title: str(x.title, 120), notion: str(x.notion, 80), why: str(x.why, 400),
-    prompt: str(x.prompt, 4000), lang: str(x.lang, 30) || (kind === "code" ? "javascript" : ""), starter: str(x.starter, 4000), expected: str(x.expected, 6000),
+    prompt: str(x.prompt, kind === "lesson" ? 8000 : 4000), lang: str(x.lang, 30) || (kind === "code" ? "javascript" : ""), starter: str(x.starter, 4000), expected: str(x.expected, 6000),
     choices, answer,
     challenge_id: kind === "challenge" && Number(x.challenge_id) > 0 ? Number(x.challenge_id) : null,
     challenge: kind === "challenge" && x.challenge ? { title: str(x.challenge.title, 160), difficulty: str(x.challenge.difficulty, 20), kind: str(x.challenge.kind, 20) } : null,
@@ -152,9 +157,10 @@ export async function savePlanEdits(env: Env, g: GuildRow, id: number, b: any): 
   if ("message" in b) p.message = str(b.message, 2000);
   if ("feedback" in b) p.feedback = str(b.feedback, 2000);
   if ("due_at" in b) p.due_at = Number(b.due_at) > 0 ? Number(b.due_at) : null;
+  if ("gated" in b) p.gated = !!b.gated;
   if (Array.isArray(b.steps)) {
     if (p.status !== "draft") throw new WorkPlanError("The plan was sent: its actions can't change anymore (make a new plan).");
-    p.steps = (b.steps as any[]).map(cleanStep).filter(Boolean).slice(0, 15) as Step[];
+    p.steps = (b.steps as any[]).map(cleanStep).filter(Boolean).slice(0, MAX_STEPS) as Step[];
     await fillChallenges(env, g, p.steps);
   }
   await putPlan(env, p);
@@ -189,7 +195,7 @@ export async function copyPlan(env: Env, g: GuildRow, id: number, students: unkn
     pid = Math.max(Date.now(), pid + 1);
     while (await getPlan(env, g.id, pid)) pid++;
     const c: WorkPlan = { id: pid, gid: g.id, sid, name, title, message: p.message, status: "draft", due_at: p.due_at,
-      created_at: t0, updated_at: t0, sent_at: null, done_at: null, diag: null, steps };
+      created_at: t0, updated_at: t0, sent_at: null, done_at: null, diag: null, steps, ...(p.gated ? { gated: true } : {}) };
     await putPlan(env, c);
     out.push({ id: c.id, sid, name });
   }
@@ -420,6 +426,7 @@ export async function sendPlan(env: Env, g: GuildRow, id: number, o: { dm: (sid:
     if ((s.kind === "code" || s.kind === "answer" || s.kind === "mcq") && s.prompt.length < 8) throw new WorkPlanError(`${n}: write the question.`);
     if (s.kind === "mcq" && (s.choices.filter(Boolean).length < 2 || !s.answer.length)) throw new WorkPlanError(`${n}: give at least 2 choices and tick the right one(s).`);
     if (s.kind === "brief" && (!s.brief || !s.brief.tasks.length)) throw new WorkPlanError(`${n}: write the tasks of the brief.`);
+    if (s.kind === "lesson" && (!s.title || s.prompt.length < 8)) throw new WorkPlanError(`${n}: give the part a title and its content.`);
   }
   const t0 = now();
   for (const s of p.steps) {
@@ -431,7 +438,10 @@ export async function sendPlan(env: Env, g: GuildRow, id: number, o: { dm: (sid:
   p.status = "sent"; p.sent_at = t0;
   await putPlan(env, p);
   const url = planUrl(env, await planToken(env, p));
-  const text = `🧭 **Ton plan d'action est prêt** : ${p.steps.length} action${p.steps.length > 1 ? "s" : ""} choisie${p.steps.length > 1 ? "s" : ""} pour toi par ton formateur${p.due_at ? `, à faire avant <t:${p.due_at}:f>` : ""}.${p.message ? `\n\n${p.message}` : ""}`;
+  const nParts = p.steps.filter((s) => s.kind === "lesson").length;
+  const what = nParts ? `${nParts} partie${nParts > 1 ? "s" : ""} de cours avec leurs questions${p.gated ? " (chaque partie s'ouvre quand tu as réussi la précédente)" : ""}`
+    : `${p.steps.length} action${p.steps.length > 1 ? "s" : ""} choisie${p.steps.length > 1 ? "s" : ""} pour toi par ton formateur`;
+  const text = `🧭 **Ton plan d'action est prêt** : ${what}${p.due_at ? `, à faire avant <t:${p.due_at}:f>` : ""}.${p.message ? `\n\n${p.message}` : ""}`;
   const sent = await o.dm(p.sid, text, url).catch(() => false);
   return { plan: p, url, dm: sent };
 }
@@ -458,7 +468,31 @@ export async function planStatus(env: Env, p: WorkPlan) {
   });
   const done = steps.filter((s) => s.state === "done").length;
   const objTotal = steps.reduce((a, s) => a + s.tasks, 0), objDone = steps.reduce((a, s) => a + s.ticked, 0);
-  return { steps, done, total: steps.length, objDone, objTotal, pct: steps.length ? Math.round((100 * steps.reduce((a, s) => a + s.progress, 0)) / steps.length) : 0 };
+  const parts = partsOf(p, steps.map((s) => s.state));
+  return { steps: steps.map((s, i) => ({ ...s, part: parts.of[i], locked: parts.list[parts.of[i]]?.locked ?? false })), parts: parts.list,
+    done, total: steps.length, objDone, objTotal, pct: steps.length ? Math.round((100 * steps.reduce((a, s) => a + s.progress, 0)) / steps.length) : 0 };
+}
+/**
+ * The plan's parts: each lesson with the actions after it (the actions before the first lesson are a part of their own).
+ * A gated plan opens them one by one: a part is locked until every action of the parts before it is done.
+ */
+export function partsOf(p: Pick<WorkPlan, "steps" | "gated">, states: string[]) {
+  const list: { title: string; lesson: number; items: number[]; done: number; total: number; state: "done" | "open" | "locked"; locked: boolean }[] = [];
+  const of: number[] = [];
+  p.steps.forEach((s, i) => {
+    if (s.kind === "lesson" || !list.length) list.push({ title: s.kind === "lesson" ? s.title : "Pour commencer", lesson: s.kind === "lesson" ? i : -1, items: [], done: 0, total: 0, state: "open", locked: false });
+    list[list.length - 1].items.push(i);
+    of.push(list.length - 1);
+  });
+  let open = true;
+  for (const pt of list) {
+    pt.total = pt.items.length;
+    pt.done = pt.items.filter((i) => states[i] === "done").length;
+    pt.locked = !!p.gated && !open;
+    pt.state = pt.locked ? "locked" : pt.done === pt.total ? "done" : "open";
+    if (pt.done < pt.total) open = false;
+  }
+  return { list, of };
 }
 async function settle(env: Env, p: WorkPlan) {
   if (p.status !== "sent") return;
@@ -508,7 +542,7 @@ export async function plansSummary(env: Env, g: GuildRow, sid?: string) {
 }
 
 // ------------------------------------------------------------------ the student's side
-const KIND_FR: Record<StepKind, string> = { challenge: "Défi", code: "Code", answer: "Question", mcq: "QCM", brief: "Mini-projet" };
+const KIND_FR: Record<StepKind, string> = { challenge: "Défi", code: "Code", answer: "Question", mcq: "QCM", brief: "Mini-projet", lesson: "Partie" };
 /** What the student sees: never the expected answers, the right choices only once they answered right. */
 export async function studentView(env: Env, gid: string, id: number) {
   const p = await getPlan(env, gid, id);
@@ -517,9 +551,12 @@ export async function studentView(env: Env, gid: string, id: number) {
   const st = await planStatus(env, p);
   return {
     title: p.title, name: p.name, message: p.message, due_at: p.due_at, status: p.status, done: st.done, total: st.total, pct: st.pct, objDone: st.objDone, objTotal: st.objTotal,
+    gated: !!p.gated, parts: st.parts.some((x) => x.lesson >= 0) ? st.parts.map((x) => ({ title: x.title, done: x.done, total: x.total, state: x.state, first: p.steps[x.items[0]].id })) : [],
     steps: p.steps.map((s, i) => {
-      const state = st.steps[i].state;
-      return { id: s.id, kind: s.kind, kindLabel: KIND_FR[s.kind], title: s.title, notion: s.notion, why: s.why, prompt: s.prompt, lang: s.lang, starter: s.starter,
+      const state = st.steps[i].state, locked = st.steps[i].locked;
+      // a locked part: its lesson can be read ahead, its questions stay hidden
+      if (locked && s.kind !== "lesson") return { id: s.id, kind: s.kind, kindLabel: KIND_FR[s.kind], title: s.title, notion: s.notion, part: st.steps[i].part, locked, state, prompt: "", choices: [], work: null, review: null, checks: [] };
+      return { id: s.id, kind: s.kind, kindLabel: KIND_FR[s.kind], title: s.title, notion: s.notion, why: s.why, prompt: s.prompt, lang: s.lang, starter: s.starter, part: st.steps[i].part, locked,
         choices: s.kind === "mcq" ? s.choices : [], multi: s.kind === "mcq" && s.answer.length > 1,
         challenge: s.kind === "challenge" ? s.challenge : null, brief: s.brief, state, work: s.work ? { answer: s.work.answer, link: s.work.link, note: s.work.note, verdict: s.work.verdict, comment: s.work.comment, tries: s.work.tries, at: s.work.at } : null,
         review: s.review, checks: s.kind === "brief" ? s.checks || [] : [] };
@@ -543,9 +580,13 @@ export async function studentAnswer(env: Env, gid: string, id: number, b: any) {
   const s = p.steps.find((x) => x.id === String(b.step || ""));
   if (!s || s.kind === "challenge") throw new WorkPlanError("Unknown action.");
   if (s.review?.ok || s.work?.verdict === "correct") throw new WorkPlanError("Déjà validé.");
+  if (p.gated && (await planStatus(env, p)).steps[p.steps.indexOf(s)].locked) throw new WorkPlanError("Cette partie n'est pas encore ouverte : réussis d'abord les questions de la partie d'avant.");
   const tries = (s.work?.tries || 0) + 1;
-  if (tries > 8) throw new WorkPlanError("Tu as fait beaucoup d'essais : parles-en à ton formateur.");
-  if (s.kind === "brief") {
+  // the AI corrects code and written answers (a cost): fewer tries than a QCM, which a gated course must let them pass
+  if (tries > (s.kind === "mcq" || s.kind === "lesson" ? 30 : 8)) throw new WorkPlanError("Tu as fait beaucoup d'essais : parles-en à ton formateur.");
+  if (s.kind === "lesson") {
+    s.work = { at: now(), tries, verdict: "correct", comment: "Partie étudiée." };
+  } else if (s.kind === "brief") {
     const link = str(b.link, 400);
     if (!/^https?:\/\/\S+\.\S+/.test(link)) throw new WorkPlanError("Donne le lien de ton travail (https://…).");
     s.work = { at: now(), link, note: str(b.note, 1500), verdict: "submitted", tries };

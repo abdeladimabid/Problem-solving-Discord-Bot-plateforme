@@ -2128,7 +2128,14 @@ input.vs-time { width: 130px; }
 
 /* ---------- plan d'action for one student: give work, diagnosis, actions, follow-up ---------- */
 .k-challenge { --kc: #7c3aed; --kc-bg: #7c3aed14; } .k-code { --kc: #2563eb; --kc-bg: #2563eb14; } .k-answer { --kc: #0891b2; --kc-bg: #0891b214; }
-.k-mcq { --kc: #db2777; --kc-bg: #db277714; } .k-brief { --kc: #ea580c; --kc-bg: #ea580c14; }
+.k-mcq { --kc: #db2777; --kc-bg: #db277714; } .k-brief { --kc: #ea580c; --kc-bg: #ea580c14; } .k-lesson { --kc: #0d9488; --kc-bg: #0d948814; }
+/* a course in parts (plan d'action): one part at a time, and where the student is */
+.wp-gate { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin: 4px 0 10px; cursor: pointer; }
+.wp-gate input { margin-top: 3px; } .wp-gate > span { display: grid; gap: 2px; }
+.wp-parts { list-style: none; padding: 0; margin: 4px 0 12px; display: grid; gap: 4px; }
+.wp-parts li { display: flex; gap: 8px; align-items: center; font-size: 13.5px; } .wp-parts .wp-pt { flex: 1; min-width: 0; }
+.wp-pi { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; flex: none; background: var(--line); }
+.wp-parts .done .wp-pi { background: var(--up, #059669); color: #fff; } .wp-parts .open .wp-pi { background: #0d9488; color: #fff; } .wp-parts .locked { opacity: .6; }
 .gw { display: grid; grid-template-columns: 1fr 1.25fr; gap: 14px; }
 .gw-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; padding: 20px; border-radius: var(--radius-l); border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; transition: border-color .15s, box-shadow .15s, transform .15s; }
 button.gw-opt:hover { border-color: var(--blue); box-shadow: var(--shadow-m); transform: translateY(-1px); }

@@ -10,6 +10,7 @@ const WK = {
   answer: { ico: "✍️", label: "Answer this", sub: "A question answered in a few sentences" },
   mcq: { ico: "☑️", label: "QCM", sub: "A multiple-choice question, corrected at once" },
   brief: { ico: "📦", label: "Mini brief", sub: "A small project made for them, handed in as a link" },
+  lesson: { ico: "📘", label: "Part", sub: "A part of a course: its objective and its concepts; the actions after it test it" },
 };
 const WP_PRIO = { 1: ["p1", "Blocking"], 2: ["p2", "Important"], 3: ["p3", "To consolidate"] };
 const WP_STATE = { todo: ["", "To do"], done: ["up", "✓ Done"], partial: ["warn", "Almost"], failed: ["down", "To redo"], submitted: ["blue", "Handed in"], redo: ["warn", "Asked to redo"] };
@@ -156,7 +157,7 @@ function stepCardHtml(s, i) {
   return `<li class="wp-step k-${s.kind} ${open ? "open" : ""}" data-sid="${esc(s.id)}">
     <header class="wp-sh"><span class="wp-num">${i + 1}</span><span class="wp-kico">${k.ico}</span>
       <button class="wp-st" data-toggle="${esc(s.id)}" aria-expanded="${open}"><span class="wp-kind">${esc(k.label)}</span><b>${esc(s.title || (s.kind === "challenge" ? s.challenge?.title : "") || "Untitled")}</b>${s.notion ? `<span class="wp-notion">${esc(s.notion)}</span>` : ""}</button>
-      ${stc ? `<span class="wp-state ${stc[0]}">${stc[1]}</span>` : ""}
+      ${st?.locked ? `<span class="wp-state">🔒 Locked</span>` : stc ? `<span class="wp-state ${stc[0]}">${s.kind === "lesson" && st.state === "done" ? "✓ Studied" : stc[1]}</span>` : ""}
       ${draft ? `<span class="wp-tools"><button class="wp-ib" data-up="${i}" title="Move up" ${i ? "" : "disabled"}>↑</button><button class="wp-ib" data-down="${i}" title="Move down" ${i < WPS.plan.steps.length - 1 ? "" : "disabled"}>↓</button><button class="wp-ib danger" data-rm="${i}" title="Remove">✕</button></span>` : ""}
       <button class="wp-ib" data-toggle="${esc(s.id)}" aria-label="Open">${open ? "▴" : "▾"}</button></header>
     ${open ? `<div class="wp-sb">${busyS ? `<div class="wp-busy"><div class="wp-spin"></div> The AI writes…</div>` : draft ? editorHtml(s) : trackHtml(s, st)}</div>` : !draft ? `<div class="wp-sb wp-peek">${peekHtml(s, st)}</div>` : ""}
@@ -173,6 +174,9 @@ function editorHtml(s) {
   const PH = { brief: "e.g. A one-page portfolio in HTML/CSS: a flex navbar, a project gallery in CSS Grid, a contact form. 4 hours.", code: "e.g. A JavaScript function that filters an array of products by price", answer: "e.g. Ask the difference between let, const and var", mcq: "e.g. A QCM on the HTTP methods (GET, POST, PUT, DELETE)", challenge: "e.g. An easy challenge on loops" };
   const askBox = `<div class="wp-askbox"><label class="wp-f wide"><span>✨ Tell the AI what you want</span><textarea data-f="ask" rows="2" placeholder="${esc(PH[s.kind])}">${esc(s.ask || "")}</textarea></label>
     <button class="btn small primary" data-ai="make" data-sid="${esc(s.id)}">✨ ${s.kind === "challenge" ? "Find it" : s.prompt || s.brief?.tasks?.length ? "Generate again" : "Generate"}</button></div>`;
+  if (s.kind === "lesson") return `<div class="wp-fields">${wpField(s, "title", "Title", { ph: "e.g. Module 02 — Sélection des éléments DOM" })}${wpField(s, "notion", "Level / topic", { ph: "e.g. Niveau 1 — Comprendre le DOM" })}${wpField(s, "why", "Objective (the student sees it)", { ph: "e.g. Savoir récupérer précisément les éléments HTML", wide: true })}
+    ${wpField(s, "prompt", "Content <span class='muted'>(« ## » a heading, « - » a concept, « &nbsp;&nbsp;- » one level in, code between backquotes)</span>", { area: true, rows: 14, wide: true, ph: "## 1. Sélecteurs\n- \x60document.getElementById()\x60\n- \x60document.querySelector()\x60" })}</div>
+    <p class="small muted">The actions after this part, until the next one, are its questions${WPS.plan.gated ? ": the next part opens when they are all done" : ""}.</p>`;
   const head = askBox + `<div class="wp-fields">${wpField(s, "title", "Title", { ph: "Short title the student sees" })}${wpField(s, "notion", "Notion", { ph: "e.g. Flexbox: justify-content" })}${wpField(s, "why", "Why (the student sees it)", { ph: "What it helps with", wide: true })}</div>`;
   if (s.kind === "challenge") {
     return `${head}<div class="wp-pick"><label class="wp-f wide"><span>Challenge</span><input type="search" data-chq placeholder="Type to filter the library"></label>
@@ -208,7 +212,8 @@ function chListHtml(s, q) {
 }
 function peekHtml(s, st) {
   const n = s.kind === "brief" ? (s.brief?.tasks || []).length : 0, ticks = n ? `<span class="wp-objpeek"><span class="ap-wpbar"><i style="width:${Math.round((100 * (s.checks || []).length) / n)}%"></i></span>${(s.checks || []).length}/${n} objectives ticked</span>` : "";
-  if (!s.work && !s.review) return ticks || `<span class="muted small">${s.kind === "challenge" ? (st?.asg === "open" ? "Not solved yet (in Discord)" : "") : "Not answered yet"}</span>`;
+  if (!s.work && !s.review) return ticks || `<span class="muted small">${st?.locked ? "Locked: the part before isn't passed yet" : s.kind === "challenge" ? (st?.asg === "open" ? "Not solved yet (in Discord)" : "") : s.kind === "lesson" ? "Not studied yet" : "Not answered yet"}</span>`;
+  if (s.kind === "lesson") return `<span class="muted small">✓ Studied ${esc(fmtAgo(s.work?.at))}</span>`;
   return ticks + trackHtml(s, st, true);
 }
 function trackHtml(s, st, short = false) {
@@ -223,6 +228,7 @@ function trackHtml(s, st, short = false) {
           : `<li class="${ck.has(k) ? "on" : ""}"><button type="button" class="wp-tick" data-tck="${esc(s.id)}" data-k="${k}" data-on="${ck.has(k) ? 0 : 1}" title="${ck.has(k) ? "Done: click to mark it not done" : "Not done: click to mark it done"}" aria-label="${esc(t)}: ${ck.has(k) ? "done" : "not done yet"}">${ck.has(k) ? "✓" : ""}</button>${esc(t)}</li>`).join("")}</ul>
         ${WPS.plan.status === "draft" ? "" : `<p class="small muted" style="margin:-4px 0 8px">Tick what you saw done; ${wpFirst()} sees the same list.</p>`}`;
     }
+    else if (s.kind === "lesson") h += `<details class="wp-fold"><summary class="small">Its content</summary><pre class="wp-ans">${esc(s.prompt)}</pre></details>`;
     else h += `<p class="wp-q">${esc(s.prompt)}</p>`;
   }
   if (w) {
@@ -259,6 +265,7 @@ function sendPanelHtml(count) {
     <label class="wp-f wide"><span>Title</span><input type="text" id="wp-title" value="${esc(p.title)}" maxlength="120"></label>
     <label class="wp-f wide"><span>Message <span class="muted">(at the top of their page)</span></span><textarea id="wp-msg" rows="4" placeholder="e.g. On reprend les bases de Flexbox ensemble : fais les actions dans l'ordre.">${esc(p.message)}</textarea></label>
     <label class="wp-f wide"><span>Due <span class="muted">(optional)</span></span><input type="datetime-local" id="wp-due" value="${due}"></label>
+    ${p.steps.some((s) => s.kind === "lesson") ? `<label class="wp-gate"><input type="checkbox" id="wp-gated" ${p.gated ? "checked" : ""}><span><b>🔒 One part at a time</b><span class="muted small">Each part opens only when every question of the part before is right.</span></span></label>` : ""}
     <div class="wp-sumk">${count.length ? count.map(([k, n]) => `<span class="wp-chip k-${k}">${WK[k].ico} ${n} ${esc(WK[k].label)}</span>`).join("") : `<span class="muted small">No action yet</span>`}</div>
     ${wpClass() ? "" : `<button class="btn primary wp-go" id="wp-send" ${p.steps.length ? "" : "disabled"}>🧭 Send the plan</button>`}
     <button class="btn wp-go ${wpClass() ? "primary" : ""}" id="wp-class" ${p.steps.length ? "" : "disabled"} title="This plan for every student of the class: a plan each, sent by DM">👥 Send to the whole class</button>
@@ -270,6 +277,7 @@ function progressPanelHtml(st) {
   return `<section class="panel wp-prog"><h2>${p.status === "done" ? "🎉 Done" : "Progress"}</h2>
     <div class="wp-ring"><svg viewBox="0 0 110 110" aria-hidden="true"><circle cx="55" cy="55" r="${r}" class="bg"/><circle cx="55" cy="55" r="${r}" class="fg" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct / 100)}"/></svg>
       <div><b>${pct}%</b><span>${st?.done ?? 0}/${st?.total ?? p.steps.length} action${(st?.total ?? p.steps.length) > 1 ? "s" : ""} done${st?.objTotal ? `<br>${st.objDone}/${st.objTotal} objectives ticked` : ""}</span></div></div>
+    ${partsHtml(st)}
     ${toReview ? `<p class="wp-alert">📦 ${toReview} mini brief${toReview > 1 ? "s" : ""} to validate below</p>` : ""}
     <dl class="wp-dl"><dt>Sent</dt><dd>${fmtDateTime(p.sent_at)}</dd>${p.due_at ? `<dt>Due</dt><dd>${fmtDateTime(p.due_at)}</dd>` : ""}${p.done_at ? `<dt>Finished</dt><dd>${fmtDateTime(p.done_at)}</dd>` : ""}</dl>
     ${WPS.url ? `<button class="btn small" id="wp-copy">Copy their link</button>` : ""}
@@ -277,6 +285,13 @@ function progressPanelHtml(st) {
     <label class="wp-f wide" style="margin-top:12px"><span>Feedback <span class="muted">(your word on the plan · goes to the « Feedback » column of Suivi Formateur)</span></span>
       <textarea id="wp-fb" rows="3" placeholder="e.g. Bon travail sur Flexbox, Git reste à revoir.">${esc(p.feedback || "")}</textarea></label>
     <p class="small muted" id="wp-fbs" style="margin:2px 0 0"></p></section>${guidePanelHtml()}${asksPanelHtml()}`;
+}
+/** A course in parts: where the student is in it (passed, open, locked). */
+function partsHtml(st) {
+  const parts = (st?.parts || []).filter((x) => x.lesson >= 0 || st.parts.length > 1);
+  if (!parts.some((x) => x.lesson >= 0)) return "";
+  const ICO = { done: "✓", open: "▶", locked: "🔒" };
+  return `<div class="wp-h">Parts${WPS.plan.gated ? ` <span class="muted small">one at a time</span>` : ""}</div><ol class="wp-parts">${parts.map((x) => `<li class="${x.state}"><span class="wp-pi">${ICO[x.state]}</span><span class="wp-pt">${esc(x.title)}</span><span class="muted small">${x.done}/${x.total}</span></li>`).join("")}</ol>`;
 }
 /** 📚 Their guide (on their page, "Mes notions"): each lacune explained, with resources; French, darija or English. */
 function guidePanelHtml() {
@@ -313,7 +328,7 @@ function wpSaveSoon() {
 async function wpSaveNow() {
   clearTimeout(WPS.timer);
   const p = WPS.plan;
-  const body = { steps: p.steps, title: $("#wp-title")?.value ?? p.title, message: $("#wp-msg")?.value ?? p.message, due_at: wpDueValue() };
+  const body = { steps: p.steps, title: $("#wp-title")?.value ?? p.title, message: $("#wp-msg")?.value ?? p.message, due_at: wpDueValue(), gated: !!p.gated };
   try {
     WPS.saving = api(`/wplans/${p.id}`, { method: "PUT", body });
     const r = await WPS.saving;
@@ -483,6 +498,7 @@ function wireWorkPlan() {
     }
   }
   ["#wp-title", "#wp-msg", "#wp-due"].forEach((sel) => { const el = $(sel); if (el) el.addEventListener("input", () => { p.title = $("#wp-title").value; p.message = $("#wp-msg").value; p.due_at = wpDueValue(); wpSaveSoon(); }); });
+  if ($("#wp-gated")) $("#wp-gated").onchange = (e) => { p.gated = e.target.checked; wpSaveSoon(); };
   if ($("#wp-class")) $("#wp-class").onclick = (e) => busy(e.currentTarget, () => wpCopyDialog({ all: true }));
   if ($("#wp-send")) $("#wp-send").onclick = (e) => busy(e.currentTarget, async () => {
     const go = await new Promise((res) => {
@@ -492,7 +508,7 @@ function wireWorkPlan() {
     });
     if (!go) return;
     clearTimeout(WPS.timer); if (WPS.saving) await WPS.saving;
-    const r = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title").value, message: $("#wp-msg").value, due_at: wpDueValue() } } });
+    const r = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title").value, message: $("#wp-msg").value, due_at: wpDueValue(), gated: !!p.gated } } });
     Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
     toast(r.dm ? `Sent: ${p.name} got their page by DM` : `Sent, but the DM couldn't go (closed DMs?): copy their link`, !r.dm);
     drawWorkPlan();
@@ -518,7 +534,7 @@ async function wpCopyDialog(o = {}) {
     const send = $("#wpc-send", dlg).value === "1";
     // the whole class: this draft goes too (to its student), with what was just typed
     if (o.all && send && wpDraft() && !wpClass()) {
-      const r0 = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title")?.value ?? p.title, message: $("#wp-msg")?.value ?? p.message, due_at: wpDueValue() } } });
+      const r0 = await api(`/wplans/${p.id}/send`, { method: "POST", body: { edits: { steps: p.steps, title: $("#wp-title")?.value ?? p.title, message: $("#wp-msg")?.value ?? p.message, due_at: wpDueValue(), gated: !!p.gated } } });
       Object.assign(WPS, { plan: r0.plan, status: r0.status, url: r0.url });
       if (!students.length) { dlg.close(); toast(`Sent to ${p.name}`); location.hash = "#/assignments"; return; }
     }
@@ -544,7 +560,9 @@ async function wpCopyDialog(o = {}) {
 
 function wpImportDialog() {
   const p = WPS.plan;
-  openDialog("Import actions", `<p class="muted small">Paste the actions as JSON: a list of actions, or an object with a title, a message and its steps. They're added after the actions already here (15 at most), and you can edit each one.</p>
+  openDialog("Import actions", `<p class="muted small">Paste the actions as JSON: a list of actions, or an object with a title, a message and its steps. They're added after the actions already here (80 at most), and you can edit each one.</p>
+    <p class="muted small">A course: parts ("kind": "lesson"), each followed by its questions; "gated": true opens them one at a time.</p>
+    <p class="toolbar" style="margin:0 0 8px"><label class="btn small">📂 Choose a .json file<input type="file" id="wpi-f" accept=".json,application/json" hidden></label></p>
     <textarea id="wpi-t" rows="12" style="width:100%;font:13px/1.5 var(--mono)" placeholder='{"steps": [{"kind": "code", "title": "…", "notion": "…", "prompt": "…"}]}'></textarea>`,
   [{ label: "⬆ Import", primary: true, action: async () => {
     let x;
@@ -555,14 +573,17 @@ function wpImportDialog() {
     const before = p.steps.length;
     // new actions: never the ids, work or review of where they came from
     const steps = [...p.steps, ...list.map(({ id, work, review, asg_id, checks, checked_at, ...s }) => s)];
-    const body = { steps, title: (!Array.isArray(x) && x.title) || $("#wp-title")?.value || p.title, message: (!Array.isArray(x) && x.message) || ($("#wp-msg")?.value ?? p.message), due_at: wpDueValue() };
+    if (steps.length > 80) throw new Error(`${steps.length} actions: 80 at most in a plan.`);
+    const body = { steps, title: (!Array.isArray(x) && x.title) || $("#wp-title")?.value || p.title, message: (!Array.isArray(x) && x.message) || ($("#wp-msg")?.value ?? p.message), due_at: wpDueValue(),
+      gated: !Array.isArray(x) && "gated" in x ? !!x.gated : !!p.gated };
     const r = await api(`/wplans/${p.id}`, { method: "PUT", body });
     Object.assign(WPS, { plan: r.plan, status: r.status, url: r.url, asks: r.asks || [], guide: r.guide || null });
     dlg.close(); drawWorkPlan();
     const n = r.plan.steps.length - before;
-    toast(n ? `${n} action(s) imported: open each one to check it` : "No action could be read: each one needs a kind (code, answer, mcq, challenge, brief)", !n);
+    toast(n ? `${n} action(s) imported: open each one to check it` : "No action could be read: each one needs a kind (code, answer, mcq, challenge, brief, lesson)", !n);
   } }]);
   dlg.classList.add("wide");
+  $("#wpi-f", dlg).onchange = async (e) => { const f = e.target.files[0]; if (f) $("#wpi-t", dlg).value = await f.text(); };
 }
 
 // ------------------------------------------------------------------ on the Plan d'action page: each student's plans

@@ -6983,6 +6983,56 @@ section("plan d'action for one student: diagnosis, actions (challenge, code, que
   run1("DELETE FROM assignments WHERE discord_id = ? AND note LIKE 'Plan d''action%'", B);
 }
 
+section("plan d'action as a course in parts: each part (lesson) and its QCM, opened one at a time, copied to the class");
+{
+  const lesson = (n: number) => ({ kind: "lesson", title: `Module 0${n}`, notion: "Niveau 1", why: "Objectif : comprendre", prompt: `## Contenu\n- \`querySelector()\` ${n}\n  - sous-point` });
+  const mcq = (n: number) => ({ kind: "mcq", title: `Q${n}`, notion: "DOM", prompt: `Question ${n} ?`, choices: ["a", "b", "c", "d"], answer: [1] });
+  // 3 parts × (a lesson + 25 QCM) = 78 actions: more than the 15 of before
+  const steps = [1, 2, 3].flatMap((n) => [lesson(n), ...Array.from({ length: 25 }, (_, k) => mcq(n * 100 + k))]);
+  const cr = await api("POST", `/api/wplans?g=${G}`, { student: U.bob.id });
+  const id = cr.data.id;
+  const sv = await api("PUT", `/api/wplans/${id}?g=${G}`, { steps, gated: true, title: "Parcours DOM" });
+  check(sv.status === 200 && sv.data.plan.steps.length === 78 && sv.data.plan.gated === true && sv.data.plan.steps[0].kind === "lesson", `a course of 78 actions, gated (${sv.status} ${sv.data.error ?? ""})`);
+  check((await api("POST", `/api/wplans/${id}/send?g=${G}`, { edits: { steps: [{ ...lesson(1), prompt: "" }, mcq(1)] } })).status === 400, "…a part without its content isn't sent");
+  // the same course for the class: each copy keeps « one part at a time »
+  const cc = await api("POST", `/api/wplans/${id}/copy?g=${G}`, { students: [U.carol.id], send: false });
+  check(cc.status === 200 && (await api("GET", `/api/wplans/${cc.data.made[0].id}?g=${G}`)).data.plan.gated === true, "…copied to another student: still one part at a time");
+  await api("DELETE", `/api/wplans/${cc.data.made[0].id}?g=${G}`);
+  const c0 = discordCalls.length;
+  const S = await api("POST", `/api/wplans/${id}/send?g=${G}`, { edits: { steps, gated: true } });
+  check(S.status === 200 && discordCalls.slice(c0).some((c) => JSON.stringify(c.body ?? {}).includes("3 parties de cours")), `sent: the DM tells the parts (${S.status} ${S.data.error ?? ""})`);
+  const tok = S.data.url.split("/wp/")[1];
+  const wp = async (action = "", body?: any) => {
+    const ctx = makeCtx();
+    const res = await bot.fetch(new Request(`https://bot.example.workers.dev/wp/${tok}${action ? "/" + action : ""}`, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}), env, ctx);
+    await ctx.flush();
+    return { status: res.status, data: (res.headers.get("content-type") ?? "").includes("json") ? await res.json() : await res.text() } as any;
+  };
+  const pg = await wp();
+  check(pg.status === 200 && /Mon parcours/.test(pg.data) && !/\$\{/.test(pg.data), "their page has the course's route");
+  let v = (await wp("data")).data;
+  const ids = (n: number) => v.steps.filter((s: any) => s.part === n).map((s: any) => s.id);
+  check(v.gated && v.parts.length === 3 && v.parts.map((x: any) => x.state).join() === "open,locked,locked" && v.parts[0].total === 26, `3 parts: the first open, the others locked (${v.parts.map((x: any) => x.state).join()})`);
+  const q2 = v.steps.find((s: any) => s.part === 1 && s.kind === "mcq"), l2 = v.steps.find((s: any) => s.part === 1 && s.kind === "lesson");
+  check(q2.locked && !q2.prompt && !q2.choices.length && l2.locked && /querySelector/.test(l2.prompt), "…a locked part: its lesson can be read ahead, its questions are hidden");
+  check((await wp("answer", { step: q2.id, answer: [1] })).status === 400, "…and can't be answered");
+  const [l1, ...q1s] = ids(0);
+  const r1 = await wp("answer", { step: l1, read: true });
+  check(r1.status === 200 && r1.data.work.verdict === "correct", "a lesson marked studied");
+  check((await wp("answer", { step: q1s[0], answer: [0] })).data.work.verdict === "wrong" && (await wp("answer", { step: q1s[0], answer: [1] })).data.work.verdict === "correct", "a QCM: wrong, then right");
+  for (const s of q1s.slice(1, -1)) await wp("answer", { step: s, answer: [1] });
+  v = (await wp("data")).data;
+  check(v.parts[0].state === "open" && v.parts[1].state === "locked", "one question of part 1 left: part 2 stays locked");
+  await wp("answer", { step: q1s[q1s.length - 1], answer: [1] });
+  v = (await wp("data")).data;
+  check(v.parts.map((x: any) => x.state).join() === "done,open,locked" && !v.steps.find((s: any) => s.id === q2.id).locked, "every question of part 1 right: part 2 opens");
+  check((await wp("answer", { step: q2.id, answer: [1] })).data.work.verdict === "correct", "…and its questions can be answered");
+  // the teacher follows the parts, and can open one by marking an action done
+  const T = await api("GET", `/api/wplans/${id}?g=${G}`);
+  check(T.data.status.parts.map((x: any) => x.state).join() === "done,open,locked" && T.data.status.steps.find((s: any) => s.id === q2.id).part === 1, "the teacher sees where they are in the parts");
+  await api("DELETE", `/api/wplans/${id}?g=${G}`);
+}
+
 section("💼 portfolio: /portfolio (projects from GitHub or links, about me, contact, available, show), the public page for companies");
 {
   const B = U.bob.id;
