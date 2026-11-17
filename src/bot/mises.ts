@@ -862,12 +862,24 @@ function whereLine(runId, line) {
   var w = line > 0 && LINEMAP[runId] ? LINEMAP[runId][line - 1] : null;
   return w ? " (" + w[0] + ", ligne " + w[1] + ")" : "";
 }
+// Each check on a fresh page of its own: a check that clicks, types or sends a form never changes what the next one sees.
+// The page on screen (or the first hidden one) gives the preview and the console.
 function runWeb(s, files, visible) {
+  var probes = s.checks.filter(function (k) { return k.probe; });
+  return Promise.all([frameRun(s, files, visible, [], false)].concat(probes.map(function (k) { return frameRun(s, files, false, [k], true); }))).then(function (rs) {
+    var values = {};
+    rs.slice(1).forEach(function (r) { for (var id in r.probes) values[id] = r.probes[id]; });
+    return { probes: values, console: rs[0].console };
+  });
+}
+// quiet: a page for one check only (its errors are already in the main page's console)
+function frameRun(s, files, visible, probes, quiet) {
   return new Promise(function (resolve) {
     var runId = "r" + (++RUN) + Math.random().toString(36).slice(2, 7);
-    var logs = [], probes = s.checks.filter(function (k) { return k.probe; }), finished = false;
+    var logs = [], finished = false;
     var fr = document.createElement("iframe");
-    fr.className = "frame"; fr.setAttribute("sandbox", "allow-scripts allow-modals"); fr.setAttribute("title", "Aperçu de ton code"); fr.setAttribute("referrerpolicy", "no-referrer");
+    // allow-forms: a form's submit event fires (the CSP's form-action 'none' and the helper still stop it from leaving)
+    fr.className = "frame"; fr.setAttribute("sandbox", "allow-scripts allow-modals allow-forms"); fr.setAttribute("title", "Aperçu de ton code"); fr.setAttribute("referrerpolicy", "no-referrer");
     var host = visible && s.id === CUR ? $("#framebox") : null;
     if (host) { host.innerHTML = ""; host.appendChild(fr); } else { fr.style.cssText = "position:absolute;left:-9999px;width:800px;height:600px"; document.body.appendChild(fr); }
     var end = function (values) {
@@ -876,7 +888,7 @@ function runWeb(s, files, visible) {
       if (!host) { window.removeEventListener("message", onMsg); fr.remove(); setTimeout(function () { delete LINEMAP[runId]; }, 5000); }
       delete NOTES[runId];
       if (visible) { CONSOLE[s.id] = logs.length ? logs : [{ level: "sys", text: "(Rien dans la console.)" }]; drawConsole(); }
-      LASTERR[s.id] = logs.filter(function (l) { return l.level === "error"; }).map(function (l) { return l.text; }).join("\n");
+      if (!quiet) LASTERR[s.id] = logs.filter(function (l) { return l.level === "error"; }).map(function (l) { return l.text; }).join("\n");
       // the console the checks read: what the code wrote (not ClassBot's notes and hints)
       resolve({ probes: values || {}, console: logs.filter(function (l) { return l.level !== "sys" && l.level !== "hint"; }).map(function (l) { return l.text; }).join("\n") });
     };

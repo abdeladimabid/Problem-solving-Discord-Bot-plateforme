@@ -7921,7 +7921,8 @@ section("mises en situation: from the week to Claude's JSON, launched by DM, the
   let parsed = blocks.length === 2;
   for (const js of blocks) { try { new Function(js); } catch (e) { parsed = false; console.log(e); } }
   check(parsed, "its scripts (the editor's, the page's) are valid JavaScript (and never close their own tag)");
-  check(h.includes('sandbox", "allow-scripts allow-modals"') && h.includes("connect-src 'none'") && !h.includes("allow-same-origin"), "the code runs in a sandboxed frame: scripts only, no same origin, no network");
+  check(h.includes('sandbox", "allow-scripts allow-modals allow-forms"') && h.includes("connect-src 'none'") && h.includes("form-action 'none'") && !h.includes("allow-same-origin"), "the code runs in a sandboxed frame: scripts and a form's submit event, no same origin, no network");
+  check(/probes\.map\(function \(k\) \{ return frameRun\(s, files, false, \[k\], true\)/.test(h), "…each check on a fresh page of its own (a click or a merge in one never changes the next)");
   check((await bot.fetch(new Request("https://bot.example.workers.dev/mes/1.99999999999.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/info"), env, makeCtx())).status === 404, "a forged link is refused");
   const info = await mes(U.alice.id, "info");
   check(info.data.status === "live" && info.data.n.situations === 5 && !JSON.stringify(info.data).includes("Tifawin';"), "info: before starting, no questions");
