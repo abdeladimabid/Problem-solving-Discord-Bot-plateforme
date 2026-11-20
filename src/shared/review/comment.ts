@@ -831,24 +831,30 @@ const VOUS = /\b(vous|votre|vos)\b/i, TU = /\b(tu|ton|ta|tes|toi|t['’](?:as|es
  * nor level nor competency, no praise the level doesn't allow, and the teacher's own notes in it. The AI is free to name
  * the learner's real mistakes precisely (that is the point).
  */
+/** Why the AI's last comment was refused (for the second try and for the teacher), "" when it was kept. */
+export let aiCommentWhy = "";
 function soloCheck(d: CommentData, body: string): string | null {
+  const no = (why: string) => { aiCommentWhy = why; return null; };
   const lines = body.split("\n");
-  if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l))) return null;
-  if (/\bMDN\b|mozilla|w3schools|openclassrooms|stack ?overflow|css-tricks|youtube|documentation (?:officielle )?(?:de |d['’])/i.test(body)) return null;
-  if ((d.off || []).some((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); })) return null;
-  if (/\d+\s*%|\bniveaux?\b|\bfiche\b|\bcritique\b|classbot|\bC[T]?\d{1,2}(N\d)?\b/i.test(body)) return null;
+  if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l))) return no("it used a list (bullets or numbers)");
+  if (/\bMDN\b|mozilla|w3schools|openclassrooms|stack ?overflow|css-tricks|youtube/i.test(body)) return no("it named a website");
+  const off = (d.off || []).find((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); });
+  if (off) return no(`it talked about ${off.toUpperCase()}, outside the sprint`);
+  if (/\d+\s*%/.test(body)) return no("it gave a score");
+  if (/\bniveaux?\b|\bfiche\b|classbot/i.test(body)) return no("it talked about the level or the Fiche");
+  if (/\bC[T]?\d{1,2}(N\d)?\b/.test(body)) return no("it named a competency code");
   const lv = levelOf(d);
-  if (lv !== "excellent" && /excellent/i.test(body)) return null;
-  if (!["bon", "excellent"].includes(lv) && /\b(bon|très bon|beau) travail\b/i.test(body)) return null;
-  if (/\bbonus\b|livrables?\b/i.test(body)) return null;
-  // the « practise every day, without copying » advice is for a learner in difficulty, never a good one
-  if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours/i.test(body)) return null;
+  if (lv !== "excellent" && /\bexcellent/i.test(body)) return no("it said « excellent » above the level");
+  if (!["bon", "excellent"].includes(lv) && /\b(bon|très bon|beau) travail\b/i.test(body)) return no("it said « bon travail » above the level");
+  if (/\bbonus\b/i.test(body)) return no("it talked about the bonus");
+  if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours/i.test(body)) return no("it gave the « practise every day » advice to a good learner");
   // the teacher's notes are in it (one of the main words of each)
   const notes = (d.toLearn || []).filter((x) => x.from.includes("remarque"));
-  const said = notes.filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return !w.length || w.some((k) => body.toLowerCase().includes(k)); }).length;
-  if (notes.length && said < notes.length - (notes.length >= 3 ? 1 : 0)) return null;
+  const missing = notes.filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return w.length && !w.some((k) => body.toLowerCase().includes(k)); });
+  if (missing.length > (notes.length >= 3 ? 1 : 0)) return no(`it left out the teacher's note « ${missing[0].notion} »`);
   const words = wordCount(body);
-  if (words < 15 || words > 520) return null;
+  if (words < 15 || words > 600) return no(words < 15 ? "it was too short" : "it was too long");
+  aiCommentWhy = "";
   return `${greetingOf(d)}\n\n${body}`;
 }
 export function aiCommentText(d: CommentData, j: any): string | null {

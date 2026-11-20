@@ -26,7 +26,7 @@ import { TASK_SYSTEM, cleanTask, isHtmlCss, pickFiles, taskChecks, taskFallback,
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
 import { memberLevel, memberLevelOf } from "./members.ts";
-import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiSystemOf, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData, outsideNotions } from "./comment.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentWhy, aiSystemOf, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData, outsideNotions } from "./comment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -1054,7 +1054,7 @@ export async function writeComment(env: Env, g: GuildRow, briefId: number, who: 
   rec.edited = Date.now();
   rec.commentBy = text ? "ai" : "template";
   await putReview(env, g, briefId, who, rec);
-  return { by: rec.commentBy as string, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+  return { by: rec.commentBy as string, msg: text ? "" : ask && !ask.ok ? ask.msg : `The AI's version didn't follow the rules${!d.group && aiCommentWhy ? ` (${aiCommentWhy})` : ""}: the comment is written from the switches.` };
 }
 
 /** The teacher edited the comment by hand: keep their text. */
@@ -1224,7 +1224,7 @@ export async function writeMemberComment(env: Env, g: GuildRow, briefId: number,
   ms.by = text ? "ai" : "template";
   ms.comment = comments[gid] = text ?? commentText(d);
   await putReview(env, g, briefId, who, rec);
-  return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+  return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : `The AI's version didn't follow the rules${!d.group && aiCommentWhy ? ` (${aiCommentWhy})` : ""}: the comment is written from the switches.` };
 }
 
 /** The AI's comment, checked; when it talks about a notion that is neither in the brief nor in the assessment (nor in
@@ -1233,6 +1233,12 @@ async function aiComment(env: Env, d: ReturnType<typeof commentData>) {
   let ask = await askReview(env, aiSystemOf(d), aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
   let text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
   const extra = !text && ask && ask.ok && d.group ? outsideNotions(d, String(ask.data?.commentaire ?? "")) : [];
+  // one learner: told what was wrong, it writes it once more
+  if (!text && ask && ask.ok && !d.group && aiCommentWhy) {
+    const why = aiCommentWhy;
+    ask = await askReview(env, aiSystemOf(d), `${aiCommentPrompt(d)}\n\nATTENTION : ta première version a été refusée (${why}). Réécris le commentaire en respectant toutes les règles.`, 1, { maxTokens: 3000 }).catch(() => null);
+    text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  }
   if (extra.length) {
     ask = await askReview(env, aiSystemOf(d), `${aiCommentPrompt(d)}\n\nATTENTION : ta première version parlait de ${extra.map((x) => `« ${x} »`).join(", ")}, qui ne sont ni dans le brief ni dans l’évaluation. Réécris le commentaire SANS en parler.`, 1, { maxTokens: 3000 }).catch(() => null);
     text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
