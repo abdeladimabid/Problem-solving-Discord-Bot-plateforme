@@ -858,8 +858,10 @@ function soloCheck(d: CommentData, body: string): string | null {
   if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours/i.test(body)) return no("it gave the « practise every day » advice to a good learner");
   // the teacher's notes are in it (one of the main words of each)
   const notes = (d.toLearn || []).filter((x) => x.from.includes("remarque"));
-  const missing = notes.filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return w.length && !w.some((k) => body.toLowerCase().includes(k)); });
-  if (missing.length > (notes.length >= 3 ? 1 : 0)) return no(`it left out the teacher's note « ${missing[0].notion} »`);
+  const low = body.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const missing = notes.filter((x) => { const w = String(x.notion).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]{5,}/g) || []; return w.length && !w.some((k) => low.includes(k.slice(0, 5))); });
+  // (the AI says it in its own words: only when it leaves out most of them)
+  if (notes.length && (missing.length === notes.length || missing.length > notes.length / 2)) return no(`it left out the teacher's note « ${missing[0].notion} »`);
   const words = wordCount(body);
   if (words < 15 || words > 600) return no(words < 15 ? "it was too short" : "it was too long");
   aiCommentWhy = "";
