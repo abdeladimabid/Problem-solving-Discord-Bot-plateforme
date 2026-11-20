@@ -26,7 +26,7 @@ import { TASK_SYSTEM, cleanTask, isHtmlCss, pickFiles, taskChecks, taskFallback,
 import type { Task, TaskTarget } from "./task.ts";
 import { nextProgrammeWeek, techSoFar } from "../activities.ts";
 import { memberLevel, memberLevelOf } from "./members.ts";
-import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData, outsideNotions } from "./comment.ts";
+import { AI_COMMENT_SYSTEM, aiCommentPrompt, aiCommentWhy, aiSystemOf, aiCommentText, buildComment, commentData, commentText, memberComment, memberCommentData, outsideNotions } from "./comment.ts";
 import { ghAppOf, githubCanRead, parseRepo } from "../github.ts";
 import type { Step } from "./steps.ts";
 import { stepRhythm, stepsOf, suiviFor } from "./steps.ts";
@@ -213,8 +213,8 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
     const members: Record<string, MemberAssessFacts> = {};
     const papers = graded.map(readPaper);
     graded.forEach((t, i) => {
-      const f = paperFacts(qs, papers[i]);
-      members[t.discord_id] = { score: t.score ?? null, ok: f.ok, ko: f.ko, summary: String(t.summary || "").trim().slice(0, 700),
+      const f = paperFacts(qs, papers[i]), d = paperDetails(qs, papers[i]);
+      members[t.discord_id] = { score: t.score ?? null, ok: f.ok, ko: f.ko, summary: String(t.summary || "").trim().slice(0, 700), missed: d.missed, right: d.right,
         comps: rows.filter((r) => r.discord_id === t.discord_id && r.ok).map((r) => r.code), compsKo: rows.filter((r) => r.discord_id === t.discord_id && !r.ok).map((r) => r.code) };
     });
     out.push({ id: a.id, title: a.title, score: Math.round(graded.reduce((s, t) => s + (t.score ?? 0), 0) / graded.length), done: graded.length, of: takers.length, comps, gaps: gapsOf(qs, papers), members, scope });
@@ -222,7 +222,7 @@ export async function briefAssessments(env: Env, briefId: number, who: string, r
   return [...out, ...mises];
 }
 /** One learner's assessment, for their own comment. */
-export interface MemberAssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
+export interface MemberAssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[]; missed?: string[]; right?: string[] }
 export const parseQuestions = (q: string | null): any[] => { try { const a = JSON.parse(q || "[]"); return Array.isArray(a) ? a : []; } catch { return []; } };
 // each paper read once (not once per question: a 30-question assessment re-read 30 times went over Cloudflare's CPU limit)
 export function readPaper(t: { grades: string | null; answers: string | null }) {
@@ -245,6 +245,29 @@ const notionsOfQ = (q: any) => {
   const sharp = cs.filter((c: string) => !BROAD.includes(c));
   return (sharp.length ? sharp : cs).slice(0, 3);
 };
+/**
+ * A learner's paper, question by question, for the comment's AI: what they got wrong (the question, their answer, what was
+ * expected) and what they got right — so the comment names the real mistakes, never a generic one, and never invents a
+ * strength.
+ */
+export function paperDetails(qs: any[], p: { g: any; an: any }): { missed: string[]; right: string[] } {
+  const short = (x: unknown, n: number) => { const t = (typeof x === "string" ? x : x == null ? "" : JSON.stringify(x)).replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+  const missed: string[] = [], right: string[] = [];
+  for (const q of qs) {
+    const v = verdictOf(q, p);
+    if (!v) continue;
+    const sc = Number(p.g?.[q.id]?.score);
+    const got = Number.isFinite(sc) && (sc > 0 || v !== "correct") ? sc / 100 : v === "correct" ? 1 : v === "partial" ? 0.5 : 0;
+    const qq = short(q.prompt, 160);
+    if (got >= 0.8) { if (right.length < 16) right.push(qq); continue; }
+    if (missed.length >= 16) continue;
+    const ans = v === "empty" ? "(pas de réponse)" : short(p.an?.[q.id], 140);
+    const fb = short(p.g?.[q.id]?.feedback || p.g?.[q.id]?.comment, 160);
+    missed.push(`${qq} → sa réponse : ${ans}${q.expected ? ` → attendu : ${short(q.expected, 140)}` : ""}${fb ? ` (correction : ${fb})` : ""}`);
+  }
+  return { missed, right };
+}
+
 /**
  * A learner's notions, from what they really scored on each one (a question 70 % right counts 0.7): missed = under 60 % on
  * the notion's questions (the worst first), mastered = 80 % or more on at least two questions. One partly right answer
@@ -1031,7 +1054,7 @@ export async function writeComment(env: Env, g: GuildRow, briefId: number, who: 
   rec.edited = Date.now();
   rec.commentBy = text ? "ai" : "template";
   await putReview(env, g, briefId, who, rec);
-  return { by: rec.commentBy as string, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+  return { by: rec.commentBy as string, msg: text ? "" : ask && !ask.ok ? ask.msg : `The AI's version didn't follow the rules${!d.group && aiCommentWhy ? ` (${aiCommentWhy})` : ""}: the comment is written from the switches.` };
 }
 
 /** The teacher edited the comment by hand: keep their text. */
@@ -1201,17 +1224,23 @@ export async function writeMemberComment(env: Env, g: GuildRow, briefId: number,
   ms.by = text ? "ai" : "template";
   ms.comment = comments[gid] = text ?? commentText(d);
   await putReview(env, g, briefId, who, rec);
-  return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : "The AI's version didn't follow the rules: the comment is written from the switches." };
+  return { comment: ms.comment as string, by: ms.by as string, comments, members: rec.members, msg: text ? "" : ask && !ask.ok ? ask.msg : `The AI's version didn't follow the rules${!d.group && aiCommentWhy ? ` (${aiCommentWhy})` : ""}: the comment is written from the switches.` };
 }
 
 /** The AI's comment, checked; when it talks about a notion that is neither in the brief nor in the assessment (nor in
  *  the teacher's remarks), it is asked once more without it, else the template is used. */
 async function aiComment(env: Env, d: ReturnType<typeof commentData>) {
-  let ask = await askReview(env, AI_COMMENT_SYSTEM, aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
+  let ask = await askReview(env, aiSystemOf(d), aiCommentPrompt(d), 1, { maxTokens: 3000 }).catch(() => null);
   let text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
-  const extra = !text && ask && ask.ok ? outsideNotions(d, String(ask.data?.commentaire ?? "")) : [];
+  const extra = !text && ask && ask.ok && d.group ? outsideNotions(d, String(ask.data?.commentaire ?? "")) : [];
+  // one learner: told what was wrong, it writes it once more
+  if (!text && ask && ask.ok && !d.group && aiCommentWhy) {
+    const why = aiCommentWhy;
+    ask = await askReview(env, aiSystemOf(d), `${aiCommentPrompt(d)}\n\nATTENTION : ta première version a été refusée (${why}). Réécris le commentaire en respectant toutes les règles.`, 1, { maxTokens: 3000 }).catch(() => null);
+    text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
+  }
   if (extra.length) {
-    ask = await askReview(env, AI_COMMENT_SYSTEM, `${aiCommentPrompt(d)}\n\nATTENTION : ta première version parlait de ${extra.map((x) => `« ${x} »`).join(", ")}, qui ne sont ni dans le brief ni dans l’évaluation. Réécris le commentaire SANS en parler.`, 1, { maxTokens: 3000 }).catch(() => null);
+    ask = await askReview(env, aiSystemOf(d), `${aiCommentPrompt(d)}\n\nATTENTION : ta première version parlait de ${extra.map((x) => `« ${x} »`).join(", ")}, qui ne sont ni dans le brief ni dans l’évaluation. Réécris le commentaire SANS en parler.`, 1, { maxTokens: 3000 }).catch(() => null);
     text = ask && ask.ok ? aiCommentText(d, ask.data) : null;
   }
   return { ask, text };

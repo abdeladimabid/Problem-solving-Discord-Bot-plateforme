@@ -9,7 +9,7 @@ import type { MiseContent } from "../mises.ts";
 
 const parse = <T>(s: string | null | undefined, d: T): T => { try { const v = s ? JSON.parse(s) : d; return v ?? d; } catch { return d; } };
 
-export interface MiseMemberFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
+export interface MiseMemberFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[]; missed?: string[]; right?: string[] }
 
 /** The mises en situation of a brief, oldest first. */
 export async function misesOfBrief(env: Env, briefId: number) {
@@ -48,7 +48,21 @@ export async function briefMises(env: Env, briefId: number, ids: string[]) {
       for (const s of c.situations) for (const n of s.notions) put(n, sc.items[s.id]?.score ?? 0);
       for (const q of c.qcm) put(q.notion, sc.items[q.id]?.score ?? 0);
       for (const n of ko) { ok.delete(n); missedBy.set(n, (missedBy.get(n) ?? 0) + 1); }
-      members[t.discord_id] = { score: t.score ?? sc.total, ok: [...ok].slice(0, 12), ko: [...ko].slice(0, 12), summary: String(t.comment || "").trim().slice(0, 700),
+      // each exercise and question, for the comment's AI: the real mistakes, and what was really done well
+      const short = (x: unknown, n: number) => { const s0 = String(x ?? "").replace(/\s+/g, " ").trim(); return s0.length > n ? `${s0.slice(0, n - 1)}…` : s0; };
+      const missed: string[] = [], right: string[] = [];
+      for (const s of c.situations) {
+        const it = sc.items[s.id], line = `Exercice « ${short(s.title, 80)} » (${s.notions.join(", ")})`;
+        if ((it?.score ?? 0) >= 80) right.push(line);
+        else missed.push(`${line} : ${!it?.attempted ? "pas fait" : `réussi à ${Math.round(it?.score ?? 0)} %`}${s.expected ? ` → attendu : ${short(s.expected, 160)}` : ""}`);
+      }
+      const ans = parse<Record<string, unknown>>(t.answers, {});
+      for (const q of c.qcm) {
+        const it = sc.items[q.id], line = `QCM « ${short(q.question.split("\n")[0], 120)} » (${q.notion})`;
+        if ((it?.score ?? 0) >= 80) right.push(line);
+        else { const a = Number(ans[q.id]); missed.push(`${line} → sa réponse : ${Number.isInteger(a) && q.choices[a] != null ? short(q.choices[a], 80) : "(pas de réponse)"} → attendu : ${short(q.choices[q.correct], 80)}`); }
+      }
+      members[t.discord_id] = { score: t.score ?? sc.total, ok: [...ok].slice(0, 12), ko: [...ko].slice(0, 12), summary: String(t.comment || "").trim().slice(0, 700), missed: missed.slice(0, 14), right: right.slice(0, 14),
         comps: rows.filter((r) => r.discord_id === t.discord_id && r.ok).map((r) => r.code), compsKo: rows.filter((r) => r.discord_id === t.discord_id && !r.ok).map((r) => r.code) };
     }
     const avg = Math.round(done.reduce((s, t) => s + (members[t.discord_id]?.score ?? 0), 0) / done.length);
