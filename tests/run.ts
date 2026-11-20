@@ -37,7 +37,7 @@ import { getGuild, getPlayer } from "../src/shared/db.ts";
 import { dayDate, parseSteps, stepRhythm, stepsFallback, stepsFrom, stepsToText } from "../src/shared/review/steps.ts";
 import { debriefLevel, reviewStates } from "../src/shared/review/engine.ts";
 import { codesOf, fitData, hideNames, unverifiedNumbers } from "../src/shared/classchat.ts";
-import { assessForAi, paperFacts } from "../src/shared/review/debrief.ts";
+import { assessForAi, paperDetails, paperFacts } from "../src/shared/review/debrief.ts";
 import { memoryKv } from "../src/shared/watcher.ts";
 import { hubWrite } from "../src/shared/library.ts";
 import { BUILTIN, TECHS, techOfWeek } from "../src/shared/program.ts";
@@ -4143,14 +4143,14 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
   const lvD = { ...d, level: "moyen" };
   const at = C.aiCommentText(lvD, { commentaire: body });
   check(!!at && at.startsWith("Sara,\n\nTon travail est correct") && at.includes("\n\nSara, en reprenant ces points"), "the AI's comment, with our greeting and the first name put back");
-  check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: "Points forts\n\n" + body }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
-    && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Tu as aussi réalisé un bonus.") }) === null && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Il manque encore la page contact.") }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
+  check(C.aiCommentText(lvD, { commentaire: body.replace("Ton travail", "Votre travail") }) === null && C.aiCommentText(lvD, { commentaire: body + "\n\n– revoir margin." }) === null
+    && C.aiCommentText(lvD, { commentaire: body.replace("maîtrisée.", "maîtrisée. Tu as aussi réalisé un bonus.") }) === null && C.aiCommentText(lvD, { commentaire: "Excellent travail. " + body }) === null && C.aiCommentText(lvD, { commentaire: "**Bravo** " + body }) === null && C.aiCommentText(lvD, { commentaire: "Bonjour,\n\n" + body }) === null,
     "an AI comment that says « vous », has titles or bullets, invents a bonus, praises above the level, uses markdown or greets is refused (the template is used)");
   {
     // a notion that is neither in the brief nor in the assessment (« fetch et async/await » for an HTML/CSS brief) is refused
     const extra = body.replace("maîtrisée.", "maîtrisée. Tu maîtrises aussi les appels d’API avec fetch et async/await.");
-    check(C.outsideNotions(lvD, extra).length > 0 && C.aiCommentText(lvD, { commentaire: extra }) === null && C.outsideNotions(lvD, body).length === 0,
-      `a comment about a notion outside the brief and the assessment is refused (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
+    check(C.outsideNotions(lvD, extra).length > 0 && C.aiCommentText(lvD, { commentaire: extra }) !== null && C.outsideNotions(lvD, body).length === 0,
+      `one learner: the AI may name precise notions (their real mistakes), only the sprint's subjects are checked (${C.outsideNotions(lvD, extra).join(" | ")}; scope: ${lvD.scope.join(" | ")})`);
     const withApi = { ...lvD, scope: [...lvD.scope, ...C.outsideNotions(lvD, extra)] };
     check(C.aiCommentText(withApi, { commentaire: extra }) !== null, "…and accepted when the brief or the assessment is about it");
   }
@@ -4172,7 +4172,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     // a good learner: the AI never adds points to learn, nor the « practise every day » advice
     const good = { ...d2, level: "bon", toLearn: d2.toLearn.slice(0, 1), notions: d2.notions.slice(0, 1) };
     const padded = "Bon travail, tu maîtrises bien l'attribut alt et la structure de ta page.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", les fonctions asynchrones avec fetch et async/await, ainsi que les requêtes SQL avec jointure.\n\nContinue comme ça.";
-    check(C.aiCommentText(good, { commentaire: padded }) === null, "a good learner's AI comment that adds points to learn: refused (the comment is written from the switches)");
+    check(C.aiCommentText(good, { commentaire: padded + " Cherche sur MDN." }) === null, "a learner's AI comment that names a site: refused (the comment is written from the switches)");
     check(C.aiCommentText(good, { commentaire: "Bon travail, tu maîtrises bien l'attribut alt.\n\nCe que tu dois encore travailler en priorité, c’est " + good.toLearn[0].notion.toLowerCase() + ", à revoir avec soin dans ton projet.\n\nContinue à pratiquer chaque jour sans copier et utilise la documentation officielle." }) === null, "…and the « practise every day without copying » advice: only for a learner in difficulty");
     const t2 = C.commentText(d2), learnPs = (t2.split("point par point :")[1] || "").split("\n\n").filter((x: string) => /Cherche «/.test(x)), list = learnPs.join("\n\n");
     const L2 = d2.toLearn.map((x: any) => x.notion);
@@ -4190,7 +4190,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     check(C.aiCommentText(d2, { commentaire: flat }) === null, "an AI comment that doesn't say what is still to learn is refused");
     const okAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois encore travailler en priorité, point par point :\n\n${list}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
     const numberedAi = `Ton travail est encore fragile, plusieurs aspects importants restent à renforcer pour la suite.\n\nCe que tu dois apprendre :\n${L2.map((x: string, i: number) => `${i + 1}. ${x}, à bien revoir.`).join("\n")}\n\n{prénom}, il faut maintenant consolider ton socle avec un travail régulier.`;
-    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: numberedAi }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("La différence entre margin", "Vu à l’oral, la différence entre margin") }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null,
+    check(C.aiCommentText(d2, { commentaire: okAi }) !== null && C.aiCommentText(d2, { commentaire: numberedAi }) === null && C.aiCommentText(d2, { commentaire: okAi.replace("fragile,", "fragile (niveau Faible),") }) === null,
       "an AI comment with a numbered list, that says where a point was seen, or the learner's level is refused");
     // a remark that only names a subject: its essentials, without what they showed they master
     check(JSON.stringify([...C.remarkNotions("Plannification à revoir."), ...C.remarkNotions("Elle doit revoir tailwind."), ...C.remarkNotions("README incomplet.")]) === JSON.stringify(["plannification", "tailwind", "README"]), "« X à revoir », « doit revoir X », « X incomplet »: the subject");
@@ -4209,7 +4209,7 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
       final: { oral: [false, false], ex: [false, true] }, remarks: { text: "Ne comprend pas les relations Eloquent (hasMany, belongsTo). Ne sait pas écrire une migration. Doit revoir la page des articles." },
       assess: [{ members: { u1: { score: 35, ok: ["les routes simples", "Blade comme moteur de template"], ko: ["les fonctions"], summary: "" } } }], level: { lvl: "critique" } };
     const tl = C.commentText(C.commentData({ first: "Salmane", project: rl.brief, rec: rl, uid: "u1" }));
-    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n\nLes relations Eloquent\. Cherche « Laravel Eloquent relationships »/.test(tl) && /\n\nÉcrire une migration\. Cherche « Laravel migrations »/.test(tl)
+    check(/Tu maîtrises déjà les routes simples et Blade comme moteur de template\./.test(tl) && /\n\nLes relations Eloquent(?: \(hasMany, belongsTo\))?\. Cherche « Laravel Eloquent relationships »/.test(tl) && /\n\nÉcrire une migration\. Cherche « Laravel migrations »/.test(tl)
       && /\n\nLes fonctions\. Cherche « fonction paramètres return »/.test(tl) && !/\n\d\. /.test(tl) && !/JavaScript|MDN|bonus|il manque|Mode sombre/i.test(tl) && /Le plus important maintenant, c’est la pratique/.test(tl) && C.wordCount(tl) < 330,
       `one learner: what they master, then what to learn said directly, never the deliverables, a feature or the bonus; short (${C.wordCount(tl)} words)`);
     // never said mastered when it is also to learn (the same notion, from another source)
@@ -4247,6 +4247,28 @@ section("the debrief comment: the teacher's way (« tu », paragraphs, an honest
     check(/^Planification : pas de description, user stories/.test(pa[0] || "") && pa.some((x: string) => /^Acceder aux classes[^\n]*« classList contains »/.test(x)) && pa.some((x: string) => /^Recuperer une image qui existe deja dans un div[^\n]*« getAttribute »/.test(x))
       && pa.some((x: string) => /^Les tableaux JavaScript/.test(x)) && pa.findIndex((x: string) => /^Les tableaux/.test(x)) > pa.findIndex((x: string) => /^Recuperer une image/.test(x)) && !/insérer une image|developer\.mozilla|Froggy/.test(ta),
       `the teacher's notes first, each fact, with what to look up; then the assessment's gaps (${pa.map((x: string) => x.slice(0, 40)).join(" / ")})`);
+  }
+  {
+    // the teacher's note in the 3rd person, said to the learner; « X à améliorer, details » one point; « projet incomplet » kept
+    const rr: any = { first: "Rayane", brief: "Mythoria 2", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } }, sprintText: "Développement d’interfaces dynamiques avec JavaScript moderne",
+      remarks: { text: "Plannification a amelioré, il met pas de description, il met les user stories au lieu des titres des taches.\nProjet incomplet (il n'a pas implementé la partie dynamique, gestion des cartes).\nIl doit revoir la manipulation du DOM pour supprimer un élément." },
+      assess: [{ members: { u1: { score: 40, ok: [], ko: ["les variables"], summary: "" } } }], level: { lvl: "moyen" } };
+    const tr = C.commentText(C.commentData({ first: "Rayane", project: rr.brief, rec: rr, uid: "u1" }));
+    check(/\n\nPlannification : tu ne mets pas de description, tu mets les user stories au lieu des titres des taches\. Cherche « rédiger une user story »/.test(tr)
+      && /\n\nProjet incomplet \(tu n’as pas implementé la partie dynamique, gestion des cartes\)\.\n/.test(tr) && !/Cherche « Projet|Cherche « Les variables »/.test(tr)
+      && /Les variables\. Cherche « let const var »/.test(tr) && /supprimer un élément\. Cherche « element remove »/.test(tr), `the teacher's notes said to the learner, each with what to look up, never « Cherche « Projet incomplet » » (${tr.split("point par point :")[1]?.slice(0, 300)})`);
+  }
+  {
+    // one learner's AI comment is built from their real answers (what was wrong, what was expected) and real successes
+    const qs = [{ id: "a", prompt: "Quelle commande crée un projet Laravel ?", expected: "composer create-project laravel/laravel nom" }, { id: "b", prompt: "Où sont les routes web ?", expected: "routes/web.php" }];
+    const pd = paperDetails(qs, { g: { a: { verdict: "incorrect", score: 0, feedback: "php artisan new n’existe pas sans l’installeur" }, b: { verdict: "correct" } }, an: { a: "php artisan new blog", b: "routes/web.php" } });
+    check(pd.missed.length === 1 && /php artisan new blog/.test(pd.missed[0]) && /composer create-project/.test(pd.missed[0]) && pd.right.length === 1 && /routes web/.test(pd.right[0]), `a paper question by question (${JSON.stringify(pd)})`);
+    const rp: any = { first: "Omar", brief: "Blog Laravel", checks: [], result: { exigences: [] }, oral: [], final: { skip: { project: true, live: true } },
+      assess: [{ members: { u1: { score: 60, ok: [], ko: [], summary: "", missed: pd.missed, right: pd.right } } }], level: { lvl: "moyen" } };
+    const dp = C.commentData({ first: "Omar", project: rp.brief, rec: rp, uid: "u1" });
+    const pp = C.aiCommentPrompt(dp);
+    check(C.aiSystemOf(dp) === C.AI_COMMENT_SYSTEM_SOLO && /QUESTIONS ET EXERCICES RATÉS[^]*php artisan new blog[^]*composer create-project/.test(pp) && /QUESTIONS ET EXERCICES RÉUSSIS[^]*routes web/.test(pp)
+      && /n’invente RIEN/.test(C.AI_COMMENT_SYSTEM_SOLO), "…given to the AI, with the teacher's model of a good comment; nothing invented when nothing was done well");
   }
   // ✨ through the API: the AI writes it; kept when a switch changes; ↻ Rebuild writes it from the switches again
   const mk = await api("POST", "/api/briefs", { g: G, data: { title: "Hammam Al Andalous" } });

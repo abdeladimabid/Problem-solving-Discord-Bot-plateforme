@@ -44,7 +44,7 @@ export interface CommentData {
 /** One thing still to learn: the notion, what was seen (why), how to work it, its sources and its weight (the order). */
 export interface ToLearn { notion: string; why: string; how: string; from: string[]; w: number }
 /** One learner's graded assessment(s) of the brief: what they mastered, what they missed, the grader's comment. */
-export interface AssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[] }
+export interface AssessFacts { score: number | null; ok: string[]; ko: string[]; summary: string; comps: string[]; compsKo: string[]; missed?: string[]; right?: string[] }
 /** A squad's project beyond the features: interface and UX, planning, README, commits, team work. */
 export interface ProjectFacts { good: string[]; bad: string[]; team: string[] }
 
@@ -93,13 +93,15 @@ export function actionOf(t: unknown): string {
 }
 /** The teacher's one-to-one remarks → the notions to review (what they couldn't explain, confused, missed). What went
  *  well in the remarks is not a notion to review: it's left out. */
-const NEGATIVE = /\b(ne|n['’])\s*\S+(?:\s+\S+)?\s+(?:pas|plus|jamais|gu[èe]re)\b|\b(?:a|as|avez|est)\s+pas\b|\bpas (?:pu|su|réussi)\b|confond|difficult|lacune|[àa] revoir|revoir|fragile|h[ée]sit|oubli|erreur|du mal|incomplet|flou|approximati/i;
+const NEGATIVE = /\b(ne|n['’])\s*\S+(?:\s+\S+)?\s+(?:pas|plus|jamais|gu[èe]re)\b|\b(?:il|elle|tu)\s+\S+\s+pas\b|am[ée]lior|incompl|au lieu d|\b(?:a|as|avez|est)\s+pas\b|\bpas (?:pu|su|réussi)\b|confond|difficult|lacune|[àa] revoir|revoir|fragile|h[ée]sit|oubli|erreur|du mal|incomplet|flou|approximati/i;
+// « planification à revoir / à améliorer, il met pas de description… »: a subject, then what the teacher noted about it
+const SUBJECT_TO_REVIEW = /^(.{3,60}?)\s+(?:est |sont )?(?:encore )?[àa] (?:revoir|retravailler|reprendre|am[ée]lior[^\s,:;]*)\s*[,:;]\s*(.+?)\s*[.!?]*$/i;
 export function remarkNotions(text: unknown): string[] {
   const parts = String(text ?? "").split(/(?<=[.!?;])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
   // one sentence can hold a positive and a gap (« elle a su X, mais elle doit revoir Y »): only the gap is a notion
   // « elle doit revoir X, elle a pas pu Y, elle a pas pu Z »: each clause that names the learner is its own point
   const gaps = parts.flatMap((s) => s.split(/,?\s+(?:mais|par contre|cependant|en revanche|toutefois)\s+/i))
-    .flatMap((s) => s.split(/,\s*(?=(?:il|elle|l['’]apprenante?|tu)\s)/i)).map((s) => s.trim()).filter(Boolean);
+    .flatMap((s) => (SUBJECT_TO_REVIEW.test(s) ? [s] : s.split(/,\s*(?=(?:il|elle|l['’]apprenante?|tu)\s)/i))).map((s) => s.trim()).filter(Boolean);
   return gaps.filter((s) => NEGATIVE.test(s)).map((s) => clean(s
     .replace(/^(?:mais|et|par contre|cependant|en revanche|toutefois|par ailleurs)\s*,?\s+/i, "")
     .replace(/^(il|elle|l['’]apprenante?|tu|vous)\s+/i, "")
@@ -110,7 +112,7 @@ export function remarkNotions(text: unknown): string[] {
     .replace(/^confond(?:s|ez)?\s+(.+?)\s+et\s+(.+)$/i, "la différence entre $1 et $2")
     .replace(/^(?:à revoir|revoir)\s*:?\s*/i, "")
     // « planification à revoir, pas de description, user stories… »: the subject, then what the teacher noted
-    .replace(/^(.{3,60}?)\s+(?:est |sont )?(?:encore )?[àa] (?:revoir|retravailler|reprendre|améliorer)\s*[,:;]\s*(.+?)\s*\??$/i, "$1 : $2")
+    .replace(SUBJECT_TO_REVIEW, "$1 : $2")
     // « Planification à revoir », « README incomplet »: the subject only
     .replace(/\s+(?:est |sont )?(?:encore )?(?:à revoir|à retravailler|à reprendre|à améliorer|à consolider|à approfondir|incompl[eè]te?s?|insuffisante?s?|fragiles?|approximati(?:f|ve)s?)[.!;\s]*$/i, ""), 140)).filter((x) => x.length > 2).map(low);
 }
@@ -132,6 +134,9 @@ export function assessFacts(rec: any, uid?: string | null): AssessFacts | null {
     summary: mine.map((m: any) => String(m.summary || "").trim()).filter(Boolean).join(" ").slice(0, 900),
     comps: uniq(mine.flatMap((m: any) => (m.comps || []).map(compName))).filter(Boolean).slice(0, 4),
     compsKo: uniq(mine.flatMap((m: any) => (m.compsKo || []).map(compName))).filter(Boolean).slice(0, 4),
+    // question by question (assessments and mises en situation): the real mistakes and the real successes
+    missed: mine.flatMap((m: any) => (Array.isArray(m.missed) ? m.missed : [])).slice(0, 24),
+    right: mine.flatMap((m: any) => (Array.isArray(m.right) ? m.right : [])).slice(0, 24),
   };
 }
 // the automatic checks of the repo, by what the squad comment talks about (the features are the requirements)
@@ -276,7 +281,9 @@ const GUIDE: [RegExp, string[], string][] = [
   [/donn[ée]es? (?:à|vers) la vue|\bview\(|compact/i, ["Laravel passing data to views", "Blade foreach"], ""],
   [/composer|artisan/i, ["Laravel Artisan console", "Composer install"], ""],
   [/tailwind/i, ["Tailwind CSS utility classes", "Tailwind responsive design"], "les préfixes sm: md: lg: s’appliquent à partir de cette largeur."],
-  [/planifi|user stor|deadline|estim|trello|github projects|kanban|t[âa]ches?\b/i, ["rédiger une user story", "GitHub Projects kanban"], "chaque tâche a une estimation et une date limite, et le lien du tableau est dans le README."],
+  [/\bvariables?\b|\blet\b|\bconst\b|port[ée]e/i, ["let const var", "portée des variables JavaScript"], "const par défaut, let seulement si la valeur change, jamais var."],
+  [/supprim|\bremove\b/i, ["element remove", "removeChild"], "on supprime l’élément lui-même (element.remove()), pas son contenu."],
+  [/plan+ifi|user stor|deadline|estim|trello|github projects|kanban|t[âa]ches?\b/i, ["rédiger une user story", "GitHub Projects kanban"], "chaque tâche a une estimation et une date limite, et le lien du tableau est dans le README."],
   [/HTMLCollection|NodeList|liste vivante|liste statique/i, ["HTMLCollection", "NodeList"], "querySelectorAll ne se met pas à jour, getElementsByClassName oui."],
   [/children|childNodes/i, ["children", "childNodes"], "childNodes compte aussi les textes et les espaces."],
   [/currentTarget|e\.target|event\.target|d[ée]l[ée]gation/i, ["event.target", "event.currentTarget", "délégation d’événements"], ""],
@@ -340,6 +347,17 @@ function vague(fact: string, s: Subject): boolean {
   return words.length <= 1 && words.every((w) => !!s.rx && s.rx.test(w));
 }
 /** A concept label said as a title: « les sélecteurs CSS (balise, classe, id) » → « les sélecteurs CSS ». */
+/** The teacher's note about the learner (« il met pas de description ») said to them (« tu ne mets pas de description »). */
+export function toTu(t: string): string {
+  const IRR: Record<string, string> = { a: "as", est: "es", peut: "peux", sait: "sais", fait: "fais", met: "mets", doit: "dois", veut: "veux", prend: "prends", comprend: "comprends", connaît: "connais", connait: "connais", va: "vas", voit: "vois", lit: "lis", écrit: "écris", ecrit: "écris" };
+  const verb = (v: string) => IRR[v.toLowerCase()] ?? (/e$/.test(v) ? v + "s" : v);
+  return t
+    .replace(/\b(?:il|elle)\s+n['’]\s*(\S+)/gi, (_, v) => `tu n’${verb(v)}`)
+    .replace(/\b(?:il|elle)\s+ne\s+(\S+)/gi, (_, v) => `tu ne ${verb(v)}`)
+    .replace(/\b(?:il|elle)\s+(\S+)\s+pas\b/gi, (_, v) => `tu ${/^[aeiouéèêh]/i.test(v) ? "n’" : "ne "}${verb(v)} pas`)
+    .replace(/\b(?:il|elle)\s+(\S+)/gi, (_, v) => `tu ${verb(v)}`)
+    .replace(/\b(son|sa|ses)\b/gi, (m) => ({ son: "ton", sa: "ta", ses: "tes" } as any)[m.toLowerCase()]);
+}
 const titleOf = (label: string) => label.replace(/\s*\([^)]*\)/g, "").trim();
 /**
  * What the learner still has to learn, said directly (never a category: « HTML », « CSS »…), from the most important:
@@ -356,11 +374,12 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
     const raw = clean(fact, 140);
     if (!raw) return;
     const isLabel = from === "evaluation" && !!LEARN[raw];
-    const title = isLabel ? titleOf(raw) : titleOf(raw).replace(/^(?:L['’]|(?:Le|La|Les|Un|Une|Des|Du)(?=\s))/, (x) => x.toLowerCase());
+    const title = from === "remarque" ? toTu(raw.charAt(0).toUpperCase() + raw.slice(1)) : isLabel ? titleOf(raw) : titleOf(raw).replace(/^(?:L['’]|(?:Le|La|Les|Un|Une|Des|Du)(?=\s))/, (x) => x.toLowerCase());
     const topic = topicOf(raw);
     const cs = conceptsOf(`${raw} ${raw.split(/\s+/).length <= 3 ? ctx : ""}`).filter((c: string) => LEARN[c]);
     // a point with nothing technical to learn (a feature of the project: « la page grimoire »): not here
-    if (!topic && !cs.length && (from === "tache" || (from === "remarque" && !TECH.test(raw) && !CAMEL.test(raw)))) return;
+    // (but the teacher's note that the project is incomplete, and what is missing, stays)
+    if (!topic && !cs.length && (from === "tache" || (from === "remarque" && !TECH.test(raw) && !CAMEL.test(raw) && !/incompl|manqu|absent|pas (?:fini|termin|impl[ée]ment)|non (?:fini|termin)/i.test(raw)))) return;
     const same = ps.find((p) => p.title.toLowerCase() === title.toLowerCase() || saidIn(title, p.title) || saidIn(p.title, title) ||
       (!!topic && p.topic === topic && (p.vague || vague(raw, topic))) || (cs.length > 0 && cs[0] === p.cs[0]));
     if (same) {
@@ -393,7 +412,7 @@ export function toLearnOf(o: { fromRemarks: string[]; gaps: { code?: string; tex
     // what it is about: a subject only named → its essentials; else its notion (said once, if the title doesn't already)
     const more = LEARN_MORE.find(([rx]) => rx.test(p.title));
     const about = p.vague && ess.length ? andList(ess) : p.cs.length && !saidIn(LEARN[p.cs[0]], p.title) ? LEARN[p.cs[0]] : more && !saidIn(more[1], p.title) ? more[1] : "";
-    return { notion: title, why: about, how: guideOf(p.title) || guideOf(about) || (() => { const q = title.replace(/\s*\([^)]*\)/g, "").trim(); return q.length <= 40 ? `Cherche « ${familyOf(`${title} ${about}`) === "php" ? "Laravel " : ""}${q} ».` : ""; })(), from: p.from, w: p.w };
+    return { notion: title, why: about, how: guideOf(p.title) || guideOf(about) || (() => { const q = title.replace(/\s*\([^)]*\)/g, "").replace(/^(?:les?|la|l['’]|des?|du)\s*/i, "").trim(); return q.split(/\s+/).length <= 4 && familyOf(q) && !/incompl|manqu|absent|pas fini|non fait/i.test(q) ? `Cherche « ${familyOf(`${title} ${about}`) === "php" ? "Laravel " : ""}${q} ».` : ""; })(), from: p.from, w: p.w };
   });
 }
 
@@ -703,13 +722,51 @@ export const AI_COMMENT_SYSTEM = [
   "- N’invente RIEN : chaque phrase vient des éléments fournis. Aucun score, aucun code de compétence. Ne parle JAMAIS du niveau de l’apprenant (ni « niveau », ni Faible, Moyen, Bon, Critique…), ni de la fiche des niveaux, ni d’aucun outil ou document interne de la formation.",
   'Réponds UNIQUEMENT avec ce JSON : {"commentaire":"le texte, paragraphes séparés par une ligne vide"}',
 ].join("\n");
+/**
+ * One learner's comment: written by the AI from everything known about them — the teacher's notes first, then their
+ * assessment's and mise en situation's real answers. Built on the teacher's own model of a good comment.
+ */
+export const AI_COMMENT_SYSTEM_SOLO = [
+  "Tu aides un formateur en développement web à rédiger le commentaire de débriefing d’un brief, envoyé à UN apprenant.",
+  "Le commentaire doit l’aider à progresser : PRÉCIS (ses vraies erreurs, pas des généralités), HONNÊTE et PERSONNEL. Un texte qui pourrait être envoyé à un autre apprenant est raté.",
+  "Exemple d’un commentaire que le formateur juge bon (imite la construction, la précision et le ton, jamais le contenu) :",
+  "<<<",
+  "Ton évaluation montre une maîtrise correcte des bases théoriques de Laravel : tu sais que Blade est le moteur de template par défaut, que la configuration est dans le fichier .env et les routes web dans routes/web.php, tu crées un contrôleur avec make:controller, tu passes des variables d’un contrôleur à une vue et tu connais le rôle de $fillable et des méthodes up() et down() des migrations.",
+  "",
+  "Tes points faibles sont des erreurs de base et un manque de précision : tu crées un projet avec php artisan new au lieu de composer create-project, ta route welcome est incomplète (point-virgule manquant), tes flags pour créer modèle, contrôleur et migration sont faux, ta migration n’a pas de Schema::create, tu expliques User::with('posts')->get() comme un tableau associatif sans parler d’eager loading, et tu places belongsTo du mauvais côté de la relation.",
+  "",
+  "Tu as le potentiel pour avancer, mais il faut abandonner les approximations et viser la précision.",
+  "",
+  "Plan d’action",
+  "",
+  "Commandes et syntaxe : refais un projet avec composer create-project, puis les commandes Artisan make:model -mc et serve, en tapant chaque route jusqu’au point-virgule. Cherche « composer create-project laravel » et « artisan make:model options ».",
+  "",
+  "Relations Eloquent : écris hasMany d’un côté et belongsTo de l’autre, avec la clé étrangère du bon côté, puis charge-les avec with() et get(). Cherche « eloquent relationships » et « eager loading ».",
+  ">>>",
+  "Construction :",
+  "1) Ce qu’il réussit, avec des exemples PRÉCIS, UNIQUEMENT à partir de « QUESTIONS ET EXERCICES RÉUSSIS », « CE QU’IL MAÎTRISE » et de ce que le formateur a noté de positif. S’il n’a rien réussi, n’écris PAS ce paragraphe et n’invente RIEN pour le remplir.",
+  "2) Ses points faibles, précis : d’abord ce que le formateur a noté (ses faits à lui, avec ses mots, adressés à l’apprenant), puis les erreurs réelles de « QUESTIONS ET EXERCICES RATÉS » (ce qu’il a répondu ou fait, et ce qui était attendu), regroupées par thème. Jamais une erreur qui n’est pas dans les données.",
+  "3) Une phrase de bilan, honnête et sans flatterie, qui correspond au NIVEAU.",
+  "4) La ligne « Plan d’action », puis un court paragraphe par axe (3 à 5 axes, sans numéro ni puce), d’abord les points du formateur : « Thème : ce qu’il doit refaire concrètement. Cherche « … » et « … ». » Les recherches sont des NOTIONS à taper (comme dans « quoi chercher » des points à apprendre), jamais un nom de site ou de source (ni MDN, ni W3Schools, ni documentation de…).",
+  "Règles strictes :",
+  "- Tutoiement. Pas de salutation (le prénom est ajouté avant ton texte), pas de « Cordialement », pas de mise en forme (**, #, `), pas d’emoji, aucune liste à puces ni numérotée.",
+  "- Uniquement le technique et ce que le formateur a noté : jamais les livrables, les fonctionnalités, les pages du brief, ni les bonus.",
+  "- Ne parle JAMAIS des sujets marqués « HORS DU SPRINT », sauf si le formateur les a notés.",
+  "- Aucun score, aucun pourcentage, aucun code ni intitulé de compétence, jamais le niveau (ni « niveau », ni Faible, Moyen, Bon, Critique), ni d’outil interne.",
+  "- Ne dis « bon travail » ou « excellent » que si le niveau est bon ou excellent.",
+  'Réponds UNIQUEMENT avec ce JSON : {"commentaire":"le texte, paragraphes séparés par une ligne vide"}',
+].join("\n");
+/** The system prompt for this comment: one learner, or a team. */
+export const aiSystemOf = (d: CommentData) => (d.group ? AI_COMMENT_SYSTEM : AI_COMMENT_SYSTEM_SOLO);
+
 /** The decisions for the AI (no name: the greeting is ours, the AI may write {prénom}). */
 export function aiCommentPrompt(d: CommentData): string {
   const list = (a: string[]) => (a.length ? a.map((x) => `- ${x}`).join("\n") : "(aucun)");
   const missing = d.improve.map(missingOf).filter(Boolean).map((x) => x!.text);
   const remarks = `REMARQUES DU FORMATEUR APRÈS L’ÉCHANGE :\n${d.remarks ? `<<<\n${d.remarks.slice(0, 2000)}\n>>>` : "(aucune)"}`;
   const head = [`PROJET : « ${d.project} »${d.group ? " (commentaire pour toute l’équipe : « vous »)" : ""}`, `NIVEAU DÉCIDÉ PAR LE FORMATEUR : ${levelOf(d)}`,
-    `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`,
+    d.group ? `NOTIONS DU BRIEF ET DE L’ÉVALUATION (les SEULES notions techniques dont tu peux parler ; n’en cite aucune autre, même si le commentaire du correcteur en parle) :\n${list(d.scope)}`
+      : `NOTIONS DU BRIEF ET DE L’ÉVALUATION :\n${list(d.scope)}`,
     ...(d.off && d.off.length ? [`SUJETS HORS DU SPRINT (n’en parle JAMAIS, ni en bien ni en mal, même si le correcteur en parle) : ${d.off.map((k) => k === "javascript" ? "JavaScript" : k.toUpperCase()).join(", ")}`] : [])];
   if (!d.group) {
     const a = d.assess;
@@ -717,6 +774,8 @@ export function aiCommentPrompt(d: CommentData): string {
       ...head,
       "TYPE DE COMMENTAIRE : INDIVIDUEL, TECHNIQUE. Parle uniquement de ce qu’il sait faire et ne sait pas encore faire techniquement, et de ce que le formateur a noté. Jamais les livrables, les fonctionnalités, les exigences du brief ni les bonus.",
       `CE QU’IL MAÎTRISE :\n${list(d.mastered)}`,
+      `QUESTIONS ET EXERCICES RÉUSSIS (évaluation et mise en situation) :\n${list(a?.right || [])}`,
+      `QUESTIONS ET EXERCICES RATÉS (question → sa réponse → attendu) :\n${list(a?.missed || [])}`,
       `COMMENTAIRE DU CORRECTEUR DE SON ÉVALUATION (pour préciser ce qu’il sait et ne sait pas faire ; jamais de score) :\n${a && a.summary ? `<<<\n${a.summary}\n>>>` : "(aucun)"}`,
       `CE QUI VA BIEN SELON L’ÉCHANGE : ${d.positive || "(rien de particulier)"}`,
       remarks,
@@ -767,6 +826,31 @@ export function outsideNotions(d: Pick<CommentData, "scope">, body: string): str
 const MARKUP = /\*\*|(^|\n)\s*#|`|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
 const VOUS = /\b(vous|votre|vos)\b/i, TU = /\b(tu|ton|ta|tes|toi|t['’](?:as|es|en|y))\b/i;
 /** The AI's comment, checked (form, tone, level, bonus, length) with our greeting; null when it doesn't follow the rules. */
+/**
+ * One learner's AI comment: only what really matters is checked — no list, no site, nothing outside the sprint, no score
+ * nor level nor competency, no praise the level doesn't allow, and the teacher's own notes in it. The AI is free to name
+ * the learner's real mistakes precisely (that is the point).
+ */
+function soloCheck(d: CommentData, body: string): string | null {
+  const lines = body.split("\n");
+  if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l))) return null;
+  if (/\bMDN\b|mozilla|w3schools|openclassrooms|stack ?overflow|css-tricks|youtube|documentation (?:officielle )?(?:de |d['’])/i.test(body)) return null;
+  if ((d.off || []).some((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); })) return null;
+  if (/\d+\s*%|\bniveaux?\b|\bfiche\b|\bcritique\b|classbot|\bC[T]?\d{1,2}(N\d)?\b/i.test(body)) return null;
+  const lv = levelOf(d);
+  if (lv !== "excellent" && /excellent/i.test(body)) return null;
+  if (!["bon", "excellent"].includes(lv) && /\b(bon|très bon|beau) travail\b/i.test(body)) return null;
+  if (/\bbonus\b|livrables?\b/i.test(body)) return null;
+  // the « practise every day, without copying » advice is for a learner in difficulty, never a good one
+  if (!["faible", "critique"].includes(lv) && /sans copier|chaque jour|tous les jours/i.test(body)) return null;
+  // the teacher's notes are in it (one of the main words of each)
+  const notes = (d.toLearn || []).filter((x) => x.from.includes("remarque"));
+  const said = notes.filter((x) => { const w = String(x.notion).toLowerCase().match(/[a-zà-ÿ0-9]{5,}/g) || []; return !w.length || w.some((k) => body.toLowerCase().includes(k)); }).length;
+  if (notes.length && said < notes.length - (notes.length >= 3 ? 1 : 0)) return null;
+  const words = wordCount(body);
+  if (words < 15 || words > 520) return null;
+  return `${greetingOf(d)}\n\n${body}`;
+}
 export function aiCommentText(d: CommentData, j: any): string | null {
   if (!j || typeof j !== "object") return null;
   let body = String(j.commentaire ?? "").replace(/\r/g, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -775,6 +859,7 @@ export function aiCommentText(d: CommentData, j: any): string | null {
   body = who ? body.replace(/\{pr[ée]nom\}/gi, who) : body.replace(/\{pr[ée]nom\}\s*,\s*(\S)/gi, (_, c) => c.toUpperCase()).replace(/\s*\{pr[ée]nom\}/gi, "");
   if (MARKUP.test(body) || /^(bonjour|cordialement)/im.test(body) || /\{|\}/.test(body)) return null;
   if (d.group ? TU.test(body) : VOUS.test(body)) return null;
+  if (!d.group) return soloCheck(d, body);
   // no section titles, no lists (neither bullets nor numbers): paragraphs only
   const lines = body.split("\n");
   if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l) || (l.trim() && l.trim().length < 45 && !/[.:?!]$/.test(l.trim())))) return null;
