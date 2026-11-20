@@ -831,6 +831,12 @@ const VOUS = /\b(vous|votre|vos)\b/i, TU = /\b(tu|ton|ta|tes|toi|t['’](?:as|es
  * nor level nor competency, no praise the level doesn't allow, and the teacher's own notes in it. The AI is free to name
  * the learner's real mistakes precisely (that is the point).
  */
+const OFF_STRICT: Record<string, RegExp> = {
+  css: /\bCSS\b|Tailwind|Flexbox|\bgrid\b|\bmargin\b|\bpadding\b|modèle de boîte|media quer|\bresponsive\b|typographie/i,
+  html: /balises? sémantiques?|tableaux? HTML|listes? HTML|formulaires? HTML|structure (?:de base )?d['’]une page|doctype|\bW3C\b/i,
+  php: /\bPHP\b|Laravel|Eloquent|Blade|Artisan/i,
+  sql: /\bSQL\b|jointure|base de données|MySQL|PostgreSQL/i,
+};
 /** Why the AI's last comment was refused (for the second try and for the teacher), "" when it was kept. */
 export let aiCommentWhy = "";
 function soloCheck(d: CommentData, body: string): string | null {
@@ -838,10 +844,12 @@ function soloCheck(d: CommentData, body: string): string | null {
   const lines = body.split("\n");
   if (lines.some((l) => /^\s*(?:[–—•*-]|\d+[.)])\s/.test(l))) return no("it used a list (bullets or numbers)");
   if (/\bMDN\b|mozilla|w3schools|openclassrooms|stack ?overflow|css-tricks|youtube/i.test(body)) return no("it named a website");
-  const off = (d.off || []).find((k) => { const rx = FAMILY.find(([f]) => f === k)![1]; return k !== "javascript" && rx.test(body) && !rx.test(d.remarks || ""); });
+  // a subject outside the sprint: its own notions (« margin », « Flexbox », « balises sémantiques »), not a word the DOM
+  // shares with it (« la balise img », « un élément HTML », « HTMLCollection »)
+  const off = (d.off || []).find((k) => { const rx = OFF_STRICT[k]; return !!rx && rx.test(body) && !rx.test(d.remarks || ""); });
   if (off) return no(`it talked about ${off.toUpperCase()}, outside the sprint`);
   if (/\d+\s*%/.test(body)) return no("it gave a score");
-  if (/\bniveaux?\b|\bfiche\b|classbot/i.test(body)) return no("it talked about the level or the Fiche");
+  if (/\bniveau\s+(?:est\s+|reste\s+)?(?:faible|moyen|bon|critique|excellent|insuffisant)|\b(?:ton|son|ce)\s+niveau\b|fiche (?:des )?niveaux|\bla fiche\b|classbot/i.test(body)) return no("it talked about the level or the Fiche");
   if (/\bC[T]?\d{1,2}(N\d)?\b/.test(body)) return no("it named a competency code");
   const lv = levelOf(d);
   if (lv !== "excellent" && /\bexcellent/i.test(body)) return no("it said « excellent » above the level");
